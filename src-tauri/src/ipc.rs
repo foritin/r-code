@@ -1,6 +1,6 @@
 //! R-Code 专属 IPC 方法处理器。
 //!
-//! 基于 `hermes-ipc` 的 `IpcHandler` trait（JSON-RPC 2.0）。
+//! 基于 `agent-ipc` 的 `IpcHandler` trait（JSON-RPC 2.0）。
 //! 本模块注册 R-Code 专属 method handler，并定义产品层错误码映射。
 //!
 //! - 健康检查（`ping`）
@@ -11,7 +11,7 @@
 //! [doc-08] [agent-core/12 §6]
 
 use async_trait::async_trait;
-use hermes_ipc::{IpcHandler, JsonRpcError, JsonRpcRequest};
+use agent_ipc::{IpcHandler, JsonRpcError, JsonRpcRequest};
 use r_code_core::dto::{Task, TaskMode};
 use r_code_core::error::ProductError;
 use serde_json::Value;
@@ -23,7 +23,7 @@ pub struct PingHandler;
 
 #[async_trait]
 impl IpcHandler for PingHandler {
-    async fn handle(&self, _params: Value) -> hermes_error::Result<Value> {
+    async fn handle(&self, _params: Value) -> agent_error::Result<Value> {
         Ok(serde_json::json!({ "pong": true }))
     }
 }
@@ -39,7 +39,7 @@ pub struct TaskCreateHandler;
 
 #[async_trait]
 impl IpcHandler for TaskCreateHandler {
-    async fn handle(&self, params: Value) -> hermes_error::Result<Value> {
+    async fn handle(&self, params: Value) -> agent_error::Result<Value> {
         let workspace_path = match params
             .get("workspacePath")
             .or_else(|| params.get("projectId"))
@@ -49,7 +49,7 @@ impl IpcHandler for TaskCreateHandler {
                 value
                     .as_str()
                     .ok_or_else(|| {
-                        hermes_error::Error::Ipc("workspacePath must be a string".into())
+                        agent_error::Error::Ipc("workspacePath must be a string".into())
                     })?
                     .to_string(),
             ),
@@ -57,14 +57,14 @@ impl IpcHandler for TaskCreateHandler {
         let goal = params
             .get("goal")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| hermes_error::Error::Ipc("missing goal".into()))?;
+            .ok_or_else(|| agent_error::Error::Ipc("missing goal".into()))?;
 
         let mode = params.get("mode").and_then(|v| v.as_str()).unwrap_or("ask");
         let mode = match mode {
             "ask" => TaskMode::Ask,
             "edit" => TaskMode::Edit,
             "auto" => TaskMode::Auto,
-            _ => return Err(hermes_error::Error::Ipc("invalid mode".into())),
+            _ => return Err(agent_error::Error::Ipc("invalid mode".into())),
         };
 
         // stub：goal 同时作为 title（上层可更新 title）

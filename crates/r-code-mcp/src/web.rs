@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::{future::join_all, StreamExt};
-use hermes_core::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
+use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use serde_json::{json, Value};
 use thiserror::Error;
 use url::Url;
@@ -705,7 +705,7 @@ impl WebToolHost {
 
 #[async_trait]
 impl ToolHost for WebToolHost {
-    async fn list_tools(&self) -> hermes_core::Result<Vec<ToolSpec>> {
+    async fn list_tools(&self) -> agent_contract::Result<Vec<ToolSpec>> {
         Ok(vec![
             ToolSpec {
                 name: "web_search".to_string(),
@@ -743,7 +743,7 @@ impl ToolHost for WebToolHost {
         ])
     }
 
-    async fn call(&self, name: &str, args: Value) -> hermes_core::Result<ToolCallOutcome> {
+    async fn call(&self, name: &str, args: Value) -> agent_contract::Result<ToolCallOutcome> {
         let result = match name {
             "web_search" => {
                 let query = args
@@ -768,7 +768,7 @@ impl ToolHost for WebToolHost {
                     serde_json::to_string_pretty(&result).map_err(|_| WebError::Decode)
                 })
             }
-            _ => return Err(hermes_core::Error::ToolNotFound(name.to_string())),
+            _ => return Err(agent_contract::Error::ToolNotFound(name.to_string())),
         };
         Ok(match result {
             Ok(content) => ToolCallOutcome {
@@ -783,7 +783,7 @@ impl ToolHost for WebToolHost {
     async fn call_batch(
         &self,
         calls: Vec<(String, Value)>,
-    ) -> Vec<hermes_core::Result<ToolCallOutcome>> {
+    ) -> Vec<agent_contract::Result<ToolCallOutcome>> {
         join_all(
             calls
                 .into_iter()

@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use hermes_mcp::{McpError, McpServer, McpToolHost, MockTransport, Transport};
+use agent_mcp::{McpError, McpServer, McpToolHost, MockTransport, Transport};
 use serde_json::json;
 
 /// 辅助：配置 initialize + tools/list 成功的 mock。

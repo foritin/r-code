@@ -10,8 +10,8 @@ description = "R-Code SQLite 持久化层：产品状态源"
 
 [dependencies]
 # 公共合同
-hermes-core = { workspace = true }
-hermes-error = { workspace = true }
+agent-contract = { workspace = true }
+agent-error = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }

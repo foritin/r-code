@@ -3,7 +3,7 @@
 //! Tool Gateway 是 Agent 工具调用的唯一入口。所有调用经过：
 //! Schema 校验 -> 权限分级 -> 执行 -> 记账。
 //!
-//! `ToolGateway` 实现 `hermes_core::ToolHost` trait，可无缝接入 Agent 循环。
+//! `ToolGateway` 实现 `agent_contract::ToolHost` trait，可无缝接入 Agent 循环。
 //!
 //! ## 审计策略 [doc-02 §8]
 //! 所有调用（含被拒绝 / 待审批）入 `ledger`，含调用者身份。
@@ -13,7 +13,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hermes_core::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
+use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use r_code_core::dto::{PermissionDecision, ProjectAccessMode, RiskLevel, ToolCall};
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;
@@ -234,7 +234,7 @@ pub trait Tool: Send + Sync {
     /// 工具是否要求路径已存在。默认 `true`（只读工具）。
     ///
     /// `create_file` 等写入工具覆写为 `false`：目标文件尚未创建，需通过
-    /// `PathGuard::resolve`（而非 `resolve_existing`）解析。
+    /// `PathGuard::resolve_path`（而非 `resolve_existing_path`）解析。
     fn requires_existing_path(&self) -> bool {
         true
     }
@@ -506,7 +506,7 @@ fn is_subagent_caller(caller: Option<&str>) -> bool {
 
 /// Tool Gateway -- 管理工具注册、权限检查与审计账本。
 ///
-/// 实现 `hermes_core::ToolHost`，可注册到 Agent 循环。
+/// 实现 `agent_contract::ToolHost`，可注册到 Agent 循环。
 pub struct ToolGateway {
     tools: HashMap<String, Box<dyn Tool>>,
     permission_engine: Arc<PermissionEngine>,
@@ -1161,13 +1161,13 @@ impl ToolGateway {
     }
 }
 
-/// 为 `ToolGateway` 实现 `hermes_core::ToolHost`。
+/// 为 `ToolGateway` 实现 `agent_contract::ToolHost`。
 ///
 /// - `list_tools`：返回所有已注册工具的 `ToolSpec`。
 /// - `call`：委托给 `execute_call`（task_id / run_id 为空，表示直接调用）。
 #[async_trait]
 impl ToolHost for ToolGateway {
-    async fn list_tools(&self) -> hermes_error::Result<Vec<ToolSpec>> {
+    async fn list_tools(&self) -> agent_error::Result<Vec<ToolSpec>> {
         Ok(self.tool_specs())
     }
 
@@ -1175,7 +1175,7 @@ impl ToolHost for ToolGateway {
         &self,
         name: &str,
         args: serde_json::Value,
-    ) -> hermes_error::Result<ToolCallOutcome> {
+    ) -> agent_error::Result<ToolCallOutcome> {
         self.execute_call("", "", name, args, None)
             .await
             .map_err(Into::into)
@@ -2595,7 +2595,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            hermes_error::Error::PermissionDenied(_)
+            agent_error::Error::PermissionDenied(_)
         ));
     }
 

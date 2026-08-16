@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use hermes_ipc::{IpcClient, IpcServer};
+use agent_ipc::{IpcClient, IpcServer};
 
 #[tokio::test]
 async fn ping_pong_health_check() {

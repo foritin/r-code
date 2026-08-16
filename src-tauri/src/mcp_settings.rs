@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use hermes_config::{Config, ServerSpec};
+use agent_config::{Config, ServerSpec};
 use r_code_core::error::ProductError;
 #[cfg(target_os = "macos")]
 use r_code_core::secret::EncryptedFileSecretStore;

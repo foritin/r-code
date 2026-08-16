@@ -25,11 +25,11 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use hermes_core::{
+use agent_contract::{
     Capabilities, CompletionRequest, CompletionResponse, LlmProvider, Message, StopReason,
     StreamEvent, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
 };
-use hermes_error::{Error, Result};
+use agent_error::{Error, Result};
 use r_code_agent_worker::cache_shape::{capture, compare, CacheChangeCause};
 use r_code_agent_worker::run_agent_loop_iteration;
 use r_code_core::dto::AgentEvent;
@@ -204,6 +204,7 @@ impl LlmProvider for PrefixCacheMockProvider {
             supports_vision: false,
             supports_prompt_caching: true,
             max_context_tokens: 200_000,
+            max_output_tokens: 0,
         }
     }
 

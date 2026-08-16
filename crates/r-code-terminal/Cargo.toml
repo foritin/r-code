@@ -10,8 +10,8 @@ description = "R-Code 终端系统：PTY 管理、Shell 集成、命令块"
 
 [dependencies]
 # 公共合同
-hermes-core = { workspace = true }
-hermes-error = { workspace = true }
+agent-contract = { workspace = true }
+agent-error = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }

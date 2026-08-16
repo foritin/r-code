@@ -7,7 +7,7 @@
 //! [doc-04 §9]
 
 use async_trait::async_trait;
-use hermes_core::{Message, Session};
+use agent_contract::{Message, Session};
 use r_code_core::dto::{AgentEvent, CreateSessionInput, ProjectAccessMode, TaskMode};
 use r_code_core::error::ProductError;
 

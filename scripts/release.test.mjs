@@ -99,7 +99,7 @@ function prepareFixture(t) {
   const crlf = "\r\n";
   const contents = new Map([
     [paths.cargoToml, `[workspace]${crlf}${crlf}[workspace.package]${crlf}version = "0.1.0"${crlf}repository = "https://github.com/foritin/r-code"${crlf}`],
-    [paths.cargoLock, `[[package]]${crlf}name = "hermes-core"${crlf}version = "0.1.0"${crlf}${crlf}[[package]]${crlf}name = "r-code-core"${crlf}version = "0.1.0"${crlf}`],
+    [paths.cargoLock, `[[package]]${crlf}name = "agent-contract"${crlf}version = "0.1.0"${crlf}${crlf}[[package]]${crlf}name = "r-code-core"${crlf}version = "0.1.0"${crlf}`],
     [paths.tauri, `{${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
     [paths.installerTauri, `{${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
     [paths.packageJson, `{${crlf}  "name": "r-code",${crlf}  "version": "0.1.0"${crlf}}${crlf}`],

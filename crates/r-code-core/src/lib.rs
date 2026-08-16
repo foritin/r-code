@@ -25,9 +25,9 @@ pub mod state;
 pub mod testing;
 
 // 重新导出公共合同类型，方便产品 crate 统一引用
-pub use hermes_core::{
+pub use agent_contract::{
     ContentBlock, FileSource, ImageSource, InferenceOptions, Message, Role, Session, SessionEvent,
     SessionMeta, SessionStatus, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
 };
-pub use hermes_error::{Error, Result, ResultExt};
+pub use agent_error::{Error, Result, ResultExt};
 pub use memory::*;

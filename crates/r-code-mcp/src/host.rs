@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use hermes_core::{ToolCallOutcome, ToolSource, ToolSpec};
+use agent_contract::{ToolCallOutcome, ToolSource, ToolSpec};
 use serde_json::{json, Value};
 use thiserror::Error;
 

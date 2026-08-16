@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use hermes_core::ToolCallOutcome;
+use agent_contract::ToolCallOutcome;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::sync::{watch, Mutex, RwLock};

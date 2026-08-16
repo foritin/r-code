@@ -38,7 +38,7 @@ R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展�
 | macOS | Apple Silicon、Intel | 各架构 `.app`、`.dmg` |
 | Linux | x86_64 GNU | `.AppImage`、`.deb` |
 
-安装包由 `v*` tag 的 GitHub Actions 构建。平台代码签名、首次发布和自动更新要求见 [发布手册](./docs/RELEASING.md)。
+安装包由 `v*` tag 的 GitHub Actions 构建。平台代码签名、首次发布和自动更新要求见 [发布手册](./docs/releasing.md)。
 
 ## 架构
 
@@ -53,9 +53,9 @@ R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展�
 | Persistence | `crates/r-code-store/` | SQLite、JSONL 投影、Blob、变更、Plan、审核与验证 |
 | Terminal | `crates/r-code-terminal/` | PTY、OSC 133、原始输出与外部 CLI 回放 |
 | Renderer | `src-tauri/frontend/` | React 场景、Zustand 状态与 typed Tauri IPC |
-| Shared contracts | `vendor/agent-core/` | `hermes-*` 公共合同 crates；构建必需 Git 子模块 |
+| Shared contracts | `vendor/agent-core/` | `agent-*` 公共合同 crates；构建必需 Git 子模块 |
 
-JSONL 是会话内容源，SQLite 是任务、Run、权限、审计、Plan、记忆和变更等产品状态源。完整说明见 [架构与实现细节](./docs/ARCHITECTURE.md)。
+JSONL 是会话内容源，SQLite 是任务、Run、权限、审计、Plan、记忆和变更等产品状态源。完整说明见 [架构与实现细节](./docs/architecture.md)。
 
 ## 开发
 
@@ -144,7 +144,7 @@ bash ./scripts/build-macos.sh --signed
 cargo tauri build --bundles appimage,deb
 ```
 
-输出目录、签名变量和正式分发要求见 [发布手册](./docs/RELEASING.md)。
+输出目录、签名变量和正式分发要求见 [发布手册](./docs/releasing.md)。
 
 ## 发布
 
@@ -157,7 +157,7 @@ node scripts/publish-release.mjs vX.Y.Z --dry-run
 node scripts/publish-release.mjs vX.Y.Z
 ```
 
-发布闸门只会在 `main` 上该精确 commit 的完整 CI 成功后创建不可变 tag；Release workflow 会再次核对 tag 来源和每个必需 CI job，之后才进入四平台构建、等待与资产验收。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、仓库控制、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。
+发布闸门只会在 `main` 上该精确 commit 的完整 CI 成功后创建不可变 tag；Release workflow 会再次核对 tag 来源和每个必需 CI job，之后才进入四平台构建、等待与资产验收。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、仓库控制、失败恢复和发布后验收见 [发布手册](./docs/releasing.md)。
 
 ## 项目结构
 
@@ -177,16 +177,16 @@ r-code/
 
 ## 文档
 
-- [文档索引](./docs/README.md)
+- [文档索引](./docs/readme.md)
 - [贡献指南](./CONTRIBUTING.md)
 - [支持与问题反馈](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
-- [架构与实现细节](./docs/ARCHITECTURE.md)
+- [架构与实现细节](./docs/architecture.md)
 - [Plan 模式与增强审核](./docs/plan-mode.md)
 - [联网工具与 MCP](./docs/mcp.md)
 - [演进记忆](./docs/memory.md)
-- [安装、备份、恢复与卸载](./docs/OPERATIONS.md)
-- [发布手册](./docs/RELEASING.md)
+- [安装、备份、恢复与卸载](./docs/operations.md)
+- [发布手册](./docs/releasing.md)
 - [Security Policy](./SECURITY.md)
 - [Privacy Notice](./PRIVACY.md)
 - [CHANGELOG](./CHANGELOG.md)

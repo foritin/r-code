@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 use chrono::{DateTime, Utc};
-use hermes_config::{Config, SubagentPoolConfig, SubagentProviderSource};
+use agent_config::{Config, SubagentPoolConfig, SubagentProviderSource};
 use r_code_core::error::ProductError;
 use ring::{
     hmac,
@@ -1270,7 +1270,7 @@ mod tests {
     use super::*;
 
     use chrono::Duration as ChronoDuration;
-    use hermes_config::ProviderConfig;
+    use agent_config::ProviderConfig;
     use std::fs::{File, FileTimes};
     use tempfile::TempDir;
 
@@ -1921,7 +1921,7 @@ mod tests {
             .insert("provider-a".to_string(), provider.clone());
         let codex = codex_catalog_input(None);
         let pool = SubagentPoolConfig {
-            slots: vec![hermes_config::SubagentProviderSlot {
+            slots: vec![agent_config::SubagentProviderSlot {
                 slot_id: "primary".to_string(),
                 source: source.clone(),
                 model: "model-a".to_string(),

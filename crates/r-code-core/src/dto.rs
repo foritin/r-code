@@ -4,7 +4,7 @@
 //! 所有类型实现 `Serialize`/`Deserialize`，用于 SQLite 存储和 IPC 传输。
 
 use chrono::{DateTime, Utc};
-use hermes_core::InferenceOptions;
+use agent_contract::InferenceOptions;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -364,6 +364,15 @@ pub struct AgentRun {
     pub ended_at: Option<DateTime<Utc>>,
     /// Token 用量（JSON）
     pub usage_json: Option<String>,
+    /// 长任务循环护栏触发记录（JSON：`{"reason": ..., "detail": ...}`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_trip: Option<String>,
+    /// 最近一次绿灯 git checkpoint 的 commit SHA。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_sha: Option<String>,
+    /// 打点时的 HEAD SHA；回滚前必须仍与之相等（防止覆盖外部提交）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_base_head: Option<String>,
 }
 
 impl AgentRun {
@@ -397,6 +406,9 @@ impl AgentRun {
             started_at: Utc::now(),
             ended_at: None,
             usage_json: None,
+            guard_trip: None,
+            checkpoint_sha: None,
+            checkpoint_base_head: None,
         }
     }
 
@@ -1411,9 +1423,50 @@ pub fn selection_ref_data(
 // AgentEvent  [doc-04 §6]
 // ============================================================================
 
+/// 长任务循环护栏的触发原因。全部由宿主按可观察状态判定，绝不让模型自评是否失控。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuardTripReason {
+    /// 工具轮数超出 `max_tool_rounds`。
+    #[serde(rename = "tool_round_budget")]
+    ToolRoundsExceeded,
+    /// 单次 run 墙钟时长超出 `max_run_seconds`。
+    #[serde(rename = "wall_clock_budget")]
+    WallClockExceeded,
+    /// 累计思考量超出 `reasoning_budget_chars`。
+    #[serde(rename = "reasoning_budget")]
+    ReasoningBudgetExceeded,
+    /// 同一错误指纹连续失败达到 `same_error_limit`。
+    #[serde(rename = "same_error")]
+    SameErrorLimit,
+    /// 连续多轮工具调用没有宿主可观察的进展（含 replay 检测）。
+    #[serde(rename = "no_progress")]
+    NoProgress,
+    /// 累计变更文件数或变更字节数超出上限。
+    #[serde(rename = "diff_divergence")]
+    DiffDivergence,
+    /// 测试/构建命令连续失败达到 `test_fail_limit`。
+    #[serde(rename = "test_failures")]
+    TestFailStreak,
+}
+
+impl GuardTripReason {
+    /// 面向用户的中文标签，用于活动提示与审查卡片。
+    pub fn label_zh(self) -> &'static str {
+        match self {
+            Self::ToolRoundsExceeded => "工具轮数超出预算",
+            Self::WallClockExceeded => "运行时长超出预算",
+            Self::ReasoningBudgetExceeded => "思考量超出预算",
+            Self::SameErrorLimit => "同一错误连续出现",
+            Self::NoProgress => "持续调用但无进展",
+            Self::DiffDivergence => "变更范围持续发散",
+            Self::TestFailStreak => "测试连续失败",
+        }
+    }
+}
+
 /// Agent 事件 —— Worker -> Main 的事件流。
 ///
-/// 映射自 `hermes_llm::StreamEvent`，不重新定义流式事件格式。
+/// 映射自 `agent_llm::StreamEvent`，不重新定义流式事件格式。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
@@ -1502,7 +1555,7 @@ pub enum AgentEvent {
     },
     /// 单次模型请求的 token 用量（agent loop 单轮内累计）。
     ///
-    /// 键与 `hermes_core::Usage` 的 serde 输出一致（`input_tokens` /
+    /// 键与 `agent_contract::Usage` 的 serde 输出一致（`input_tokens` /
     /// `output_tokens` / `cache_read_tokens` / `cache_write_tokens`），宿主据此写入
     /// `AgentRun.usage_json`，前端 `runUsageLabel` 直接解析；与 Codex 线路写入
     /// 同一列的 JSON 形状保持一致。仅当 provider 报告非零用量时发出；会话
@@ -1522,6 +1575,23 @@ pub enum AgentEvent {
     StreamReplay {
         /// 当前重试次数（本轮内第几次重放，从 1 开始）。
         attempt: u32,
+    },
+    /// 长任务循环护栏触发。事件由宿主发出后，run 会先做一次无工具总结再进入
+    /// `ReviewReady`，工作区改动保留待审，绝不自动回滚。
+    GuardTrip {
+        reason: GuardTripReason,
+        /// 用户可见的中文细节；不得承载模型私有推理文本。
+        detail: String,
+    },
+    /// 绿灯 git checkpoint：测试全绿后为当前工作区快照创建的 commit SHA。
+    /// 只由主运行发出；`sha` 为空表示本次快照失败或未启用。`base_head` 是打点
+    /// 时的 HEAD，回滚前必须仍与之相等（防止覆盖外部提交）。
+    Checkpoint {
+        /// 快照 commit SHA（空 = 未生成）。
+        sha: String,
+        /// 打点时的 HEAD SHA；旧事件缺省为空。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        base_head: String,
     },
 }
 

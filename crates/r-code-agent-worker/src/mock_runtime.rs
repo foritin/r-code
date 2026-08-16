@@ -6,7 +6,7 @@
 //! [doc-04 §2.2]
 
 use async_trait::async_trait;
-use hermes_core::{Session, SessionMeta};
+use agent_contract::{Session, SessionMeta};
 use r_code_core::dto::{AgentEvent, CreateSessionInput, TaskState};
 use r_code_core::error::ProductError;
 use uuid::Uuid;

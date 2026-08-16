@@ -10,8 +10,8 @@ description = "R-Code Tool Gateway：工具注册、权限引擎、审计账本"
 
 [dependencies]
 # 公共合同
-hermes-core = { workspace = true }
-hermes-error = { workspace = true }
+agent-contract = { workspace = true }
+agent-error = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }

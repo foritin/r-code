@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use hermes_core::{CompletionRequest, InferenceOptions, Message};
+use agent_contract::{CompletionRequest, InferenceOptions, Message};
 use r_code_core::MemoryReviewOutput;
 use r_code_store::{Database, MemoryReviewClaim, MemoryStore};
 
@@ -74,15 +74,16 @@ async fn execute_claim(
     {
         return Err(("provider_unavailable", problem));
     }
-    let provider = hermes_llm::create_provider(build_provider_config(
+    let provider = agent_llm::create_provider(build_provider_config(
         &claim.reviewer.provider_name,
         provider_config,
     ))
     .map_err(|error| ("provider_unavailable", error.to_string()))?;
     let input = serde_json::to_string(&claim.assembly.wire)
         .map_err(|error| ("invalid_review_output", error.to_string()))?;
-    let response = provider
-        .complete(CompletionRequest {
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        provider.complete(CompletionRequest {
             model: claim.reviewer.model.clone(),
             system: Some(reviewer_system_prompt().to_string()),
             messages: vec![Message::user_text(format!(
@@ -94,9 +95,11 @@ async fn execute_claim(
             temperature: Some(0.1),
             enable_caching: false,
             inference: InferenceOptions::default(),
-        })
-        .await
-        .map_err(|error| ("provider_request_failed", error.to_string()))?;
+        }),
+    )
+    .await
+    .map_err(|_| ("provider_request_failed", "memory review timed out".to_string()))?
+    .map_err(|error| ("provider_request_failed", error.to_string()))?;
     let output =
         parse_review_output(&response.text()).map_err(|error| ("invalid_review_output", error))?;
     MemoryStore::new(db)

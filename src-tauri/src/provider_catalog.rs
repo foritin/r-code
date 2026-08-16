@@ -31,13 +31,13 @@ use serde::Serialize;
 /// （火山方舟 `/api/coding` 是 Anthropic 口，`/api/coding/v3` 是 OpenAI 口）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Protocol {
-    /// Anthropic Messages：`{base}/v1/messages`，由 `hermes_llm::AnthropicProvider` 处理。
+    /// Anthropic Messages：`{base}/v1/messages`，由 `agent_llm::AnthropicProvider` 处理。
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages,
-    /// OpenAI Chat Completions：`{base}/chat/completions`，由 `hermes_llm::OpenAiProvider` 处理。
+    /// OpenAI Chat Completions：`{base}/chat/completions`，由 `agent_llm::OpenAiProvider` 处理。
     #[serde(rename = "openai_chat")]
     OpenAiChat,
-    /// OpenAI Responses：`{base}/responses`，由 `hermes_llm::ResponsesProvider` 处理。
+    /// OpenAI Responses：`{base}/responses`，由 `agent_llm::ResponsesProvider` 处理。
     #[serde(rename = "openai_responses")]
     OpenAiResponses,
 }
@@ -174,7 +174,7 @@ pub struct Preset {
     /// `https://api.z.ai/api/anthropic/chat/completions` 发请求）。
     pub native: &'static [Protocol],
     pub auth: AuthStyle,
-    /// 接口根地址。拼接规则见 `hermes_llm::url`：
+    /// 接口根地址。拼接规则见 `agent_llm::url`：
     /// OpenAI 系只对裸域名补 `/v1`（`/api/coding/paas/v4` 这类保持原样），
     /// Anthropic 系一律补 `/v1/messages`（`/api/coding` → `/api/coding/v1/messages`）。
     pub base_url: &'static str,
@@ -242,7 +242,7 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: Some("https://console.anthropic.com/settings/keys"),
         endpoint_candidates: &[],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(128_000),
         context_window: Some(200_000),
         note: None,
     },
@@ -268,7 +268,7 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: Some("https://platform.openai.com/api-keys"),
         endpoint_candidates: &[],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(128_000),
         context_window: Some(1_050_000),
         note: Some("走 Responses；Chat Completions 未弃用但调不到 codex 系列"),
     },
@@ -313,7 +313,7 @@ pub const PRESETS: &[Preset] = &[
             label: "Azure 资源名",
             placeholder: "my-openai-resource",
         }],
-        max_output_tokens: None,
+        max_output_tokens: Some(128_000),
         context_window: None,
         note: Some(
             "v1 GA 路径下 api-version 已是可选参数。⚠️ Azure 用 api-key 头或 Entra token，\
@@ -343,7 +343,7 @@ pub const PRESETS: &[Preset] = &[
             label: "AWS Region",
             placeholder: "us-west-2",
         }],
-        max_output_tokens: None,
+        max_output_tokens: Some(128_000),
         context_window: Some(200_000),
         note: Some("需要 SigV4 签名；用长期 API Key 模式才能走现有的 Bearer 分支"),
     },
@@ -418,7 +418,7 @@ pub const PRESETS: &[Preset] = &[
             label: "国际站",
         }],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(262_144),
         context_window: Some(262_144),
         note: Some("模型名里的方括号后缀是上下文档位语法（如 kimi-k3[1m]），不要剥掉"),
     },
@@ -450,7 +450,9 @@ pub const PRESETS: &[Preset] = &[
         template_vars: &[],
         max_output_tokens: Some(32_768),
         context_window: Some(262_144),
-        note: None,
+        note: Some(
+            "thinking 仅支持 enabled（模型默认持续思考）；k3/k3-256k 推理强度为 low/high/max；该模型固定 temperature，客户端不会发送 temperature",
+        ),
     },
     Preset {
         id: "zhipu",
@@ -467,7 +469,7 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: Some("https://www.bigmodel.cn/usercenter/apikeys"),
         endpoint_candidates: &[],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(131_072),
         context_window: Some(200_000),
         note: None,
     },
@@ -487,7 +489,7 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: None,
         endpoint_candidates: &[],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(131_072),
         context_window: Some(200_000),
         note: Some("路径以 /v4 结尾，OpenAiProvider 的补 /v1 逻辑会拼错，需按原样透传"),
     },
@@ -511,7 +513,7 @@ pub const PRESETS: &[Preset] = &[
             label: "OpenAI 兼容口（Coding Plan）",
         }],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(131_072),
         context_window: Some(200_000),
         note: None,
     },
@@ -538,7 +540,7 @@ pub const PRESETS: &[Preset] = &[
         template_vars: &[],
         max_output_tokens: None,
         context_window: Some(256_000),
-        note: Some("必须走 /api/coding 才计入套餐；走 /api/v3 会静默转成按量计费"),
+        note: Some("必须走 /api/coding 才计入套餐；走 /api/v3 会静默转成按量计费。thinking 支持 enabled/disabled/auto，adaptive 亦可透传"),
     },
     Preset {
         id: "ark_coding_openai",
@@ -557,7 +559,7 @@ pub const PRESETS: &[Preset] = &[
         template_vars: &[],
         max_output_tokens: None,
         context_window: Some(256_000),
-        note: Some("套餐网关未见 /responses，只有 Chat Completions"),
+        note: Some("套餐网关只有 Chat Completions；thinking 支持 enabled/disabled/auto，adaptive 亦可透传"),
     },
     Preset {
         id: "ark_agent",
@@ -574,12 +576,12 @@ pub const PRESETS: &[Preset] = &[
             "ark-code-latest",
             "doubao-seed-2.0-mini",
             "doubao-seed-2.0-lite",
+            "doubao-seed-2.1-pro",
             "deepseek-v4-flash",
             "doubao-seed-2.1-turbo",
             "doubao-seed-evolving",
             "minimax-m3",
             "glm-5.2",
-            "glm-latest",
             "kimi-k2.7-code",
             "deepseek-v4-pro",
             "kimi-k3",
@@ -594,7 +596,7 @@ pub const PRESETS: &[Preset] = &[
         max_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some(
-            "官方现名 Agent Plan；Token 套餐必须走 /api/plan，改用 /api/v3 会进入按量线路",
+            "官方现名 Agent Plan；Token 套餐必须走 /api/plan，改用 /api/v3 会进入按量线路。模型以套餐实际开通列表为准，也支持手填 ep-xxx 接入点",
         ),
     },
     Preset {
@@ -621,7 +623,7 @@ pub const PRESETS: &[Preset] = &[
             label: "上海区域",
         }],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(256_000),
         context_window: Some(262_144),
         note: Some(
             "按量计费，不走套餐。同址有 /responses，但 Ark 的 Responses 不支持 include \
@@ -667,7 +669,7 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: Some("https://bailian.console.aliyun.com/#/api-key"),
         endpoint_candidates: &[],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(65_536),
         context_window: Some(1_048_576),
         note: Some("百炼 Anthropic 口还转发 glm / deepseek 等第三方模型"),
     },
@@ -686,7 +688,7 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: Some("https://bailian.console.aliyun.com/#/api-key"),
         endpoint_candidates: &[],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(65_536),
         context_window: Some(1_048_576),
         note: Some("套餐走 coding. 子域名，按量走 dashscope. 主域名，配错不计入套餐"),
     },
@@ -705,7 +707,7 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: Some("https://bailian.console.aliyun.com/#/api-key"),
         endpoint_candidates: &[],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(65_536),
         context_window: Some(1_048_576),
         note: Some("同一 base_url 下原生支持 /responses，SSE 事件名与 OpenAI 一致；previous_response_id 有效期 7 天"),
     },
@@ -729,7 +731,7 @@ pub const PRESETS: &[Preset] = &[
             label: "OpenAI 兼容口",
         }],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(204_800),
         context_window: Some(1_000_000),
         note: Some("忽略 top_k / stop_sequences；1M 档位模型名写作 MiniMax-M3[1m]"),
     },
@@ -753,7 +755,7 @@ pub const PRESETS: &[Preset] = &[
             label: "OpenAI 兼容口",
         }],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(204_800),
         context_window: Some(1_000_000),
         note: None,
     },
@@ -859,7 +861,7 @@ pub const PRESETS: &[Preset] = &[
             label: "OpenAI 兼容口",
         }],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(131_072),
         context_window: Some(1_048_576),
         note: Some("OpenAI 口官方声明原生支持 Responses"),
     },
@@ -883,7 +885,7 @@ pub const PRESETS: &[Preset] = &[
             label: "OpenAI 兼容口",
         }],
         template_vars: &[],
-        max_output_tokens: None,
+        max_output_tokens: Some(131_072),
         context_window: Some(1_048_576),
         note: None,
     },
@@ -1349,7 +1351,7 @@ pub fn catalog_dto() -> CatalogDto {
 ///    的套餐口和按量口经常是不同协议、不同计费，一律拆成两条独立预设。
 /// 3. `reasoning_replay` 只能对确认支持 `include=reasoning.encrypted_content`
 ///    的服务打开（目前只有 OpenAI 官方与 xAI），单测会拦。
-/// 4. `base_url` 按 `hermes_llm::url` 的规则写：OpenAI 系必须自带版本段，
+/// 4. `base_url` 按 `agent_llm::url` 的规则写：OpenAI 系必须自带版本段，
 ///    Anthropic 系不带版本段。
 ///
 /// **协议判定的优先级**

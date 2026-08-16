@@ -10,11 +10,11 @@ description = "R-Code Agent Worker：Agent Runtime、agent loop、事件流"
 
 [dependencies]
 # 公共合同
-hermes-core = { workspace = true }
-hermes-error = { workspace = true }
-hermes-llm = { workspace = true }
-hermes-store = { workspace = true }
-hermes-compaction = { workspace = true }
+agent-contract = { workspace = true }
+agent-error = { workspace = true }
+agent-llm = { workspace = true }
+agent-store = { workspace = true }
+agent-compaction = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }

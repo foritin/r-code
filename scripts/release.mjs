@@ -94,7 +94,7 @@ function versionSnapshot(paths = PATHS) {
   const installerTauri = JSON.parse(read(paths.installerTauri));
   const packageJson = JSON.parse(read(paths.packageJson));
   const packageLock = JSON.parse(read(paths.packageLock));
-  const lockPackages = [...cargoLock.matchAll(/\[\[package\]\]\r?\nname = "((?:r-code|hermes)-[^"]+)"\r?\nversion = "([^"]+)"/g)]
+  const lockPackages = [...cargoLock.matchAll(/\[\[package\]\]\r?\nname = "((?:r-code|agent)-[^"]+)"\r?\nversion = "([^"]+)"/g)]
     .map((match) => ({ name: match[1], version: match[2] }));
 
   if (lockPackages.length === 0) fail("Cargo.lock contains no R-Code workspace packages");

@@ -20,23 +20,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt;
-use hermes_core::{
+use agent_contract::{
     CompletionRequest, ContentBlock, LlmProvider, Message, Role, StreamEvent, ToolHost, ToolSpec,
     Usage,
 };
 use r_code_core::dto::AgentEvent;
 use r_code_core::error::ProductError;
 
+use crate::run_guard::ToolObservation;
+
 /// Provider 请求建立连接的最大等待（vendor 层无超时，F2 兜底）。
 const LLM_PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 /// 流式响应两次事件之间的最大空闲。长推理可能数分钟无输出，10 分钟是安全上限。
 const LLM_PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 观察值中保留的输出文本上限：足以覆盖测试/构建的成功与失败标记。
+const OBSERVATION_SNIPPET_CHARS: usize = 16_000;
 
 /// 单轮 agent 循环的控制结果。
 ///
 /// 可见事件经回调在产生时交付；调用方只需要根据此结果决定是否进入下一次模型请求。
 ///
-/// 注意：不含 `Copy`——`usage` 字段（hermes_core::Usage）不实现 Copy。
+/// 注意：不含 `Copy`——`usage` 字段（agent_contract::Usage）不实现 Copy。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolMetadataObservation {
     pub tool_name: String,
@@ -69,6 +73,9 @@ pub struct AgentLoopOutcome {
     /// this signal to make one controlled retry with the local web tools, without guessing from
     /// user-visible text or declaring hosted and local tools in the same request.
     pub hosted_web_failed: bool,
+    /// 本轮每个工具调用的宿主侧观察值（名称、输入、错误码、退出码、输出片段）。
+    /// `llm_runtime` 把它们喂给 `RunLoopGuard`，模型自己不能接触或伪造这些信号。
+    pub tool_observations: Vec<ToolObservation>,
 }
 
 const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
@@ -82,7 +89,9 @@ const MAX_STREAM_RECOVERIES: u32 = 5;
 const STREAM_RECOVERY_BASE_MS: u64 = 500;
 /// P1-E：流正常结束却未返回任何可展示内容时，重放冻结请求的次数上限。
 /// 与流空闲重放同一语义：只重放**尚无任何输出**的轮次，指数退避，避免重复输出。
-const MAX_EMPTY_RESPONSE_RECOVERIES: u32 = 3;
+/// 空响应重放在运行时层由“无工具最终总结恢复”统一处理；此处若继续重放会消费
+/// 后续脚本轮次，阻断该恢复路径，因此按 0 次禁用（保留常量以说明语义边界）。
+const MAX_EMPTY_RESPONSE_RECOVERIES: u32 = 0;
 /// 空响应恢复退避基数（500ms * 2^(n-1)）。
 const EMPTY_RESPONSE_RECOVERY_BASE_MS: u64 = 500;
 #[cfg(not(test))]
@@ -274,6 +283,40 @@ fn tool_result_error_code(content: &str) -> Option<String> {
     None
 }
 
+/// 从 bash 风格输出里解析 `exit: N`；缺失时再看结构化 metadata。
+fn tool_outcome_exit_code(outcome: &agent_contract::ToolCallOutcome) -> Option<i32> {
+    if let Some(metadata) = outcome.metadata.as_ref() {
+        if let Some(code) = metadata
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+        {
+            return i32::try_from(code).ok();
+        }
+    }
+    let content = outcome.content.as_str();
+    let rest = content.split("exit:").nth(1)?;
+    let digits: String = rest
+        .trim_start()
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    digits.parse::<i32>().ok()
+}
+
+/// 把一次真实工具执行转换为宿主侧护栏观察值。错误码与退出码都由宿主从结果
+/// 内容/元数据推导，模型无法在 ToolResult 之外伪造这些信号。
+fn tool_observation(call: &PendingToolCall, outcome: &agent_contract::ToolCallOutcome) -> ToolObservation {
+    let snippet: String = outcome.content.chars().take(OBSERVATION_SNIPPET_CHARS).collect();
+    ToolObservation {
+        name: call.name.clone(),
+        input: call.input.clone(),
+        is_error: outcome.is_error,
+        error_code: tool_result_error_code(&outcome.content),
+        exit_code: tool_outcome_exit_code(outcome),
+        output_snippet: snippet,
+    }
+}
+
 #[derive(Debug, Default)]
 struct EditRetryRecord {
     stale_failures: usize,
@@ -290,7 +333,7 @@ pub struct EditRetryGuard {
 }
 
 impl EditRetryGuard {
-    fn before_call(&self, call: &PendingToolCall) -> Option<hermes_core::ToolCallOutcome> {
+    fn before_call(&self, call: &PendingToolCall) -> Option<agent_contract::ToolCallOutcome> {
         if call.name != "edit" {
             return None;
         }
@@ -309,7 +352,7 @@ impl EditRetryGuard {
         } else {
             return None;
         };
-        Some(hermes_core::ToolCallOutcome {
+        Some(agent_contract::ToolCallOutcome {
             content: serde_json::json!({
                 "status": "blocked",
                 "tool": "edit",
@@ -327,7 +370,7 @@ impl EditRetryGuard {
         })
     }
 
-    fn observe(&mut self, call: &PendingToolCall, outcome: &hermes_core::ToolCallOutcome) {
+    fn observe(&mut self, call: &PendingToolCall, outcome: &agent_contract::ToolCallOutcome) {
         if call.name == "read_file" && !outcome.is_error {
             if let Some(path) = call
                 .input
@@ -378,7 +421,7 @@ async fn execute_pending_tool(
     tool_host: &dyn ToolHost,
     call: &PendingToolCall,
     abort: Option<&AtomicBool>,
-) -> Result<hermes_core::ToolCallOutcome, ProductError> {
+) -> Result<agent_contract::ToolCallOutcome, ProductError> {
     if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return Ok(cancelled_tool_outcome(call));
     }
@@ -391,10 +434,10 @@ async fn execute_pending_tool(
     let Some(abort) = abort else {
         return match watchdog {
             Some(timeout) => match tokio::time::timeout(timeout, &mut execution).await {
-                Ok(result) => result.map_err(map_hermes_err),
+                Ok(result) => result.map_err(map_agent_err),
                 Err(_) => Ok(timed_out_tool_outcome(call, timeout)),
             },
-            None => execution.await.map_err(map_hermes_err),
+            None => execution.await.map_err(map_agent_err),
         };
     };
 
@@ -409,7 +452,7 @@ async fn execute_pending_tool(
             return Ok(cancelled_tool_outcome(call));
         }
         tokio::select! {
-            result = &mut execution => return result.map_err(map_hermes_err),
+            result = &mut execution => return result.map_err(map_agent_err),
             _ = &mut deadline, if watchdog.is_some() => {
                 return Ok(timed_out_tool_outcome(call, watchdog.expect("deadline exists")));
             }
@@ -432,14 +475,14 @@ fn ordinary_tool_watchdog(name: &str) -> Option<Duration> {
 fn timed_out_tool_outcome(
     call: &PendingToolCall,
     timeout: Duration,
-) -> hermes_core::ToolCallOutcome {
+) -> agent_contract::ToolCallOutcome {
     tracing::warn!(
         tool = %call.name,
         tool_call_id = %call.id,
         timeout_ms = timeout.as_millis(),
         "tool execution produced no completion before the per-call watchdog expired"
     );
-    hermes_core::ToolCallOutcome {
+    agent_contract::ToolCallOutcome {
         content: serde_json::json!({
             "status": "timeout",
             "reason": format!(
@@ -459,7 +502,7 @@ async fn execute_pending_tools(
     calls: &[PendingToolCall],
     retry_guard: &mut EditRetryGuard,
     abort: Option<&AtomicBool>,
-) -> Result<Vec<hermes_core::ToolCallOutcome>, ProductError> {
+) -> Result<Vec<agent_contract::ToolCallOutcome>, ProductError> {
     let can_run_in_parallel = calls.len() > 1
         && calls
             .iter()
@@ -509,8 +552,8 @@ async fn execute_pending_tools(
     Ok(outcomes)
 }
 
-fn cancelled_tool_outcome(call: &PendingToolCall) -> hermes_core::ToolCallOutcome {
-    hermes_core::ToolCallOutcome {
+fn cancelled_tool_outcome(call: &PendingToolCall) -> agent_contract::ToolCallOutcome {
+    agent_contract::ToolCallOutcome {
         content: serde_json::json!({
             "status": "cancelled",
             "reason": format!(
@@ -775,8 +818,14 @@ where
         let mut tool_calls: Vec<PendingToolCall> = Vec::new();
         let mut tool_results: Vec<ContentBlock> = Vec::new();
         let mut tool_metadata: Vec<ToolMetadataObservation> = Vec::new();
+        let mut tool_observations: Vec<ToolObservation> = Vec::new();
         let mut total_usage = Usage::default();
         let mut reasoning_chars = 0usize;
+        // DeepSeek Responses 必须把明文 reasoning_text 回传到下一轮（否则 400）；
+        // Kimi 等实测方言回传 thinking 以命中 prefix cache。是否回传由 provider
+        // 的能力声明决定，其余 provider 保持不落历史。
+        let preserve_plaintext_reasoning = provider.echoes_reasoning();
+        let mut replay_reasoning = String::new();
         let mut streaming_started = false;
         // A provider response has one forward-only visible phase: private reasoning may precede
         // the answer, but it must never resume after answer text has started. Some compatible
@@ -804,19 +853,20 @@ where
                     appended_messages: Vec::new(),
                     requires_final_summary_recovery: false,
                     hosted_web_failed: false,
+                    tool_observations: std::mem::take(&mut tool_observations),
                 });
             }
             break tokio::select! {
                 result = &mut connection => result,
                 _ = &mut connect_deadline => {
-                    return Err(map_hermes_err(hermes_error::Error::Provider(
+                    return Err(map_agent_err(agent_error::Error::Provider(
                         "模型请求连接超时".to_string(),
                     )))
                 }
                 _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL), if abort.is_some() => continue,
             };
         };
-        let mut stream = connected.map_err(map_hermes_err)?;
+        let mut stream = connected.map_err(map_agent_err)?;
 
         loop {
             if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
@@ -830,7 +880,7 @@ where
                             Ok(Some(ev)) => Some(ev),
                             Ok(None) => None,
                             Err(_) => {
-                                return Err(map_hermes_err(hermes_error::Error::Provider(
+                                return Err(map_agent_err(agent_error::Error::Provider(
                                     "模型流式响应空闲超时".to_string(),
                                 )))
                             }
@@ -843,7 +893,7 @@ where
                     Ok(Some(ev)) => Some(ev),
                     Ok(None) => None,
                     Err(_) => {
-                        return Err(map_hermes_err(hermes_error::Error::Provider(
+                        return Err(map_agent_err(agent_error::Error::Provider(
                             "模型流式响应空闲超时".to_string(),
                         )));
                     }
@@ -868,6 +918,9 @@ where
                         streaming_started = true;
                     }
                     reasoning_chars = reasoning_chars.saturating_add(text.chars().count());
+                    if preserve_plaintext_reasoning {
+                        replay_reasoning.push_str(&text);
+                    }
                     if !answer_started {
                         emit(AgentEvent::Reasoning { text, delta: true });
                     }
@@ -981,7 +1034,7 @@ where
                 }
                 StreamEvent::Stop { reason } => {
                     let other_reason = match &reason {
-                        hermes_core::StopReason::Other(value) => Some(value.as_str()),
+                        agent_contract::StopReason::Other(value) => Some(value.as_str()),
                         _ => None,
                     };
                     // Anthropic server tools normally finish inside one response. A rare
@@ -1037,6 +1090,7 @@ where
                                 appended_messages: Vec::new(),
                                 requires_final_summary_recovery: false,
                                 hosted_web_failed: false,
+                                tool_observations: std::mem::take(&mut tool_observations),
                             });
                         }
                         // P1-E §8：重试计数对用户可见——每次实际重放前发出事件，
@@ -1122,6 +1176,7 @@ where
                         appended_messages: Vec::new(),
                         requires_final_summary_recovery: false,
                         hosted_web_failed: false,
+                        tool_observations: std::mem::take(&mut tool_observations),
                     });
                 }
                 continue 'attempt;
@@ -1139,12 +1194,26 @@ where
 
         flush_text(&mut current_text, &mut assistant_blocks);
 
+        // 回传方言：把本轮明文 reasoning 作为 Thinking 块插入 assistant 消息最前面，
+        // 下一轮由协议适配器映射为 reasoning_content（Chat）或 thinking 块
+        // （Anthropic）。EncryptedReplay 依赖 signature 块，无法从 delta 重建。
+        if preserve_plaintext_reasoning && !replay_reasoning.is_empty() {
+            assistant_blocks.insert(
+                0,
+                ContentBlock::Thinking {
+                    thinking: std::mem::take(&mut replay_reasoning),
+                    signature: None,
+                },
+            );
+        }
+
         if !tool_calls.is_empty() {
             let outcomes =
                 execute_pending_tools(tool_host, tools, &tool_calls, retry_guard, abort).await?;
             for (call, outcome) in tool_calls.into_iter().zip(outcomes) {
                 // 一旦 assistant 已经声明了一组 ToolUse，就必须为每个调用闭合协议对；
                 // 即使并发期间收到中断，也会为未启动调用合成可记录的取消结果。
+                tool_observations.push(tool_observation(&call, &outcome));
                 let output_val: serde_json::Value = serde_json::from_str(&outcome.content)
                     .unwrap_or(serde_json::Value::String(outcome.content.clone()));
                 emit(AgentEvent::ToolResult {
@@ -1194,7 +1263,7 @@ where
 
         // P0-B：把本轮累计 usage 经事件链暴露给宿主。Codex 线路在 run 完成时写库
         // （commands.rs set_usage），原生线路复用同一事件链与同一 JSON 形状——
-        // hermes Usage 的 serde 输出键（input_tokens/output_tokens/cache_read_tokens/
+        // 公共层（agent-contract）Usage 的 serde 输出键（input_tokens/output_tokens/cache_read_tokens/
         // cache_write_tokens）即前端 runUsageLabel 与 usage_json 列的契约。仅当
         // provider 报告了非零用量时发出，避免无 usage 的 provider 制造噪音事件。
         if total_usage.input_tokens > 0
@@ -1222,6 +1291,7 @@ where
             appended_messages,
             requires_final_summary_recovery,
             hosted_web_failed,
+            tool_observations,
         });
     };
     outcome
@@ -1268,19 +1338,19 @@ fn provider_content_to_custom(content: serde_json::Value) -> Option<ContentBlock
     })
 }
 
-/// 将 `hermes_error::Error` 映射为 `ProductError`。
+/// 将 `agent_error::Error` 映射为 `ProductError`。
 ///
-/// `ProductError` 与 `hermes_error::Error` 之间无 `From` 互转（公共层不依赖产品层），
+/// `ProductError` 与 `agent_error::Error` 之间无 `From` 互转（公共层不依赖产品层），
 /// 故在此显式映射常见变体，其余归入 `ProductError::Other`。
-fn map_hermes_err(err: hermes_error::Error) -> ProductError {
+fn map_agent_err(err: agent_error::Error) -> ProductError {
     match err {
-        hermes_error::Error::PermissionDenied(msg) => ProductError::PermissionError(msg),
-        hermes_error::Error::Provider(msg) => ProductError::Other(format!("provider: {msg}")),
-        hermes_error::Error::ToolHost(msg) => ProductError::Other(format!("tool host: {msg}")),
-        hermes_error::Error::ToolNotFound(name) => {
+        agent_error::Error::PermissionDenied(msg) => ProductError::PermissionError(msg),
+        agent_error::Error::Provider(msg) => ProductError::Other(format!("provider: {msg}")),
+        agent_error::Error::ToolHost(msg) => ProductError::Other(format!("tool host: {msg}")),
+        agent_error::Error::ToolNotFound(name) => {
             ProductError::Other(format!("tool not found: {name}"))
         }
-        hermes_error::Error::ToolCallFailed { tool, message } => {
+        agent_error::Error::ToolCallFailed { tool, message } => {
             ProductError::Other(format!("tool call failed ({tool}): {message}"))
         }
         other => ProductError::Other(other.to_string()),
@@ -1291,12 +1361,12 @@ fn map_hermes_err(err: hermes_error::Error) -> ProductError {
 mod tests {
     use super::STREAM_IDLE_TIMEOUT_REASON;
     use async_trait::async_trait;
-    use hermes_core::{
+    use agent_contract::{
         Capabilities, CompletionRequest, CompletionResponse, ContentBlock, LlmProvider, Message,
         Role, StopReason, StreamEvent, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
     };
-    use hermes_error::{Error, Result};
-    use hermes_llm::{MockProvider, RecordedTurn};
+    use agent_error::{Error, Result};
+    use agent_llm::{MockProvider, RecordedTurn};
     use r_code_core::dto::AgentEvent;
     use std::sync::{
         Arc, Mutex,
@@ -1305,11 +1375,13 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        EditRetryGuard, PendingToolCall, TOOL_NO_COMPLETION_TIMEOUT, edit_intent,
+        EditRetryGuard, OBSERVATION_SNIPPET_CHARS, PendingToolCall, TOOL_NO_COMPLETION_TIMEOUT,
+        edit_intent,
         normalized_tool_path, ordinary_tool_watchdog, repair_dangling_tool_uses,
         run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
         run_agent_loop_iteration_with_abort_and_emit,
         run_agent_loop_iteration_with_abort_and_emit_with_retry_guard,
+        tool_observation, tool_outcome_exit_code,
     };
 
     fn edit_call(id: &str, old_string: &str) -> PendingToolCall {
@@ -1536,6 +1608,7 @@ mod tests {
                 supports_vision: false,
                 supports_prompt_caching: false,
                 max_context_tokens: 16_000,
+                max_output_tokens: 0,
             }
         }
 
@@ -1720,6 +1793,7 @@ mod tests {
                 supports_vision: false,
                 supports_prompt_caching: false,
                 max_context_tokens: 16_000,
+                max_output_tokens: 0,
             }
         }
 
@@ -3614,7 +3688,7 @@ mod tests {
             },
         ]));
         // NullToolHost 对任何调用返回 Error::ToolHost
-        let tool_host = hermes_core::NullToolHost;
+        let tool_host = agent_contract::NullToolHost;
         let mut messages = vec![Message::user_text("hi")];
 
         let err =
@@ -3681,5 +3755,63 @@ mod tests {
             !events.iter().any(|e| matches!(e, AgentEvent::Usage { .. })),
             "provider 未报告用量时不应发出 Usage 事件"
         );
+    }
+
+    #[test]
+    fn tool_observation_derives_error_code_exit_code_and_snippet() {
+        let call = PendingToolCall {
+            id: "c1".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({ "command": "cargo test" }),
+        };
+        let outcome = ToolCallOutcome {
+            content: "$ cargo test\nexit: 2（非零，命令失败）\ntests failed\n".to_string(),
+            is_error: true,
+            metadata: None,
+        };
+        let observation = tool_observation(&call, &outcome);
+        assert_eq!(observation.name, "bash");
+        assert!(observation.is_error);
+        assert_eq!(observation.exit_code, Some(2));
+        assert!(observation.output_snippet.contains("tests failed"));
+        assert!(observation.error_code.is_none());
+    }
+
+    #[test]
+    fn tool_observation_prefers_structured_metadata_exit_code() {
+        let call = PendingToolCall {
+            id: "c2".to_string(),
+            name: "edit".to_string(),
+            input: serde_json::json!({ "path": "a.rs", "old_string": "x", "new_string": "y" }),
+        };
+        let outcome = ToolCallOutcome {
+            content: serde_json::json!({ "status": "error", "code": "stale_read" }).to_string(),
+            is_error: true,
+            metadata: Some(serde_json::json!({ "exit_code": 7 })),
+        };
+        let observation = tool_observation(&call, &outcome);
+        assert_eq!(observation.exit_code, Some(7));
+        assert_eq!(observation.error_code.as_deref(), Some("stale_read"));
+        assert_eq!(
+            tool_outcome_exit_code(&outcome),
+            Some(7),
+            "metadata 退出码应优先于输出文本"
+        );
+    }
+
+    #[test]
+    fn observation_snippet_is_bounded() {
+        let call = PendingToolCall {
+            id: "c3".to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({ "path": "big.txt" }),
+        };
+        let outcome = ToolCallOutcome {
+            content: "x".repeat(OBSERVATION_SNIPPET_CHARS + 100),
+            is_error: false,
+            metadata: None,
+        };
+        let observation = tool_observation(&call, &outcome);
+        assert_eq!(observation.output_snippet.chars().count(), OBSERVATION_SNIPPET_CHARS);
     }
 }

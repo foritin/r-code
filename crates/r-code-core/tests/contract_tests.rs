@@ -1,18 +1,18 @@
 //! agent-core 公共合同验证测试。
 //!
 //! 本文件实现 `docs/agent-core-development-checklist.html` 中的 P1 验证向量，
-//! 验证 R-Code 所依赖的 agent-core 公共 API 表面（hermes-* crate）被正确采纳。
+//! 验证 R-Code 所依赖的 agent-core 公共 API 表面（agent-* crate）被正确采纳。
 //! 每个测试对应一个合同向量（V-MSG / V-PROV / V-TOOL / V-STORE / V-CFG / V-COMP）。
 //!
 //! 运行：`cargo test -p r-code-core --test contract_tests`
 
-use hermes_compaction::{CompactionManager, SlidingWindowCompaction};
-use hermes_config::Config;
-use hermes_core::*;
-use hermes_error::Error;
-use hermes_llm::{create_provider, MockProvider, ProviderConfig, RecordedTurn};
-use hermes_mcp::McpToolHost;
-use hermes_store::SessionStore;
+use agent_compaction::{CompactionManager, SlidingWindowCompaction};
+use agent_config::Config;
+use agent_contract::*;
+use agent_error::Error;
+use agent_llm::{create_provider, MockProvider, ProviderConfig, RecordedTurn};
+use agent_mcp::McpToolHost;
+use agent_store::SessionStore;
 
 /// 环境变量是进程级全局状态；多个测试并行操作会竞态，用锁串行化。
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -534,7 +534,7 @@ memories_dir = "{base}/m"
     /// V-CFG-02：Debug 输出不含 api_key / authorization / cookie / token。
     #[test]
     fn v_cfg_02_debug_output_masks_secrets() {
-        let pc = hermes_config::ProviderConfig {
+        let pc = agent_config::ProviderConfig {
             base_url: "https://api.anthropic.com".into(),
             api_key: "sk-ant-super-secret-key-9876543210".into(),
             model: "claude-sonnet-4".into(),

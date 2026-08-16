@@ -1,6 +1,6 @@
 # cargo-deny 配置 -- 依赖边界 lint
 #
-# ✅ 决策：路径 B - 不使用 Pi SDK，直接基于 hermes-llm 的 LlmProvider trait 实现 agent loop
+# ✅ 决策：路径 B - 不使用 Pi SDK，直接基于 agent-llm 的 LlmProvider trait 实现 agent loop
 # 整个 workspace 不依赖任何 Pi SDK 包。
 # [doc-07 §7.2] [doc-18]
 

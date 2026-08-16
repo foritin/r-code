@@ -685,21 +685,29 @@ fn r7_t5_accessibility_keyboard_navigation() {
 
 #[test]
 fn r7_t5_accessibility_diff_text_mode() {
-    // accessible diff mode：store 标志 + 设置页开关（F7 导航为后续增强）
+    // Diff 现已始终使用可选择的 DOM 文本行，不再需要会让两种呈现漂移的设置开关。
     let store = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend/src/store/app.ts"),
     )
     .unwrap();
-    assert!(store.contains("accessibleDiffMode"));
-    assert!(store.contains("toggleDiffMode"));
+    assert!(!store.contains("accessibleDiffMode"));
+    assert!(!store.contains("toggleDiffMode"));
 
     let settings = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("frontend/src/components/scenes/SettingsScene.tsx"),
     )
     .unwrap();
-    assert!(settings.contains("accessibleDiffMode"), "settings toggle");
-    assert!(settings.contains("F7"), "F7 hint text");
+    assert!(!settings.contains("accessibleDiffMode"), "retired settings toggle");
+
+    let canvas = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend/src/components/room/Canvas.tsx"),
+    )
+    .unwrap();
+    assert!(canvas.contains("className=\"diff-body\""));
+    assert!(canvas.contains("<span className=\"code\">{l.text}</span>"));
+    assert!(canvas.contains("F7 下一个变更，Shift + F7 上一个"));
+    assert!(canvas.contains("aria-live=\"polite\""));
 }
 
 #[test]
@@ -851,7 +859,7 @@ async fn r7_accept_task() {
 
 #[tokio::test]
 async fn r7_replay_service_three_depths() {
-    use hermes_core::{Message, SessionEvent, SessionMeta};
+    use agent_contract::{Message, SessionEvent, SessionMeta};
     use r_code_host::replay::{EvidenceLevel, ReplayDepth, ReplayService};
 
     let dir = TempDir::new().unwrap();
@@ -943,7 +951,7 @@ async fn r7_replay_service_three_depths() {
 
 #[test]
 fn r7_replay_never_shows_thinking() {
-    use hermes_core::{ContentBlock, Message, Role, SessionEvent, SessionMeta};
+    use agent_contract::{ContentBlock, Message, Role, SessionEvent, SessionMeta};
     use r_code_host::replay::{ReplayDepth, ReplayService};
 
     let dir = TempDir::new().unwrap();

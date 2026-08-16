@@ -11,7 +11,7 @@ use std::{
 use std::path::Path;
 
 use async_trait::async_trait;
-use hermes_core::ToolCallOutcome;
+use agent_contract::ToolCallOutcome;
 use http::{HeaderName, HeaderValue};
 use rmcp::{
     model::{

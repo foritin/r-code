@@ -11,8 +11,8 @@ description = "R-Code product MCP contracts, runtime supervision, registry, and 
 [dependencies]
 async-trait = { workspace = true }
 blake3 = { workspace = true }
-hermes-core = { workspace = true }
-hermes-error = { workspace = true }
+agent-contract = { workspace = true }
+agent-error = { workspace = true }
 html2text = { workspace = true }
 http = { workspace = true }
 chrono = { workspace = true }

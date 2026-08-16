@@ -176,7 +176,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
 /// 列顺序：id, task_id, branch_id, parent_run_id, agent_kind, agent_label,
 /// delegated_by_tool_call_id, model, runtime_kind, external_session_id, review_state,
 /// started_at, ended_at, usage_json, summary, access_mode, routing_reason,
-/// require_approval
+/// require_approval, guard_trip, checkpoint_sha, checkpoint_base_head
 fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
     let agent_kind_str: String = row.get(4).map_err(db_err)?;
     let agent_kind = parse_agent_kind(&agent_kind_str)?;
@@ -227,6 +227,9 @@ fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
         ended_at,
         usage_json: row.get(13).map_err(db_err)?,
         summary: row.get(14).map_err(db_err)?,
+        guard_trip: row.get(18).map_err(db_err)?,
+        checkpoint_sha: row.get(19).map_err(db_err)?,
+        checkpoint_base_head: row.get(20).map_err(db_err)?,
     })
 }
 
@@ -613,7 +616,7 @@ impl<'a> TaskRepository<'a> {
     pub fn set_inference(
         &self,
         id: &str,
-        inference: &hermes_core::InferenceOptions,
+        inference: &agent_contract::InferenceOptions,
     ) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         let inference_json = serde_json::to_string(inference).map_err(|error| {
@@ -745,8 +748,8 @@ impl<'a> AgentRunRepository<'a> {
         conn.execute(
             "INSERT INTO agent_runs \
              (id, task_id, branch_id, parent_run_id, agent_kind, agent_label, summary, delegated_by_tool_call_id, \
-              model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, access_mode, routing_reason, require_approval) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+              model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 run.id,
                 run.task_id,
@@ -766,6 +769,9 @@ impl<'a> AgentRunRepository<'a> {
                 run.access_mode.to_string(),
                 run.routing_reason,
                 i64::from(run.require_approval),
+                run.guard_trip,
+                run.checkpoint_sha,
+                run.checkpoint_base_head,
             ],
         )
         .map_err(db_err)?;
@@ -778,7 +784,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -795,7 +801,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE task_id = ?1 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -816,7 +822,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at ASC",
             )
             .map_err(db_err)?;
@@ -838,7 +844,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -856,7 +862,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
             )
@@ -878,7 +884,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 \
                    AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
@@ -908,7 +914,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' \
                    AND model <> ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
@@ -935,7 +941,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval, guard_trip, checkpoint_sha, checkpoint_base_head \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND model = ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
             )
@@ -1000,6 +1006,33 @@ impl<'a> AgentRunRepository<'a> {
         conn.execute(
             "UPDATE agent_runs SET usage_json = ?1 WHERE id = ?2",
             params![usage_json, id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 记录长任务护栏触发（覆盖式：一个 run 只保留第一个触发原因）。
+    pub fn set_guard_trip(&self, id: &str, guard_trip_json: &str) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE agent_runs SET guard_trip = COALESCE(guard_trip, ?1) WHERE id = ?2",
+            params![guard_trip_json, id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 记录最近一次绿灯 git checkpoint 及其打点时的 HEAD（覆盖式：最新一次生效）。
+    pub fn set_checkpoint(
+        &self,
+        id: &str,
+        checkpoint_sha: &str,
+        checkpoint_base_head: &str,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE agent_runs SET checkpoint_sha = ?1, checkpoint_base_head = ?2 WHERE id = ?3",
+            params![checkpoint_sha, checkpoint_base_head, id],
         )
         .map_err(db_err)?;
         Ok(())
@@ -2755,7 +2788,7 @@ mod tests {
         let repo = TaskRepository::new(&db);
         let task = Task::new(Some("/proj".into()), "Inference", "Run", TaskMode::Auto);
         repo.create(&task).unwrap();
-        let inference = hermes_core::InferenceOptions {
+        let inference = agent_contract::InferenceOptions {
             thinking: Some("enabled".into()),
             reasoning_effort: Some("high".into()),
             verbosity: Some("low".into()),

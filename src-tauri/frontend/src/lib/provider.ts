@@ -76,7 +76,7 @@ export function providerLabel(name: string): string {
 /**
  * 自定义模型名的本地记忆。
  *
- * hermes-config 的 ProviderConfig 只有单个 `model` 字段。内置服务的候选模型
+ * agent-config 的 ProviderConfig 只有单个 `model` 字段。内置服务的候选模型
  * 现在由 `provider_catalog.rs` 提供，但它是一份会过期的静态清单，也覆盖不到
  * 用户自建的网关——所以仍然记住用户实际用过的名字，两者合并展示。
  * 等后端接上厂商的 /v1/models 发现能力后，这一层可以退成纯兜底。

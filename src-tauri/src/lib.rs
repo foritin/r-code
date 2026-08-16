@@ -1,8 +1,8 @@
 //! R-Code Host：主进程、IPC Server、进程编排。
 //!
 //! 基于 agent-core 公共层构建：
-//! - 使用 `hermes-ipc` 的跨平台 `IpcServer`/`IpcClient`（Unix Socket / Named Pipe）
-//! - 使用 `hermes-tauri` 的 `AppState` + commands 基础
+//! - 使用 `agent-ipc` 的跨平台 `IpcServer`/`IpcClient`（Unix Socket / Named Pipe）
+//! - 使用 `agent-tauri` 的 `AppState` + commands 基础
 //! - 在公共层基础上注册 R-Code 专属 method handler
 //!
 //! [doc-08] [agent-core/12 §6] [agent-core/10]

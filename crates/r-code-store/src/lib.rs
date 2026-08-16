@@ -1,7 +1,7 @@
 //! R-Code SQLite 持久化层。
 //!
 //! ✅ 双存储架构：
-//! - `hermes-store` (JSONL) 是会话内容源（source of truth）
+//! - `agent-store` (JSONL) 是会话内容源（source of truth）
 //! - `r-code-store` (SQLite) 是产品状态源
 //!
 //! ## 数据流

@@ -14,8 +14,8 @@ testing = ["dep:tempfile"]
 
 [dependencies]
 # 公共合同
-hermes-core = { workspace = true }
-hermes-error = { workspace = true }
+agent-contract = { workspace = true }
+agent-error = { workspace = true }
 
 # 序列化
 serde = { workspace = true }
@@ -56,8 +56,8 @@ tempfile = "3"
 tokio = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
-hermes-llm = { workspace = true }
-hermes-store = { workspace = true }
-hermes-config = { workspace = true }
-hermes-compaction = { workspace = true }
-hermes-mcp = { workspace = true }
+agent-llm = { workspace = true }
+agent-store = { workspace = true }
+agent-config = { workspace = true }
+agent-compaction = { workspace = true }
+agent-mcp = { workspace = true }

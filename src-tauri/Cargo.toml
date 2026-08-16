@@ -22,13 +22,13 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 # 公共合同
-hermes-core = { workspace = true }
-hermes-error = { workspace = true }
-hermes-ipc = { workspace = true }
-hermes-config = { workspace = true }
-hermes-tauri = { workspace = true }
-hermes-store = { workspace = true }
-hermes-llm = { workspace = true }
+agent-contract = { workspace = true }
+agent-error = { workspace = true }
+agent-ipc = { workspace = true }
+agent-config = { workspace = true }
+agent-tauri = { workspace = true }
+agent-store = { workspace = true }
+agent-llm = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }

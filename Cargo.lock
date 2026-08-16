@@ -9,6 +9,142 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-compaction"
+version = "0.9.0"
+dependencies = [
+ "agent-contract",
+ "agent-error",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agent-config"
+version = "0.9.0"
+dependencies = [
+ "agent-error",
+ "dirs 5.0.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.8.23",
+ "tracing",
+]
+
+[[package]]
+name = "agent-contract"
+version = "0.9.0"
+dependencies = [
+ "agent-error",
+ "async-trait",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "agent-error"
+version = "0.9.0"
+dependencies = [
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.19",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "agent-ipc"
+version = "0.9.0"
+dependencies = [
+ "agent-contract",
+ "agent-error",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "agent-llm"
+version = "0.9.0"
+dependencies = [
+ "agent-contract",
+ "agent-error",
+ "async-trait",
+ "bytes",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agent-mcp"
+version = "0.9.0"
+dependencies = [
+ "agent-contract",
+ "agent-error",
+ "async-trait",
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.23",
+ "tracing",
+]
+
+[[package]]
+name = "agent-store"
+version = "0.9.0"
+dependencies = [
+ "agent-contract",
+ "agent-error",
+ "chrono",
+ "flate2",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "agent-tauri"
+version = "0.9.0"
+dependencies = [
+ "agent-config",
+ "agent-contract",
+ "agent-error",
+ "agent-mcp",
+ "agent-store",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1789,142 +1925,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "hermes-compaction"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "futures",
- "hermes-core",
- "hermes-error",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hermes-config"
-version = "0.9.0"
-dependencies = [
- "dirs 5.0.1",
- "hermes-error",
- "serde",
- "serde_json",
- "tempfile",
- "toml 0.8.23",
- "tracing",
-]
-
-[[package]]
-name = "hermes-core"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "chrono",
- "futures",
- "hermes-error",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "hermes-error"
-version = "0.9.0"
-dependencies = [
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.19",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "hermes-ipc"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "futures",
- "hermes-core",
- "hermes-error",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "hermes-llm"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "hermes-core",
- "hermes-error",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hermes-mcp"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "futures",
- "hermes-core",
- "hermes-error",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "toml 0.8.23",
- "tracing",
-]
-
-[[package]]
-name = "hermes-store"
-version = "0.9.0"
-dependencies = [
- "chrono",
- "flate2",
- "futures",
- "hermes-core",
- "hermes-error",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "hermes-tauri"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "hermes-config",
- "hermes-core",
- "hermes-error",
- "hermes-mcp",
- "hermes-store",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3511,15 +3511,15 @@ dependencies = [
 name = "r-code-agent-worker"
 version = "0.9.0"
 dependencies = [
+ "agent-compaction",
+ "agent-contract",
+ "agent-error",
+ "agent-llm",
+ "agent-store",
  "async-trait",
  "blake3",
  "chrono",
  "futures",
- "hermes-compaction",
- "hermes-core",
- "hermes-error",
- "hermes-llm",
- "hermes-store",
  "r-code-core",
  "r-code-gateway",
  "r-code-mcp",
@@ -3536,18 +3536,18 @@ dependencies = [
 name = "r-code-core"
 version = "0.9.0"
 dependencies = [
+ "agent-compaction",
+ "agent-config",
+ "agent-contract",
+ "agent-error",
+ "agent-llm",
+ "agent-mcp",
+ "agent-store",
  "async-trait",
  "base64 0.22.1",
  "cap-std",
  "chrono",
  "futures",
- "hermes-compaction",
- "hermes-config",
- "hermes-core",
- "hermes-error",
- "hermes-llm",
- "hermes-mcp",
- "hermes-store",
  "keyring",
  "libc",
  "regex",
@@ -3566,14 +3566,14 @@ dependencies = [
 name = "r-code-gateway"
 version = "0.9.0"
 dependencies = [
+ "agent-contract",
+ "agent-error",
  "async-trait",
  "blake3",
  "chrono",
  "globset",
  "grep-regex",
  "grep-searcher",
- "hermes-core",
- "hermes-error",
  "ignore",
  "libc",
  "r-code-core",
@@ -3590,6 +3590,13 @@ dependencies = [
 name = "r-code-host"
 version = "0.9.0"
 dependencies = [
+ "agent-config",
+ "agent-contract",
+ "agent-error",
+ "agent-ipc",
+ "agent-llm",
+ "agent-store",
+ "agent-tauri",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -3600,13 +3607,6 @@ dependencies = [
  "fix-path-env",
  "flate2",
  "futures",
- "hermes-config",
- "hermes-core",
- "hermes-error",
- "hermes-ipc",
- "hermes-llm",
- "hermes-store",
- "hermes-tauri",
  "home",
  "libc",
  "objc2",
@@ -3667,12 +3667,12 @@ dependencies = [
 name = "r-code-mcp"
 version = "0.9.0"
 dependencies = [
+ "agent-contract",
+ "agent-error",
  "async-trait",
  "blake3",
  "chrono",
  "futures",
- "hermes-core",
- "hermes-error",
  "html2text",
  "http",
  "reqwest 0.12.28",
@@ -3692,11 +3692,11 @@ dependencies = [
 name = "r-code-store"
 version = "0.9.0"
 dependencies = [
+ "agent-contract",
+ "agent-error",
  "blake3",
  "chrono",
  "diffy",
- "hermes-core",
- "hermes-error",
  "r-code-core",
  "r2d2",
  "r2d2_sqlite",
@@ -3714,11 +3714,11 @@ dependencies = [
 name = "r-code-terminal"
 version = "0.9.0"
 dependencies = [
+ "agent-contract",
+ "agent-error",
  "async-trait",
  "chrono",
  "futures",
- "hermes-core",
- "hermes-error",
  "portable-pty",
  "r-code-core",
  "r-code-gateway",

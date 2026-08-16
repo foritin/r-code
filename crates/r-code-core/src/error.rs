@@ -1,6 +1,6 @@
 //! R-Code 专属错误类型。
 //!
-//! 这些错误在 r-code crate 中定义，不修改公共 `hermes_error::Error` 枚举。
+//! 这些错误在 r-code crate 中定义，不修改公共 `agent_error::Error` 枚举。
 //! 通过 `From` 实现与公共 `Error` 的互转。
 
 use thiserror::Error;
@@ -10,8 +10,8 @@ pub const PROJECT_CONVERSATION_LIMIT_REACHED_CODE: &str = "PROJECT_CONVERSATION_
 
 /// R-Code 产品专属错误。
 ///
-/// 不修改公共 `hermes_error::Error` 枚举。
-/// 通过 `From<ProductError> for hermes_error::Error` 互转。
+/// 不修改公共 `agent_error::Error` 枚举。
+/// 通过 `From<ProductError> for agent_error::Error` 互转。
 #[derive(Debug, Clone, Error)]
 pub enum ProductError {
     /// A workspace already owns the maximum number of unarchived conversations.
@@ -114,7 +114,7 @@ pub enum ProductError {
     Other(String),
 }
 
-impl From<ProductError> for hermes_error::Error {
+impl From<ProductError> for agent_error::Error {
     fn from(err: ProductError) -> Self {
         match err {
             ProductError::ProjectConversationLimitReached { limit } => Self::Other(format!(
@@ -181,20 +181,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn product_error_to_hermes_error() {
+    fn product_error_to_agent_error() {
         let err = ProductError::PathEscape("/etc/passwd".to_string());
-        let hermes_err: hermes_error::Error = err.into();
+        let agent_err: agent_error::Error = err.into();
         assert!(matches!(
-            hermes_err,
-            hermes_error::Error::PermissionDenied(_)
+            agent_err,
+            agent_error::Error::PermissionDenied(_)
         ));
     }
 
     #[test]
     fn product_error_database() {
         let err = ProductError::DatabaseError("connection failed".to_string());
-        let hermes_err: hermes_error::Error = err.into();
-        assert!(matches!(hermes_err, hermes_error::Error::Storage(_)));
+        let agent_err: agent_error::Error = err.into();
+        assert!(matches!(agent_err, agent_error::Error::Storage(_)));
     }
 
     #[test]

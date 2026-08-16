@@ -3,7 +3,7 @@
 //! 本 crate 实现 [doc-02] 定义的 Tool Gateway 与权限引擎：
 //! - [`permission::PermissionEngine`]：风险分级与审批流程
 //! - [`classifier`]：命令动态分类（文本注入 + shell 命令分级）
-//! - [`gateway::ToolGateway`]：工具注册、权限检查、审计记账（实现 `hermes_core::ToolHost`）
+//! - [`gateway::ToolGateway`]：工具注册、权限检查、审计记账（实现 `agent_contract::ToolHost`）
 //! - [`tools`]：文件读写工具集
 //! - [`tools_search`]：内嵌 ripgrep 引擎的 `search` / `glob`
 //! - [`tools_command`]：平台自适应的 `bash`
@@ -28,8 +28,8 @@ pub use gateway::{
 };
 pub use permission::{PermissionCheckResult, PermissionEngine, StandingRuleKey};
 pub use tools::{
-    ApplyPatchTool, CreateFileTool, DeleteFileTool, EditTool, GitStatusTool, ListFilesTool,
-    LoadSkillTool, ReadFileTool,
+    ApplyPatchTool, CreateFileTool, DeleteFileTool, EditTool, GitDiffStatTool, GitStatusTool,
+    ListFilesTool, LoadSkillTool, ReadFileTool,
 };
 pub use tools_command::BashTool;
 pub use tools_search::{GlobTool, SearchHit, SearchTool};

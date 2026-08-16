@@ -1,7 +1,7 @@
 # DeepSeek Provider 前缀缓存与响应速度优化 PRD
 
 > 归档状态：方案已实施，本文件只保留历史设计、验收与已知例外，不是当前待办。
-> 状态：**已实施（2026-08-07，分支 `feat/deepseek-prefix-cache`；两处已记录例外：P1-F 的 missing-reasoning 回放因 hermes 无 reasoning 事件流未实施、P2-G 命中率恢复场景测试未建，见 §5 对应注释。Review 收尾已补齐：§8 两项缓解（双套 usage 字段解析、重试计数展示）与 P2-H 运行时归因接线）**
+> 状态：**已实施（2026-08-07，分支 `feat/deepseek-prefix-cache`；两处已记录例外：P1-F 的 missing-reasoning 回放因公共层（agent-llm）无 reasoning 事件流未实施、P2-G 命中率恢复场景测试未建，见 §5 对应注释。Review 收尾已补齐：§8 两项缓解（双套 usage 字段解析、重试计数展示）与 P2-H 运行时归因接线）**
 > 范围：DeepSeek Provider 的请求字节稳定性、缓存观测与响应路径优化；主路径为 Chat Completions，并覆盖用户手动切换到 Responses、Anthropic Messages 兼容口及 DeepSeek 自定义网关时的协议适配。
 > 目标读者：维护者、评审者、实施者。
 > 参照实现：Reasonix（`esengine/DeepSeek-Reasonix`，MIT）——围绕 DeepSeek 字节级自动前缀缓存专门设计的 agent。
@@ -55,7 +55,7 @@ DeepSeek 的 prefix cache 是**字节级自动**的：两次请求的公共前�
 
 ## 3. 现状盘点（r-code 实测，含对应实施项）
 
-DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `hermes-llm` 的 `OpenAiProvider`（序列化与发送，`vendor/agent-core/crates/hermes-llm/src/`）。
+DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `agent-llm` 的 `OpenAiProvider`（序列化与发送，`vendor/agent-core/crates/agent-llm/src/`）。
 
 | # | 现状 | 位置 | 对缓存/速度的影响 | 实施项 |
 | --- | --- | --- | --- | --- |
@@ -64,11 +64,11 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 | A3 | `memory_context` 注入 system（每 run 冻结） | `llm_runtime.rs:261-276`；冻结点 `829`、`commands.rs:8457` | 🟡 run 间变化切断跨 run 前缀 | P0-A |
 | A4 | tools 顺序来自 `HashMap::values()` 迭代，进程内稳定、**重启后随机** | `gateway.rs:479, 531-542` | 🟡 重启后首个请求必 miss | P1-C |
 | A5 | `repair_dangling_tool_uses` 向历史**插入合成消息**（仅异常路径，但永久改变该会话前缀） | `agent_loop.rs:162-235, 330` | 🟡 异常恢复后前缀改写 | P1-D |
-| A6 | usage 解析把缓存字段**硬编码丢弃**（`cache_read_tokens: None, cache_write_tokens: None`），`prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` 未读取 | `openai.rs:773-785`（字段本身是 `Option<u32>`，`hermes-core/src/usage.rs:13,15`） | 🔵 无观测手段 | P0-B |
+| A6 | usage 解析把缓存字段**硬编码丢弃**（`cache_read_tokens: None, cache_write_tokens: None`），`prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` 未读取 | `openai.rs:773-785`（字段本身是 `Option<u32>`，`agent-contract/src/usage.rs:13,15`） | 🔵 无观测手段 | P0-B |
 | A7 | **agent-worker 原生 LlmAgentRuntime 线路的 usage 不持久化**（仅 `tracing::debug!`）；注意 Codex CLI 线路**已实时持久化**（`commands.rs:12885-12891, 15160-15162, 15371-15373`，写库 API `repositories.rs:854-858` 已存在） | `agent_loop.rs:562-567`、`dto.rs:366` | 🔵 原生线路无法量化收益 | P0-B |
 | A8 | `supports_prompt_caching = false`（仅能力声明，不影响字节级自动缓存） | `deepseek.rs:60`、`openai.rs:225` | 🔵 信息错误，需修正 | P0-B |
 | A9 | 无重试：连接/流式失败即终止 run（`gateway.rs` 的工具执行重试与 provider 请求无关） | `agent_loop.rs:345-405` | 🔵 网络抖动直接失败，无"冻结请求重放" | P1-E |
-| A10 | 无历史压缩：`hermes-compaction` 未接入生产代码（`crates/r-code-agent-worker/Cargo.toml:17` **声明了但生产代码未使用**；`crates/r-code-core/Cargo.toml:46` 为 dev-dependencies，仅 `tests/contract_tests.rs:9,600-633` 引用） | — | 🔵 64k 模型会超窗；1M 模型成本无界 | P2-G |
+| A10 | 无历史压缩：`agent-compaction` 未接入生产代码（`crates/r-code-agent-worker/Cargo.toml:17` **声明了但生产代码未使用**；`crates/r-code-core/Cargo.toml:46` 为 dev-dependencies，仅 `tests/contract_tests.rs:9,600-633` 引用） | — | 🔵 64k 模型会超窗；1M 模型成本无界 | P2-G |
 | A11 | 运行期注入的动态消息（steer、continuation、子代理收集、findings）均 append 到历史**尾部** | `llm_runtime.rs:1154-1159, 1281-1283, 1324-1329, 1382-1387` | ✅ 位置正确，保持"只追加"即可，**不纳入改动** | — |
 | A12 | serde_json 未启用 `preserve_order`（键字典序，字节稳定）；全流式实时转发；工具并发执行；子代理 system 无时间戳 | `Cargo.toml:42`、`agent_loop.rs:410-419, 525` | ✅ 有利基础 | — |
 | A13 | system 中段还有三类**按轮动态内容**：①委派提示（`delegation_allowed` 由 `delegation_directive(&messages)` 基于最新用户消息每轮重算，`llm_runtime.rs:1182, 1204-1219`；`codex_available()` 于 `1207`）；②plan mode policy（`session.mode` run 中可变，`1204` + `commands.rs:1679`）；③workspace attach/detach（base 在 `WORKSPACE_SYSTEM_PROMPT`/`CHAT_SYSTEM_PROMPT` 间切换，`148,154`，连带 tools 过滤 `1744-1748`） | `llm_runtime.rs:1204-1219` | 🟠 用户行为变化即改 system 中段（属**合法重置点**，但需显式表达） | P0-A/P1-D |
@@ -128,7 +128,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 3. 持久化与展示：agent-worker 原生线路补写 `usage_json`（`dto.rs:366` 列已存在；复用 Codex 线路的 `set_usage` 写库 API `repositories.rs:854-858`）；UI 展示会话累计命中率——扩展 `Timeline.tsx:107-120` 的 `runUsageLabel` 解析 `cache_read_tokens/cache_write_tokens`（前端文件位置以实施时为准）。
 4. `deepseek.rs:60` / `openai.rs:225`：`supports_prompt_caching` 置 true（DeepSeek 自动缓存确实存在；注意 `openai.rs:225` 影响**所有** OpenAI 兼容 provider 的能力声明，需确认 UI 只把它用于提示展示，生产代码不消费 `enable_caching`——已确认 `openai.rs` 不消费，风险见 §8）。
 
-**涉及文件**：`vendor/agent-core/crates/hermes-llm/src/openai.rs`（44-52、90-95、773-785）、`vendor/agent-core/crates/hermes-llm/src/deepseek.rs`（60）；`crates/r-code-agent-worker/src/agent_loop.rs`（562-567）、`crates/r-code-core/src/dto.rs`（366）、`crates/r-code-store/src/repositories.rs`（854-858 复用）、`src-tauri/src/commands.rs`、前端 `Timeline.tsx`。
+**涉及文件**：`vendor/agent-core/crates/agent-llm/src/openai.rs`（44-52、90-95、773-785）、`vendor/agent-core/crates/agent-llm/src/deepseek.rs`（60）；`crates/r-code-agent-worker/src/agent_loop.rs`（562-567）、`crates/r-code-core/src/dto.rs`（366）、`crates/r-code-store/src/repositories.rs`（854-858 复用）、`src-tauri/src/commands.rs`、前端 `Timeline.tsx`。
 
 **改动规模**：5-6 个文件（含 2 个 vendor 文件）。
 
@@ -183,7 +183,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 3. 流空闲 watchdog：SSE 无数据超过阈值（Reasonix `defaultStreamIdleTimeout = 120s`，`openai.go:43-50`）视为流死，关闭连接走恢复路径——与连接超时互补（区分"连接断了"与"流死了"）。
 4. 重试边界：仅 5xx/连接类/流中断可重试；4xx/AuthFailed 不重试（`agent_loop.rs:1547` `provider_error_propagates` 测试契约）。
 
-**涉及文件**：`vendor/agent-core/crates/hermes-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`（345-405、1547）。
+**涉及文件**：`vendor/agent-core/crates/agent-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`（345-405、1547）。
 
 **改动规模**：2 个文件。
 
@@ -201,19 +201,19 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 1. **键恒发**（Reasonix `openai.go:688-735`）：thinking 模式对 assistant tool_calls 轮**恒发 `reasoning_content` 键**（空串可接受，缺键 DeepSeek 400 "must be passed back"，724-730）；tool 消息恒发 `name` 键（719-723）；发送前修复悬空工具调用对（`SanitizeToolPairing`，689-692）。对应 r-code 的 `openai.rs` 序列化层。
 2. **missing-reasoning 精确回放**（Reasonix `run_loop.go:444-493`）：工具轮 reasoning 缺失时用**同一冻结请求**精确重放一次（不造合成 prompt），带审计事件——与 P1-E 同一冻结基础设施。
 
-**涉及文件**：`vendor/agent-core/crates/hermes-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`。
+**涉及文件**：`vendor/agent-core/crates/agent-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`。
 
 **改动规模**：2 个文件。
 
 **验收标准**：
 - [x] 单测：thinking 模式序列化后 assistant 消息含 `reasoning_content` 键（值为空串也可）；tool 消息含 `name` 键。
-- [ ] 单测：缺 reasoning 的响应触发一次冻结请求重放，session 无新增消息。**（未实施：hermes 无 reasoning 事件流，响应侧无法观测 reasoning 缺失；键恒发已消除 DeepSeek 400 的主要触发面。若未来 hermes 暴露 reasoning 事件，按本节方案补回放。）**
+- [ ] 单测：缺 reasoning 的响应触发一次冻结请求重放，session 无新增消息。**（未实施：公共层（agent-llm）无 reasoning 事件流，响应侧无法观测 reasoning 缺失；键恒发已消除 DeepSeek 400 的主要触发面。若未来公共层暴露 reasoning 事件，按本节方案补回放。）**
 
 ### P2-G：接入分层压缩（长会话）
 
 **目标**：长会话不超窗、成本有界，压缩尽可能少打穿缓存。
 
-**方案**：接入 `hermes-compaction`（worker 的 `Cargo.toml:17` 已声明依赖），对齐 Reasonix 分层（`internal/agent/compact.go`）：
+**方案**：接入 `agent-compaction`（worker 的 `Cargo.toml:17` 已声明依赖），对齐 Reasonix 分层（`internal/agent/compact.go`）：
 1. 阈值（相对 provider context window，默认 0.5/0.6/0.8，`config.go:1846-1848`）：50% 仅提示一次、60% 剪旧工具结果（保留头尾 + 引用，`prune.go`）、80% 摘要折叠。
 2. 折叠边界（`compact.go:217-342`）：保留 (a) system（b) 小 user 轮次 verbatim——**有上限**：`maxPinnedFirstUserTokens=1500` 且不超过窗口 15%（`compact.go:35-36`）(c) 旧摘要（不重复折叠）(d) 尾部预算 `defaultTailTokens=16384`（`compact.go:31`；64k 模型约占 25%，需按模型窗口调整）。压缩前**归档原始消息**（`archiveMessages`）；摘要失败时用确定性机械折叠兜底（不循环、不丢 verbatim 小轮次，`compact.go:293-315`）。
 3. **防抖守卫**：连续 2 次压缩即暂停自动压缩并提示"窗口太小"（压缩后仍超阈值才会触发第二次，`compact.go:136-166`）；context window < 16384 显示非阻断警告（Reasonix `docs/GUIDE.md:441-442`）。
@@ -270,7 +270,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 | 真实 API | `#[ignore]` 集成测试（需 key） | 实测 `prompt_cache_hit_tokens` 增长曲线；探针设计参考 Reasonix `realcache_test.go`（前缀需明显超过 64-token 缓存块粒度） |
 | 产品 | UI 命中率展示 | P0-B 之后，状态栏/会话详情显示累计命中率（`runUsageLabel` 扩展） |
 
-协议切换回归位于 `vendor/agent-core/crates/hermes-llm/tests/deepseek_protocol_routes.rs`：使用本机 loopback HTTP/SSE 逐条验证 Chat 自定义网关、Responses、Anthropic 兼容口与旧网关兼容回退的 endpoint、公共请求前缀、缓存 usage 及能力声明。它证明 R-Code 的协议适配，不宣称任意第三方网关都完整兼容 DeepSeek。
+协议切换回归位于 `vendor/agent-core/crates/agent-llm/tests/deepseek_protocol_routes.rs`：使用本机 loopback HTTP/SSE 逐条验证 Chat 自定义网关、Responses、Anthropic 兼容口与旧网关兼容回退的 endpoint、公共请求前缀、缓存 usage 及能力声明。它证明 R-Code 的协议适配，不宣称任意第三方网关都完整兼容 DeepSeek。
 
 **发布门槛**（两个时点，缺一不可）：① **P0-A 落地前**采集 10 轮以上工具会话的缓存命中率基线并**存档**（预期 ≈0%，作为"优化前"对照）；② **P0-A 完成后**复测同场景，基线应 ≥85%（作为"优化后"对照）。基线采集细节见 P0-B 验收；若未达 85%，回退路径见 §8。
 
@@ -309,7 +309,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 
 | 风险/问题 | 说明 | 缓解 |
 | --- | --- | --- |
-| vendor 子模块本地修改 | `hermes-llm` 是固定 commit 子模块（`.gitmodules`）；全仓无本地补丁机制；发布流程含 `git submodule status` 检查（`docs/RELEASING.md:153`） | 已确认可本地改（用户决策）；改动保持小面、注释标记；发布前把 vendor 子模块**提升到新 commit**（在 vendor 仓库内提交本地改动）或建立 vendor 补丁目录，二选一需在实施前定 |
+| vendor 子模块本地修改 | `agent-llm` 是固定 commit 子模块（`.gitmodules`）；全仓无本地补丁机制；发布流程含 `git submodule status` 检查（`docs/releasing.md:153`） | 已确认可本地改（用户决策）；改动保持小面、注释标记；发布前把 vendor 子模块**提升到新 commit**（在 vendor 仓库内提交本地改动）或建立 vendor 补丁目录，二选一需在实施前定 |
 | P1-E 重试的重复计费与重复输出 | body 层最多 6 次尝试，用户可能看到重复的流式内容片段 | 参照 Reasonix `RequestAttemptCounter`（`agent.go:2976-2978`）统计并展示重试次数；仅对"连接/流中断"重试，已产出内容后不重试 |
 | P2-G 压缩基数与模型窗口 | 50/60/80% 相对 provider context window；16K 尾部预算在 64k 模型占 25%、1M 模型占 1.6% | 阈值与尾部预算按模型窗口配置化；超窗兜底：升级模型或强制压缩（90% force 档） |
 | P0-B 通用 usage 解析影响其他 OpenAI 兼容 provider | DeepSeek 字段名 `prompt_cache_hit_tokens` 与 OpenAI 官方 `prompt_tokens_details.cached_tokens` 不同 | 解析时两套字段都尝试；缺省回落 `Some(0)` |
@@ -328,7 +328,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 - [x] §6 真实 API 基线报告采集并**存档到 `docs/`**（`deepseek-cache-baseline.md`：2 轮基线 + 14 轮真实 API 曲线，tail_avg(3)=93.0% ≥85%，发布门槛②达成）。
 - [x] §6.1 受影响测试清单全部同步更新，既有测试无回归。
 - [x] vendor 改动带注释标记，且发布流程（`git submodule status` 检查）通过（gitlink `d26f02e`，子模块仓内提交 `fe64d90`/`34cd10f`/`d26f02e`）。
-- [x] `docs/README.md` 索引与本文档状态从"草案"更新为"已实施"；`docs/ARCHITECTURE.md` 中受影响的章节（Agent 执行链路 §6.3、Provider §12）已同步。
+- [x] `docs/readme.md` 索引与本文档状态从"草案"更新为"已实施"；`docs/architecture.md` 中受影响的章节（Agent 执行链路 §6.3、Provider §12）已同步。
 - [x] §8 开放问题中"vendor 修改机制二选一"已决策并记录：**采用「vendor 子模块提升到新 commit」方案**（父仓 gitlink 指向子模块新 commit，`git submodule status` 一致）。
 
 ---

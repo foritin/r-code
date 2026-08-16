@@ -25,7 +25,7 @@
 ## 备注
 
 - 基线①（P0-A 前 ≈0% 对照）未采集：P0-A 已实施，历史对照由上述"请求 1 冷启动全 miss"数据替代。
-- 正式探针测试（`#[ignore]`，走 hermes-llm 流式链路 + usage 解析）待补：见 PRD §6 真实 API 层级。
+- 正式探针测试（`#[ignore]`，走 agent-llm 流式链路 + usage 解析）待补：见 PRD §6 真实 API 层级。
 
 ## 探针复测（2026-08-07，`deepseek_cache_probe.rs`，真实 API 14 轮）
 
@@ -51,5 +51,5 @@
 复跑命令（vendor/agent-core 目录下，key 从环境变量读取、不落盘）：
 
 ```bash
-DEEPSEEK_API_KEY=sk-... cargo test -p hermes-llm --test deepseek_cache_probe -- --ignored --nocapture
+DEEPSEEK_API_KEY=sk-... cargo test -p agent-llm --test deepseek_cache_probe -- --ignored --nocapture
 ```

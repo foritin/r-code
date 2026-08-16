@@ -11,7 +11,7 @@
 //! - `provider_visible_version`：参与归因（变化 → `Rewrite`）；
 //! - `local_metadata_version`：只记录、不上报（变化 → `None`）。
 
-use hermes_core::ToolSpec;
+use agent_contract::ToolSpec;
 
 /// 请求可缓存前缀的指纹（PrefixShape）。
 ///
@@ -253,7 +253,7 @@ impl FnvHasher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermes_core::ToolSource;
+    use agent_contract::ToolSource;
 
     fn tool(name: &str, description: &str, schema: serde_json::Value) -> ToolSpec {
         ToolSpec {

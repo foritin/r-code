@@ -1,6 +1,6 @@
 //! R-Code Agent Worker：Agent Runtime、agent loop、事件流。
 //!
-//! 基于 `hermes-llm` 的 `LlmProvider` trait 实现 agent 循环
+//! 基于 `agent-llm` 的 `LlmProvider` trait 实现 agent 循环
 //! （model -> tool -> feedback -> model），不使用 Pi SDK（路径 B 决策）。
 //!
 //! ## 模块结构
@@ -16,10 +16,12 @@
 
 pub mod agent_loop;
 pub mod cache_shape;
+mod checkpoint;
 mod delegation_tree;
 pub mod llm_runtime;
 pub mod mock_runtime;
 pub mod recovery;
+mod run_guard;
 pub mod runtime;
 
 pub use agent_loop::run_agent_loop_iteration;
@@ -36,6 +38,8 @@ pub use llm_runtime::{
     SubagentCandidateRunner, SubagentCandidateSource, SubagentProviderCapabilities,
     native_parent_subagent_access,
 };
+pub use checkpoint::GreenCheckpoint;
 pub use mock_runtime::MockAgentRuntime;
 pub use recovery::{RecoveryState, scan_orphaned_runs};
+pub use run_guard::RunBudgetPolicy;
 pub use runtime::{AgentRuntime, SteerResult};

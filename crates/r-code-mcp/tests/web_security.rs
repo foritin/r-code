@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use hermes_core::ToolHost;
+use agent_contract::ToolHost;
 use r_code_mcp::{
     is_blocked_ip, DnsResolver, WebClient, WebError, WebHttpAdapter, WebHttpRequest,
     WebHttpResponse, WebLimits, WebSearchConfiguration, WebSearchProvider, WebToolHost,

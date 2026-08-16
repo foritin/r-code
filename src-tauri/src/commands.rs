@@ -42,18 +42,19 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
 };
-use hermes_config::{SubagentPoolConfig, SubagentProviderSource};
-use hermes_core::{
+use agent_config::{SubagentPoolConfig, SubagentProviderSource};
+use agent_contract::{
     CompletionRequest, ContentBlock, FileSource, HostedToolFormat, HostedToolSpec,
     InferenceOptions, Message, Role, SessionEvent, SessionMeta,
 };
-use hermes_store::{SessionStore, DURABLE_USER_MESSAGE_CANCEL_EVENT, DURABLE_USER_MESSAGE_EVENT};
+use agent_store::{SessionStore, DURABLE_USER_MESSAGE_CANCEL_EVENT, DURABLE_USER_MESSAGE_EVENT};
 use r_code_agent_worker::{
     native_parent_subagent_access, AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome,
     CodexSubagentRequest, CodexSubagentRunner, DelegationRouterMode as RuntimeDelegationRouterMode,
     ExternalAgentId, FrozenSubagentSlot, FrozenSubagentSlotDescriptor, MockAgentRuntime,
     NativeSubagentRuntimeOptions, OrchestrationPolicy, QualityLoopMode as RuntimeQualityLoopMode,
     QualityReviewer as RuntimeQualityReviewer, RCodeSubagentRequest, RCodeSubagentRunner,
+    RunBudgetPolicy,
     SteerResult, SubagentCandidateOutcome, SubagentCandidateRequest, SubagentCandidateRunner,
     SubagentCandidateSource, SubagentProviderCapabilities as RuntimeSubagentProviderCapabilities,
 };
@@ -69,8 +70,8 @@ use r_code_core::error::ProductError;
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput,
     PlanExecutionContext, PlanExecutionStatus, PlanImplementationDispatchState, PlanItemState,
-    PlanQuestionAnswer, PlanQuestionSet, PlanQuestionSetState, PlanReviewDecision, PlanState,
-    PlanView, UpdatePlanItemInput,
+    PlanQuestionAnswer, PlanQuestionSet, PlanQuestionSetKind, PlanQuestionSetState,
+    PlanReviewDecision, PlanState, PlanView, UpdatePlanItemInput,
 };
 use r_code_core::process::hide_background_console;
 use r_code_core::secret::redact_text;
@@ -120,7 +121,8 @@ use crate::plan_review_tools::{
     plan_review_status as current_plan_review_status,
 };
 use crate::plan_tools::{
-    EnterPlanModeTool, PlanItemUpdateTool, PlanPublishTool, RequestUserInputTool,
+    EnterPlanModeTool, PlanItemUpdateTool, PlanPublishTool, RequestScopeDecisionTool,
+    RequestUserInputTool,
 };
 use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
 use crate::replay::{ReplayDepth, ReplayService};
@@ -1044,6 +1046,7 @@ impl CommandState {
         gateway.register(Box::new(r_code_gateway::SearchTool));
         gateway.register(Box::new(r_code_gateway::GlobTool));
         gateway.register(Box::new(r_code_gateway::GitStatusTool));
+        gateway.register(Box::new(r_code_gateway::GitDiffStatTool));
         gateway.register(Box::new(r_code_gateway::LoadSkillTool));
         // 受控配置写入（R2）
         gateway.register(Box::new(SaveWorkflowSkillTool::new(
@@ -1061,6 +1064,10 @@ impl CommandState {
             plan_store.clone(),
         )));
         gateway.register(Box::new(RequestUserInputTool::new(
+            db.clone(),
+            plan_store.clone(),
+        )));
+        gateway.register(Box::new(RequestScopeDecisionTool::new(
             db.clone(),
             plan_store.clone(),
         )));
@@ -1417,6 +1424,9 @@ pub struct SessionAttachmentMeta {
     pub media_type: String,
     /// image / text / pdf
     pub kind: String,
+    /// 图片附件的按需预览引用；非图片附件恒为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1583,7 +1593,7 @@ fn parse_decision(decision: &str) -> Result<PermissionDecision, String> {
     }
 }
 
-/// 将错误转换为 String。泛型实现，兼容 ProductError / hermes_error::Error / std::io::Error 等。
+/// 将错误转换为 String。泛型实现，兼容 ProductError / agent_error::Error / std::io::Error 等。
 fn err_str<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -1632,7 +1642,17 @@ fn task_workspace_binding_from_db(
     task: &Task,
 ) -> Result<(Option<String>, ProjectAccessMode), String> {
     let Some(workspace_path) = task.workspace_path.as_deref() else {
-        return Ok((None, ProjectAccessMode::RequestApproval));
+        // 纯聊天默认把用户主目录作为工作区：MCP 等全局能力不绑定项目，
+        // 本地文件/终端工具以主目录为根，写操作与命令仍需要用户批准。
+        let home = dirs::home_dir()
+            .filter(|path| path.is_dir())
+            .ok_or_else(|| "无法确定当前用户主目录".to_string())?
+            .canonicalize()
+            .map_err(|error| format!("用户主目录不可访问：{error}"))?;
+        return Ok((
+            Some(home.display().to_string()),
+            ProjectAccessMode::RequestApproval,
+        ));
     };
     let workspace = WorkspaceService::new(db)
         .get(workspace_path)
@@ -1652,10 +1672,14 @@ fn attached_task_workspace_root(state: &CommandState, task_id: &str) -> Result<P
         .get(task_id)
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found: {task_id}"))?;
-    let path = task.workspace_path.ok_or_else(|| {
-        "this conversation has no workspace; attach a folder before using local tools".to_string()
-    })?;
-    attached_workspace_root(state, &path)
+    match task.workspace_path {
+        Some(ref path) => attached_workspace_root(state, path),
+        None => dirs::home_dir()
+            .filter(|path| path.is_dir())
+            .ok_or_else(|| "无法确定当前用户主目录".to_string())?
+            .canonicalize()
+            .map_err(|error| format!("用户主目录不可访问：{error}")),
+    }
 }
 
 fn resolve_workspace_path(root: &Path, path: &str) -> Result<PathBuf, String> {
@@ -1666,7 +1690,10 @@ fn resolve_workspace_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     } else {
         guard.root().join(requested)
     };
-    guard.resolve(&candidate).map_err(err_str)
+    guard
+        .resolve_path(&candidate)
+        .map(|resolved| resolved.canonical().to_path_buf())
+        .map_err(err_str)
 }
 
 /// 将用户/历史路径解析成安全的物理路径，同时找回与其等价的持久化路径键。
@@ -1688,8 +1715,8 @@ async fn rollback_target(
         } else {
             root.join(stored)
         };
-        if let Ok(resolved) = guard.resolve(&candidate) {
-            if resolved == physical_path {
+        if let Ok(resolved) = guard.resolve_path(&candidate) {
+            if resolved.canonical() == physical_path {
                 return Ok((baseline.path, physical_path));
             }
         }
@@ -1822,8 +1849,8 @@ fn build_new_task(
         Some(value) => AgentEngine::try_from_str(value)
             .ok_or_else(|| "主 Agent 只支持 r_code 或 codex".to_string())?,
         None => match config.orchestration.default_agent_engine {
-            hermes_config::MainAgentEngine::RCode => AgentEngine::RCode,
-            hermes_config::MainAgentEngine::Codex => AgentEngine::Codex,
+            agent_config::MainAgentEngine::RCode => AgentEngine::RCode,
+            agent_config::MainAgentEngine::Codex => AgentEngine::Codex,
         },
     };
     if mode == TaskMode::Plan && agent_engine != AgentEngine::RCode {
@@ -2219,15 +2246,24 @@ pub async fn plan_create(state: &CommandState, task_id: &str) -> Result<PlanView
 }
 
 fn render_plan_continuation(question_set: &PlanQuestionSet) -> Result<String, String> {
+    let scope_decision = question_set.kind == PlanQuestionSetKind::ScopeDecision;
     match question_set.state {
         PlanQuestionSetState::Answered => {}
         PlanQuestionSetState::Skipped => {
-            return Ok("已跳过本轮计划问题，请结合现有上下文继续完善同一计划。".to_string());
+            return Ok(if scope_decision {
+                "用户跳过了本轮范围决策，请恢复原任务并继续。".to_string()
+            } else {
+                "已跳过本轮计划问题，请结合现有上下文继续完善同一计划。".to_string()
+            });
         }
         PlanQuestionSetState::Pending => return Err("问题集尚未回答，不能恢复 Plan".to_string()),
     }
 
-    let mut rendered = "计划问题已回答，请根据以下选择继续完善同一计划：".to_string();
+    let mut rendered = if scope_decision {
+        "范围决策已回答，请恢复原任务并继续：".to_string()
+    } else {
+        "计划问题已回答，请根据以下选择继续完善同一计划：".to_string()
+    };
     for question in &question_set.questions {
         let answer = match question.answer.as_ref() {
             Some(PlanQuestionAnswer::Option { option_id }) => question
@@ -2270,6 +2306,15 @@ async fn dispatch_plan_continuation(
             return Err(format!("回答已保存，但无法生成 Plan 恢复消息：{error}"));
         }
     };
+    if claimed.kind == PlanQuestionSetKind::ScopeDecision {
+        if let Some(restore_mode) = claimed.restore_mode {
+            TaskRepository::new(&state.db)
+                .set_mode(task_id, restore_mode)
+                .map_err(err_str)?;
+            let task = require_task(state, task_id)?;
+            refresh_runtime_task_context_if_present(state, &task).await?;
+        }
+    }
     if let Err(error) = agent_send_with_mode(state, task_id, &message, AgentSendMode::Auto).await {
         if let Err(mark_error) = state.plan_store.mark_continuation_failed(
             task_id,
@@ -2307,8 +2352,24 @@ pub async fn plan_answer(
     task_id: &str,
     input: AnswerPlanQuestionsInput,
 ) -> Result<PlanView, String> {
-    require_native_plan_task(state, task_id)?;
     let question_set_id = input.question_set_id.clone();
+    let set = state
+        .plan_store
+        .get_question_set(task_id, &question_set_id)
+        .map_err(err_str)?;
+    if set.kind == PlanQuestionSetKind::ScopeDecision {
+        // 范围决策第一次回答后会恢复为原 Agent 模式；重复提交同一答案时必须仍可
+        // 幂等返回，不能再用 Plan 模式守卫误拒。
+        let task = require_task(state, task_id)?;
+        if task.state == TaskState::Archived {
+            return Err("会话已归档，不能继续范围决策".to_string());
+        }
+        if task.agent_engine != AgentEngine::RCode {
+            return Err("范围决策仅支持 R-Code 内置 Agent".to_string());
+        }
+    } else {
+        require_native_plan_task(state, task_id)?;
+    }
     state
         .plan_store
         .answer_questions(task_id, &input)
@@ -2328,7 +2389,17 @@ pub async fn plan_retry_continuation(
     task_id: &str,
     question_set_id: &str,
 ) -> Result<PlanView, String> {
-    require_native_plan_task(state, task_id)?;
+    let set = state
+        .plan_store
+        .get_question_set(task_id, question_set_id)
+        .map_err(err_str)?;
+    if set.kind == PlanQuestionSetKind::ScopeDecision {
+        // 范围决策派发失败时任务可能已恢复为原 Agent 模式；重试不能再用
+        // `require_native_plan_task` 误拒。只要任务未归档且仍属于 R-Code 即可。
+        require_task(state, task_id)?;
+    } else {
+        require_native_plan_task(state, task_id)?;
+    }
     state
         .plan_store
         .retry_continuation(task_id, question_set_id)
@@ -2853,26 +2924,103 @@ fn compaction_message_source(index: usize, message: &Message) -> Result<String, 
     ))
 }
 
+/// 手动压缩的原子单元：单条消息，或相邻的 assistant ToolUse + user ToolResult 对。
+struct CompactionUnit {
+    /// 预渲染的完整来源文本（与旧 `compaction_units` 输出一致）。
+    text: String,
+    /// 工具对锚点：合并 ToolUse/ToolResult 时记录 tool_use_id；否则 None。
+    tool_use_id: Option<String>,
+}
+
 /// 把会话变成不可拆分的摘要单元。相邻的 assistant ToolUse 与 user ToolResult
 /// 必须进入同一单元，避免 map 边界让摘要模型只看到调用或只看到证据。
-fn compaction_units(messages: &[Message]) -> Result<Vec<String>, String> {
+fn compaction_units(messages: &[Message]) -> Result<Vec<CompactionUnit>, String> {
     let mut units = Vec::new();
     let mut index = 0usize;
     while index < messages.len() {
-        let mut unit = compaction_message_source(index, &messages[index])?;
+        let mut text = compaction_message_source(index, &messages[index])?;
+        let mut tool_use_id = None;
         let pairs_with_next = messages
             .get(index + 1)
             .is_some_and(|next| manual_messages_form_tool_pair(&messages[index], next));
         if pairs_with_next {
-            unit.push_str(&compaction_message_source(index + 1, &messages[index + 1])?);
+            tool_use_id = messages[index]
+                .content
+                .iter()
+                .find_map(ContentBlock::tool_id)
+                .map(str::to_string);
+            text.push_str(&compaction_message_source(index + 1, &messages[index + 1])?);
             index += 1;
         }
-        units.push(unit);
+        units.push(CompactionUnit { text, tool_use_id });
         index += 1;
     }
     Ok(units)
 }
 
+/// 拆分超长单元时给每个子块加的前缀。工具对会带 tool_use_id，保证同一对在各 part
+/// 之间仍可归并；非工具对只带 PART 序号。
+fn compaction_part_header(unit: &CompactionUnit, part: usize, total: usize) -> String {
+    match &unit.tool_use_id {
+        Some(id) => format!("COMPACTION_PART {part}/{total} TOOL {id}:\n"),
+        None => format!("COMPACTION_PART {part}/{total}:\n"),
+    }
+}
+
+/// 把超长单元按 UTF-8 字符边界切成多个 ≤ COMPACTION_SOURCE_CHARS 的子块。
+/// 每个子块带 PART 头；不省略任何字符，只做有界切分。
+fn split_compaction_unit(unit: &CompactionUnit) -> Vec<String> {
+    let total_chars = unit.text.chars().count();
+    // 用 6 位占位符估算头部上界，保证“头 + 正文”不超 COMPACTION_SOURCE_CHARS。
+    let header_upper = compaction_part_header(unit, 999_999, 999_999).chars().count();
+    let body_budget = COMPACTION_SOURCE_CHARS
+        .saturating_sub(header_upper)
+        .max(1);
+    let part_count = (total_chars + body_budget - 1) / body_budget;
+
+    let chars: Vec<char> = unit.text.chars().collect();
+    let mut parts = Vec::with_capacity(part_count);
+    let mut offset = 0usize;
+    for part_index in 1..=part_count {
+        let take = body_budget.min(total_chars - offset);
+        let piece: String = chars[offset..offset + take].iter().collect();
+        offset += take;
+        let header = compaction_part_header(unit, part_index, part_count);
+        parts.push(format!("{header}{piece}"));
+    }
+    parts
+}
+
+/// map 阶段的打包：普通单元沿用旧行为合并到同一块；超长单元先落盘当前块，再拆分。
+fn pack_compaction_units(units: Vec<CompactionUnit>) -> Result<Vec<String>, String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    for unit in units {
+        let unit_chars = unit.text.chars().count();
+        if unit_chars > COMPACTION_SOURCE_CHARS {
+            if !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+                current_chars = 0;
+            }
+            chunks.extend(split_compaction_unit(&unit));
+            continue;
+        }
+        if current_chars > 0 && current_chars + unit_chars > COMPACTION_SOURCE_CHARS {
+            chunks.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        current.push_str(&unit.text);
+        current_chars += unit_chars;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    Ok(chunks)
+}
+
+/// reduce 阶段的打包：任何超长单元都按 UTF-8 边界切分（不丢字符、不失败），
+/// 保证手动压缩只要 provider 可用就一定能落地。
 fn pack_compaction_sources(units: Vec<String>) -> Result<Vec<String>, String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -2880,9 +3028,12 @@ fn pack_compaction_sources(units: Vec<String>) -> Result<Vec<String>, String> {
     for unit in units {
         let unit_chars = unit.chars().count();
         if unit_chars > COMPACTION_SOURCE_CHARS {
-            return Err(format!(
-                "单条消息或工具调用/结果对超过手动压缩单块上限（{COMPACTION_SOURCE_CHARS} 字符），本次未应用压缩"
-            ));
+            if !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+                current_chars = 0;
+            }
+            chunks.extend(split_compaction_text(&unit, COMPACTION_SOURCE_CHARS));
+            continue;
         }
         if current_chars > 0 && current_chars + unit_chars > COMPACTION_SOURCE_CHARS {
             chunks.push(std::mem::take(&mut current));
@@ -2897,12 +3048,31 @@ fn pack_compaction_sources(units: Vec<String>) -> Result<Vec<String>, String> {
     Ok(chunks)
 }
 
+/// 把一段超长文本按 UTF-8 字符边界切成多个 ≤ `max_chars` 的子块，每块带
+/// PART 头；不省略任何字符。
+fn split_compaction_text(text: &str, max_chars: usize) -> Vec<String> {
+    let total = text.chars().count();
+    let header_upper = "COMPACTION_PART 999999/999999:\n".chars().count();
+    let body_budget = max_chars.saturating_sub(header_upper).max(1);
+    let part_count = (total + body_budget - 1) / body_budget;
+    let chars: Vec<char> = text.chars().collect();
+    let mut parts = Vec::with_capacity(part_count);
+    let mut offset = 0usize;
+    for part_index in 1..=part_count {
+        let take = body_budget.min(total - offset);
+        let piece: String = chars[offset..offset + take].iter().collect();
+        offset += take;
+        parts.push(format!("COMPACTION_PART {part_index}/{part_count}:\n{piece}"));
+    }
+    parts
+}
+
 fn compaction_source_chunks(messages: &[Message]) -> Result<Vec<String>, String> {
-    pack_compaction_sources(compaction_units(messages)?)
+    pack_compaction_units(compaction_units(messages)?)
 }
 
 async fn request_compaction_summary(
-    provider: &dyn hermes_core::LlmProvider,
+    provider: &dyn agent_contract::LlmProvider,
     model: &str,
     inference: &InferenceOptions,
     prompt: String,
@@ -2913,44 +3083,65 @@ async fn request_compaction_summary(
             "手动压缩请求超过单次上限（{prompt_chars}/{COMPACTION_REQUEST_CHARS} 字符），本次未应用压缩"
         ));
     }
-    let response = provider
-        .complete(CompletionRequest {
-            model: model.to_string(),
-            system: Some("你是精确的会话上下文压缩器。只返回结构化摘要。".to_string()),
-            messages: vec![Message::user_text(prompt)],
-            tools: vec![],
-            hosted_tools: vec![],
-            max_tokens: COMPACTION_SUMMARY_MAX_TOKENS,
-            temperature: Some(0.1),
-            enable_caching: false,
-            inference: inference.clone(),
-        })
+    let mut max_tokens = COMPACTION_SUMMARY_MAX_TOKENS;
+    for attempt in 0..2 {
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            provider.complete(CompletionRequest {
+                model: model.to_string(),
+                system: Some("你是精确的会话上下文压缩器。只返回结构化摘要。".to_string()),
+                messages: vec![Message::user_text(prompt.clone())],
+                tools: vec![],
+                hosted_tools: vec![],
+                max_tokens,
+                temperature: Some(0.1),
+                enable_caching: false,
+                inference: inference.clone(),
+            }),
+        )
         .await
+        .map_err(|_| "生成上下文摘要超时，请稍后重试".to_string())?
         .map_err(|error| format!("生成上下文摘要失败：{}", err_str(error)))?;
-    if response.stop_reason == hermes_core::StopReason::MaxTokens {
-        return Err("上下文摘要未完整生成，请稍后重试".to_string());
-    }
-    if !matches!(
-        response.stop_reason,
-        hermes_core::StopReason::EndTurn | hermes_core::StopReason::StopSequence
-    ) {
-        return Err(format!(
-            "上下文摘要异常结束（{:?}），本次未应用压缩",
-            response.stop_reason
+        if response.stop_reason == agent_contract::StopReason::MaxTokens && attempt == 0 {
+            max_tokens /= 2;
+            continue;
+        }
+        if response.stop_reason == agent_contract::StopReason::MaxTokens {
+            return Err("上下文摘要未完整生成，请稍后重试".to_string());
+        }
+        if !matches!(
+            response.stop_reason,
+            agent_contract::StopReason::EndTurn | agent_contract::StopReason::StopSequence
+        ) {
+            return Err(format!(
+                "上下文摘要异常结束（{:?}），本次未应用压缩",
+                response.stop_reason
+            ));
+        }
+        let summary = response.text();
+        let summary = summary.trim();
+        if summary.is_empty() {
+            return Err("模型没有返回可用的上下文摘要".to_string());
+        }
+        let summary_chars = summary.chars().count();
+        if summary_chars <= COMPACTION_SUMMARY_CHARS {
+            return Ok(summary.to_string());
+        }
+        if attempt == 0 {
+            max_tokens /= 2;
+            continue;
+        }
+        // 最后兜底：带标记的有界截断，保证手动压缩仍然落地。
+        tracing::warn!(
+            summary_chars,
+            "compaction summary exceeded the cap after retry; truncating with marker"
+        );
+        return Ok(format!(
+            "[R-Code 已截断摘要尾部] {}",
+            trim_chars(summary, COMPACTION_SUMMARY_CHARS)
         ));
     }
-    let summary = response.text();
-    let summary = summary.trim();
-    if summary.is_empty() {
-        return Err("模型没有返回可用的上下文摘要".to_string());
-    }
-    let summary_chars = summary.chars().count();
-    if summary_chars > COMPACTION_SUMMARY_CHARS {
-        return Err(format!(
-            "上下文摘要超过单块上限（{summary_chars}/{COMPACTION_SUMMARY_CHARS} 字符），本次未应用压缩"
-        ));
-    }
-    Ok(summary.to_string())
+    Err("生成上下文摘要失败：重试未收敛".to_string())
 }
 
 /// Context compaction is a bounded evidence-preserving transformation, so an automatic
@@ -2958,7 +3149,7 @@ async fn request_compaction_summary(
 /// Explicit user choices remain authoritative; only the local smart-balance state (empty or the
 /// legacy `adaptive` marker) is translated to the model's cheapest supported native mode.
 fn deepseek_fast_compaction_inference(
-    provider: &hermes_config::ProviderConfig,
+    provider: &agent_config::ProviderConfig,
     model: &str,
     configured: &InferenceOptions,
 ) -> InferenceOptions {
@@ -2987,7 +3178,7 @@ fn deepseek_fast_compaction_inference(
 }
 
 async fn summarize_compaction_groups(
-    provider: &dyn hermes_core::LlmProvider,
+    provider: &dyn agent_contract::LlmProvider,
     model: &str,
     inference: &InferenceOptions,
     groups: Vec<String>,
@@ -3015,7 +3206,7 @@ async fn summarize_compaction_groups(
 }
 
 async fn summarize_compaction_history(
-    provider: &dyn hermes_core::LlmProvider,
+    provider: &dyn agent_contract::LlmProvider,
     model: &str,
     inference: &InferenceOptions,
     messages: &[Message],
@@ -3167,7 +3358,7 @@ pub async fn task_compact_context(
         return Err(format!("模型服务“{provider_name}”尚未就绪：{problem}"));
     }
     let provider =
-        hermes_llm::create_provider(build_provider_config(provider_name, provider_config))
+        agent_llm::create_provider(build_provider_config(provider_name, provider_config))
             .map_err(err_str)?;
 
     let recent_start = manual_compaction_recent_start(&history.messages);
@@ -3324,6 +3515,27 @@ fn remove_task_session_logs(sessions_dir: &Path, task_id: &str, storage_ids: &Ha
                     tracing::warn!(task_id, file = %path.display(), %error, "failed to remove deleted task session log");
                 }
             }
+        }
+    }
+    remove_task_attachment_previews(sessions_dir, task_id);
+}
+
+/// 删除任务的本机 OCR 原图预览目录（`{app_data}/attachments/{task_id}`）。
+///
+/// 与会话日志同生命周期：任务删除或工作区解绑后不再保留可预览的原图副本。
+/// 目录缺失视为已清理；任务标识不是安全路径段时拒绝删除，防止越界。
+fn remove_task_attachment_previews(sessions_dir: &Path, task_id: &str) {
+    if !is_safe_path_segment(task_id) {
+        tracing::warn!(task_id, "refused to remove attachment previews for unsafe task id");
+        return;
+    }
+    let Some(root) = sessions_dir.parent() else {
+        return;
+    };
+    let directory = root.join("attachments").join(task_id);
+    if let Err(error) = std::fs::remove_dir_all(&directory) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(task_id, dir = %directory.display(), %error, "failed to remove deleted task attachment previews");
         }
     }
 }
@@ -3543,9 +3755,6 @@ pub async fn task_set_agent_engine(
         .ok_or_else(|| format!("task not found: {task_id}"))?;
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能再切换主 Agent".to_string());
-    }
-    if agent_engine == AgentEngine::Codex && task.workspace_path.is_none() {
-        return Err("Codex 主 Agent 需要先附加本地工作区".to_string());
     }
     if agent_engine == AgentEngine::Codex && task.mode == TaskMode::Plan {
         return Err(
@@ -4228,7 +4437,7 @@ impl AgentRuntime for AgentRuntimeKind {
     async fn create_session(
         &mut self,
         input: CreateSessionInput,
-    ) -> Result<hermes_core::Session, ProductError> {
+    ) -> Result<agent_contract::Session, ProductError> {
         match self {
             Self::Real(r) => r.create_session(input).await,
             Self::Mock(r) => r.create_session(input).await,
@@ -4391,7 +4600,7 @@ impl AgentBridge {
 /// 解析出的线路协议，而不是服务名。
 fn provider_runtime_config_fingerprint(
     provider_name: &str,
-    provider: &hermes_config::ProviderConfig,
+    provider: &agent_config::ProviderConfig,
 ) -> String {
     format!(
         "{provider_name}|{}|{}|{}|{}|{:?}|{:?}|{}|{}",
@@ -4423,9 +4632,13 @@ async fn ensure_real_runtime(
     // 设置页允许保留尚未完成的非默认 Provider 草稿；启动会话时只校验当前
     // 选中的 Provider，不能让无关草稿阻断已配置好的服务。
     let config = settings.load_global_unvalidated().map_err(err_str)?;
-    let agent_prompts = settings
+    let mut agent_prompts = settings
         .resolve_agent_prompts(workspace_path)
         .map_err(err_str)?;
+    // RTK 是全局能力：开启后所有模型的原生会话（含子代理）都在提示词里拿到策略；
+    // Codex 会话在 codex_main_prompt / build_codex_delegation_prompt 里单独注入。
+    crate::rtk::RtkManager::from_config_dir(config_dir.to_path_buf())
+        .apply_command_hint(&mut agent_prompts.main_agent, &mut agent_prompts.subagent);
     // 旧会话没有 provider_name 时才使用全局默认；一旦任务绑定了服务，后续全局
     // 默认变更不应影响它。
     let provider_name = requested_provider
@@ -4478,27 +4691,39 @@ async fn ensure_real_runtime(
     // 实际行为没变，不该白白重建 runtime 并清空会话。
     let orchestration = OrchestrationPolicy {
         delegation_router: match config.orchestration.delegation_router {
-            hermes_config::DelegationRouterMode::Manual => RuntimeDelegationRouterMode::Manual,
-            hermes_config::DelegationRouterMode::Balanced => RuntimeDelegationRouterMode::Balanced,
-            hermes_config::DelegationRouterMode::RCodeFirst => {
+            agent_config::DelegationRouterMode::Manual => RuntimeDelegationRouterMode::Manual,
+            agent_config::DelegationRouterMode::Balanced => RuntimeDelegationRouterMode::Balanced,
+            agent_config::DelegationRouterMode::RCodeFirst => {
                 RuntimeDelegationRouterMode::RCodeFirst
             }
-            hermes_config::DelegationRouterMode::CodexFirst => {
+            agent_config::DelegationRouterMode::CodexFirst => {
                 RuntimeDelegationRouterMode::CodexFirst
             }
         },
         allow_cross_engine_delegation: config.orchestration.allow_cross_engine_delegation,
         quality_loop: match config.orchestration.quality_loop {
-            hermes_config::QualityLoopMode::Off => RuntimeQualityLoopMode::Off,
-            hermes_config::QualityLoopMode::Auto => RuntimeQualityLoopMode::Auto,
-            hermes_config::QualityLoopMode::Always => RuntimeQualityLoopMode::Always,
+            agent_config::QualityLoopMode::Off => RuntimeQualityLoopMode::Off,
+            agent_config::QualityLoopMode::Auto => RuntimeQualityLoopMode::Auto,
+            agent_config::QualityLoopMode::Always => RuntimeQualityLoopMode::Always,
         },
         quality_reviewer: match config.orchestration.quality_reviewer {
-            hermes_config::QualityReviewer::Auto => RuntimeQualityReviewer::Auto,
-            hermes_config::QualityReviewer::RCode => RuntimeQualityReviewer::RCode,
-            hermes_config::QualityReviewer::Codex => RuntimeQualityReviewer::Codex,
+            agent_config::QualityReviewer::Auto => RuntimeQualityReviewer::Auto,
+            agent_config::QualityReviewer::RCode => RuntimeQualityReviewer::RCode,
+            agent_config::QualityReviewer::Codex => RuntimeQualityReviewer::Codex,
         },
         max_review_rounds: config.orchestration.max_review_rounds,
+        run_budget: RunBudgetPolicy {
+            max_tool_rounds: config.orchestration.run_budget.max_tool_rounds,
+            max_run_seconds: config.orchestration.run_budget.max_run_seconds,
+            reasoning_budget_chars: config.orchestration.run_budget.reasoning_budget_chars,
+            same_error_limit: config.orchestration.run_budget.same_error_limit,
+            no_progress_rounds: config.orchestration.run_budget.no_progress_rounds,
+            replay_detection: config.orchestration.run_budget.replay_detection,
+            diff_file_limit: config.orchestration.run_budget.diff_file_limit,
+            diff_byte_limit: config.orchestration.run_budget.diff_byte_limit,
+            test_fail_limit: config.orchestration.run_budget.test_fail_limit,
+            checkpoint_enabled: config.orchestration.run_budget.checkpoint_enabled,
+        },
     };
     // 该开关是热配置：设置页在活跃运行中会直接更新同一个原子门；这里再次同步，
     // 也覆盖用户在应用外编辑配置文件后开始下一轮交互的情况。
@@ -4514,6 +4739,7 @@ async fn ensure_real_runtime(
             orchestration.quality_loop,
             orchestration.quality_reviewer,
             orchestration.max_review_rounds,
+            orchestration.run_budget,
         ),
         prompt_fingerprint.to_hex(),
     );
@@ -4536,7 +4762,7 @@ async fn ensure_real_runtime(
     }
 
     let provider_config = build_provider_config(&provider_name, pcfg);
-    let provider = hermes_llm::create_provider(provider_config).map_err(err_str)?;
+    let provider = agent_llm::create_provider(provider_config).map_err(err_str)?;
     let max_tokens = effective_max_tokens(&provider_name, pcfg);
     let hosted_tools = hosted_tools_for_provider(&provider_name, pcfg);
     let codex_runner: Arc<dyn CodexSubagentRunner> = Arc::new(RCodeCodexSubagentRunner {
@@ -4823,6 +5049,38 @@ fn persist_native_stream_replay_event(db: &Database, main_run_id: &str, event: &
     if let Ok(json) = serde_json::to_string(&usage) {
         let _ = repo.set_usage(run_id, &json);
     }
+}
+
+/// 护栏触发原因写库：只保留首个触发；主/子运行都记录，主运行供 ReviewReady
+/// 卡片展示。事件本身继续转发 WebView，让进行中的 UI 即时可见。
+fn persist_native_guard_trip_event(db: &Database, main_run_id: &str, event: &AgentEvent) {
+    let (scope, inner) = split_scoped_event(event);
+    let AgentEvent::GuardTrip { reason, detail } = inner else {
+        return;
+    };
+    let run_id = scope
+        .map(|value| value.run_id.as_str())
+        .unwrap_or(main_run_id);
+    if let Ok(json) = serde_json::to_string(&serde_json::json!({ "reason": reason, "detail": detail }))
+    {
+        let _ = AgentRunRepository::new(db).set_guard_trip(run_id, &json);
+    }
+}
+
+/// 绿灯 checkpoint SHA 写库：最新一次覆盖。主运行记录供“回滚到 checkpoint”
+/// 动作读取。
+fn persist_native_checkpoint_event(db: &Database, main_run_id: &str, event: &AgentEvent) {
+    let (scope, inner) = split_scoped_event(event);
+    let AgentEvent::Checkpoint { sha, base_head } = inner else {
+        return;
+    };
+    if sha.trim().is_empty() {
+        return;
+    }
+    let run_id = scope
+        .map(|value| value.run_id.as_str())
+        .unwrap_or(main_run_id);
+    let _ = AgentRunRepository::new(db).set_checkpoint(run_id, sha.trim(), base_head.trim());
 }
 
 fn ensure_subagent_run(
@@ -5334,6 +5592,13 @@ async fn persist_runtime_event(
             // 点对点消息正文只存在于 Worker 的有界内存 mailbox；跨进程事件仅携带
             // 字符数，不包含正文片段。此处仅保持 match 穷尽，会话 JSONL 不记录正文。
         }
+        AgentEvent::GuardTrip { .. } => {
+            // 护栏触发原因与 checkpoint SHA 由 drain 循环持久化到 run 行；
+            // 会话 JSONL 不重复记录。
+        }
+        AgentEvent::Checkpoint { .. } => {
+            // 见 GuardTrip：由 drain 循环持久化到 run 行。
+        }
     }
 }
 
@@ -5393,6 +5658,7 @@ async fn ensure_runtime_session(
 /// 在已持有 AgentBridge 锁的前提下启动一个 run。调用方必须在返回后尽快释放锁，
 /// 再启动 drain 循环，防止不同任务的流事件互相串台。
 const USER_MESSAGE_MODE_EVENT: &str = "r_code_user_message_mode";
+const ATTACHMENT_IMAGE_EVENT: &str = "r_code_attachment_image";
 const MAX_ATTACHMENTS: usize = 8;
 const MAX_IMAGE_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_BYTES: usize = 1024 * 1024;
@@ -5437,6 +5703,21 @@ struct ValidatedAttachment {
     text: Option<String>,
     kind: ValidatedAttachmentKind,
     native_ocr: bool,
+    /// 本机 OCR 转换前的原图预览引用；仅用于 UI 展示，不进入模型上下文。
+    preview: Option<AttachmentPreviewRef>,
+}
+
+/// 本机 OCR 原图的预览引用。
+///
+/// `preview_id` 是 `{app_data}/attachments/{task_id}/` 下落盘文件名的 UUID 主干，
+/// `name` / `media_type` 保留原始图片信息，`ocr_name` 记录转换出的文本附件名，
+/// 供后续会话 DTO 把预览与 OCR 文本附件配对。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct AttachmentPreviewRef {
+    preview_id: String,
+    name: String,
+    media_type: String,
+    ocr_name: String,
 }
 
 /// 排队附件的持久化载荷：只保留重建完整消息所需的字段，避免把 `bytes` 序列化成
@@ -5448,6 +5729,9 @@ struct QueuedAttachmentPayload {
     data: String,
     text: Option<String>,
     kind: ValidatedAttachmentKind,
+    /// 本机 OCR 原图的预览引用；旧数据缺失该字段时反序列化为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview: Option<AttachmentPreviewRef>,
 }
 
 fn queued_attachments_payload(attachments: &[ValidatedAttachment]) -> Option<String> {
@@ -5462,6 +5746,7 @@ fn queued_attachments_payload(attachments: &[ValidatedAttachment]) -> Option<Str
             data: attachment.data.clone(),
             text: attachment.text.clone(),
             kind: attachment.kind,
+            preview: attachment.preview.clone(),
         })
         .collect::<Vec<_>>();
     serde_json::to_string(&payload).ok()
@@ -5486,6 +5771,7 @@ fn restore_queued_attachments(json: Option<&str>) -> Result<Vec<ValidatedAttachm
                 text: attachment.text,
                 kind: attachment.kind,
                 native_ocr: false,
+                preview: attachment.preview,
             })
         })
         .collect()
@@ -5672,6 +5958,7 @@ fn validate_attachments(
             text,
             kind,
             native_ocr: attachment.native_ocr,
+            preview: None,
         });
     }
     Ok(validated)
@@ -5728,21 +6015,97 @@ fn native_ocr_attachment_name(original: &str) -> String {
     format!("{}.ocr.txt", trim_chars(original, 172))
 }
 
+/// 单一路径段的防御性校验：拒绝空段、当前/父目录引用与任何路径分隔符。
+fn is_safe_path_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+        && !value.contains(':')
+}
+
+/// `preview_id` 仅接受小写连字符 UUID 的规范文本形式。
+///
+/// 该值会成为落盘文件名的一部分，因此任何路径分隔符、`..`、绝对路径前缀以及
+/// 非 UUID 文本都被拒绝；简写/大写形式的 UUID 虽可解析，但与规范形式不等价，
+/// 一并拒绝以保证后续按 ID 取图时的文件名确定性。
+fn valid_attachment_preview_id(value: &str) -> bool {
+    match uuid::Uuid::parse_str(value) {
+        Ok(parsed) => format!("{parsed}") == value,
+        Err(_) => false,
+    }
+}
+
+/// 本机 OCR 原图的落盘扩展名。JPEG 采用 `jpg`。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn attachment_preview_extension(media_type: &str) -> Result<&'static str, String> {
+    match media_type {
+        "image/png" => Ok("png"),
+        "image/jpeg" => Ok("jpg"),
+        other => Err(format!("{other} 不支持本机 OCR 原图预览")),
+    }
+}
+
+/// 把本机 OCR 原图字节写入 `{app_data}/attachments/{task_id}/{preview_id}.{ext}`。
+///
+/// `sessions_dir` 位于 `{app_data}/sessions`，附件目录由其父目录推导，避免为单一
+/// 功能扩展 `CommandState`。返回的引用只服务 UI 预览，绝不进入模型上下文。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn persist_attachment_preview(
+    sessions_dir: &Path,
+    task_id: &str,
+    preview_id: &str,
+    name: &str,
+    media_type: &str,
+    ocr_name: &str,
+    bytes: &[u8],
+) -> Result<AttachmentPreviewRef, String> {
+    if !is_safe_path_segment(task_id) {
+        return Err(format!("任务标识不能用作附件路径：{task_id}"));
+    }
+    if !valid_attachment_preview_id(preview_id) {
+        return Err("OCR 原图预览标识不合法".to_string());
+    }
+    let extension = attachment_preview_extension(media_type)?;
+    let directory = sessions_dir
+        .parent()
+        .ok_or_else(|| "无法定位附件存储根目录".to_string())?
+        .join("attachments")
+        .join(task_id);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("创建附件目录失败：{error}"))?;
+    let path = directory.join(format!("{preview_id}.{extension}"));
+    std::fs::write(&path, bytes).map_err(|error| format!("保存 OCR 原图失败：{error}"))?;
+    Ok(AttachmentPreviewRef {
+        preview_id: preview_id.to_string(),
+        name: name.to_string(),
+        media_type: media_type.to_string(),
+        ocr_name: ocr_name.to_string(),
+    })
+}
+
 async fn apply_native_ocr(
+    sessions_dir: &Path,
+    task_id: &str,
     attachments: Vec<ValidatedAttachment>,
 ) -> Result<Vec<ValidatedAttachment>, String> {
     if !attachments.iter().any(|attachment| attachment.native_ocr) {
         return Ok(attachments);
     }
 
+    // 参数仅在提供系统 OCR 的平台上使用；其余平台直接拒绝。
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
+        let _ = (sessions_dir, task_id);
         return Err("当前平台不提供系统 OCR；请改用支持图片的模型".to_string());
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         validate_native_ocr_budget(&attachments)?;
+        let sessions_dir = sessions_dir.to_path_buf();
+        let task_id = task_id.to_string();
         let attachments = tokio::task::spawn_blocking(move || {
             let mut attachments = attachments;
             let mut total_text_bytes = 0usize;
@@ -5775,13 +6138,26 @@ async fn apply_native_ocr(
                 if total_text_bytes > MAX_NATIVE_OCR_TOTAL_TEXT_BYTES {
                     return Err("本轮 OCR 文本总大小超过 2 MiB，请减少图片后重试".to_string());
                 }
-                attachment.name = native_ocr_attachment_name(&original_name);
+                // OCR 成功后才落盘原图：失败路径不产生孤儿预览文件。预览只服务
+                // UI 展示，模型仍然只看到下方生成的 OCR 文本附件。
+                let preview_id = uuid::Uuid::new_v4().to_string();
+                let preview = persist_attachment_preview(
+                    &sessions_dir,
+                    &task_id,
+                    &preview_id,
+                    &original_name,
+                    &original_media_type,
+                    &native_ocr_attachment_name(&original_name),
+                    &attachment.bytes,
+                )?;
+                attachment.name = preview.ocr_name.clone();
                 attachment.kind = ValidatedAttachmentKind::Text;
                 attachment.media_type = "text/plain".to_string();
                 attachment.bytes = text.as_bytes().to_vec();
                 attachment.data = BASE64_STANDARD.encode(&attachment.bytes);
                 attachment.text = Some(text);
                 attachment.native_ocr = false;
+                attachment.preview = Some(preview);
             }
             Ok::<_, String>(attachments)
         })
@@ -5840,20 +6216,28 @@ async fn append_user_content_with_mode(
     storage_id: &str,
     message: Message,
     mode: AgentSendMode,
+    attachments: &[ValidatedAttachment],
 ) -> Result<(), String> {
-    session_store
-        .append_batch(
-            storage_id,
-            &[
-                SessionEvent::Message(message),
-                SessionEvent::System {
-                    event: USER_MESSAGE_MODE_EVENT.into(),
-                    data: serde_json::json!({ "mode": send_mode_name(mode) }),
-                },
-            ],
-        )
-        .await
-        .map_err(err_str)
+    let mut events = vec![
+        SessionEvent::Message(message),
+        SessionEvent::System {
+            event: USER_MESSAGE_MODE_EVENT.into(),
+            data: serde_json::json!({ "mode": send_mode_name(mode) }),
+        },
+    ];
+    // OCR 过的图片只把文本附件送进模型上下文，但原图预览引用要随用户消息一起
+    // 持久化，供时间线隐藏 `.ocr.txt` 并渲染原图缩略图。该事件不参与模型重放。
+    let previews = attachments
+        .iter()
+        .filter_map(|attachment| attachment.preview.as_ref())
+        .collect::<Vec<_>>();
+    if !previews.is_empty() {
+        events.push(SessionEvent::System {
+            event: ATTACHMENT_IMAGE_EVENT.into(),
+            data: serde_json::to_value(previews).unwrap_or(serde_json::Value::Null),
+        });
+    }
+    session_store.append_batch(storage_id, &events).await.map_err(err_str)
 }
 
 async fn stage_steer_context_with_retry(
@@ -6078,7 +6462,7 @@ pub async fn agent_send_with_mode_and_attachments(
     // Native OCR can be CPU/memory intensive. Validate the task and reserve its task-local send
     // boundary before invoking Vision, so archived/running tasks cannot consume OCR resources and
     // another run cannot start halfway through this conversion.
-    let attachments = apply_native_ocr(attachments).await?;
+    let attachments = apply_native_ocr(&state.sessions_dir, task_id, attachments).await?;
     let user_message = user_message_with_attachments(message, &attachments);
     let branch = SessionBranchRepository::new(&state.db)
         .ensure_active(task_id)
@@ -6272,6 +6656,7 @@ pub async fn agent_send_with_mode_and_attachments(
                     &branch,
                     &user_message,
                     AgentSendMode::SendNow,
+                    &attachments,
                 )
                 .await?;
                 drop(bridge);
@@ -6303,6 +6688,7 @@ pub async fn agent_send_with_mode_and_attachments(
                     &branch,
                     &user_message,
                     AgentSendMode::Auto,
+                    &attachments,
                 )
                 .await?;
                 drop(bridge);
@@ -6442,6 +6828,14 @@ fn spawn_drain_loop_with_resources(
                 if matches!(split_scoped_event(event).1, AgentEvent::StreamReplay { .. }) {
                     persist_native_stream_replay_event(&db, &active.run_id, event);
                     continue;
+                }
+                // 长任务护栏：先持久化再照常转发，前端即时显示触发原因与最新
+                // checkpoint；会话 JSONL 不重复记录。
+                if matches!(split_scoped_event(event).1, AgentEvent::GuardTrip { .. }) {
+                    persist_native_guard_trip_event(&db, &active.run_id, event);
+                }
+                if matches!(split_scoped_event(event).1, AgentEvent::Checkpoint { .. }) {
+                    persist_native_checkpoint_event(&db, &active.run_id, event);
                 }
                 if matches!(
                     event,
@@ -6933,6 +7327,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             &branch,
             &queued_message,
             queued_dispatch_mode(&queued),
+            &restored_attachments,
         )
         .await;
         match started {
@@ -7501,7 +7896,7 @@ fn parse_message_line_id(storage_id: &str, message_id: &str) -> Result<usize, St
 
 fn user_message_from_session_event(event: &SessionEvent) -> Option<Message> {
     match event {
-        SessionEvent::Message(message) if message.role == hermes_core::Role::User => {
+        SessionEvent::Message(message) if message.role == agent_contract::Role::User => {
             Some(message.clone())
         }
         SessionEvent::System { event, data } if event == DURABLE_USER_MESSAGE_EVENT => data
@@ -7773,9 +8168,10 @@ async fn reconcile_legacy_task_changes_uncached(
         } else {
             root.join(requested)
         };
-        let Ok(physical) = guard.resolve(&candidate) else {
+        let Ok(resolved) = guard.resolve_path(&candidate) else {
             continue;
         };
+        let physical = resolved.canonical().to_path_buf();
         let Ok(workspace_relative) = physical.strip_prefix(guard.root()) else {
             continue;
         };
@@ -7794,10 +8190,10 @@ async fn reconcile_legacy_task_changes_uncached(
             Some(tree) => git.blob_at_tree(tree, &repo_path).map_err(err_str)?,
             None => None,
         };
-        let after = match guard.open_existing_file(&physical, WorkspaceFileAccess::Read) {
-            Ok((_safe_path, mut file)) => {
+        let after = match guard.open_file(&physical, WorkspaceFileAccess::Read) {
+            Ok(mut handle) => {
                 let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes).map_err(err_str)?;
+                handle.file_mut().read_to_end(&mut bytes).map_err(err_str)?;
                 Some(bytes)
             }
             Err(ProductError::PathNotFound(_)) => None,
@@ -8022,6 +8418,78 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
     mark_current_review_notification_read(state, task_id)?;
 
     Ok(rendered_results)
+}
+
+/// 回滚到本次运行最近一次绿灯 git checkpoint：先校验 HEAD 未被外部移动并
+/// `git reset --hard` 恢复绿灯快照，再只做审查账本与 run/任务状态收尾。
+/// 注意：绝不能复用 `rollback_task` 的文件级回滚——那会把文件继续还原到
+/// run 前基线（丢弃 checkpoint 内的绿灯改动），且在 checkpoint 之后还有
+/// 编辑时会因磁盘哈希与快照后哈希不一致而误报冲突。
+/// 没有 checkpoint 时明确失败（不回落到普通回滚，避免用户误以为只回滚了
+/// Agent 改动）。
+pub async fn rollback_task_to_checkpoint(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<Vec<String>, String> {
+    let runs = AgentRunRepository::new(&state.db);
+    let Some(run) = runs.get_latest_main_run(task_id).map_err(err_str)? else {
+        return Err("该任务没有可回滚的运行".to_string());
+    };
+    let Some(sha) = run
+        .checkpoint_sha
+        .clone()
+        .filter(|sha| !sha.trim().is_empty())
+    else {
+        return Err("本次运行没有可用的绿灯 checkpoint，请使用「回滚全部改动」".to_string());
+    };
+
+    let root = attached_task_workspace_root(state, task_id)?;
+    let git = GitService::new(root.clone());
+    let root_canonical = root.canonicalize().map_err(err_str)?;
+    let top_canonical = git.repo_root().map_err(err_str)?.canonicalize().map_err(err_str)?;
+    if root_canonical != top_canonical {
+        return Err("工作区不是 git 仓库顶层，拒绝 checkpoint 回滚".to_string());
+    }
+    let expected_head = match run.checkpoint_base_head.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(base_head) => base_head.to_string(),
+        None => git.rev_parse(&format!("{sha}^")).map_err(err_str)?,
+    };
+    let current_head = git.rev_parse("HEAD").map_err(err_str)?;
+    if current_head != expected_head {
+        return Err(format!(
+            "HEAD 已被外部移动（{current_head} != {expected_head}），拒绝 checkpoint 回滚"
+        ));
+    }
+    git.reset_hard(&sha).map_err(err_str)?;
+
+    // 工作区已经等于绿灯快照：跳过 ChangeService 的文件级恢复，只关闭审查账本
+    // 并复用 rollback_task 的终态收尾。账本全部标记为 rejected 表示本轮后续改动
+    // 已被丢弃；checkpoint 内保留的绿灯改动仍留在工作区，供用户继续审查。
+    let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
+    let review_status = review.status(task_id).map_err(err_str)?;
+    if !review_status.paths.is_empty() {
+        review.reject_all(task_id).map_err(err_str)?;
+    }
+
+    let runs = AgentRunRepository::new(&state.db);
+    if let Some(run) = runs.get_latest_main_run(task_id).map_err(err_str)? {
+        if run.review_state == ReviewState::Pending {
+            runs.update_review_state(&run.id, ReviewState::RolledBack)
+                .map_err(err_str)?;
+        }
+    }
+    let tasks = TaskRepository::new(&state.db);
+    if let Some(task) = tasks.get(task_id).map_err(err_str)? {
+        if task.state != TaskState::Archived {
+            tasks
+                .update_state(task_id, TaskState::Idle)
+                .map_err(err_str)?;
+        }
+    }
+    mark_current_review_notification_read(state, task_id)?;
+
+    let short_sha = sha.chars().take(8).collect::<String>();
+    Ok(vec![format!("已回滚到绿灯 checkpoint {short_sha}")])
 }
 
 pub async fn accept_task(state: &CommandState, task_id: &str) -> Result<(), String> {
@@ -8891,11 +9359,11 @@ fn read_workspace_git_blob(
         return Ok(None);
     }
     let guard = PathGuard::new(workspace_root.to_path_buf()).map_err(err_str)?;
-    let (_safe_path, mut file) = guard
-        .open_existing_file(physical_path, WorkspaceFileAccess::Read)
+    let mut handle = guard
+        .open_file(physical_path, WorkspaceFileAccess::Read)
         .map_err(err_str)?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(err_str)?;
+    handle.file_mut().read_to_end(&mut bytes).map_err(err_str)?;
     Ok(Some(bytes))
 }
 
@@ -9914,6 +10382,141 @@ pub async fn session_messages_for_branch(
     ))
 }
 
+/// 时间线图片附件的按需预览载荷。`data` 是不含 data URL 前缀的标准 Base64。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentPreviewPayload {
+    pub media_type: String,
+    pub data: String,
+}
+
+/// 解析内联图片引用 `{storage_id}:{line}#{image_index}`。
+///
+/// `storage_id` 与 `line` 用最后一个冒号分隔（storage 前缀可能包含任务 ID 等），
+/// 行号为 1-based；`image_index` 是同一消息内第几个 Image 块。
+fn parse_inline_preview_ref(reference: &str) -> Option<(&str, usize, usize)> {
+    let (location, image_index) = reference.rsplit_once('#')?;
+    let image_index: usize = image_index.parse().ok()?;
+    let (storage_id, line) = location.rsplit_once(':')?;
+    let line: usize = line.parse().ok()?;
+    if line == 0 {
+        return None;
+    }
+    Some((storage_id, line, image_index))
+}
+
+/// 读取本机 OCR 落盘的 UUID 预览。扩展名未随引用传输，因此按受控的白名单尝试
+/// `png` / `jpg` 两个候选，杜绝任意路径构造。
+fn read_disk_preview(
+    sessions_dir: &Path,
+    task_id: &str,
+    preview_id: &str,
+) -> Result<AttachmentPreviewPayload, String> {
+    if !is_safe_path_segment(task_id) {
+        return Err("任务标识不能用作附件路径".to_string());
+    }
+    let directory = sessions_dir
+        .parent()
+        .ok_or_else(|| "无法定位附件存储根目录".to_string())?
+        .join("attachments")
+        .join(task_id);
+    for (extension, media_type) in [("png", "image/png"), ("jpg", "image/jpeg")] {
+        let path = directory.join(format!("{preview_id}.{extension}"));
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(err_str)?;
+        if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+            return Err("图片超过 8 MiB 预览上限".to_string());
+        }
+        if !image_magic_matches(media_type, &bytes) {
+            return Err("图片文件内容已损坏".to_string());
+        }
+        return Ok(AttachmentPreviewPayload {
+            media_type: media_type.to_string(),
+            data: BASE64_STANDARD.encode(&bytes),
+        });
+    }
+    Err("图片预览不存在或已被清理".to_string())
+}
+
+/// 读取会话 JSONL 中某条消息内第 `image_index` 个 Image 块。
+async fn read_inline_preview(
+    state: &CommandState,
+    task_id: &str,
+    storage_id: &str,
+    line: usize,
+    image_index: usize,
+) -> Result<AttachmentPreviewPayload, String> {
+    let owned = SessionBranchRepository::new(&state.db)
+        .list_by_task(task_id)
+        .map_err(err_str)?
+        .into_iter()
+        .any(|branch| branch.storage_id == storage_id);
+    if !owned {
+        return Err("图片预览引用的会话分支不属于当前任务".to_string());
+    }
+
+    let content = tokio::fs::read_to_string(session_file_path(&state.sessions_dir, storage_id))
+        .await
+        .map_err(err_str)?;
+    let line_text = content
+        .lines()
+        .nth(line.saturating_sub(1))
+        .ok_or_else(|| "图片预览引用的会话行不存在".to_string())?;
+    let event = serde_json::from_str::<SessionEvent>(line_text)
+        .map_err(|_| "图片预览引用的会话记录已损坏".to_string())?;
+    let SessionEvent::Message(message) = event else {
+        return Err("图片预览引用未指向消息记录".to_string());
+    };
+
+    let mut seen = 0usize;
+    for block in &message.content {
+        if let ContentBlock::Image { source } = block {
+            if seen == image_index {
+                let bytes = BASE64_STANDARD
+                    .decode(source.data.as_bytes())
+                    .map_err(|_| "图片数据无法解码".to_string())?;
+                if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+                    return Err("图片超过 8 MiB 预览上限".to_string());
+                }
+                if !image_magic_matches(&source.media_type, &bytes) {
+                    return Err("图片文件内容已损坏".to_string());
+                }
+                return Ok(AttachmentPreviewPayload {
+                    media_type: source.media_type.clone(),
+                    data: source.data.clone(),
+                });
+            }
+            seen += 1;
+        }
+    }
+    Err("图片预览索引不存在".to_string())
+}
+
+/// 按引用取回时间线图片附件预览字节。
+///
+/// `reference` 为规范 UUID 时读取本机 OCR 落盘原图；为 `{storage_id}:{line}#{idx}`
+/// 时读取会话记录中的内联 Image 块。两种形式都不进入模型上下文，仅服务 UI。
+pub async fn agent_attachment_preview(
+    state: &CommandState,
+    task_id: &str,
+    reference: &str,
+) -> Result<AttachmentPreviewPayload, String> {
+    TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+
+    let reference = reference.trim();
+    if valid_attachment_preview_id(reference) {
+        read_disk_preview(&state.sessions_dir, task_id, reference)
+    } else if let Some((storage_id, line, image_index)) = parse_inline_preview_ref(reference) {
+        read_inline_preview(state, task_id, storage_id, line, image_index).await
+    } else {
+        Err("图片预览引用不合法".to_string())
+    }
+}
+
 fn push_visible_session_message(
     out: &mut Vec<SessionMessage>,
     msg: &Message,
@@ -9921,16 +10524,17 @@ fn push_visible_session_message(
     branch_id: &str,
 ) {
     let role = match msg.role {
-        hermes_core::Role::User => "user",
-        hermes_core::Role::Assistant => "assistant",
+        agent_contract::Role::User => "user",
+        agent_contract::Role::Assistant => "assistant",
     };
     let mut text = String::new();
     let mut image_media_types = Vec::new();
     let mut attachments = Vec::new();
+    let mut inline_image_index = 0usize;
     for block in &msg.content {
         match block {
-            hermes_core::ContentBlock::Text { text: value } => text.push_str(value),
-            hermes_core::ContentBlock::Custom { type_name, data } => {
+            agent_contract::ContentBlock::Text { text: value } => text.push_str(value),
+            agent_contract::ContentBlock::Custom { type_name, data } => {
                 if type_name == "file_ref" {
                     if let Some(path) = data.get("path").and_then(|value| value.as_str()) {
                         if !text.is_empty() {
@@ -9941,15 +10545,20 @@ fn push_visible_session_message(
                     }
                 }
             }
-            hermes_core::ContentBlock::Image { source } => {
+            agent_contract::ContentBlock::Image { source } => {
                 image_media_types.push(source.media_type.clone());
+                let preview_id = message_id
+                    .as_deref()
+                    .map(|id| format!("{id}#{inline_image_index}"));
+                inline_image_index += 1;
                 attachments.push(SessionAttachmentMeta {
                     name: format!("图片 {}", attachments.len() + 1),
                     media_type: source.media_type.clone(),
                     kind: "image".to_string(),
+                    preview_id,
                 });
             }
-            hermes_core::ContentBlock::File { source } => {
+            agent_contract::ContentBlock::File { source } => {
                 let kind = if source.media_type.starts_with("image/") {
                     image_media_types.push(source.media_type.clone());
                     "image"
@@ -9962,6 +10571,7 @@ fn push_visible_session_message(
                     name: source.name.clone(),
                     media_type: source.media_type.clone(),
                     kind: kind.to_string(),
+                    preview_id: None,
                 });
             }
             _ => {}
@@ -9983,6 +10593,56 @@ fn push_visible_session_message(
         is_error: None,
         timestamp: None,
     });
+}
+
+/// 把 `r_code_attachment_image` 事件的 OCR 原图预览合并到最近一条用户消息 DTO：
+/// 用图片附件元数据替换配对的 `.ocr.txt` 文本附件。OCR 文本只服务模型，不再
+/// 作为时间线附件暴露给用户；原图引用（`preview_id`）供后续按需取图。
+fn attach_image_previews(out: &mut [SessionMessage], data: &serde_json::Value) {
+    let Ok(previews) = serde_json::from_value::<Vec<AttachmentPreviewRef>>(data.clone()) else {
+        return;
+    };
+    if previews.is_empty() {
+        return;
+    }
+    let Some(user_message) = out.iter_mut().rev().find(|message| {
+        message.kind == "message" && message.role.as_deref() == Some("user")
+    }) else {
+        return;
+    };
+
+    let mut attachments = user_message.attachments.take().unwrap_or_default();
+    for preview in &previews {
+        // 优先按 ocr_name 精确配对；缺省时按顺序移除首个未配对的 .ocr.txt 文本
+        // 附件，保证历史事件即使没有完整字段也不会把合成文本暴露到时间线。
+        let ocr_index = attachments.iter().position(|attachment| {
+            attachment.kind == "text" && attachment.name == preview.ocr_name
+        });
+        if let Some(index) = ocr_index {
+            attachments.remove(index);
+        } else if let Some(index) = attachments.iter().position(|attachment| {
+            attachment.kind == "text" && attachment.name.ends_with(".ocr.txt")
+        }) {
+            attachments.remove(index);
+        }
+        attachments.push(SessionAttachmentMeta {
+            name: preview.name.clone(),
+            media_type: preview.media_type.clone(),
+            kind: "image".to_string(),
+            preview_id: Some(preview.preview_id.clone()),
+        });
+    }
+
+    let image_media_types = attachments
+        .iter()
+        .filter(|attachment| attachment.kind == "image")
+        .map(|attachment| attachment.media_type.clone())
+        .collect::<Vec<_>>();
+    user_message.image_count =
+        (!image_media_types.is_empty()).then_some(image_media_types.len());
+    user_message.image_media_types =
+        (!image_media_types.is_empty()).then_some(image_media_types);
+    user_message.attachments = (!attachments.is_empty()).then_some(attachments);
 }
 
 fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> Vec<SessionMessage> {
@@ -10102,7 +10762,9 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
             SessionEvent::HistorySnapshot { .. } => {}
             SessionEvent::ModelProjection { .. } => {}
             SessionEvent::System { event, data } => {
-                if event == DURABLE_USER_MESSAGE_EVENT {
+                if event == ATTACHMENT_IMAGE_EVENT {
+                    attach_image_previews(&mut out, &data);
+                } else if event == DURABLE_USER_MESSAGE_EVENT {
                     let operation_id = data.get("operation_id").and_then(serde_json::Value::as_str);
                     let visible = operation_id.is_some_and(|operation_id| {
                         !cancelled_durable_messages.contains(operation_id)
@@ -11211,6 +11873,7 @@ async fn start_run_locked_with_message(
     branch: &SessionBranch,
     message: &Message,
     message_mode: AgentSendMode,
+    attachments: &[ValidatedAttachment],
 ) -> Result<ActiveRun, String> {
     if bridge.active.is_some() {
         return Err("已有运行正在收尾，无法并发启动新的运行".to_string());
@@ -11235,6 +11898,7 @@ async fn start_run_locked_with_message(
         &branch.storage_id,
         message.clone(),
         message_mode,
+        attachments,
     )
     .await?;
 
@@ -11494,14 +12158,15 @@ fn local_image_preview_with_codex_home(
             })?;
             let root = attached_workspace_root(state, workspace_path)?;
             let guard = PathGuard::new(root).map_err(err_str)?;
-            guard
-                .open_existing_file(
+            let handle = guard
+                .open_file(
                     Path::new(target.relative_path.as_deref().ok_or_else(|| {
                         "workspace image preview is missing its relative path".to_string()
                     })?),
                     WorkspaceFileAccess::Read,
                 )
-                .map_err(err_str)?
+                .map_err(err_str)?;
+            (handle.display().to_string(), handle.into_file())
         }
         LocalFileScope::External => {
             let external_preview_error = || {
@@ -11521,12 +12186,13 @@ fn local_image_preview_with_codex_home(
                 );
             }
             let guard = PathGuard::new(generated_images).map_err(err_str)?;
-            guard
-                .open_existing_file(Path::new(&target.absolute_path), WorkspaceFileAccess::Read)
-                .map_err(err_str)?
+            let handle = guard
+                .open_file(Path::new(&target.absolute_path), WorkspaceFileAccess::Read)
+                .map_err(err_str)?;
+            (handle.display().to_string(), handle.into_file())
         }
     };
-    target.absolute_path = platform_display_path(&canonical);
+    target.absolute_path = canonical;
     target.size_bytes = Some(file.metadata().map_err(err_str)?.len());
     let bytes = read_bounded_preview_bytes(file, MAX_IMAGE_PREVIEW_BYTES)?;
     Ok((target, bytes))
@@ -11610,8 +12276,7 @@ pub async fn file_list(
     } else {
         Path::new(requested)
     };
-    let (_canonical_directory, directory_entries) =
-        guard.list_existing_directory(directory).map_err(err_str)?;
+    let directory_entries = guard.list_directory(directory).map_err(err_str)?.into_entries();
 
     let mut entries = Vec::new();
     let mut truncated = false;
@@ -11650,12 +12315,12 @@ pub async fn file_read(
 ) -> Result<FileContent, String> {
     let root = attached_workspace_root(state, workspace_path)?;
     let guard = PathGuard::new(root).map_err(err_str)?;
-    let (canon, mut file) = guard
-        .open_existing_file(Path::new(path), WorkspaceFileAccess::Read)
+    let mut handle = guard
+        .open_file(Path::new(path), WorkspaceFileAccess::Read)
         .map_err(err_str)?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(err_str)?;
-    Ok(file_content_from_bytes(&canon, &bytes))
+    handle.file_mut().read_to_end(&mut bytes).map_err(err_str)?;
+    Ok(file_content_from_bytes(handle.canonical(), &bytes))
 }
 
 /// 保存一个已经读取的文本文件。修订标识不匹配时拒绝覆盖，要求前端先重新加载。
@@ -11671,11 +12336,11 @@ pub async fn file_write(
     }
     let root = attached_workspace_root(state, workspace_path)?;
     let guard = PathGuard::new(root).map_err(err_str)?;
-    let (canon, mut file) = guard
-        .open_existing_file(Path::new(path), WorkspaceFileAccess::ReadWrite)
+    let mut handle = guard
+        .open_file(Path::new(path), WorkspaceFileAccess::ReadWrite)
         .map_err(err_str)?;
     let mut current = Vec::new();
-    file.read_to_end(&mut current).map_err(err_str)?;
+    handle.file_mut().read_to_end(&mut current).map_err(err_str)?;
     if current.len() > MAX_READ_BYTES
         || current.contains(&0)
         || std::str::from_utf8(&current).is_err()
@@ -11687,10 +12352,13 @@ pub async fn file_write(
         return Err("文件已在磁盘上变更，请重新加载后再保存".to_string());
     }
     let next = content.as_bytes();
-    file.set_len(0).map_err(err_str)?;
-    file.seek(SeekFrom::Start(0)).map_err(err_str)?;
-    file.write_all(next).map_err(err_str)?;
-    Ok(file_content_from_bytes(&canon, next))
+    {
+        let file = handle.file_mut();
+        file.set_len(0).map_err(err_str)?;
+        file.seek(SeekFrom::Start(0)).map_err(err_str)?;
+        file.write_all(next).map_err(err_str)?;
+    }
+    Ok(file_content_from_bytes(handle.canonical(), next))
 }
 
 pub async fn verification_output(state: &CommandState, id: &str) -> Result<String, String> {
@@ -11785,7 +12453,7 @@ fn provider_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// Responses 的一律降级为 Chat，等用户自己去设置页选。
 fn resolve_effective_protocol(
     name: &str,
-    pcfg: &hermes_config::ProviderConfig,
+    pcfg: &agent_config::ProviderConfig,
 ) -> ProviderProtocol {
     pcfg.protocol
         .as_deref()
@@ -11797,7 +12465,7 @@ fn resolve_effective_protocol(
 /// have all been verified. Wire compatibility alone never implies server-tool compatibility.
 fn hosted_tools_for_provider(
     name: &str,
-    pcfg: &hermes_config::ProviderConfig,
+    pcfg: &agent_config::ProviderConfig,
 ) -> Vec<HostedToolSpec> {
     let protocol = resolve_effective_protocol(name, pcfg);
     let configured = pcfg.base_url.trim();
@@ -11885,8 +12553,8 @@ fn protocol_to_persist(
 /// 旧代码「除 anthropic / deepseek 外一律当 OpenAI Chat」会把它们全部发错协议。
 pub(crate) fn build_provider_config(
     name: &str,
-    pcfg: &hermes_config::ProviderConfig,
-) -> hermes_llm::ProviderConfig {
+    pcfg: &agent_config::ProviderConfig,
+) -> agent_llm::ProviderConfig {
     use crate::provider_catalog::{Protocol, resolve_reasoning_replay};
 
     let configured = pcfg.base_url.trim();
@@ -11902,49 +12570,74 @@ pub(crate) fn build_provider_config(
     let optional_base_url = (!base_url.is_empty()).then(|| base_url.to_string());
     let deepseek = is_deepseek_provider(pcfg);
     let kimi_coding = is_kimi_coding_provider(pcfg);
+    let ark_kind = pcfg
+        .provider_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| matches!(*kind, "ark_coding" | "ark_agent" | "ark_coding_openai"))
+        .map(str::to_string);
     match resolve_effective_protocol(name, pcfg) {
-        Protocol::AnthropicMessages if deepseek => hermes_llm::ProviderConfig::DeepSeekAnthropic {
+        Protocol::AnthropicMessages if deepseek => agent_llm::ProviderConfig::DeepSeekAnthropic {
             api_key: pcfg.api_key.clone(),
             model: pcfg.model.clone(),
             base_url: optional_base_url,
         },
+        Protocol::AnthropicMessages if ark_kind.is_some() => {
+            agent_llm::ProviderConfig::ArkAnthropic {
+                api_key: pcfg.api_key.clone(),
+                model: pcfg.model.clone(),
+                base_url: optional_base_url,
+                kind: ark_kind.expect("checked above"),
+            }
+        }
         Protocol::AnthropicMessages if kimi_coding => {
-            hermes_llm::ProviderConfig::KimiCodingAnthropic {
+            agent_llm::ProviderConfig::KimiCodingAnthropic {
                 api_key: pcfg.api_key.clone(),
                 model: pcfg.model.clone(),
                 base_url: optional_base_url,
             }
         }
-        Protocol::AnthropicMessages => hermes_llm::ProviderConfig::Anthropic {
+        Protocol::AnthropicMessages => agent_llm::ProviderConfig::Anthropic {
             api_key: pcfg.api_key.clone(),
             model: pcfg.model.clone(),
             base_url: optional_base_url,
         },
-        Protocol::OpenAiResponses if deepseek => hermes_llm::ProviderConfig::DeepSeekResponses {
+        Protocol::OpenAiResponses if deepseek => agent_llm::ProviderConfig::DeepSeekResponses {
             api_key: pcfg.api_key.clone(),
             model: pcfg.model.clone(),
             base_url: base_url.to_string(),
         },
-        Protocol::OpenAiResponses => hermes_llm::ProviderConfig::Responses {
+        Protocol::OpenAiResponses => agent_llm::ProviderConfig::Responses {
             api_key: pcfg.api_key.clone(),
             model: pcfg.model.clone(),
             base_url: base_url.to_string(),
             // 只有目录里明确标了 reasoning_replay 且地址未被改写的服务才打开；
             // 对不支持 `include=reasoning.encrypted_content` 的实现打开会 400。
             reasoning: if resolve_reasoning_replay(name, configured) {
-                hermes_llm::ReasoningMode::EncryptedReplay
+                agent_llm::ReasoningMode::EncryptedReplay
             } else {
-                hermes_llm::ReasoningMode::Drop
+                agent_llm::ReasoningMode::Drop
             },
         },
         // DeepSeek 也是 OpenAI Chat，但 DeepSeekProvider 会按模型名报出正确的
         // 上下文窗口（v4 为 1M，其余 64K），压缩策略依赖这个值，故保留特例。
-        Protocol::OpenAiChat if deepseek => hermes_llm::ProviderConfig::DeepSeek {
+        Protocol::OpenAiChat if deepseek => agent_llm::ProviderConfig::DeepSeek {
             api_key: pcfg.api_key.clone(),
             model: pcfg.model.clone(),
             base_url: optional_base_url,
         },
-        Protocol::OpenAiChat => hermes_llm::ProviderConfig::OpenAi {
+        Protocol::OpenAiChat if ark_kind.is_some() => agent_llm::ProviderConfig::ArkChat {
+            api_key: pcfg.api_key.clone(),
+            model: pcfg.model.clone(),
+            base_url: base_url.to_string(),
+            kind: ark_kind.expect("checked above"),
+        },
+        Protocol::OpenAiChat if kimi_coding => agent_llm::ProviderConfig::KimiChat {
+            api_key: pcfg.api_key.clone(),
+            model: pcfg.model.clone(),
+            base_url: base_url.to_string(),
+        },
+        Protocol::OpenAiChat => agent_llm::ProviderConfig::OpenAi {
             api_key: pcfg.api_key.clone(),
             model: pcfg.model.clone(),
             base_url: base_url.to_string(),
@@ -11953,14 +12646,14 @@ pub(crate) fn build_provider_config(
 }
 
 /// DeepSeek-specific request shaping follows persisted identity, never an editable label or URL.
-fn is_deepseek_provider(provider: &hermes_config::ProviderConfig) -> bool {
+fn is_deepseek_provider(provider: &agent_config::ProviderConfig) -> bool {
     provider
         .provider_kind
         .as_deref()
         .is_some_and(|kind| kind.eq_ignore_ascii_case("deepseek"))
 }
 
-fn is_kimi_coding_provider(provider: &hermes_config::ProviderConfig) -> bool {
+fn is_kimi_coding_provider(provider: &agent_config::ProviderConfig) -> bool {
     provider
         .provider_kind
         .as_deref()
@@ -11974,7 +12667,7 @@ fn is_kimi_coding_provider(provider: &hermes_config::ProviderConfig) -> bool {
 /// 拒绝，因此在保存和运行旧配置时都使用同一规则保护。
 ///
 /// 其余服务取目录里的 `max_output_tokens`（同样只是输出上限，不是 `context_window`）。
-fn provider_max_output_tokens(name: &str, provider: &hermes_config::ProviderConfig) -> Option<u32> {
+fn provider_max_output_tokens(name: &str, provider: &agent_config::ProviderConfig) -> Option<u32> {
     let deepseek = is_deepseek_provider(provider);
     let is_v4 = provider
         .model
@@ -11996,7 +12689,7 @@ fn provider_max_output_tokens(name: &str, provider: &hermes_config::ProviderConf
 }
 
 /// 兼容已保存的旧配置：不因历史上误填的 1M/10M 输出上限而重新触发 400。
-fn effective_max_tokens(name: &str, provider: &hermes_config::ProviderConfig) -> Option<u32> {
+fn effective_max_tokens(name: &str, provider: &agent_config::ProviderConfig) -> Option<u32> {
     match (
         provider.max_tokens,
         provider_max_output_tokens(name, provider),
@@ -12022,7 +12715,7 @@ fn provider_env_has_key(name: &str, provider_kind: Option<&str>) -> bool {
 /// 让其它未完成的配置草稿影响当前默认服务。
 pub(crate) fn provider_readiness_error(
     name: &str,
-    provider: &hermes_config::ProviderConfig,
+    provider: &agent_config::ProviderConfig,
 ) -> Option<String> {
     if provider.api_key.trim().is_empty() {
         return Some("缺少访问密钥".to_string());
@@ -12081,7 +12774,7 @@ fn load_config_json_for_editing(state: &CommandState) -> Result<serde_json::Valu
             toml::from_str(&content).map_err(|e| format!("parse {}: {e}", path.display()))?;
         serde_json::to_value(tv).map_err(|e| e.to_string())
     } else {
-        serde_json::to_value(hermes_config::Config::default()).map_err(|e| e.to_string())
+        serde_json::to_value(agent_config::Config::default()).map_err(|e| e.to_string())
     }
 }
 
@@ -12401,7 +13094,7 @@ pub async fn settings_save_provider(
                 .map(str::to_string)
         }),
     };
-    let output_limits = hermes_config::ProviderConfig {
+    let output_limits = agent_config::ProviderConfig {
         base_url: base_url.clone(),
         api_key: String::new(),
         model: model.clone(),
@@ -12506,7 +13199,7 @@ pub async fn settings_save_provider(
         );
     }
 
-    let config: hermes_config::Config = serde_json::from_value(config_json).map_err(err_str)?;
+    let config: agent_config::Config = serde_json::from_value(config_json).map_err(err_str)?;
     // 先确认序列化可行，再写入平台凭据后端；避免无效字段影响用户已有密钥。
     toml::to_string(&config).map_err(err_str)?;
     if let Some(secret) = supplied_key.as_deref().or(legacy_key.as_deref()) {
@@ -12589,7 +13282,7 @@ const MAX_CODEX_TRUST_TREE_ENTRIES: usize = 512;
 const MAX_CODEX_ADDITIONAL_BINARIES: usize = 32;
 
 struct SubagentCatalogContext {
-    config: hermes_config::Config,
+    config: agent_config::Config,
     receipts: SubagentHealthReceiptDocument,
     pepper: SubagentFingerprintPepper,
     codex: CodexCliCatalogInput,
@@ -12618,7 +13311,7 @@ struct NativeProviderSubagentCandidateRunner {
 
 #[async_trait::async_trait]
 impl SubagentCandidateRunner for NativeProviderSubagentCandidateRunner {
-    fn native_provider(&self) -> Option<Arc<dyn hermes_core::LlmProvider>> {
+    fn native_provider(&self) -> Option<Arc<dyn agent_contract::LlmProvider>> {
         Some(self.runtime.provider.clone())
     }
 
@@ -12837,7 +13530,7 @@ fn verified_codex_trust_chain(cli_path: Option<&Path>) -> Option<VerifiedExecuta
 
 async fn build_subagent_catalog_context(
     config_dir: &Path,
-    config: hermes_config::Config,
+    config: agent_config::Config,
 ) -> Result<SubagentCatalogContext, String> {
     let settings = SettingsService::new(config_dir.to_path_buf());
     let pepper = load_or_create_fingerprint_pepper(&settings).map_err(err_str)?;
@@ -12997,7 +13690,7 @@ async fn build_runtime_subagent_candidate_pool(
     config_dir: &Path,
     db: &Arc<Database>,
     permission_engine: Arc<PermissionEngine>,
-    config: hermes_config::Config,
+    config: agent_config::Config,
 ) -> Result<RuntimeSubagentCandidatePoolUpdate, String> {
     let context = build_subagent_catalog_context(config_dir, config).await?;
     let snapshot = subagent_pool_snapshot_from_context(&context, chrono::Utc::now())?;
@@ -13049,12 +13742,12 @@ async fn build_runtime_subagent_candidate_pool(
                     })?;
                     let mut exact_config = provider_config.clone();
                     exact_config.model = slot.model.clone();
-                    let provider = hermes_llm::create_provider(build_provider_config(
+                    let provider = agent_llm::create_provider(build_provider_config(
                         provider_id,
                         &exact_config,
                     ))
                     .map_err(err_str)?;
-                    let provider: Arc<dyn hermes_core::LlmProvider> = Arc::from(provider);
+                    let provider: Arc<dyn agent_contract::LlmProvider> = Arc::from(provider);
                     let runtime = NativeSubagentRuntimeOptions {
                         provider,
                         hosted_tools: hosted_tools_for_provider(provider_id, &exact_config),
@@ -13097,6 +13790,7 @@ async fn build_runtime_subagent_candidate_pool(
                 model: slot.model,
                 weight: slot.weight,
                 role_prompt: slot.prompt,
+                role_key: slot.prompt_template_id.clone(),
                 capabilities: runtime_subagent_capabilities(health.capabilities),
             },
             runner,
@@ -13110,7 +13804,7 @@ fn validate_subagent_probe_request(request: &SubagentProviderProbeRequest) -> Re
     if model.is_empty()
         || model.trim() != model
         || model.chars().any(char::is_control)
-        || model.chars().count() > hermes_config::MAX_SUBAGENT_MODEL_CHARS
+        || model.chars().count() > agent_config::MAX_SUBAGENT_MODEL_CHARS
     {
         return Err("子代理模型必须填写、无控制字符且长度有效".to_string());
     }
@@ -13118,7 +13812,7 @@ fn validate_subagent_probe_request(request: &SubagentProviderProbeRequest) -> Re
         if provider_id.is_empty()
             || provider_id.trim() != provider_id
             || provider_id.chars().any(char::is_control)
-            || provider_id.chars().count() > hermes_config::MAX_SUBAGENT_SOURCE_ID_CHARS
+            || provider_id.chars().count() > agent_config::MAX_SUBAGENT_SOURCE_ID_CHARS
         {
             return Err("API Provider 标识无效".to_string());
         }
@@ -13187,7 +13881,7 @@ async fn run_api_subagent_probe(
         .ok_or(SubagentHealthErrorCode::Unsupported)?;
     let mut exact_config = provider_config.clone();
     exact_config.model = model.to_string();
-    let provider = hermes_llm::create_provider(build_provider_config(provider_id, &exact_config))
+    let provider = agent_llm::create_provider(build_provider_config(provider_id, &exact_config))
         .map_err(|error| classify_subagent_probe_error(&err_str(error)))?;
     let request = CompletionRequest {
         model: model.to_string(),
@@ -16397,6 +17091,7 @@ async fn start_codex_main_with_resources(
         &branch.storage_id,
         user_message_with_attachments(&message, &attachments),
         message_mode,
+        &attachments,
     )
     .await?;
 
@@ -16754,7 +17449,7 @@ fn codex_exec_command_with_permissions_and_images(
         if model.is_empty()
             || model.trim() != model
             || model.chars().any(char::is_control)
-            || model.chars().count() > hermes_config::MAX_SUBAGENT_MODEL_CHARS
+            || model.chars().count() > agent_config::MAX_SUBAGENT_MODEL_CHARS
         {
             return Err("Codex 子代理模型标识无效。".to_string());
         }
@@ -18712,7 +19407,7 @@ fn codex_approval_response(
                 } else {
                     guard.root().join(requested)
                 };
-                guard.resolve(&candidate).is_ok()
+                guard.resolve_path(&candidate).is_ok()
             };
             if let Some(entries) = file_system
                 .get_mut("entries")
@@ -19121,7 +19816,7 @@ async fn run_codex_app_server_process_with_images_and_registry(
         if model.is_empty()
             || model.trim() != model
             || model.chars().any(char::is_control)
-            || model.chars().count() > hermes_config::MAX_SUBAGENT_MODEL_CHARS
+            || model.chars().count() > agent_config::MAX_SUBAGENT_MODEL_CHARS
         {
             transport_owner.finish(false).await;
             return CodexExecCompletion {
@@ -20703,7 +21398,7 @@ pub async fn settings_set(
     set_nested_value(&mut config_json, key, value)?;
 
     // 反序列化回 Config 并保存
-    let config: hermes_config::Config =
+    let config: agent_config::Config =
         serde_json::from_value(config_json).map_err(|e| e.to_string())?;
     let live_codex_setting = (key == "orchestration.allow_cross_engine_delegation")
         .then_some(config.orchestration.allow_cross_engine_delegation);
@@ -21004,6 +21699,27 @@ mod tests {
         assert!(cache.completed.contains(&chat.id));
         assert_eq!(cache.uncached_runs.get(&workspace.id), Some(&2));
         assert!(!cache.completed.contains(&workspace.id));
+    }
+
+    #[tokio::test]
+    async fn pure_chat_tasks_default_their_workspace_binding_to_the_user_home() {
+        let (_dir, state) = setup_state();
+        let repository = TaskRepository::new(&state.db);
+        let chat = Task::new(None, "Chat", "default home scope", TaskMode::Edit);
+        repository.create(&chat).unwrap();
+
+        let (workspace_path, access_mode) =
+            task_workspace_binding_from_db(&state.db, &chat).unwrap();
+        let expected_home = dirs::home_dir()
+            .expect("user home must exist in the test environment")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(
+            PathBuf::from(workspace_path.expect("chat must resolve a workspace")),
+            expected_home,
+            "pure chat must default its workspace binding to the user home"
+        );
+        assert_eq!(access_mode, ProjectAccessMode::RequestApproval);
     }
 
     /// 构造一个“上次进程退出前仍在运行”的文件数据库。
@@ -21435,6 +22151,80 @@ mod tests {
                 .count(),
             1,
             "an idempotent answer retry must not resume the model twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn scope_decision_restores_agent_mode_and_resumes_once() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Scope", "Decide scope", "auto")
+            .await
+            .unwrap();
+        let awaiting = state
+            .plan_store
+            .request_scope_decision(
+                &task.id,
+                &r_code_core::plan::RequestScopeDecisionInput {
+                    questions: vec![r_code_core::plan::PlanQuestionDraft {
+                        id: "scope".to_string(),
+                        header: "Scope".to_string(),
+                        question: "Which scope?".to_string(),
+                        options: vec![
+                            r_code_core::plan::PlanQuestionOptionDraft {
+                                id: "narrow".to_string(),
+                                label: "Narrow (Recommended)".to_string(),
+                                description: "Only the typed request".to_string(),
+                            },
+                            r_code_core::plan::PlanQuestionOptionDraft {
+                                id: "all".to_string(),
+                                label: "All OCR suggestions".to_string(),
+                                description: "Also implement image notes".to_string(),
+                            },
+                        ],
+                    }],
+                },
+            )
+            .unwrap();
+        let question_set_id = awaiting.pending_question_set.as_ref().unwrap().id.clone();
+        let answer = AnswerPlanQuestionsInput {
+            question_set_id: question_set_id.clone(),
+            expected_revision: awaiting.plan.revision,
+            idempotency_key: "scope-answer-once".to_string(),
+            skip_all: false,
+            answers: vec![r_code_core::plan::PlanQuestionAnswerInput::Option {
+                question_id: "scope".to_string(),
+                option_id: "narrow".to_string(),
+            }],
+        };
+
+        let view = plan_answer(&state, &task.id, answer.clone()).await.unwrap();
+        assert_eq!(view.plan.state, PlanState::Cancelled);
+        assert_eq!(require_task(&state, &task.id).unwrap().mode, TaskMode::Auto);
+
+        // 幂等重复提交不得再次派发续接。
+        plan_answer(&state, &task.id, answer).await.unwrap();
+        let set = state
+            .plan_store
+            .get_question_set(&task.id, &question_set_id)
+            .unwrap();
+        assert_eq!(
+            set.continuation_state,
+            r_code_core::plan::PlanContinuationState::Dispatched
+        );
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let history = state.session_store.load(&branch.storage_id).await.unwrap();
+        assert_eq!(
+            history
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.role == Role::User && message.text_content().contains("范围决策已回答")
+                })
+                .count(),
+            1,
+            "scope decision resume must be dispatched exactly once"
         );
     }
 
@@ -22004,11 +22794,11 @@ input.on('line', (line) => {
 
     struct CompactionTestProvider {
         requests: Arc<Mutex<Vec<CompletionRequest>>>,
-        responses: Mutex<Vec<(String, hermes_core::StopReason)>>,
+        responses: Mutex<Vec<(String, agent_contract::StopReason)>>,
     }
 
     impl CompactionTestProvider {
-        fn new(responses: Vec<(String, hermes_core::StopReason)>) -> Self {
+        fn new(responses: Vec<(String, agent_contract::StopReason)>) -> Self {
             Self {
                 requests: Arc::new(Mutex::new(Vec::new())),
                 responses: Mutex::new(responses),
@@ -22017,35 +22807,41 @@ input.on('line', (line) => {
     }
 
     #[async_trait::async_trait]
-    impl hermes_core::LlmProvider for CompactionTestProvider {
+    impl agent_contract::LlmProvider for CompactionTestProvider {
         async fn complete(
             &self,
             request: CompletionRequest,
-        ) -> hermes_error::Result<hermes_core::CompletionResponse> {
+        ) -> agent_error::Result<agent_contract::CompletionResponse> {
             self.requests.lock().unwrap().push(request);
-            let (text, stop_reason) = self.responses.lock().unwrap().remove(0);
-            Ok(hermes_core::CompletionResponse {
+            let mut responses = self.responses.lock().unwrap();
+            let (text, stop_reason) = if responses.is_empty() {
+                (String::new(), agent_contract::StopReason::EndTurn)
+            } else {
+                responses.remove(0)
+            };
+            Ok(agent_contract::CompletionResponse {
                 content: vec![ContentBlock::Text { text }],
                 stop_reason,
-                usage: hermes_core::Usage::default(),
+                usage: agent_contract::Usage::default(),
             })
         }
 
         async fn stream(
             &self,
             _request: CompletionRequest,
-        ) -> hermes_error::Result<futures::stream::BoxStream<'static, hermes_core::StreamEvent>>
+        ) -> agent_error::Result<futures::stream::BoxStream<'static, agent_contract::StreamEvent>>
         {
             unreachable!("manual compaction uses complete")
         }
 
-        fn capabilities(&self) -> hermes_core::Capabilities {
-            hermes_core::Capabilities {
+        fn capabilities(&self) -> agent_contract::Capabilities {
+            agent_contract::Capabilities {
                 supports_streaming: false,
                 supports_tool_use: false,
                 supports_vision: false,
                 supports_prompt_caching: false,
                 max_context_tokens: 200_000,
+                max_output_tokens: 0,
             }
         }
 
@@ -22125,6 +22921,155 @@ input.on('line', (line) => {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn compaction_chunks_split_oversized_message_into_ordered_parts() {
+        let body = "x".repeat(300_000);
+        let message = Message::user_text(format!("START-MARKER-{body}-END-MARKER"));
+        let source = compaction_message_source(0, &message).unwrap();
+        let unit = CompactionUnit {
+            text: source.clone(),
+            tool_use_id: None,
+        };
+        let parts = split_compaction_unit(&unit);
+
+        assert!(parts.len() > 1);
+        assert!(
+            parts
+                .iter()
+                .all(|part| part.chars().count() <= COMPACTION_SOURCE_CHARS)
+        );
+        // 内容拼接完整：去掉每个 PART 头后按顺序逐字符重建，必须与原来源完全一致。
+        let mut joined = String::new();
+        for (index, part) in parts.iter().enumerate() {
+            let expected = format!("COMPACTION_PART {}/{}:", index + 1, parts.len());
+            assert!(part.starts_with(&expected), "part {index} 缺少 PART 头 {expected:?}");
+            joined.push_str(part.split_once('\n').map(|(_, rest)| rest).unwrap_or(part));
+        }
+        assert_eq!(joined, source);
+        assert!(parts.first().unwrap().contains("START-MARKER"));
+        assert!(parts.last().unwrap().contains("END-MARKER"));
+        assert!(
+            parts
+                .iter()
+                .all(|part| !part.contains("中间内容因长度受限已省略"))
+        );
+    }
+
+    #[test]
+    fn compaction_chunks_split_oversized_tool_pair_keeping_atomicity() {
+        let messages = vec![
+            Message::user_text("prefix"),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "atomic-call".into(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({"path": "src/lib.rs"}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "atomic-call".into(),
+                    content: format!("RESULT-HEAD-{}-RESULT-TAIL", "y".repeat(300_000)),
+                    is_error: false,
+                }],
+            },
+            Message::assistant_text("suffix"),
+        ];
+
+        let chunks = compaction_source_chunks(&messages).unwrap();
+
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.chars().count() <= COMPACTION_SOURCE_CHARS)
+        );
+        // 所有引用同一 tool_use_id 的分块连续，不被 prefix/suffix 或其他工具对穿插。
+        let atomic_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| chunk.contains("TOOL atomic-call"))
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!atomic_indices.is_empty());
+        for window in atomic_indices.windows(2) {
+            assert_eq!(window[0] + 1, window[1]);
+        }
+        // prefix 与 suffix 分别位于两端。
+        assert!(chunks.first().unwrap().contains("prefix"));
+        assert!(chunks.last().unwrap().contains("suffix"));
+
+        // 直接校验工具对单元的拆分：ToolUse 头只出现一次，去掉 PART 头后可完整重建。
+        let unit = compaction_units(&messages)
+            .unwrap()
+            .into_iter()
+            .find(|unit| unit.tool_use_id.as_deref() == Some("atomic-call"))
+            .expect("tool pair must be one compaction unit");
+        let parts = split_compaction_unit(&unit);
+        assert!(parts.len() > 1);
+        assert!(
+            parts
+                .iter()
+                .all(|part| part.chars().count() <= COMPACTION_SOURCE_CHARS)
+        );
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|part| part.contains("read_file"))
+                .count(),
+            1
+        );
+        let mut joined = String::new();
+        for (index, part) in parts.iter().enumerate() {
+            let expected = format!(
+                "COMPACTION_PART {}/{} TOOL atomic-call:",
+                index + 1,
+                parts.len()
+            );
+            assert!(part.starts_with(&expected), "part {index} 缺少工具对 PART 头");
+            joined.push_str(part.split_once('\n').map(|(_, rest)| rest).unwrap_or(part));
+        }
+        assert_eq!(joined, unit.text);
+        assert!(parts.iter().any(|part| part.contains("RESULT-HEAD")));
+        assert!(parts.iter().any(|part| part.contains("RESULT-TAIL")));
+        assert!(
+            parts
+                .iter()
+                .all(|part| !part.contains("中间内容因长度受限已省略"))
+        );
+    }
+
+    #[test]
+    fn compaction_source_chunks_accepts_one_mib_text_attachment() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::File {
+                source: FileSource {
+                    kind: "text".into(),
+                    name: "big.txt".into(),
+                    media_type: "text/plain".into(),
+                    text: Some("z".repeat(1_048_576)),
+                    data: None,
+                },
+            }],
+        }];
+
+        let chunks = compaction_source_chunks(&messages).unwrap();
+
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.chars().count() <= COMPACTION_SOURCE_CHARS)
+        );
+        let z_count: usize = chunks
+            .iter()
+            .map(|chunk| chunk.matches('z').count())
+            .sum();
+        assert_eq!(z_count, 1_048_576);
     }
 
     #[test]
@@ -22214,12 +23159,12 @@ input.on('line', (line) => {
             .map(|index| {
                 (
                     format!("MAP-SUMMARY-{index}"),
-                    hermes_core::StopReason::EndTurn,
+                    agent_contract::StopReason::EndTurn,
                 )
             })
             .chain(std::iter::once((
                 "FINAL-REDUCED-SUMMARY".to_string(),
-                hermes_core::StopReason::EndTurn,
+                agent_contract::StopReason::EndTurn,
             )))
             .collect();
         let provider = CompactionTestProvider::new(responses);
@@ -22252,8 +23197,8 @@ input.on('line', (line) => {
     #[tokio::test]
     async fn manual_compaction_rejects_incomplete_or_empty_map_output() {
         for (text, reason) in [
-            ("partial", hermes_core::StopReason::MaxTokens),
-            ("   ", hermes_core::StopReason::EndTurn),
+            ("partial", agent_contract::StopReason::MaxTokens),
+            ("   ", agent_contract::StopReason::EndTurn),
         ] {
             let provider = CompactionTestProvider::new(vec![(text.to_string(), reason)]);
             let error = summarize_compaction_history(
@@ -22270,6 +23215,47 @@ input.on('line', (line) => {
                 "unexpected error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn reduce_packing_splits_oversized_units_instead_of_rejecting() {
+        let oversized = "证据".repeat(120_000);
+        let chunks = pack_compaction_sources(vec![oversized]).unwrap();
+        assert!(chunks.len() > 1);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= COMPACTION_SOURCE_CHARS));
+        assert!(chunks.last().unwrap().ends_with('据'));
+    }
+
+    #[test]
+    fn map_packing_splits_oversized_tool_pair_without_dropping_chars() {
+        let evidence = "evidence-".repeat(30_000);
+        let call = Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-1".into(),
+                name: "read".into(),
+                input: serde_json::json!({}),
+            }],
+        };
+        let result = Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tool-1".into(),
+                content: evidence,
+                is_error: false,
+            }],
+        };
+        let chunks = compaction_source_chunks(&[call, result]).unwrap();
+        assert!(chunks.len() > 1);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= COMPACTION_SOURCE_CHARS));
+        let joined = chunks.join("");
+        assert!(joined.contains("COMPACTION_PART"));
+        assert!(joined.contains("tool-1"));
+        assert!(joined.matches("evidence-").count() >= 29_998);
     }
 
     #[tokio::test]
@@ -22681,15 +23667,26 @@ input.on('line', (line) => {
                     .as_deref()
                     .is_some_and(|value| value.contains("正在读取 README.md"))
         }));
-        let assistant_messages = child_messages
+        assert!(child_messages.iter().all(|message| {
+            !(message.kind == "message" && message.role.as_deref() == Some("assistant"))
+        }));
+        let interim_messages = child_messages
             .iter()
             .filter(|message| {
-                message.kind == "message" && message.role.as_deref() == Some("assistant")
+                message.kind == "system" && message.text.as_deref() == Some(R_CODE_INTERIM_EVENT)
             })
             .collect::<Vec<_>>();
-        assert_eq!(assistant_messages.len(), 1);
+        assert_eq!(interim_messages.len(), 1, "interim deltas should be coalesced");
         assert_eq!(
-            assistant_messages[0].text.as_deref(),
+            interim_messages[0]
+                .output_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .and_then(|value| value
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string))
+                .as_deref(),
             Some("先读取 README.md，再核对边界。")
         );
         let reasoning_messages = child_messages
@@ -22719,9 +23716,9 @@ input.on('line', (line) => {
             .iter()
             .position(|message| message.id.as_deref() == reasoning_messages[0].id.as_deref())
             .unwrap();
-        let assistant_index = child_messages
+        let interim_index = child_messages
             .iter()
-            .position(|message| message.id.as_deref() == assistant_messages[0].id.as_deref())
+            .position(|message| message.id.as_deref() == interim_messages[0].id.as_deref())
             .unwrap();
         let tool_index = child_messages
             .iter()
@@ -22730,8 +23727,8 @@ input.on('line', (line) => {
             })
             .unwrap();
         assert!(
-            reasoning_index < assistant_index && assistant_index < tool_index,
-            "流式回答应在后续工具调用前落盘"
+            reasoning_index < interim_index && interim_index < tool_index,
+            "工具前过渡文本应作为过程条目按原始顺序落盘"
         );
         assert!(
             subagent_session_messages(&state, "another-task", "child-run")
@@ -22909,6 +23906,81 @@ input.on('line', (line) => {
         let parent_json: serde_json::Value =
             serde_json::from_str(fetched_parent.usage_json.as_deref().unwrap()).unwrap();
         assert_eq!(parent_json["stream_retries"], 2);
+    }
+
+    #[tokio::test]
+    async fn native_guard_trip_and_checkpoint_persist_to_run_row() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let run = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+
+        persist_native_guard_trip_event(
+            &state.db,
+            &run.id,
+            &AgentEvent::GuardTrip {
+                reason: r_code_core::dto::GuardTripReason::NoProgress,
+                detail: "连续 24 个工具轮没有可观察进展".to_string(),
+            },
+        );
+        let fetched = AgentRunRepository::new(&state.db)
+            .get(&run.id)
+            .unwrap()
+            .unwrap();
+        let trip: serde_json::Value =
+            serde_json::from_str(fetched.guard_trip.as_deref().unwrap()).unwrap();
+        assert_eq!(trip["reason"], "no_progress");
+        assert!(trip["detail"].as_str().unwrap().contains("24 个工具轮"));
+
+        // 首个触发原因保留（COALESCE），后续触发不覆盖。
+        persist_native_guard_trip_event(
+            &state.db,
+            &run.id,
+            &AgentEvent::GuardTrip {
+                reason: r_code_core::dto::GuardTripReason::ToolRoundsExceeded,
+                detail: "后续触发".to_string(),
+            },
+        );
+        let fetched = AgentRunRepository::new(&state.db)
+            .get(&run.id)
+            .unwrap()
+            .unwrap();
+        let trip: serde_json::Value =
+            serde_json::from_str(fetched.guard_trip.as_deref().unwrap()).unwrap();
+        assert_eq!(trip["reason"], "no_progress");
+
+        persist_native_checkpoint_event(
+            &state.db,
+            &run.id,
+            &AgentEvent::Checkpoint {
+                sha: "abc123def".to_string(),
+                base_head: "base456".to_string(),
+            },
+        );
+        let fetched = AgentRunRepository::new(&state.db)
+            .get(&run.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.checkpoint_sha.as_deref(), Some("abc123def"));
+        assert_eq!(fetched.checkpoint_base_head.as_deref(), Some("base456"));
+
+        // 空 sha 的 checkpoint 事件不写库。
+        persist_native_checkpoint_event(
+            &state.db,
+            &run.id,
+            &AgentEvent::Checkpoint {
+                sha: String::new(),
+                base_head: "base456".to_string(),
+            },
+        );
+        let fetched = AgentRunRepository::new(&state.db)
+            .get(&run.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.checkpoint_sha.as_deref(), Some("abc123def"));
     }
 
     #[tokio::test]
@@ -23357,6 +24429,207 @@ input.on('line', (line) => {
             .find(|path| path.path == "task.txt")
             .unwrap();
         assert!(task_path.accepted);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_rollback_restores_green_state_and_preserves_untracked() {
+        let (_dir, state) = setup_state();
+        let repo = state.project_root.join("review-checkpoint");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "review@example.test"]);
+        git(&["config", "user.name", "Review Test"]);
+        git(&["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join("task.txt"), b"baseline\n").unwrap();
+        git(&["add", "task.txt"]);
+        git(&["commit", "--quiet", "-m", "baseline"]);
+
+        let workspace = workspace_open(&state, &repo).await.unwrap();
+        let task = task_create(
+            &state,
+            Some(&workspace.canonical_path),
+            "Review checkpoint",
+            "edit task file",
+            "edit",
+        )
+        .await
+        .unwrap();
+        let run = AgentRun::new(&task.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+        let git_service = GitService::new(repo.clone());
+        let entry_index = git_service.index_snapshot().unwrap().unwrap();
+        let entry_worktree = git_service.entry_snapshot().unwrap().unwrap();
+        let entry_head = git_service.head_tree().unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .save_run_workspace_snapshot(NewRunWorkspaceSnapshot {
+                run_id: &run.id,
+                task_id: &task.id,
+                repo_root: &repo,
+                workspace_root: &repo,
+                entry_head_tree: entry_head.as_deref(),
+                entry_index_tree: &entry_index,
+                entry_worktree_tree: &entry_worktree,
+            })
+            .unwrap();
+
+        // 绿灯状态：Agent 第一版改动，随后被打成 checkpoint。
+        std::fs::write(repo.join("task.txt"), b"agent edit v1\n").unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .record_snapshot_change(
+                &run.id,
+                &task.id,
+                "task.txt",
+                FileChangeType::Modify,
+                Some(b"baseline\n"),
+                Some(b"agent edit v1\n"),
+            )
+            .await
+            .unwrap();
+        std::fs::write(repo.join("user.txt"), b"user work\n").unwrap();
+        let checkpoint_sha = git(&["stash", "create", "r-code checkpoint"]);
+        assert!(!checkpoint_sha.is_empty(), "checkpoint capture must succeed");
+        let base_head = git(&["rev-parse", "HEAD"]);
+        AgentRunRepository::new(&state.db)
+            .set_checkpoint(&run.id, &checkpoint_sha, &base_head)
+            .unwrap();
+
+        // checkpoint 之后的改动：回滚应回到绿灯状态而不是 run 前基线。
+        std::fs::write(repo.join("task.txt"), b"agent edit v2\n").unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .record_snapshot_change(
+                &run.id,
+                &task.id,
+                "task.txt",
+                FileChangeType::Modify,
+                Some(b"agent edit v1\n"),
+                Some(b"agent edit v2\n"),
+            )
+            .await
+            .unwrap();
+        AgentRunRepository::new(&state.db)
+            .finish_if_active(&run.id, ReviewState::Pending, None)
+            .unwrap();
+
+        let results = rollback_task_to_checkpoint(&state, &task.id)
+            .await
+            .unwrap();
+        assert!(
+            results
+                .iter()
+                .any(|line| line.contains("已回滚到绿灯 checkpoint")),
+            "checkpoint rollback must report the checkpoint: {results:?}"
+        );
+        assert_eq!(
+            std::fs::read(repo.join("task.txt")).unwrap(),
+            b"agent edit v1\n",
+            "rollback must restore the green checkpoint state, not the pre-run baseline"
+        );
+        assert_eq!(
+            std::fs::read(repo.join("user.txt")).unwrap(),
+            b"user work\n",
+            "untracked files must never be discarded by checkpoint rollback"
+        );
+        let run = AgentRunRepository::new(&state.db)
+            .get(&run.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.review_state, ReviewState::RolledBack);
+        assert_eq!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            TaskState::Idle
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_rollback_refuses_when_head_moved_externally() {
+        let (_dir, state) = setup_state();
+        let repo = state.project_root.join("review-checkpoint-moved-head");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "review@example.test"]);
+        git(&["config", "user.name", "Review Test"]);
+        git(&["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join("task.txt"), b"baseline\n").unwrap();
+        git(&["add", "task.txt"]);
+        git(&["commit", "--quiet", "-m", "baseline"]);
+
+        let workspace = workspace_open(&state, &repo).await.unwrap();
+        let task = task_create(
+            &state,
+            Some(&workspace.canonical_path),
+            "Review checkpoint moved",
+            "edit task file",
+            "edit",
+        )
+        .await
+        .unwrap();
+        let run = AgentRun::new(&task.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+
+        std::fs::write(repo.join("task.txt"), b"agent edit v1\n").unwrap();
+        let checkpoint_sha = git(&["stash", "create", "r-code checkpoint"]);
+        assert!(!checkpoint_sha.is_empty());
+        let base_head = git(&["rev-parse", "HEAD"]);
+        AgentRunRepository::new(&state.db)
+            .set_checkpoint(&run.id, &checkpoint_sha, &base_head)
+            .unwrap();
+
+        // 运行结束后有外部提交移动了 HEAD。
+        git(&["add", "task.txt"]);
+        git(&["commit", "--quiet", "-m", "external commit"]);
+        std::fs::write(repo.join("task.txt"), b"external edit\n").unwrap();
+        AgentRunRepository::new(&state.db)
+            .finish_if_active(&run.id, ReviewState::Pending, None)
+            .unwrap();
+
+        let error = rollback_task_to_checkpoint(&state, &task.id)
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("HEAD 已被外部移动"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read(repo.join("task.txt")).unwrap(),
+            b"external edit\n",
+            "refused rollback must not touch the worktree"
+        );
     }
 
     #[cfg(unix)]
@@ -23997,12 +25270,67 @@ input.on('line', (line) => {
             Some(vec!["image/png".into()])
         );
         assert_eq!(messages[0].attachments.as_ref().map(Vec::len), Some(1));
+        assert_eq!(
+            messages[0].attachments.as_ref().unwrap()[0].preview_id.as_deref(),
+            Some("storage:1#0")
+        );
         assert!(messages[0].text.is_none());
         assert!(
             !serde_json::to_string(&messages[0])
                 .unwrap()
                 .contains("secret-base64")
         );
+    }
+
+    #[test]
+    fn session_message_parser_hides_ocr_text_and_exposes_image_preview() {
+        let preview = AttachmentPreviewRef {
+            preview_id: "00000000-0000-4000-8000-000000000000".to_string(),
+            name: "screen.png".to_string(),
+            media_type: "image/png".to_string(),
+            ocr_name: "screen.png.ocr.txt".to_string(),
+        };
+        let user_message = Message {
+            role: Role::User,
+            content: vec![ContentBlock::File {
+                source: FileSource {
+                    kind: "text".to_string(),
+                    name: "screen.png.ocr.txt".to_string(),
+                    media_type: "text/plain".to_string(),
+                    text: Some("[Windows OCR] recognized text".to_string()),
+                    data: None,
+                },
+            }],
+        };
+        let events = [
+            SessionEvent::Message(user_message),
+            SessionEvent::System {
+                event: ATTACHMENT_IMAGE_EVENT.into(),
+                data: serde_json::to_value(&[preview]).unwrap(),
+            },
+        ];
+        let content = events
+            .iter()
+            .map(|event| serde_json::to_string(event).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let messages = parse_session_messages(&content, "branch", "storage");
+        let user = messages
+            .iter()
+            .find(|message| message.role.as_deref() == Some("user"))
+            .expect("user message");
+        let attachments = user.attachments.as_ref().expect("attachments");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, "image");
+        assert_eq!(attachments[0].name, "screen.png");
+        assert_eq!(attachments[0].media_type, "image/png");
+        assert_eq!(
+            attachments[0].preview_id.as_deref(),
+            Some("00000000-0000-4000-8000-000000000000")
+        );
+        assert!(attachments.iter().all(|item| !item.name.ends_with(".ocr.txt")));
+        assert_eq!(user.image_count, Some(1));
+        assert_eq!(user.image_media_types, Some(vec!["image/png".into()]));
     }
 
     #[test]
@@ -24263,8 +25591,20 @@ input.on('line', (line) => {
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].message, "second");
 
-        tokio::time::sleep(std::time::Duration::from_millis(1_800)).await;
-        let detail = task_detail(&state, &task.id).await.unwrap();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+        let detail = loop {
+            let detail = task_detail(&state, &task.id).await.unwrap();
+            if detail.runs.len() == 2
+                && detail.runs.iter().all(|run| run.ended_at.is_some())
+                && detail.queued_messages.is_empty()
+            {
+                break detail;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("queued message did not finish after the active run within the timeout");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        };
         assert_eq!(detail.runs.len(), 2);
         assert!(detail.runs.iter().all(|run| run.ended_at.is_some()));
         assert!(detail.queued_messages.is_empty());
@@ -25088,7 +26428,7 @@ kind = "codex_cli"
     #[tokio::test]
     async fn provider_probe_batch_accepts_more_than_three_sources_and_deduplicates_pairs() {
         let (_dir, state) = setup_state();
-        assert!(SUBAGENT_PROVIDER_PROBE_MAX_BATCH > hermes_config::MAX_SUBAGENT_PROVIDER_SLOTS);
+        assert!(SUBAGENT_PROVIDER_PROBE_MAX_BATCH > agent_config::MAX_SUBAGENT_PROVIDER_SLOTS);
         let mut requests = (0..5)
             .map(|index| SubagentProviderProbeRequest {
                 source: SubagentProviderSource::ApiProvider {
@@ -25146,7 +26486,7 @@ kind = "codex_cli"
         };
         let pool = SubagentPoolConfig {
             slots: vec![
-                hermes_config::SubagentProviderSlot {
+                agent_config::SubagentProviderSlot {
                     slot_id: "implementation".into(),
                     source: request.source.clone(),
                     model: request.model.clone(),
@@ -25154,7 +26494,7 @@ kind = "codex_cli"
                     prompt_template_id: Some("implementation".into()),
                     prompt: "Implement the delegated task.".into(),
                 },
-                hermes_config::SubagentProviderSlot {
+                agent_config::SubagentProviderSlot {
                     slot_id: "review".into(),
                     source: request.source.clone(),
                     model: request.model.clone(),
@@ -25280,7 +26620,7 @@ kind = "codex_cli"
             .unwrap();
 
         config.orchestration.subagent_pool = SubagentPoolConfig {
-            slots: vec![hermes_config::SubagentProviderSlot {
+            slots: vec![agent_config::SubagentProviderSlot {
                 slot_id: "native-slot".into(),
                 source: request.source.clone(),
                 model: request.model.clone(),
@@ -25958,10 +27298,10 @@ kind = "codex_cli"
         let pure_chat = task_create(&state, None, "纯聊天", "无工作区", "ask")
             .await
             .unwrap();
-        let error = task_set_agent_engine(&state, &pure_chat.id, "codex")
+        let switched = task_set_agent_engine(&state, &pure_chat.id, "codex")
             .await
-            .unwrap_err();
-        assert!(error.contains("需要先附加本地工作区"));
+            .unwrap();
+        assert_eq!(switched.agent_engine, AgentEngine::Codex);
         assert!(
             task_set_agent_engine(&state, &task.id, "unknown")
                 .await
@@ -25982,8 +27322,8 @@ kind = "codex_cli"
     }
 
     /// 未存过 protocol 的配置（即升级前保存的旧配置）。
-    fn provider_cfg(base_url: &str, model: &str) -> hermes_config::ProviderConfig {
-        hermes_config::ProviderConfig {
+    fn provider_cfg(base_url: &str, model: &str) -> agent_config::ProviderConfig {
+        agent_config::ProviderConfig {
             base_url: base_url.into(),
             api_key: "sk-test".into(),
             model: model.into(),
@@ -26000,8 +27340,8 @@ kind = "codex_cli"
         base_url: &str,
         model: &str,
         protocol: ProviderProtocol,
-    ) -> hermes_config::ProviderConfig {
-        hermes_config::ProviderConfig {
+    ) -> agent_config::ProviderConfig {
+        agent_config::ProviderConfig {
             protocol: Some(protocol.as_str().to_string()),
             ..provider_cfg(base_url, model)
         }
@@ -26012,8 +27352,8 @@ kind = "codex_cli"
         model: &str,
         protocol: ProviderProtocol,
         provider_kind: &str,
-    ) -> hermes_config::ProviderConfig {
-        hermes_config::ProviderConfig {
+    ) -> agent_config::ProviderConfig {
+        agent_config::ProviderConfig {
             provider_kind: Some(provider_kind.into()),
             ..provider_cfg_with(base_url, model, protocol)
         }
@@ -26177,7 +27517,7 @@ kind = "codex_cli"
             let preset = provider_preset(id).unwrap();
             let built = build_provider_config(id, &provider_cfg(preset.base_url, preset.model));
             assert!(
-                matches!(built, hermes_llm::ProviderConfig::Anthropic { .. }),
+                matches!(built, agent_llm::ProviderConfig::Anthropic { .. }),
                 "{id} 应走 Anthropic Messages，实际 {built:?}"
             );
         }
@@ -26192,7 +27532,7 @@ kind = "codex_cli"
                 "ark_coding",
                 &provider_cfg(anthropic_port.base_url, anthropic_port.model)
             ),
-            hermes_llm::ProviderConfig::Anthropic { .. }
+            agent_llm::ProviderConfig::Anthropic { .. }
         ));
 
         let openai_port = provider_preset("ark_coding_openai").unwrap();
@@ -26201,7 +27541,7 @@ kind = "codex_cli"
                 "ark_coding_openai",
                 &provider_cfg(openai_port.base_url, openai_port.model)
             ),
-            hermes_llm::ProviderConfig::OpenAi { .. }
+            agent_llm::ProviderConfig::OpenAi { .. }
         ));
     }
 
@@ -26213,7 +27553,7 @@ kind = "codex_cli"
             &provider_cfg("https://my-gateway.internal/v1", "gpt-5.6-sol"),
         );
         assert!(
-            matches!(built, hermes_llm::ProviderConfig::OpenAi { .. }),
+            matches!(built, agent_llm::ProviderConfig::OpenAi { .. }),
             "自建网关不应被当成 Responses，实际 {built:?}"
         );
     }
@@ -26229,7 +27569,7 @@ kind = "codex_cli"
 
         let built = build_provider_config("openai", &provider_cfg(openai.base_url, openai.model));
         assert!(
-            matches!(built, hermes_llm::ProviderConfig::OpenAi { .. }),
+            matches!(built, agent_llm::ProviderConfig::OpenAi { .. }),
             "没存过 protocol 的旧配置必须留在 Chat，实际 {built:?}"
         );
     }
@@ -26249,9 +27589,9 @@ kind = "codex_cli"
             ),
         );
         match built {
-            hermes_llm::ProviderConfig::Responses { reasoning, .. } => {
+            agent_llm::ProviderConfig::Responses { reasoning, .. } => {
                 // EncryptedReplay 只对目录里标了 reasoning_replay 的服务打开
-                assert_eq!(reasoning, hermes_llm::ReasoningMode::EncryptedReplay);
+                assert_eq!(reasoning, agent_llm::ReasoningMode::EncryptedReplay);
             }
             other => panic!("显式选了 Responses 却没走，实际 {other:?}"),
         }
@@ -26264,7 +27604,7 @@ kind = "codex_cli"
             &provider_cfg_with(kimi.base_url, kimi.model, ProviderProtocol::OpenAiChat),
         );
         assert!(
-            matches!(built, hermes_llm::ProviderConfig::OpenAi { .. }),
+            matches!(built, agent_llm::ProviderConfig::OpenAi { .. }),
             "用户选的 Chat 被目录覆盖了，实际 {built:?}"
         );
     }
@@ -26282,7 +27622,7 @@ kind = "codex_cli"
                 "deepseek",
             ),
         );
-        assert!(matches!(chat, hermes_llm::ProviderConfig::DeepSeek { .. }));
+        assert!(matches!(chat, agent_llm::ProviderConfig::DeepSeek { .. }));
 
         let responses = build_provider_config(
             profile_name,
@@ -26295,7 +27635,7 @@ kind = "codex_cli"
         );
         assert!(matches!(
             responses,
-            hermes_llm::ProviderConfig::DeepSeekResponses { .. }
+            agent_llm::ProviderConfig::DeepSeekResponses { .. }
         ));
 
         let pro_responses = build_provider_config(
@@ -26309,7 +27649,7 @@ kind = "codex_cli"
         );
         assert!(matches!(
             pro_responses,
-            hermes_llm::ProviderConfig::DeepSeekResponses { model, .. }
+            agent_llm::ProviderConfig::DeepSeekResponses { model, .. }
                 if model == "deepseek-v4-pro"
         ));
 
@@ -26324,7 +27664,7 @@ kind = "codex_cli"
         );
         assert!(matches!(
             anthropic,
-            hermes_llm::ProviderConfig::DeepSeekAnthropic { .. }
+            agent_llm::ProviderConfig::DeepSeekAnthropic { .. }
         ));
 
         for (name, base_url, protocol) in [
@@ -26352,13 +27692,13 @@ kind = "codex_cli"
                 (protocol, ordinary),
                 (
                     ProviderProtocol::OpenAiChat,
-                    hermes_llm::ProviderConfig::OpenAi { .. }
+                    agent_llm::ProviderConfig::OpenAi { .. }
                 ) | (
                     ProviderProtocol::OpenAiResponses,
-                    hermes_llm::ProviderConfig::Responses { .. }
+                    agent_llm::ProviderConfig::Responses { .. }
                 ) | (
                     ProviderProtocol::AnthropicMessages,
-                    hermes_llm::ProviderConfig::Anthropic { .. }
+                    agent_llm::ProviderConfig::Anthropic { .. }
                 )
             );
             assert!(
@@ -26378,7 +27718,7 @@ kind = "codex_cli"
         );
         assert!(matches!(
             lookalike,
-            hermes_llm::ProviderConfig::Responses { .. }
+            agent_llm::ProviderConfig::Responses { .. }
         ));
     }
 
@@ -26511,14 +27851,14 @@ kind = "codex_cli"
         );
         assert!(matches!(
             build_provider_config("renamed-coding-subscription", &kimi),
-            hermes_llm::ProviderConfig::KimiCodingAnthropic { .. }
+            agent_llm::ProviderConfig::KimiCodingAnthropic { .. }
         ));
 
         let mut ordinary = kimi.clone();
         ordinary.provider_kind = Some("openai".into());
         assert!(matches!(
             build_provider_config("renamed-coding-subscription", &ordinary),
-            hermes_llm::ProviderConfig::Anthropic { .. }
+            agent_llm::ProviderConfig::Anthropic { .. }
         ));
         assert_ne!(
             provider_runtime_config_fingerprint("renamed-coding-subscription", &kimi),
@@ -26535,7 +27875,7 @@ kind = "codex_cli"
         cfg.protocol = Some("grpc_whatever".into());
         assert!(matches!(
             build_provider_config("kimi", &cfg),
-            hermes_llm::ProviderConfig::Anthropic { .. }
+            agent_llm::ProviderConfig::Anthropic { .. }
         ));
     }
 
@@ -26543,7 +27883,7 @@ kind = "codex_cli"
     #[test]
     fn blank_base_url_is_backfilled_from_the_catalog() {
         match build_provider_config("kimi", &provider_cfg("", "kimi-k2.7-code")) {
-            hermes_llm::ProviderConfig::Anthropic { base_url, .. } => {
+            agent_llm::ProviderConfig::Anthropic { base_url, .. } => {
                 assert_eq!(
                     base_url.as_deref(),
                     Some(provider_preset("kimi").unwrap().base_url)
@@ -26554,7 +27894,7 @@ kind = "codex_cli"
 
         // anthropic 自己回填出来的就是 AnthropicProvider 的内置默认值，等价于 None。
         match build_provider_config("anthropic", &provider_cfg("", "claude-sonnet-5")) {
-            hermes_llm::ProviderConfig::Anthropic { base_url, .. } => {
+            agent_llm::ProviderConfig::Anthropic { base_url, .. } => {
                 assert_eq!(base_url.as_deref(), Some("https://api.anthropic.com"));
             }
             other => panic!("anthropic 应走 Anthropic Messages，实际 {other:?}"),
@@ -27727,6 +29067,7 @@ kind = "codex_cli"
                 text: None,
                 kind: ValidatedAttachmentKind::Image,
                 native_ocr: true,
+                preview: None,
             }
         }
 
@@ -27750,6 +29091,215 @@ kind = "codex_cli"
         let converted = native_ocr_attachment_name("screen.png");
         assert_eq!(converted, "screen.png.ocr.txt");
         assert!(converted.chars().count() <= 180);
+    }
+
+    #[test]
+    fn queued_attachment_payload_round_trips_preview_ref() {
+        let bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let preview = AttachmentPreviewRef {
+            preview_id: "00000000-0000-4000-8000-000000000000".to_string(),
+            name: "screen.png".to_string(),
+            media_type: "image/png".to_string(),
+            ocr_name: "screen.png.ocr.txt".to_string(),
+        };
+        let attachment = ValidatedAttachment {
+            name: preview.ocr_name.clone(),
+            media_type: "text/plain".to_string(),
+            data: BASE64_STANDARD.encode(&bytes),
+            bytes,
+            text: Some("OCR text".to_string()),
+            kind: ValidatedAttachmentKind::Text,
+            native_ocr: false,
+            preview: Some(preview.clone()),
+        };
+
+        let payload = queued_attachments_payload(&[attachment]).expect("payload");
+        let restored = restore_queued_attachments(Some(&payload)).expect("restore");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].preview, Some(preview));
+        assert_eq!(restored[0].name, "screen.png.ocr.txt");
+    }
+
+    #[test]
+    fn remove_task_session_logs_removes_attachment_previews() {
+        let dir = TempDir::new().unwrap();
+        let sessions_dir = dir.path().join("sessions");
+        let preview_dir = dir.path().join("attachments").join("task-123");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::create_dir_all(&preview_dir).unwrap();
+        std::fs::write(preview_dir.join("preview.png"), b"png").unwrap();
+
+        remove_task_session_logs(&sessions_dir, "task-123", &HashSet::new());
+        assert!(!preview_dir.exists());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn attachment_preview_id_requires_canonical_uuid() {
+        let valid = uuid::Uuid::new_v4().to_string();
+        assert!(valid_attachment_preview_id(&valid));
+        assert!(valid_attachment_preview_id("00000000-0000-4000-8000-000000000000"));
+        assert!(!valid_attachment_preview_id(".."));
+        assert!(!valid_attachment_preview_id("../etc/passwd"));
+        assert!(!valid_attachment_preview_id("C:\\temp\\file.png"));
+        assert!(!valid_attachment_preview_id("/absolute/path"));
+        assert!(!valid_attachment_preview_id(""));
+        // 大写或简写 UUID 不是规范文本形式，按确定性文件名要求拒绝。
+        assert!(!valid_attachment_preview_id(&valid.to_uppercase()));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn persist_attachment_preview_writes_and_rejects_unsafe_task_id() {
+        let dir = TempDir::new().unwrap();
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let preview_id = uuid::Uuid::new_v4().to_string();
+        let bytes = b"\x89PNG\r\n\x1a\nrest";
+        let reference = persist_attachment_preview(
+            &sessions_dir,
+            "task-123",
+            &preview_id,
+            "screen.png",
+            "image/png",
+            "screen.png.ocr.txt",
+            bytes,
+        )
+        .unwrap();
+        assert_eq!(reference.ocr_name, "screen.png.ocr.txt");
+        let path = dir
+            .path()
+            .join("attachments")
+            .join("task-123")
+            .join(format!("{preview_id}.png"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        assert!(
+            persist_attachment_preview(
+                &sessions_dir,
+                "../evil",
+                &preview_id,
+                "screen.png",
+                "image/png",
+                "screen.png.ocr.txt",
+                bytes,
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_preview_reads_disk_reference_and_rejects_corruption() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let preview_id = uuid::Uuid::new_v4().to_string();
+        let directory = state
+            .sessions_dir
+            .parent()
+            .unwrap()
+            .join("attachments")
+            .join(&task.id);
+        std::fs::create_dir_all(&directory).unwrap();
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        std::fs::write(directory.join(format!("{preview_id}.png")), png).unwrap();
+
+        let payload = agent_attachment_preview(&state, &task.id, &preview_id)
+            .await
+            .unwrap();
+        assert_eq!(payload.media_type, "image/png");
+        assert_eq!(payload.data, BASE64_STANDARD.encode(png));
+
+        // magic 不匹配的文件必须被拒绝。
+        std::fs::write(directory.join(format!("{preview_id}.png")), b"not-a-png").unwrap();
+        assert!(agent_attachment_preview(&state, &task.id, &preview_id)
+            .await
+            .is_err());
+
+        // 任务 ID 不能成为路径穿越载体。
+        assert!(agent_attachment_preview(&state, "../evil", &preview_id)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn attachment_preview_reads_inline_reference_and_blocks_cross_task() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        let message = Message {
+            role: Role::User,
+            content: vec![ContentBlock::Image {
+                source: agent_contract::ImageSource {
+                    kind: "base64".to_string(),
+                    media_type: "image/png".to_string(),
+                    data: BASE64_STANDARD.encode(png),
+                },
+            }],
+        };
+        let path = session_file_path(&state.sessions_dir, &branch.storage_id);
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&SessionEvent::Message(message)).unwrap()),
+        )
+        .unwrap();
+
+        let reference = format!("{}:1#0", branch.storage_id);
+        let payload = agent_attachment_preview(&state, &task.id, &reference)
+            .await
+            .unwrap();
+        assert_eq!(payload.media_type, "image/png");
+        assert_eq!(payload.data, BASE64_STANDARD.encode(png));
+
+        // 另一个任务不能借 storage 分支引用读取该会话。
+        let other = task_create(&state, None, "O", "g", "ask").await.unwrap();
+        assert!(agent_attachment_preview(&state, &other.id, &reference)
+            .await
+            .is_err());
+
+        // 图片下标越界与非法引用都必须拒绝。
+        assert!(
+            agent_attachment_preview(&state, &task.id, &format!("{}:1#1", branch.storage_id))
+                .await
+                .is_err()
+        );
+        assert!(agent_attachment_preview(&state, &task.id, "not-a-ref")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn attachment_preview_rejects_oversized_inline_image() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let oversized = vec![0x89u8; MAX_IMAGE_ATTACHMENT_BYTES + 1];
+        let message = Message {
+            role: Role::User,
+            content: vec![ContentBlock::Image {
+                source: agent_contract::ImageSource {
+                    kind: "base64".to_string(),
+                    media_type: "image/png".to_string(),
+                    data: BASE64_STANDARD.encode(&oversized),
+                },
+            }],
+        };
+        let path = session_file_path(&state.sessions_dir, &branch.storage_id);
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&SessionEvent::Message(message)).unwrap()),
+        )
+        .unwrap();
+
+        let reference = format!("{}:1#0", branch.storage_id);
+        let error = agent_attachment_preview(&state, &task.id, &reference)
+            .await
+            .unwrap_err();
+        assert!(error.contains("8 MiB"));
     }
 
     #[test]

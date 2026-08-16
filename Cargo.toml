@@ -2,15 +2,15 @@
 resolver = "2"
 members = [
     # agent-core 公共合同子模块（固定 commit）
-    "vendor/agent-core/crates/hermes-error",
-    "vendor/agent-core/crates/hermes-core",
-    "vendor/agent-core/crates/hermes-llm",
-    "vendor/agent-core/crates/hermes-mcp",
-    "vendor/agent-core/crates/hermes-store",
-    "vendor/agent-core/crates/hermes-config",
-    "vendor/agent-core/crates/hermes-compaction",
-    "vendor/agent-core/crates/hermes-ipc",
-    "vendor/agent-core/crates/hermes-tauri",
+    "vendor/agent-core/crates/agent-error",
+    "vendor/agent-core/crates/agent-contract",
+    "vendor/agent-core/crates/agent-llm",
+    "vendor/agent-core/crates/agent-mcp",
+    "vendor/agent-core/crates/agent-store",
+    "vendor/agent-core/crates/agent-config",
+    "vendor/agent-core/crates/agent-compaction",
+    "vendor/agent-core/crates/agent-ipc",
+    "vendor/agent-core/crates/agent-tauri",
     # R-Code 产品私有 crate
     "crates/r-code-core",
     "crates/r-code-store",
@@ -109,15 +109,15 @@ tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 
 # 内部公共 crate（agent-core 公共合同）
-hermes-error = { path = "vendor/agent-core/crates/hermes-error" }
-hermes-core = { path = "vendor/agent-core/crates/hermes-core" }
-hermes-llm = { path = "vendor/agent-core/crates/hermes-llm" }
-hermes-mcp = { path = "vendor/agent-core/crates/hermes-mcp" }
-hermes-store = { path = "vendor/agent-core/crates/hermes-store" }
-hermes-config = { path = "vendor/agent-core/crates/hermes-config" }
-hermes-compaction = { path = "vendor/agent-core/crates/hermes-compaction" }
-hermes-ipc = { path = "vendor/agent-core/crates/hermes-ipc" }
-hermes-tauri = { path = "vendor/agent-core/crates/hermes-tauri" }
+agent-error = { path = "vendor/agent-core/crates/agent-error" }
+agent-contract = { path = "vendor/agent-core/crates/agent-contract" }
+agent-llm = { path = "vendor/agent-core/crates/agent-llm" }
+agent-mcp = { path = "vendor/agent-core/crates/agent-mcp" }
+agent-store = { path = "vendor/agent-core/crates/agent-store" }
+agent-config = { path = "vendor/agent-core/crates/agent-config" }
+agent-compaction = { path = "vendor/agent-core/crates/agent-compaction" }
+agent-ipc = { path = "vendor/agent-core/crates/agent-ipc" }
+agent-tauri = { path = "vendor/agent-core/crates/agent-tauri" }
 
 # 内部产品私有 crate
 r-code-core = { path = "crates/r-code-core" }

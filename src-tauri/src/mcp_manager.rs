@@ -10,7 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::future::join_all;
-use hermes_core::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
+use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use r_code_core::{dto::RiskLevel, error::ProductError};
 use r_code_gateway::{PathBinding, Tool};
 use r_code_mcp::{
@@ -207,7 +207,7 @@ impl Tool for CreateMcpDraftTool {
     }
 
     fn description(&self) -> &str {
-        "Import a verified MCP implementation from the current workspace into R-Code's application-managed user data directory, rewrite local launch paths to the managed copy, and save it as a disabled draft. Prefer configuring an existing MCP endpoint or executable instead of creating a new server. This tool never starts, tests, approves, or enables the server; the user must review it in Settings > Tools & Connections and enable it manually."
+        "Import a verified MCP implementation from an absolute source path into R-Code's application-managed user data directory, rewrite local launch paths to the managed copy, and save it as a disabled draft. MCP is a global configuration and does not require an attached workspace. Prefer configuring an existing MCP endpoint or executable instead of creating a new server. This tool never starts, tests, approves, or enables the server; the user must review it in Settings > Tools & Connections and enable it manually."
     }
 
     fn risk_level(&self) -> RiskLevel {
@@ -216,6 +216,11 @@ impl Tool for CreateMcpDraftTool {
 
     fn path_bindings(&self) -> &'static [PathBinding] {
         MCP_DRAFT_PATH_BINDINGS
+    }
+
+    fn requires_workspace_scope(&self) -> bool {
+        // MCP 是全局配置：草稿导入不应绑定当前会话的工作区。
+        false
     }
 
     fn input_schema(&self) -> Value {
@@ -233,7 +238,7 @@ impl Tool for CreateMcpDraftTool {
                 "source_path": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Existing verified MCP source directory or entry file inside the attached workspace. R-Code imports it into its managed user-data root and preserves the original unless the dedicated staging cleanup contract is explicitly requested."
+                    "description": "Existing verified MCP source directory or entry file at an absolute path. MCP is global and not bound to the current workspace. R-Code imports it into its managed user-data root and preserves the original unless the dedicated staging cleanup contract is explicitly requested."
                 },
                 "cleanup_source_after_import": {
                     "type": "boolean",
@@ -837,7 +842,7 @@ impl McpManager {
 
         let source_path = PathBuf::from(request.source_path.trim());
         if !source_path.is_absolute() {
-            return Err("待导入的 MCP 源码必须使用当前项目内的绝对路径".to_string());
+            return Err("待导入的 MCP 源码必须使用绝对路径；MCP 是全局配置，不绑定当前工作区".to_string());
         }
         let source_path = std::fs::canonicalize(&source_path)
             .map_err(|_| "待导入的 MCP 源码不存在或无法读取".to_string())?;
@@ -2310,7 +2315,10 @@ mod tests {
 
         assert_eq!(tool.name(), "mcp_create_draft");
         assert_eq!(tool.risk_level(), RiskLevel::R2);
-        assert!(tool.requires_workspace_scope());
+        assert!(
+            !tool.requires_workspace_scope(),
+            "MCP is global: draft import must work without an attached workspace"
+        );
         assert_eq!(tool.path_bindings().len(), 1);
         assert_eq!(tool.path_bindings()[0].key, "source_path");
 

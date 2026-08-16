@@ -15,7 +15,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hermes_ipc::IpcServer;
+use agent_ipc::IpcServer;
 use r_code_host::commands::CommandState;
 use tauri::{Emitter, Manager};
 
@@ -663,6 +663,7 @@ fn main() {
             tauri_commands::cmd_task_detail,
             tauri_commands::cmd_task_detail_batch,
             tauri_commands::cmd_agent_send,
+            tauri_commands::cmd_agent_attachment_preview,
             tauri_commands::cmd_agent_abort,
             tauri_commands::cmd_agent_abort_subagent,
             tauri_commands::cmd_agent_delegate_codex,
@@ -682,6 +683,7 @@ fn main() {
             tauri_commands::cmd_change_diff,
             tauri_commands::cmd_rollback_file,
             tauri_commands::cmd_rollback_task,
+            tauri_commands::cmd_rollback_task_to_checkpoint,
             tauri_commands::cmd_accept_task,
             tauri_commands::cmd_review_git_status,
             tauri_commands::cmd_review_accept_line,

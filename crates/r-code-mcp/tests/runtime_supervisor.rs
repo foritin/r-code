@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use hermes_core::ToolCallOutcome;
+use agent_contract::ToolCallOutcome;
 use r_code_mcp::{
     McpClientError, McpClientSession, McpConnector, McpServerConfig, McpServerSource,
     McpServerState, McpSupervisor, McpToolDescriptor, McpTransportConfig,

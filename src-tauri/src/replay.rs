@@ -21,7 +21,7 @@
 
 use std::path::PathBuf;
 
-use hermes_core::{ContentBlock, Message, Role, SessionEvent, SessionMeta};
+use agent_contract::{ContentBlock, Message, Role, SessionEvent, SessionMeta};
 use r_code_core::error::ProductError;
 use serde::{Deserialize, Serialize};
 
@@ -458,7 +458,7 @@ fn meta_to_summary(meta: &SessionMeta) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermes_core::{Message, SessionEvent, SessionMeta};
+    use agent_contract::{Message, SessionEvent, SessionMeta};
     use tempfile::TempDir;
 
     /// 创建临时 ReplayService 并写入测试事件。
@@ -595,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn thinking_content_is_filtered() {
-        use hermes_core::{ContentBlock, Message, Role};
+        use agent_contract::{ContentBlock, Message, Role};
         let events = vec![
             SessionEvent::Meta(sample_meta()),
             SessionEvent::Message(Message {
@@ -663,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_events_are_excluded() {
-        use hermes_core::Usage;
+        use agent_contract::Usage;
         let events = vec![
             SessionEvent::Meta(sample_meta()),
             SessionEvent::Usage(Usage::new(100, 50)),

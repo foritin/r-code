@@ -19,7 +19,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use hermes_config::Config;
+use agent_config::Config;
 use r_code_agent_worker::AgentPromptPolicy;
 use r_code_core::error::ProductError;
 #[cfg(all(not(test), target_os = "macos"))]
@@ -707,7 +707,7 @@ impl SettingsService {
             .map_err(|e| ProductError::ConfigError(format!("parse {}: {e}", path.display())))
     }
 
-    /// 校验配置，将 `hermes_error::Error` 映射为 `ProductError::ConfigError`。
+    /// 校验配置，将 `agent_error::Error` 映射为 `ProductError::ConfigError`。
     fn validate(config: &Config) -> Result<(), ProductError> {
         config
             .validate()
@@ -822,7 +822,7 @@ fn merge_toml(base: &mut toml::Value, over: &toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermes_config::ProviderConfig;
+    use agent_config::ProviderConfig;
     use std::path::Path;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -1175,7 +1175,7 @@ memories_dir = "{m}"
 
         let mut cfg = Config {
             log_level: "warn".into(),
-            storage: hermes_config::StorageConfig {
+            storage: agent_config::StorageConfig {
                 base_dir: tmp.path().join("data"),
                 sessions_dir: tmp.path().join("s"),
                 skills_dir: tmp.path().join("k"),

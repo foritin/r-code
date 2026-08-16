@@ -38,7 +38,7 @@ R-Code shows only public reasoning summaries emitted by the App Server, never ra
 | macOS | Apple Silicon, Intel | per-architecture `.app`, `.dmg` |
 | Linux | x86_64 GNU | `.AppImage`, `.deb` |
 
-GitHub Actions builds installers from `v*` tags. See the [release guide](./docs/RELEASING.md) for code signing, first-release setup, and updater requirements.
+GitHub Actions builds installers from `v*` tags. See the [release guide](./docs/releasing.md) for code signing, first-release setup, and updater requirements.
 
 ## Architecture
 
@@ -53,9 +53,9 @@ The normal desktop application is not three permanently separate processes. The 
 | Persistence | `crates/r-code-store/` | SQLite, JSONL projections, blobs, changes, Plan, review, verification |
 | Terminal | `crates/r-code-terminal/` | PTY, OSC 133, raw output, external CLI replay |
 | Renderer | `src-tauri/frontend/` | React scenes, Zustand state, typed Tauri IPC |
-| Shared contracts | `vendor/agent-core/` | required `hermes-*` contract crates Git submodule |
+| Shared contracts | `vendor/agent-core/` | required `agent-*` contract crates Git submodule |
 
-JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See [Architecture](./docs/ARCHITECTURE.md) for the full model and diagrams.
+JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See [Architecture](./docs/architecture.md) for the full model and diagrams.
 
 ## Development
 
@@ -146,7 +146,7 @@ bash ./scripts/build-macos.sh --signed
 cargo tauri build --bundles appimage,deb
 ```
 
-See [RELEASING.md](./docs/RELEASING.md) for output paths, signing variables, and production requirements.
+See [RELEASING.md](./docs/releasing.md) for output paths, signing variables, and production requirements.
 
 ## Release
 
@@ -159,7 +159,7 @@ node scripts/publish-release.mjs vX.Y.Z --dry-run
 node scripts/publish-release.mjs vX.Y.Z
 ```
 
-The publish gate creates the immutable tag only after the exact `main` commit has a complete successful CI run; the release workflow verifies that provenance and every required CI job again before it can access release work. It then triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Stable releases sign each platform when its credentials are available; missing platform certificates produce an explicit unsigned warning instead of blocking the release, while updater integrity signing remains mandatory. Follow [the release guide](./docs/RELEASING.md) for credentials, repository controls, recovery, and post-release acceptance.
+The publish gate creates the immutable tag only after the exact `main` commit has a complete successful CI run; the release workflow verifies that provenance and every required CI job again before it can access release work. It then triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Stable releases sign each platform when its credentials are available; missing platform certificates produce an explicit unsigned warning instead of blocking the release, while updater integrity signing remains mandatory. Follow [the release guide](./docs/releasing.md) for credentials, repository controls, recovery, and post-release acceptance.
 
 ## Repository layout
 
@@ -179,16 +179,16 @@ r-code/
 
 ## Documentation
 
-- [Documentation index](./docs/README.md)
+- [Documentation index](./docs/readme.md)
 - [Contributing](./CONTRIBUTING.md)
 - [Support](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
-- [Architecture](./docs/ARCHITECTURE.md)
+- [Architecture](./docs/architecture.md)
 - [Plan mode and enhanced review](./docs/plan-mode.en.md)
 - [Web tools and MCP](./docs/mcp.md)
 - [Evolving memory](./docs/memory.md)
-- [Installation, backup, recovery, and uninstall](./docs/OPERATIONS.en.md)
-- [Release guide](./docs/RELEASING.md)
+- [Installation, backup, recovery, and uninstall](./docs/operations.en.md)
+- [Release guide](./docs/releasing.md)
 - [Security Policy](./SECURITY.md)
 - [Privacy Notice](./PRIVACY.md)
 - [CHANGELOG](./CHANGELOG.md)

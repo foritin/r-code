@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWi
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-use hermes_core::InferenceOptions;
+use agent_contract::InferenceOptions;
 use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
     SessionBranch, Task, TaskMode, VerificationRecord, Workspace, WorkspaceMemoryMode,
@@ -466,6 +466,16 @@ pub async fn cmd_agent_send(
     .await
 }
 
+/// 按引用取回时间线图片附件预览（OCR 落盘原图或会话内联 Image 块）。
+#[tauri::command]
+pub async fn cmd_agent_attachment_preview(
+    state: State<'_, CommandState>,
+    task_id: String,
+    reference: String,
+) -> Result<r_code_host::commands::AttachmentPreviewPayload, String> {
+    r_code_host::commands::agent_attachment_preview(&state, &task_id, &reference).await
+}
+
 /// 中止 Agent 运行。
 #[tauri::command]
 pub async fn cmd_agent_abort(
@@ -641,6 +651,15 @@ pub async fn cmd_rollback_task(
     task_id: String,
 ) -> Result<Vec<String>, String> {
     r_code_host::commands::rollback_task(&state, &task_id).await
+}
+
+/// 回滚到本次运行最近一次绿灯 git checkpoint。
+#[tauri::command]
+pub async fn cmd_rollback_task_to_checkpoint(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Vec<String>, String> {
+    r_code_host::commands::rollback_task_to_checkpoint(&state, &task_id).await
 }
 
 /// 接受任务变更。
@@ -1490,7 +1509,7 @@ pub async fn cmd_subagent_pool_snapshot(
 pub async fn cmd_subagent_pool_save(
     state: State<'_, CommandState>,
     revision: String,
-    pool: hermes_config::SubagentPoolConfig,
+    pool: agent_config::SubagentPoolConfig,
 ) -> Result<r_code_host::subagent_providers::SubagentPoolSnapshot, String> {
     r_code_host::commands::subagent_pool_save(&state, &revision, pool).await
 }
