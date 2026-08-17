@@ -265,7 +265,8 @@ impl Tool for SearchTool {
         "search"
     }
     fn description(&self) -> &str {
-        "Search file contents with a regular expression, powered by the ripgrep engine. \
+        "Search local file contents with a regular expression, powered by the ripgrep engine. \
+This is local file-content search, not web search; it requires `path` + `pattern`. \
 Respects .gitignore, skips binary and oversized files. \
 Set literal=true to match the pattern as plain text instead of a regex. \
 Filter with glob (e.g. [\"*.rs\", \"!target/**\"]). \

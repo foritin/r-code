@@ -8,9 +8,9 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
-use chrono::{DateTime, Utc};
 use agent_config::{Config, SubagentPoolConfig, SubagentProviderSource};
+use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
+use chrono::{DateTime, Utc};
 use r_code_core::error::ProductError;
 use ring::{
     hmac,
@@ -193,7 +193,7 @@ pub fn load_or_create_fingerprint_pepper(
     SystemRandom::new().fill(&mut generated).map_err(|_| {
         ProductError::SecretError("failed to generate provider fingerprint pepper".into())
     })?;
-    let encoded = STANDARD_NO_PAD.encode(&generated);
+    let encoded = STANDARD_NO_PAD.encode(generated);
     settings.set_internal_secret(FINGERPRINT_PEPPER_SECRET_KEY, &encoded)?;
 
     let confirmed = settings
@@ -382,19 +382,14 @@ fn path_identity_bytes(path: &Path) -> Vec<u8> {
     path.as_os_str().as_bytes().to_vec()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentProviderHealthState {
+    #[default]
     Untested,
     Connected,
     Failed,
     Stale,
-}
-
-impl Default for SubagentProviderHealthState {
-    fn default() -> Self {
-        Self::Untested
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -944,7 +939,7 @@ pub fn resolve_subagent_provider_probe_identity(
 pub fn build_subagent_provider_catalog(input: CatalogBuildInput<'_>) -> CatalogSnapshot {
     let mut entries = Vec::new();
     let mut api_profiles = input.global_config.providers.iter().collect::<Vec<_>>();
-    api_profiles.sort_by(|(left, _), (right, _)| left.cmp(right));
+    api_profiles.sort_by_key(|(provider_id, _)| *provider_id);
     for (provider_id, provider) in api_profiles {
         let source = SubagentProviderSource::ApiProvider {
             provider_id: provider_id.clone(),
@@ -1269,8 +1264,8 @@ fn valid_fingerprint_encoding(fingerprint: &str) -> bool {
 mod tests {
     use super::*;
 
-    use chrono::Duration as ChronoDuration;
     use agent_config::ProviderConfig;
+    use chrono::Duration as ChronoDuration;
     use std::fs::{File, FileTimes};
     use tempfile::TempDir;
 
@@ -1604,52 +1599,42 @@ mod tests {
         let cmd_script = write_canonical(directory.path(), "codex.cmd", b"@echo off\r\n");
         let shebang_script = write_canonical(directory.path(), "codex", b"#!/bin/sh\n");
         let native_binary = write_canonical(directory.path(), "codex.exe", b"native");
-        assert!(
-            VerifiedExecutableTrustChain::Native { binary: cmd_script }
-                .complete_paths()
-                .is_none()
-        );
-        assert!(
-            VerifiedExecutableTrustChain::Native {
-                binary: shebang_script,
-            }
+        assert!(VerifiedExecutableTrustChain::Native { binary: cmd_script }
             .complete_paths()
-            .is_none()
-        );
-        assert!(
-            VerifiedExecutableTrustChain::Native {
-                binary: native_binary,
-            }
-            .complete_paths()
-            .is_some()
-        );
+            .is_none());
+        assert!(VerifiedExecutableTrustChain::Native {
+            binary: shebang_script,
+        }
+        .complete_paths()
+        .is_none());
+        assert!(VerifiedExecutableTrustChain::Native {
+            binary: native_binary,
+        }
+        .complete_paths()
+        .is_some());
 
         let shim = write_canonical(directory.path(), "npm.cmd", b"@echo off\r\n");
         let runtime = write_canonical(directory.path(), "node.exe", b"node");
         let entrypoint = write_canonical(directory.path(), "cli.js", b"main();\n");
         let platform = write_canonical(directory.path(), "codex-platform.exe", b"platform");
-        assert!(
-            VerifiedExecutableTrustChain::Npm {
-                shim: shim.clone(),
-                runtime: PathBuf::new(),
-                js_entrypoint: entrypoint.clone(),
-                platform_binary: platform.clone(),
-                additional_binaries: Vec::new(),
-            }
-            .complete_paths()
-            .is_none()
-        );
-        assert!(
-            VerifiedExecutableTrustChain::Npm {
-                shim: shim.clone(),
-                runtime: shim.clone(),
-                js_entrypoint: shim.clone(),
-                platform_binary: shim.clone(),
-                additional_binaries: Vec::new(),
-            }
-            .complete_paths()
-            .is_none()
-        );
+        assert!(VerifiedExecutableTrustChain::Npm {
+            shim: shim.clone(),
+            runtime: PathBuf::new(),
+            js_entrypoint: entrypoint.clone(),
+            platform_binary: platform.clone(),
+            additional_binaries: Vec::new(),
+        }
+        .complete_paths()
+        .is_none());
+        assert!(VerifiedExecutableTrustChain::Npm {
+            shim: shim.clone(),
+            runtime: shim.clone(),
+            js_entrypoint: shim.clone(),
+            platform_binary: shim.clone(),
+            additional_binaries: Vec::new(),
+        }
+        .complete_paths()
+        .is_none());
         assert_eq!(
             VerifiedExecutableTrustChain::Npm {
                 shim,

@@ -1,7 +1,7 @@
-//! agent-core 公共合同验证测试。
+//! agent-contracts 公共合同验证测试。
 //!
-//! 本文件实现 `docs/agent-core-development-checklist.html` 中的 P1 验证向量，
-//! 验证 R-Code 所依赖的 agent-core 公共 API 表面（agent-* crate）被正确采纳。
+//! 本文件实现 `docs/agent-contracts-development-checklist.html` 中的 P1 验证向量，
+//! 验证 R-Code 所依赖的 agent-contracts 公共 API 表面（agent-* crate）被正确采纳。
 //! 每个测试对应一个合同向量（V-MSG / V-PROV / V-TOOL / V-STORE / V-CFG / V-COMP）。
 //!
 //! 运行：`cargo test -p r-code-core --test contract_tests`
@@ -578,7 +578,7 @@ mod v_comp {
         let mut session = Session::new(SessionMeta::new("claude-sonnet-4", "anthropic"));
 
         // 持久事实 / 首条用户目标（keep_first 保留）
-        session.push_user("Goal: ship the agent-core contract test suite.");
+        session.push_user("Goal: ship the agent-contracts contract test suite.");
 
         // 中段闲聊：将被压缩
         for i in 0..10 {
@@ -618,7 +618,7 @@ mod v_comp {
         assert!(
             compacted[0]
                 .text_content()
-                .contains("ship the agent-core contract test suite"),
+                .contains("ship the agent-contracts contract test suite"),
             "persistent first user goal preserved"
         );
 

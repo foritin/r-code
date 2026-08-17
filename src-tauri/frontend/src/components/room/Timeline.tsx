@@ -20,6 +20,7 @@ import {
   sessionMessages,
   sessionMessagesForBranch,
 } from "../../lib/ipc";
+import { cachedAttachmentPreview, loadAttachmentPreview } from "../../lib/attachment-preview";
 import type {
   AgentEvent,
   AgentRunRuntimeKind,
@@ -29,11 +30,14 @@ import type {
 } from "../../lib/types";
 import { useTasksStore } from "../../store/tasks";
 import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
+import { ImageLightbox } from "../ImageLightbox";
 import { parseWorkflowInvocation } from "../../lib/slash-commands";
+import { isCjkText, type ToolDisplayLanguage } from "../../lib/format";
 import { useSharedNow } from "../../lib/shared-clock";
 import {
   applyAgentEventInPlace,
   buildTimeline,
+  compactInstruction,
   mergeRunItems,
   type PlanStep,
   type TimelineItem,
@@ -245,6 +249,58 @@ const RunDuration = memo(function RunDuration({ startedAt, endedAt }: {
   return <span className="run-duration">{duration}</span>;
 });
 
+function TimelineAttachmentChip({
+  taskId,
+  attachment,
+  onPreview,
+}: {
+  taskId: string;
+  attachment: SessionAttachmentMeta;
+  onPreview: (src: string, name: string) => void;
+}) {
+  const immediate = attachment.previewUrl;
+  const reference = attachment.preview_id;
+  const cached = reference ? cachedAttachmentPreview(reference) : undefined;
+  const [loaded, setLoaded] = useState<string | null>(immediate ?? cached ?? null);
+
+  useEffect(() => {
+    if (!reference || immediate || cached) return;
+    let cancelled = false;
+    loadAttachmentPreview(taskId, reference)
+      .then((dataUrl) => {
+        if (!cancelled) setLoaded(dataUrl);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId, reference, immediate, cached]);
+
+  if (attachment.kind === "image" && loaded) {
+    return (
+      <button
+        type="button"
+        className="message-attachment-item kind-image is-previewable"
+        title={`${attachment.name} · ${attachment.media_type}`}
+        onClick={() => onPreview(loaded, attachment.name)}
+      >
+        <img className="message-attachment-thumbnail" src={loaded} alt="" aria-hidden="true" />
+        {attachment.name}
+      </button>
+    );
+  }
+
+  return (
+    <span
+      className={`message-attachment-item kind-${attachment.kind}`}
+      title={`${attachment.name} · ${attachment.media_type}`}
+    >
+      <IconAttach width={13} height={13} aria-hidden="true" />
+      {attachment.name}
+    </span>
+  );
+}
+
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   {
     taskId,
@@ -271,6 +327,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
   const [expandedProcessTurnIds, setExpandedProcessTurnIds] = useState<Set<string>>(() => new Set());
   const [visibleTurnLimit, setVisibleTurnLimit] = useState(80);
+  const [previewingImage, setPreviewingImage] = useState<{ src: string; name: string } | null>(null);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const eventsLen = useTasksStore((s) =>
     s.details[taskId]?.task.id === taskId ? s.details[taskId].events.length : 0
@@ -711,14 +768,12 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             {it.attachments.length > 0 && (
               <div className="message-attachment-summary" aria-label={`${it.attachments.length} 个附件`}>
                 {it.attachments.map((attachment, index) => (
-                  <span
-                    className={`message-attachment-item kind-${attachment.kind}`}
-                    title={`${attachment.name} · ${attachment.media_type}`}
+                  <TimelineAttachmentChip
                     key={`${attachment.name}-${index}`}
-                  >
-                    <IconAttach width={13} height={13} aria-hidden="true" />
-                    {attachment.name}
-                  </span>
+                    taskId={taskId}
+                    attachment={attachment}
+                    onPreview={(src, name) => setPreviewingImage({ src, name })}
+                  />
                 ))}
               </div>
             )}
@@ -780,7 +835,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
               className="run-row ring-inset"
               aria-expanded={expanded}
               aria-controls={detailId}
-              title={expanded ? "收起本轮运行详情" : "展开本轮运行详情"}
+              title={compactInstruction(it.requestText) ?? (expanded ? "收起本轮运行详情" : "展开本轮运行详情")}
               onClick={() => toggleRun(it.id)}
             >
               <span className={`run-summary-mark${it.state === "active" ? " active" : ""}`} aria-hidden="true" />
@@ -948,6 +1003,14 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           </section>
         );
       })}
+      {previewingImage && (
+        <ImageLightbox
+          src={previewingImage.src}
+          alt={previewingImage.name}
+          name={previewingImage.name}
+          onClose={() => setPreviewingImage(null)}
+        />
+      )}
     </div>
   );
 });

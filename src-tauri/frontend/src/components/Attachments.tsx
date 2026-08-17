@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClipboardEvent as ReactClipboardEvent } from "react";
-import { createPortal } from "react-dom";
-import type { AttachmentInput, AttachmentKind, PlatformCapabilities } from "../lib/types";
+import type { AttachmentInput, AttachmentKind, PlatformCapabilities, SessionAttachmentMeta } from "../lib/types";
 import type { ImageCapability } from "./room/model-capabilities";
+import { ImageLightbox } from "./ImageLightbox";
 import { IconAlert, IconAttach, IconClose, IconFile } from "./icons";
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -74,9 +74,6 @@ export type AttachmentCapabilityResolver = (attachment: DraftAttachment) => Imag
 function nativeOcrReason(platform: PlatformCapabilities["platform"]): string {
   const system = platform === "windows" ? "Windows" : platform === "macos" ? "macOS" : "系统";
   return `当前模型不接收图片；发送时会用 ${system} OCR 在本机仅提取文字，识别文本仍会随消息发送给模型。图片布局与非文字内容不会发送。`;
-}
-export function nativeOcrTextName(name: string): string {
-  return `${Array.from(name).slice(0, 172).join("")}.ocr.txt`;
 }
 
 export function attachmentUsesNativeOcr(
@@ -334,28 +331,6 @@ export function AttachmentTray({
   onRemove: (id: string) => void;
 }) {
   const [previewing, setPreviewing] = useState<DraftAttachment | null>(null);
-  const previewCloseRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!previewing) return undefined;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    previewCloseRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setPreviewing(null);
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        previewCloseRef.current?.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      if (previousFocus?.isConnected) previousFocus.focus();
-    };
-  }, [previewing]);
 
   useEffect(() => {
     if (previewing && !attachments.some((attachment) => attachment.id === previewing.id)) {
@@ -433,30 +408,13 @@ export function AttachmentTray({
             : "附件会随消息发送；图片可点击预览")}
         </span>
       </div>
-      {previewing?.previewUrl && createPortal(
-        <div
-          className="attachment-preview-backdrop"
-          role="presentation"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setPreviewing(null);
-          }}
-        >
-          <div
-            className="attachment-preview"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`预览图片 ${previewing.name}`}
-          >
-            <header>
-              <span>{previewing.name}</span>
-              <button ref={previewCloseRef} type="button" aria-label="关闭预览" onClick={() => setPreviewing(null)}>
-                <IconClose width={16} height={16} />
-              </button>
-            </header>
-            <img src={previewing.previewUrl} alt={previewing.name} />
-          </div>
-        </div>,
-        document.body,
+      {previewing?.previewUrl && (
+        <ImageLightbox
+          src={previewing.previewUrl}
+          alt={previewing.name}
+          name={previewing.name}
+          onClose={() => setPreviewing(null)}
+        />
       )}
     </>
   );
@@ -476,6 +434,27 @@ export function sendableAttachmentInputs(
       nativeOcr: attachment.kind === "image"
         && attachmentUsesNativeOcr({ name, mediaType, data, ...attachment }, capabilityFor, platformCapabilities),
     }));
+}
+
+/**
+ * 发送瞬间乐观气泡的附件展示元数据：OCR 图片保留原始文件名与 image 类型，
+ * 并附带自包含的原图 data URL 缩略图，绝不把合成的 `.ocr.txt` 暴露给用户。
+ */
+export function optimisticAttachmentMeta(
+  inputs: readonly AttachmentInput[],
+): SessionAttachmentMeta[] {
+  return inputs.map((file) => ({
+    name: file.name,
+    media_type: file.mediaType,
+    kind: file.mediaType.startsWith("image/")
+      ? "image"
+      : file.mediaType === "application/pdf"
+        ? "pdf"
+        : "text",
+    previewUrl: file.mediaType.startsWith("image/")
+      ? `data:${file.mediaType};base64,${file.data}`
+      : undefined,
+  }));
 }
 
 export function firstBlockedAttachmentReason(

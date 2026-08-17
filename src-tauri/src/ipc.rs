@@ -8,10 +8,10 @@
 //! - 错误码：JSON-RPC 标准码 (-32xxx) + 应用码 (1xxx) [doc-08 §6]
 //! - 请求校验 [doc-08 §5]
 //!
-//! [doc-08] [agent-core/12 §6]
+//! [doc-08] [agent-contracts/12 §6]
 
-use async_trait::async_trait;
 use agent_ipc::{IpcHandler, JsonRpcError, JsonRpcRequest};
+use async_trait::async_trait;
 use r_code_core::dto::{Task, TaskMode};
 use r_code_core::error::ProductError;
 use serde_json::Value;

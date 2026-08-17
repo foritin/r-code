@@ -11,7 +11,7 @@
 //! - 崩溃恢复：先读 JSONL `recover()`（恢复对话），再读 SQLite（恢复 Task 状态）
 //! - UI 查询：任务列表/权限/审计从 SQLite；时间线/Replay 从 JSONL
 //!
-//! [doc-06 §2-8] [agent-core/12 §2,§5]
+//! [doc-06 §2-8] [agent-contracts/12 §2,§5]
 
 pub mod backup;
 pub mod change_service;

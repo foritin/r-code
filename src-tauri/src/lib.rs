@@ -1,11 +1,11 @@
 //! R-Code Host：主进程、IPC Server、进程编排。
 //!
-//! 基于 agent-core 公共层构建：
+//! 基于 agent-contracts 公共层构建：
 //! - 使用 `agent-ipc` 的跨平台 `IpcServer`/`IpcClient`（Unix Socket / Named Pipe）
 //! - 使用 `agent-tauri` 的 `AppState` + commands 基础
 //! - 在公共层基础上注册 R-Code 专属 method handler
 //!
-//! [doc-08] [agent-core/12 §6] [agent-core/10]
+//! [doc-08] [agent-contracts/12 §6] [agent-contracts/10]
 
 pub mod app_paths;
 pub mod codex_app_server;
@@ -63,7 +63,7 @@ pub use provider_catalog::{
 pub use recovery::{InterruptedTask, RecoveryManager, RecoveryPageData};
 pub use replay::{EvidenceLevel, ReplayDepth, ReplayEntry, ReplayService};
 pub use search::{ReplacePreview, SearchMatch, SearchService};
-pub use security_config::{SecurityConfig, should_block_navigation, should_block_window_open};
+pub use security_config::{should_block_navigation, should_block_window_open, SecurityConfig};
 pub use skills::{SkillManager, SkillStatus};
 pub use support_bundle::{
     BundleContents, ConfigSummary, DbStats, LogEntry, McpServerSupportSummary, SupportBundle,

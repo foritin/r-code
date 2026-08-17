@@ -115,6 +115,40 @@ test("Plan outline keeps visual leaf order identical to execution order", async 
   await page.close();
 });
 
+test("Plan outline drops numeric-only section labels from legacy plans", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const outline = await page.evaluate(async () => {
+    const { planOutline } = await import("/src/components/plan/PlanPanel.tsx");
+    const make = (id, title, section_path) => ({
+      id,
+      title,
+      description: "",
+      section_path,
+      state: "pending",
+      depends_on: [],
+    });
+    return planOutline([
+      make("a", "修正会话消息模式标记的消费顺序", ["1", "修复模式错位"]),
+      make("b", "时间线立即呈现引导消息", ["2", "引导发送后立即可见"]),
+      make("c", "阶段 1 仍保留", ["阶段 1", "验证"]),
+    ]).map((entry) => entry.kind === "item"
+      ? { kind: "item", id: entry.item.id, number: entry.number }
+      : { kind: "section", title: entry.title, number: entry.number });
+  });
+
+  assert.deepEqual(outline, [
+    { kind: "section", title: "修复模式错位", number: "1" },
+    { kind: "item", id: "a", number: "1.1" },
+    { kind: "section", title: "引导发送后立即可见", number: "2" },
+    { kind: "item", id: "b", number: "2.1" },
+    { kind: "section", title: "阶段 1", number: "3" },
+    { kind: "section", title: "验证", number: "3.1" },
+    { kind: "item", id: "c", number: "3.1.1" },
+  ]);
+  await page.close();
+});
+
 test("Plan mode carries Goal into the task, asks per-question HITL, and approves feature todos", async () => {
   const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
   const runtimeErrors = [];

@@ -15,12 +15,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, OnceLock, RwLock};
 
-use async_trait::async_trait;
-use chrono::{DateTime, FixedOffset, Local};
 use agent_contract::{
     CompletionRequest, ContentBlock, HostedToolSpec, InferenceOptions, LlmProvider, Message, Role,
     Session, SessionMeta, ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
 };
+use async_trait::async_trait;
+use chrono::{DateTime, FixedOffset, Local};
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRunRuntimeKind,
     CreateSessionInput, PeerMessageDeliveryStatus, ProjectAccessMode, RiskLevel,
@@ -28,27 +28,27 @@ use r_code_core::dto::{
 };
 use r_code_core::error::ProductError;
 use r_code_core::plan::{PlanExecutionContext, PlanExecutionStatus, PlanItemState, PlanView};
-use r_code_core::security::{PathGuard, path_for_display};
+use r_code_core::security::{path_for_display, PathGuard};
 use r_code_gateway::{
-    PathArity, PathBinding, ToolExecutionDirective, ToolGateway, ToolOutcomeMetadata,
-    classify_shell_command, subagent_read_only_tool_allowed, tool_outcome_directive,
+    classify_shell_command, subagent_read_only_tool_allowed, tool_outcome_directive, PathArity,
+    PathBinding, ToolExecutionDirective, ToolGateway, ToolOutcomeMetadata,
 };
 use r_code_mcp::{ExternalToolHost, ExternalToolRisk};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use crate::agent_loop::{
-    EditRetryGuard, ToolMetadataObservation, repair_dangling_tool_uses,
-    run_agent_loop_iteration_streaming_with_abort,
-    run_agent_loop_iteration_with_abort_and_emit_with_retry_guard,
+    repair_dangling_tool_uses, run_agent_loop_iteration_streaming_with_abort,
+    run_agent_loop_iteration_with_abort_and_emit_with_retry_guard, EditRetryGuard,
+    ToolMetadataObservation,
 };
-use crate::cache_shape::{PrefixShape, capture, compare};
+use crate::cache_shape::{capture, compare, PrefixShape};
 use crate::checkpoint::GreenCheckpoint;
 use crate::delegation_tree::{
     DelegationTree, QueuedPeerMessage, SendPeerMessageOutcome, TerminalClaim,
 };
+use crate::run_guard::{trip_reason_to_dto, GuardTrip, RunBudgetPolicy, RunLoopGuard};
 use crate::runtime::{AgentRuntime, SteerResult};
-use crate::run_guard::{GuardTrip, RunBudgetPolicy, RunLoopGuard, trip_reason_to_dto};
 
 /// 工具密集任务的阶段性综合间隔。它只触发软提醒，不会终止运行。
 const TOOL_PROGRESS_CHECKPOINT_INTERVAL: usize = 8;
@@ -66,19 +66,16 @@ pub const MAX_ACTIVE_DESCENDANTS: usize = 5;
 /// 假名。中文用户用中文名，英文用户用英文名；主代理自身衍生的原生子代理则直接
 /// 使用“本家 / Self”，不占用人名池。
 const SUBAGENT_NAMES_ZH: [&str; 48] = [
-    "张伟", "李娜", "王强", "刘洋", "陈静", "杨帆", "赵磊", "黄敏",
-    "周杰", "吴倩", "徐涛", "孙丽", "马超", "朱婷", "胡斌", "郭雪",
-    "林峰", "何佳", "高翔", "罗丹", "郑爽", "梁宇", "谢婷", "韩冰",
-    "唐骏", "冯露", "于洋", "董璇", "萧然", "程旭", "曹颖", "袁野",
-    "邓琳", "许峰", "傅莹", "沈昊", "曾瑶", "彭飞", "吕萌", "蒋欣",
-    "苏杭", "谭宁", "常乐", "魏征", "田甜", "白鹭", "宋词", "龙吟",
+    "张伟", "李娜", "王强", "刘洋", "陈静", "杨帆", "赵磊", "黄敏", "周杰", "吴倩", "徐涛", "孙丽",
+    "马超", "朱婷", "胡斌", "郭雪", "林峰", "何佳", "高翔", "罗丹", "郑爽", "梁宇", "谢婷", "韩冰",
+    "唐骏", "冯露", "于洋", "董璇", "萧然", "程旭", "曹颖", "袁野", "邓琳", "许峰", "傅莹", "沈昊",
+    "曾瑶", "彭飞", "吕萌", "蒋欣", "苏杭", "谭宁", "常乐", "魏征", "田甜", "白鹭", "宋词", "龙吟",
 ];
 const SUBAGENT_NAMES_EN: [&str; 48] = [
-    "Alice", "Benjamin", "Clara", "Daniel", "Eleanor", "Felix", "Grace", "Henry",
-    "Isabel", "Jack", "Kate", "Liam", "Mia", "Noah", "Olivia", "Peter",
-    "Quinn", "Ruby", "Simon", "Thea", "Uma", "Victor", "Wendy", "Xavier",
-    "Yvonne", "Zachary", "Amelia", "Oscar", "Diana", "Edward", "Fiona", "George",
-    "Hannah", "Ian", "Julia", "Kevin", "Laura", "Michael", "Nina", "Paul",
+    "Alice", "Benjamin", "Clara", "Daniel", "Eleanor", "Felix", "Grace", "Henry", "Isabel", "Jack",
+    "Kate", "Liam", "Mia", "Noah", "Olivia", "Peter", "Quinn", "Ruby", "Simon", "Thea", "Uma",
+    "Victor", "Wendy", "Xavier", "Yvonne", "Zachary", "Amelia", "Oscar", "Diana", "Edward",
+    "Fiona", "George", "Hannah", "Ian", "Julia", "Kevin", "Laura", "Michael", "Nina", "Paul",
     "Rachel", "Samuel", "Tara", "Walter", "Violet", "Wesley", "Yara", "Zoe",
 ];
 
@@ -173,8 +170,12 @@ impl SubagentNameAllocator {
             (SubagentNameLanguage::Chinese, Some("technical_research")) => "技术调研".to_string(),
             (SubagentNameLanguage::Chinese, Some("code_review")) => "代码评审".to_string(),
             (SubagentNameLanguage::English, Some("implementation")) => "Implementation".to_string(),
-            (SubagentNameLanguage::English, Some("test_verification")) => "Test verification".to_string(),
-            (SubagentNameLanguage::English, Some("technical_research")) => "Technical research".to_string(),
+            (SubagentNameLanguage::English, Some("test_verification")) => {
+                "Test verification".to_string()
+            }
+            (SubagentNameLanguage::English, Some("technical_research")) => {
+                "Technical research".to_string()
+            }
             (SubagentNameLanguage::English, Some("code_review")) => "Code review".to_string(),
             (SubagentNameLanguage::Chinese, _) => "自定义角色".to_string(),
             (SubagentNameLanguage::English, _) => "Custom role".to_string(),
@@ -340,9 +341,7 @@ fn reasoning_governor_kind(
         "deepseek" | "deepseek_responses" | "deepseek_anthropic"
     ) {
         return match model.trim().to_ascii_lowercase().as_str() {
-            "deepseek-v4-flash" => Some(ReasoningGovernorKind::DeepSeekV4(
-                DeepSeekV4Kind::Flash,
-            )),
+            "deepseek-v4-flash" => Some(ReasoningGovernorKind::DeepSeekV4(DeepSeekV4Kind::Flash)),
             "deepseek-v4-pro" => Some(ReasoningGovernorKind::DeepSeekV4(DeepSeekV4Kind::Pro)),
             _ => None,
         };
@@ -402,8 +401,12 @@ fn deepseek_v4_governed_inference(
     let normal_effort = "high";
     let (thinking, reasoning_effort) = match (kind, mode) {
         (DeepSeekV4Kind::Pro, DeepSeekGovernorRequestMode::CheapExploration) => {
+            // Responses thinking 模式不能在中途用 effort=none 关掉思考：那一轮工具
+            // 调用不会返回 reasoning_text，下一轮切回 high 时 DeepSeek 要求原样回传，
+            // 缺了直接 400（"reasoning_text must be passed back"）。空 reasoning 兜底
+            // 补不出"根本没产生"的思考，因此廉价轮保持 low 档思考开启，与 Flash 一致。
             if responses {
-                (None, Some("none".to_string()))
+                (None, Some("low".to_string()))
             } else {
                 (Some("disabled".to_string()), None)
             }
@@ -2427,7 +2430,8 @@ impl CompactionState {
     /// 输入可用的窗口：总窗口减去本轮预留的输出额度。输出预留大于等于窗口时
     /// 没有可用的输入预算，只能靠用户降低最大输出或换模型。
     fn input_budget_tokens(&self) -> u32 {
-        self.window_tokens.saturating_sub(self.output_reserve_tokens)
+        self.window_tokens
+            .saturating_sub(self.output_reserve_tokens)
     }
 
     /// 用上一轮真实 usage（input_tokens）反推 tokPerChar；0.05~2 范围过滤，
@@ -2820,9 +2824,12 @@ fn is_context_length_error(detail: &str) -> bool {
         || (normalized.contains("context length") && normalized.contains("tokens"))
 }
 
-fn estimated_input_over_budget(estimated_tokens: u32, output_reserve: u32, window_tokens: u32) -> bool {
-    window_tokens == 0
-        || (estimated_tokens as u64 + output_reserve as u64) >= window_tokens as u64
+fn estimated_input_over_budget(
+    estimated_tokens: u32,
+    output_reserve: u32,
+    window_tokens: u32,
+) -> bool {
+    window_tokens == 0 || (estimated_tokens as u64 + output_reserve as u64) >= window_tokens as u64
 }
 
 /// 把请求的 max_tokens 钳制到「窗口 − 估算输入 − 余量」，防止输出预留把请求推超窗。
@@ -2890,7 +2897,7 @@ fn trim_history_to_budget(
 fn truncate_message_chars(message: &Message, budget_chars: usize) -> Message {
     const MARKER: &str = "[R-Code 已截断超长内容] ";
     let marker_chars = MARKER.chars().count();
-    let mut remaining = budget_chars.saturating_sub(marker_chars).max(0);
+    let mut remaining = budget_chars.saturating_sub(marker_chars);
     let mut content = Vec::with_capacity(message.content.len());
     for block in &message.content {
         match block {
@@ -2937,6 +2944,7 @@ fn truncate_message_chars(message: &Message, budget_chars: usize) -> Message {
 
 /// 硬闸门用的「强制折叠，失败即裁剪」：折叠永远基于 canonical 证据，裁剪只在
 /// 折叠失败后对当前投影做最后兜底。
+#[allow(clippy::too_many_arguments)]
 async fn force_compaction_or_trim(
     provider: Arc<dyn LlmProvider>,
     model: &str,
@@ -3034,6 +3042,16 @@ fn user_facing_provider_error(detail: &str) -> String {
     if normalized.contains("模型服务拒绝了请求") {
         return "模型服务拒绝了本次请求。R-Code 已在诊断日志中记录安全的请求形状与服务端错误类别；请重试，若持续出现可据此定位具体参数。".to_string();
     }
+    // DeepSeek V4 thinking 模式要求把上一轮（尤其是工具调用轮）的 reasoning 原样回传，
+    // 缺失会得到专门的 400。这不是接口地址或流式参数问题，先抢在下面的通用分支之前
+    // 给出准确提示，避免把用户引向错误的排查方向。
+    if normalized.contains("must be passed back")
+        && (normalized.contains("reasoning_text")
+            || normalized.contains("reasoning_content")
+            || normalized.contains("thinking"))
+    {
+        return "模型服务要求回传上一轮的工具调用思考内容，但当前会话历史中缺少该字段。这是服务端 thinking 模式的连续性要求，与接口地址和流式设置无关；请重试本次请求，若反复出现请新开一个会话继续。".to_string();
+    }
     if normalized.contains("invalid_request_error")
         || normalized.contains("stream_options")
         || normalized.contains("cache_control")
@@ -3043,6 +3061,7 @@ fn user_facing_provider_error(detail: &str) -> String {
     detail.to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_provider_request_failure(
     provider: &dyn LlmProvider,
     model: &str,
@@ -3100,6 +3119,20 @@ fn log_provider_request_failure(
         .flat_map(|message| &message.content)
         .filter(|block| matches!(block, ContentBlock::ToolUse { .. }))
         .count();
+    // 命中 reasoning 回传 400 时的关键定位信号：有多少条 assistant 工具调用消息
+    // 缺了 Thinking 块。>0 说明注入兜底没触发/被洗掉；==0 说明 reasoning item 是在
+    // 后续 sanitize/排序环节被丢掉的。
+    let assistant_tool_messages_without_reasoning = messages
+        .iter()
+        .filter(|message| message.role == Role::Assistant)
+        .filter(|message| message.content.iter().any(ContentBlock::is_tool_use))
+        .filter(|message| {
+            !message
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Thinking { .. }))
+        })
+        .count();
     let estimated_input_tokens = messages.iter().fold(0u32, |total, message| {
         total.saturating_add(message.estimate_tokens())
     });
@@ -3115,6 +3148,7 @@ fn log_provider_request_failure(
         responses_items,
         hosted_web_items,
         function_call_pairs,
+        assistant_tool_messages_without_reasoning,
         tool_spec_count = tools.len(),
         hosted_tool_spec_count = hosted_tools.len(),
         estimated_input_tokens,
@@ -3417,10 +3451,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             loop {
                 let estimated_tokens = compactor.estimate_tokens(
                     request_chars(&system_prompt, &messages, tools_json_len)
-                        + memory_message
-                            .as_ref()
-                            .map(message_chars)
-                            .unwrap_or(0),
+                        + memory_message.as_ref().map(message_chars).unwrap_or(0),
                 );
                 let over_budget = estimated_input_over_budget(
                     (estimated_tokens as f32 * CONTEXT_GUARD_SAFETY_MARGIN) as u32,
@@ -3689,9 +3720,9 @@ async fn run_loop(ctx: RunLoopCtx) {
                         // 不再进入复核、子代理收集或 peer 注入。
                         session.accepting_steer = false;
                         false
-                    } else if hosted_web_fallback_required {
-                        true
-                    } else if hosted_summary_recovery && !summary_recovery_attempted {
+                    } else if hosted_web_fallback_required
+                        || (hosted_summary_recovery && !summary_recovery_attempted)
+                    {
                         true
                     } else if require_full_finalization {
                         // A cheap exploration request is never authoritative for completion. Its
@@ -4803,9 +4834,7 @@ impl SessionToolHost {
         }
         if name == "delegate_task" {
             let supervisor = self.delegation.as_ref().ok_or_else(|| {
-                agent_error::Error::ToolHost(
-                    "delegate_task is unavailable in this run".to_string(),
-                )
+                agent_error::Error::ToolHost("delegate_task is unavailable in this run".to_string())
             })?;
             let goal = args
                 .get("goal")
@@ -5678,6 +5707,7 @@ impl SubagentSupervisor {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn nested_for_native_child(
         &self,
         child_run_id: String,
@@ -6769,6 +6799,7 @@ impl SubagentSupervisor {
 }
 
 impl SubagentExecutionContext {
+    #[allow(clippy::too_many_arguments)]
     async fn run_child(
         self,
         backend: SubagentBackend,
@@ -7112,6 +7143,8 @@ impl SubagentExecutionContext {
         let mut hosted_web_fallback_attempted = false;
         let mut emergency_context_recovery_attempted = false;
         let mut pending_peer_injection: Option<Message> = None;
+        let mut summary_recovery_pending = false;
+        let mut summary_recovery_attempted = false;
         // Child runs own their governor state. They do not share or inherit the parent's current
         // cheap/full phase, so parallel children cannot perturb one another.
         let mut reasoning_governor = DeepSeekReasoningGovernor::new(
@@ -7154,8 +7187,15 @@ impl SubagentExecutionContext {
                     detail: None,
                 },
             );
-            let governor_request_mode = reasoning_governor.begin_request(false);
-            let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools);
+            let summary_only = std::mem::take(&mut summary_recovery_pending);
+            // Summary recovery is a correctness-critical final pass and can never inherit a
+            // queued cheap exploration dose.
+            let governor_request_mode = reasoning_governor.begin_request(summary_only);
+            let tools = if summary_only {
+                Vec::new()
+            } else {
+                client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools)
+            };
             let tools_json_len = serde_json::to_string(&tools)
                 .map(|json| json.len())
                 .unwrap_or(0);
@@ -7337,6 +7377,13 @@ impl SubagentExecutionContext {
                 messages.push(Message::user_text(DEEPSEEK_LOCAL_WEB_FALLBACK_PROMPT));
                 index
             });
+            // 空最终轮恢复提示与主 run_loop 同一注入语义：仅本轮请求携带，
+            // 迭代结束即移除，不进入 canonical 历史。
+            let summary_recovery_index = summary_only.then(|| {
+                let index = messages.len();
+                messages.push(Message::user_text(FINAL_SUMMARY_RECOVERY_PROMPT));
+                index
+            });
             // P2-G：75% 档提示作为一次性瞬态消息注入本轮请求（索引最大，先移除，
             // 不扰动其它瞬态注入的索引）。
             let compaction_hint_index = pending_compaction_hint.take().map(|text| {
@@ -7353,7 +7400,11 @@ impl SubagentExecutionContext {
                 system: Some(subagent_system_prompt.clone()),
                 messages: Vec::new(),
                 tools: Vec::new(),
-                hosted_tools: active_hosted_tools.clone(),
+                hosted_tools: if summary_only {
+                    Vec::new()
+                } else {
+                    active_hosted_tools.clone()
+                },
                 max_tokens: clamp_request_max_tokens(
                     native_max_tokens,
                     window_tokens,
@@ -7393,6 +7444,9 @@ impl SubagentExecutionContext {
             if let Some(index) = compaction_hint_index {
                 messages.remove(index);
             }
+            if let Some(index) = summary_recovery_index {
+                messages.remove(index);
+            }
             if let Some(index) = fallback_guidance_index {
                 messages.remove(index);
             }
@@ -7429,11 +7483,7 @@ impl SubagentExecutionContext {
                             &scope,
                             AgentEvent::Activity {
                                 phase: AgentActivityPhase::Requesting,
-                                detail: Some(format!(
-                                    "{}：{}",
-                                    trip.reason.label(),
-                                    trip.detail
-                                )),
+                                detail: Some(format!("{}：{}", trip.reason.label(), trip.detail)),
                             },
                         );
                         emit_scoped(
@@ -7477,6 +7527,28 @@ impl SubagentExecutionContext {
                         outcome.reasoning_chars,
                         tool_round,
                     );
+                    // 与主 run_loop 的 hosted_summary_recovery 同语义：托管工具已完成
+                    // 但本轮没有可见正文时，做一次无工具总结恢复，而不是把不透明的
+                    // 工具块当作最终答复；已尝试过恢复则按终态失败处理。
+                    if outcome.requires_final_summary_recovery {
+                        if summary_recovery_attempted {
+                            terminal_error = Some(FINAL_SUMMARY_RECOVERY_FAILED.to_string());
+                            break;
+                        }
+                        summary_recovery_attempted = true;
+                        summary_recovery_pending = true;
+                        emit_scoped(
+                            &self.event_tx,
+                            &scope,
+                            AgentEvent::Activity {
+                                phase: AgentActivityPhase::Requesting,
+                                detail: Some(
+                                    "托管工具已完成，正在进行一次无工具总结恢复…".to_string(),
+                                ),
+                            },
+                        );
+                        continue;
+                    }
                     let has_nested_children = if outcome.had_tool_call {
                         false
                     } else if let Some(supervisor) = nested_supervisor.as_ref() {
@@ -7598,7 +7670,33 @@ Synthesize their results before finishing.\n{}",
                             continue;
                         }
                     }
-                    terminal_error = Some(user_facing_provider_error(&error_detail));
+                    // 与主 run_loop 的 can_recover_summary 同语义：工具已执行后的空
+                    // 最终轮（如推理耗尽输出预算后无正文）不是线路故障，做一次禁用
+                    // 工具的收尾总结恢复；恢复再空则按 FINAL_SUMMARY_RECOVERY_FAILED
+                    // 终态结束，不做第二次尝试。
+                    let empty_final = matches!(&error, ProductError::EmptyAssistantResponse);
+                    let can_recover_summary = empty_final
+                        && tool_iterations > 0
+                        && !summary_recovery_attempted
+                        && !self.is_child_cancelled(&abort);
+                    if can_recover_summary {
+                        summary_recovery_attempted = true;
+                        summary_recovery_pending = true;
+                        emit_scoped(
+                            &self.event_tx,
+                            &scope,
+                            AgentEvent::Activity {
+                                phase: AgentActivityPhase::Requesting,
+                                detail: Some("模型未生成最终总结，正在进行一次无工具恢复…".to_string()),
+                            },
+                        );
+                        continue;
+                    }
+                    terminal_error = Some(if empty_final && summary_recovery_attempted {
+                        FINAL_SUMMARY_RECOVERY_FAILED.to_string()
+                    } else {
+                        user_facing_provider_error(&error_detail)
+                    });
                     break;
                 }
             }
@@ -7650,6 +7748,7 @@ Synthesize their results before finishing.\n{}",
         self.finish_child(&scope, SubagentState::Completed, summary, result_tx);
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn prepare_subagent_report(
         &self,
         provider: &Arc<dyn LlmProvider>,
@@ -8410,18 +8509,14 @@ mod compaction_tests {
             .position(|message| message.content.iter().any(ContentBlock::is_tool_use))
             .unwrap();
         assert!(tail_start <= call_index);
-        assert!(
-            messages[call_index]
-                .content
-                .iter()
-                .any(ContentBlock::is_tool_use)
-        );
-        assert!(
-            messages[call_index + 1]
-                .content
-                .iter()
-                .any(ContentBlock::is_tool_result)
-        );
+        assert!(messages[call_index]
+            .content
+            .iter()
+            .any(ContentBlock::is_tool_use));
+        assert!(messages[call_index + 1]
+            .content
+            .iter()
+            .any(ContentBlock::is_tool_result));
     }
 
     #[tokio::test]
@@ -8435,18 +8530,16 @@ mod compaction_tests {
             Message::assistant_text("large evidence"),
         ];
 
-        assert!(
-            fold_messages(
-                provider,
-                "test-model",
-                &messages,
-                100_000,
-                0.25,
-                &InferenceOptions::default(),
-            )
-            .await
-            .is_none()
-        );
+        assert!(fold_messages(
+            provider,
+            "test-model",
+            &messages,
+            100_000,
+            0.25,
+            &InferenceOptions::default(),
+        )
+        .await
+        .is_none());
     }
 
     #[tokio::test]
@@ -8457,18 +8550,16 @@ mod compaction_tests {
             Message::user_text("thanks"),
         ];
         let provider: Arc<dyn LlmProvider> = Arc::new(FailingSummaryProvider);
-        assert!(
-            fold_messages(
-                provider,
-                "test-model",
-                &messages[..1],
-                100_000,
-                0.25,
-                &InferenceOptions::default(),
-            )
-            .await
-            .is_none()
-        );
+        assert!(fold_messages(
+            provider,
+            "test-model",
+            &messages[..1],
+            100_000,
+            0.25,
+            &InferenceOptions::default(),
+        )
+        .await
+        .is_none());
     }
 
     #[test]
@@ -8594,7 +8685,7 @@ mod compaction_tests {
             cheap,
         );
         assert_eq!(cheap_inference.thinking, None);
-        assert_eq!(cheap_inference.reasoning_effort.as_deref(), Some("none"));
+        assert_eq!(cheap_inference.reasoning_effort.as_deref(), Some("low"));
 
         let bash_round = outcome_with_tools(0, &["bash"]);
         assert_eq!(
@@ -8785,8 +8876,7 @@ mod compaction_tests {
             reasoning_effort: None,
             verbosity: None,
         };
-        let mut kimi_governor =
-            DeepSeekReasoningGovernor::new("kimi_coding", "k3", &kimi);
+        let mut kimi_governor = DeepSeekReasoningGovernor::new("kimi_coding", "k3", &kimi);
         assert_eq!(
             kimi_governor.begin_request(false),
             DeepSeekGovernorRequestMode::Standard
@@ -8889,7 +8979,10 @@ mod compaction_tests {
 
     #[test]
     fn request_max_tokens_is_clamped_to_remaining_window() {
-        assert_eq!(clamp_request_max_tokens(393_216, 1_000_000, 700_000), 298_976);
+        assert_eq!(
+            clamp_request_max_tokens(393_216, 1_000_000, 700_000),
+            298_976
+        );
         assert_eq!(clamp_request_max_tokens(8_192, 64_000, 10_000), 8_192);
         assert_eq!(clamp_request_max_tokens(8_192, 0, 10_000), 8_192);
     }
@@ -8920,7 +9013,9 @@ mod compaction_tests {
         ];
         let trimmed = trim_history_to_budget(&messages, 16_384, 1_024, 0.5);
         assert!(!trimmed.is_empty());
-        assert!(trimmed[0].text_content().contains("[R-Code 已截断超长内容]"));
+        assert!(trimmed[0]
+            .text_content()
+            .contains("[R-Code 已截断超长内容]"));
         let total_chars = trimmed.iter().map(message_chars).sum::<usize>();
         assert!(total_chars <= 40_000);
     }

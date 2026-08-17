@@ -391,7 +391,7 @@ test("release workflow falls back per platform while preserving explicit unsigne
   assert.equal(
     (workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? []).length,
     2,
-    "both release jobs that clone agent-core must use the private-submodule token",
+    "both release jobs that clone agent-contracts must use the private-submodule token",
   );
   assert.equal(
     (workflow.match(/submodules: recursive/g) ?? []).length,
@@ -805,7 +805,7 @@ test("publish-release canonicalizes temporary draft asset URLs", (t) => {
   );
 });
 
-test("CI authenticates every private agent-core checkout and covers Linux", () => {
+test("CI authenticates every private agent-contracts checkout and covers Linux", () => {
   const workflow = fs.readFileSync(
     path.join(repoRoot, ".github", "workflows", "ci.yml"),
     "utf8",

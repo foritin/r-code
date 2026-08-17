@@ -14,7 +14,7 @@ import {
 import { createPortal } from "react-dom";
 
 export type SurfacePlacement = "up" | "down" | "left" | "right";
-export type SurfaceAlign = "left" | "right";
+export type SurfaceAlign = "left" | "right" | "center";
 
 const DEFAULT_GAP = 6;
 const MARGIN = 8;
@@ -117,7 +117,11 @@ export function calculateSurfacePosition({
   const fittedWidth = Math.min(Math.max(0, surfaceWidth), viewportWidth);
   const edge = useUp ? aboveEdge : belowEdge;
   const rawTop = useUp ? edge - fittedHeight : edge;
-  const rawLeft = align === "right" ? anchor.right - fittedWidth : anchor.left;
+  const rawLeft = align === "right"
+    ? anchor.right - fittedWidth
+    : align === "center"
+      ? anchor.left + (anchor.right - anchor.left - fittedWidth) / 2
+      : anchor.left;
 
   return {
     top: clamp(rawTop, viewportTop, viewportBottom - fittedHeight),

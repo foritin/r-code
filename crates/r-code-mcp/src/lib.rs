@@ -1,6 +1,6 @@
 //! R-Code product MCP layer.
 //!
-//! The shared `agent-core` submodule owns protocol-neutral contracts. This crate owns product
+//! The shared `agent-contracts` submodule owns protocol-neutral contracts. This crate owns product
 //! policy: persisted server metadata, secret references, lifecycle supervision, marketplace
 //! installation plans, native web tools, and the bundled research server.
 

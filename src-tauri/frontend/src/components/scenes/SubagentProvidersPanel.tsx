@@ -5,6 +5,7 @@ import {
   subagentProviderTest,
   subagentProviderTestBatch,
 } from "../../lib/ipc";
+import { providerIconFor, providerInitial } from "../../lib/provider-icons";
 import type {
   SubagentPoolSnapshot,
   SubagentProviderCatalogEntry,
@@ -16,6 +17,7 @@ import type {
 
 const MAX_SLOTS = 3;
 const MAX_PROMPT_CHARS = 12_000;
+const WEIGHT_STEP = 5;
 
 const PROMPT_TEMPLATES = [
   {
@@ -49,7 +51,7 @@ function sourceKey(source: SubagentProviderSource): string {
 }
 
 function candidateKey(source: SubagentProviderSource, model: string): string {
-  return `${sourceKey(source)}\u0000${model}`;
+  return `${sourceKey(source)} ${model}`;
 }
 
 function sameSource(left: SubagentProviderSource, right: SubagentProviderSource): boolean {
@@ -101,42 +103,127 @@ function cloneSlots(slots: SubagentProviderSlot[]): SubagentProviderSlot[] {
   }));
 }
 
+// 进入面板自动探测的节流窗口：窗口内的重复挂载/来源刷新不重发探测请求，
+// 避免用户在设置页频繁切换时对 provider 造成重复连通性调用。
+const AUTO_PROBE_THROTTLE_MS = 60_000;
+let lastAutoProbeAt = 0;
+
 function newSlotId(sequence: number): string {
   return `subagent-slot-${Date.now().toString(36)}-${sequence}`;
 }
 
-export function SubagentProvidersPanel() {
+export function SubagentProvidersPanel({
+  providerKinds,
+  refreshSignal,
+}: {
+  /** provider 档案名 → 目录 provider_kind，用于给候选来源匹配厂商图标。 */
+  providerKinds?: Record<string, string | undefined>;
+  /** 外部就绪信号（如 Codex 登录/协作状态变化）：递增时保留草稿、仅刷新来源目录。 */
+  refreshSignal?: number;
+}) {
   const slotSequence = useRef(0);
   const [snapshot, setSnapshot] = useState<SubagentPoolSnapshot | null>(null);
   const [slots, setSlots] = useState<SubagentProviderSlot[]>([]);
   const [probeResults, setProbeResults] = useState<Record<string, SubagentProviderCatalogEntry>>({});
   const [loading, setLoading] = useState(true);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const isBusy = useCallback((key: string) => busyKeys.has(key), [busyKeys]);
+  const setBusy = useCallback((key: string, busy: boolean) => {
+    setBusyKeys((current) => {
+      const next = new Set(current);
+      if (busy) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+  // 全局操作（保存/批量测试/重新加载/自动探测）会整体替换快照，互相及与单测互斥。
+  const globalBusy = ["save", "batch", "reload", "auto-probe"].some((key) => busyKeys.has(key));
+  // 单个来源测试彼此独立；全局操作需要等单测结束，避免快照互相覆盖。
+  const anyTestBusy = Array.from(busyKeys).some((key) => key.startsWith("test:"));
+
   const load = useCallback(async (replaceDraft = true) => {
     setLoading(true);
+    setBusy("reload", true);
     try {
       const next = await subagentPoolSnapshot();
       setSnapshot(next);
-      if (replaceDraft) setSlots(cloneSlots(next.pool.slots));
+      if (replaceDraft) setSlots(cloneSlots(next?.pool?.slots ?? []));
       setProbeResults({});
       setError(null);
     } catch (cause) {
       setError(errorText(cause));
     } finally {
+      setBusy("reload", false);
       setLoading(false);
     }
-  }, []);
+  }, [setBusy]);
+
+  // 进入面板即自动探测：只补测"就绪但尚未连通"的来源（已连通的沿用持久化
+  // receipt），槽位状态随后直接同步。模块级节流保证短时间内反复进出设置页
+  // 或刷新信号触发重载时不会重复请求；手动"全部测试"不受节流影响。
+  const autoProbeBusy = useRef(false);
+  const autoProbe = useCallback(async (entries: SubagentProviderCatalogEntry[]) => {
+    if (autoProbeBusy.current) return;
+    const requests = entries
+      .filter((entry) => entry.ready && entry.selectable && entry.model
+        && entry.health.state !== "connected")
+      .map((entry) => ({ source: entry.source, model: entry.model }));
+    if (requests.length === 0) return;
+    const now = Date.now();
+    if (now - lastAutoProbeAt < AUTO_PROBE_THROTTLE_MS) return;
+    lastAutoProbeAt = now;
+    autoProbeBusy.current = true;
+    setBusy("auto-probe", true);
+    try {
+      const response = await subagentProviderTestBatch(requests);
+      setSnapshot(response.snapshot);
+      setProbeResults((current) => {
+        const next = { ...current };
+        response.results.forEach((entry) => {
+          next[candidateKey(entry.source, entry.model)] = entry;
+        });
+        return next;
+      });
+    } catch {
+      // 自动探测失败不打断配置流程；用户仍可手动测试。
+    } finally {
+      autoProbeBusy.current = false;
+      setBusy("auto-probe", false);
+    }
+  }, [setBusy]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const catalog = snapshot?.catalog.entries ?? [];
+  // 快照到达后触发一次自动探测（依赖 snapshot 而非 catalog，保证每次重载都评估）。
+  useEffect(() => {
+    if (!snapshot) return;
+    void autoProbe(snapshot.catalog?.entries ?? []);
+  }, [snapshot, autoProbe]);
+
+  // Codex 协作状态推进（登录完成、协作配置完成）后，Host 侧候选目录的
+  // codex_cli 条目会随之就绪；这里只刷新目录，不清掉用户正在编辑的槽位草稿。
+  const firstSignal = useRef(true);
+  useEffect(() => {
+    if (firstSignal.current) {
+      firstSignal.current = false;
+      return;
+    }
+    void load(false);
+  }, [refreshSignal, load]);
+
+  const catalog = snapshot?.catalog?.entries ?? [];
   const weightTotal = useMemo(() => slots.reduce((sum, slot) => sum + slot.weight, 0), [slots]);
-  const dirty = snapshot ? JSON.stringify(slots) !== JSON.stringify(snapshot.pool.slots) : false;
+  const dirty = snapshot ? JSON.stringify(slots) !== JSON.stringify(snapshot.pool?.slots ?? []) : false;
+
+  const iconForSource = useCallback((source: SubagentProviderSource): string | null => {
+    const kind = source.kind === "api_provider" ? providerKinds?.[source.provider_id] : "codex_cli";
+    return providerIconFor(kind);
+  }, [providerKinds]);
 
   const entryForSource = useCallback((source: SubagentProviderSource) => (
     catalog.find((entry) => sameSource(entry.source, source)) ?? null
@@ -147,7 +234,7 @@ export function SubagentProvidersPanel() {
     if (tested) return tested;
     const direct = catalog.find((entry) => sameSource(entry.source, slot.source) && entry.model === slot.model);
     if (direct) return direct;
-    const persistedHealth = snapshot?.slot_health.find((health) => (
+    const persistedHealth = (snapshot?.slot_health ?? []).find((health) => (
       health.slot_id === slot.slot_id
       && sameSource(health.source, slot.source)
       && health.model === slot.model
@@ -197,14 +284,18 @@ export function SubagentProvidersPanel() {
     if (!source || slots.length >= MAX_SLOTS) return;
     slotSequence.current += 1;
     const template = PROMPT_TEMPLATES[0];
-    setSlots((current) => [...current, {
-      slot_id: newSlotId(slotSequence.current),
-      source: { ...source.source },
-      model: source.model,
-      weight: current.length === 0 ? 100 : 1,
-      prompt_template_id: template.id,
-      prompt: template.prompt,
-    }]);
+    setSlots((current) => {
+      // 新槽位默认拿剩余权重：第一个槽位即 100%，通常一步就能保存。
+      const used = current.reduce((sum, slot) => sum + slot.weight, 0);
+      return [...current, {
+        slot_id: newSlotId(slotSequence.current),
+        source: { ...source.source },
+        model: source.model,
+        weight: Math.min(100, Math.max(1, 100 - used)),
+        prompt_template_id: template.id,
+        prompt: template.prompt,
+      }];
+    });
     setNotice(null);
     setError(null);
   };
@@ -224,8 +315,10 @@ export function SubagentProvidersPanel() {
   };
 
   const testOne = async (request: SubagentProviderProbeRequest) => {
+    if (globalBusy) return;
     const key = candidateKey(request.source, request.model);
-    setBusyKey(`test:${key}`);
+    const busyToken = `test:${key}`;
+    setBusy(busyToken, true);
     setError(null);
     setNotice(null);
     try {
@@ -235,11 +328,12 @@ export function SubagentProvidersPanel() {
     } catch (cause) {
       setError(errorText(cause));
     } finally {
-      setBusyKey(null);
+      setBusy(busyToken, false);
     }
   };
 
   const testAll = async () => {
+    if (globalBusy || anyTestBusy) return;
     const requests: SubagentProviderProbeRequest[] = [];
     const seen = new Set<string>();
     [...catalog.map((entry) => ({ source: entry.source, model: entry.model })), ...slots.map((slot) => ({ source: slot.source, model: slot.model }))]
@@ -251,7 +345,7 @@ export function SubagentProvidersPanel() {
         requests.push(request);
       });
     if (requests.length === 0) return;
-    setBusyKey("batch");
+    setBusy("batch", true);
     setError(null);
     setNotice("正在逐项测试已配置来源…");
     try {
@@ -263,21 +357,21 @@ export function SubagentProvidersPanel() {
       setError(errorText(cause));
       setNotice(null);
     } finally {
-      setBusyKey(null);
+      setBusy("batch", false);
     }
   };
 
   const save = async () => {
-    if (!snapshot || validation.length > 0 || !dirty) return;
-    setBusyKey("save");
+    if (!snapshot || validation.length > 0 || !dirty || globalBusy || anyTestBusy) return;
+    setBusy("save", true);
     setError(null);
     setNotice(null);
     try {
       const next = await subagentPoolSave(snapshot.revision, { slots: cloneSlots(slots) });
       setSnapshot(next);
-      setSlots(cloneSlots(next.pool.slots));
+      setSlots(cloneSlots(next?.pool?.slots ?? []));
       setProbeResults({});
-      setNotice(next.pool.slots.length > 0 ? "子代理候选池已原子保存。" : "候选池已清空，将继续使用原有委派路由。 ");
+      setNotice((next?.pool?.slots?.length ?? 0) > 0 ? "子代理候选池已原子保存。" : "候选池已清空，将继续使用原有委派路由。 ");
     } catch (cause) {
       const message = errorText(cause);
       if (/revision|其他窗口|已更新|冲突/i.test(message)) {
@@ -287,9 +381,16 @@ export function SubagentProvidersPanel() {
         setError(message);
       }
     } finally {
-      setBusyKey(null);
+      setBusy("save", false);
     }
   };
+
+  const weightHint = useMemo(() => {
+    if (slots.length === 0) return null;
+    if (weightTotal < 100) return `权重还差 ${100 - weightTotal}%，用 ＋ 补齐到 100% 后即可保存。`;
+    if (weightTotal > 100) return `权重超出 ${weightTotal - 100}%，用 − 调低到 100% 后即可保存。`;
+    return null;
+  }, [slots.length, weightTotal]);
 
   return (
     <section className="settings-block subagent-providers-panel" aria-labelledby="subagent-providers-title">
@@ -299,43 +400,52 @@ export function SubagentProvidersPanel() {
           <p className="desc">从已配置的 API Provider 与 Codex CLI 组成最多 3 个槽位；同一来源可以重复使用。</p>
         </div>
         <div className="subagent-provider-actions">
-          <button className="btn sm" disabled={loading || busyKey != null || catalog.length === 0} onClick={() => void testAll()}>
-            {busyKey === "batch" ? "正在批量测试…" : "全部测试"}
+          <button className="btn sm" disabled={loading || globalBusy || anyTestBusy || catalog.length === 0} onClick={() => void testAll()}>
+            {isBusy("batch") ? "正在批量测试…" : "全部测试"}
           </button>
-          <button className="btn sm ghost" disabled={loading || busyKey != null} onClick={() => void load(true)}>重新加载</button>
+          <button className="btn sm ghost" disabled={loading || globalBusy || anyTestBusy} onClick={() => void load(true)}>重新加载</button>
         </div>
       </header>
 
-      <div className="subagent-provider-boundary" role="note">
-        连通测试只在点击后执行。未测试、失败、过期或配置已变化的来源会保持不可选；保存时 Host 会再次复核。
-      </div>
+      <details className="subagent-provider-boundary">
+        <summary>连通性与保存规则</summary>
+        <p>进入本页会自动探测配置就绪但尚未连通的来源（一分钟内重复进入不会重复请求）。失败、过期或配置已变化的来源会保持不可选；保存时 Host 会再次复核。</p>
+      </details>
       {loading && !snapshot && <div className="settings-loading">正在读取子代理候选来源…</div>}
       {error && <div className="errbar" role="alert">{error}</div>}
       {notice && <div className="okbar" role="status" aria-live="polite">{notice}</div>}
 
       {snapshot && (
         <>
+          <div className="subagent-source-heading">
+            <h4>候选来源</h4>
+            <span className="subagent-source-count">{catalog.length} 项</span>
+          </div>
           <div className="subagent-provider-catalog" data-testid="subagent-provider-catalog">
             {catalog.map((entry) => {
               const key = candidateKey(entry.source, entry.model);
               const current = probeResults[key] ?? entry;
+              const icon = iconForSource(current.source);
               return (
                 <article className="subagent-provider-row" key={key} data-source-key={sourceKey(entry.source)}>
+                  <span className={`provider-icon-tile${icon ? "" : " is-fallback"}`} aria-hidden="true">
+                    {icon ? <img src={icon} alt="" /> : providerInitial(current.display_name)}
+                  </span>
                   <div className="subagent-provider-copy">
                     <div className="subagent-provider-name">
                       <strong>{current.display_name}</strong>
-                      <span className={`subagent-health is-${current.health.state}`}>{healthLabel(current.health.state)}</span>
+                      <span className="subagent-provider-model">{current.model || "未配置模型"}</span>
                     </div>
-                    <span className="subagent-provider-model">{current.model || "未配置模型"}</span>
                     <small>{probeDetail(current)}</small>
                     <small>{capabilityLabel(current)}</small>
                   </div>
+                  <span className={`subagent-status is-${current.health.state}`}>{healthLabel(current.health.state)}</span>
                   <button
                     className="btn sm"
-                    disabled={busyKey != null || !current.ready || !current.model}
+                    disabled={globalBusy || isBusy(`test:${key}`) || !current.ready || !current.model}
                     onClick={() => void testOne({ source: current.source, model: current.model })}
                   >
-                    {busyKey === `test:${key}` ? "测试中…" : "测试连接"}
+                    {isBusy(`test:${key}`) ? "测试中…" : "测试连接"}
                   </button>
                 </article>
               );
@@ -345,7 +455,7 @@ export function SubagentProvidersPanel() {
           <div className="subagent-pool-heading">
             <div>
               <h4>候选槽位</h4>
-              <p>权重使用正整数，启用候选池时合计必须严格等于 100%。</p>
+              <p>每个槽位绑定一个来源和一个权重；全部槽位权重合计等于 100% 时，候选池才能启用。</p>
             </div>
             <div className="subagent-pool-summary">
               <span className={slots.length > 0 && weightTotal !== 100 ? "invalid" : ""}>权重 {weightTotal}%</span>
@@ -353,7 +463,7 @@ export function SubagentProvidersPanel() {
               <button
                 className="btn sm"
                 data-testid="subagent-add-slot"
-                disabled={busyKey != null || slots.length >= MAX_SLOTS || !catalog.some((entry) => entry.selectable)}
+                disabled={globalBusy || slots.length >= MAX_SLOTS || !catalog.some((entry) => entry.selectable)}
                 onClick={addSlot}
               >
                 添加槽位
@@ -362,7 +472,23 @@ export function SubagentProvidersPanel() {
           </div>
 
           {slots.length === 0 && (
-            <div className="subagent-pool-empty">尚未启用候选池；新的自动委派继续使用现有路由策略。</div>
+            <div className="subagent-pool-empty">
+              <div className="subagent-pool-empty-copy">
+                <strong>还没有槽位</strong>
+                <p>
+                  槽位决定自动委派子代理时按什么比例把任务分给不同来源。
+                  例如：槽位 1 选一个来源、权重 100%，表示所有子代理任务都走这个来源。
+                </p>
+                <p className="subagent-pool-empty-hint">尚未启用候选池；新的自动委派继续使用现有路由策略。</p>
+              </div>
+              <button
+                className="btn sm"
+                disabled={globalBusy || !catalog.some((entry) => entry.selectable)}
+                onClick={addSlot}
+              >
+                ＋ 添加槽位
+              </button>
+            </div>
           )}
 
           <div className="subagent-slot-list">
@@ -370,24 +496,25 @@ export function SubagentProvidersPanel() {
               const selectedSource = entryForSource(slot.source);
               const testedEntry = entryForSlot(slot);
               const selectedTemplateKnown = PROMPT_TEMPLATES.some((template) => template.id === slot.prompt_template_id);
-              const testKey = `test:${candidateKey(slot.source, slot.model)}`;
               return (
                 <article className="subagent-slot-card" key={slot.slot_id} data-testid="subagent-slot-card">
                   <header>
                     <div>
                       <strong>槽位 {index + 1}</strong>
-                      <span className={`subagent-health is-${testedEntry?.health.state ?? "untested"}`}>
+                      <span className={`subagent-status is-${testedEntry?.health.state ?? "untested"}`}>
                         {testedEntry ? healthLabel(testedEntry.health.state) : selectedSource ? "未测试此模型" : "来源已删除"}
                       </span>
                     </div>
-                    <button
-                      className="quiet-link danger"
-                      disabled={busyKey != null}
-                      aria-label={`删除槽位 ${index + 1}`}
-                      onClick={() => setSlots((current) => current.filter((candidate) => candidate.slot_id !== slot.slot_id))}
-                    >
-                      删除
-                    </button>
+                    <div className="subagent-slot-actions">
+                      <button
+                        className="quiet-link danger"
+                        disabled={globalBusy}
+                        aria-label={`删除槽位 ${index + 1}`}
+                        onClick={() => setSlots((current) => current.filter((candidate) => candidate.slot_id !== slot.slot_id))}
+                      >
+                        删除
+                      </button>
+                    </div>
                   </header>
 
                   <div className="subagent-slot-grid">
@@ -397,7 +524,7 @@ export function SubagentProvidersPanel() {
                         className="input"
                         aria-label={`槽位 ${index + 1} 来源`}
                         value={sourceKey(slot.source)}
-                        disabled={busyKey != null}
+                        disabled={isBusy("save")}
                         onChange={(event) => {
                           const entry = catalog.find((candidate) => sourceKey(candidate.source) === event.target.value);
                           if (!entry?.selectable) return;
@@ -419,13 +546,25 @@ export function SubagentProvidersPanel() {
                         aria-label={`槽位 ${index + 1} 模型`}
                         value={slot.model}
                         maxLength={320}
-                        disabled={busyKey != null}
+                        disabled={isBusy("save")}
                         onChange={(event) => updateSlot(slot.slot_id, (current) => ({ ...current, model: event.target.value }))}
                       />
                     </label>
                     <label>
                       <span>权重</span>
                       <div className="subagent-weight-input">
+                        <button
+                          type="button"
+                          className="subagent-weight-step"
+                          aria-label={`槽位 ${index + 1} 减少权重`}
+                          disabled={isBusy("save") || slot.weight <= 1}
+                          onClick={() => updateSlot(slot.slot_id, (current) => ({
+                            ...current,
+                            weight: Math.max(1, current.weight - WEIGHT_STEP),
+                          }))}
+                        >
+                          −
+                        </button>
                         <input
                           className="input"
                           type="number"
@@ -434,19 +573,24 @@ export function SubagentProvidersPanel() {
                           step={1}
                           aria-label={`槽位 ${index + 1} 权重`}
                           value={slot.weight}
-                          disabled={busyKey != null}
+                          disabled={isBusy("save")}
                           onChange={(event) => updateSlot(slot.slot_id, (current) => ({ ...current, weight: Number(event.target.value) }))}
                         />
+                        <button
+                          type="button"
+                          className="subagent-weight-step"
+                          aria-label={`槽位 ${index + 1} 增加权重`}
+                          disabled={isBusy("save") || slot.weight >= 100}
+                          onClick={() => updateSlot(slot.slot_id, (current) => ({
+                            ...current,
+                            weight: Math.min(100, current.weight + WEIGHT_STEP),
+                          }))}
+                        >
+                          ＋
+                        </button>
                         <span>%</span>
                       </div>
                     </label>
-                    <button
-                      className="btn sm subagent-slot-test"
-                      disabled={busyKey != null || !selectedSource?.ready || !slot.model || slot.model.trim() !== slot.model}
-                      onClick={() => void testOne({ source: slot.source, model: slot.model })}
-                    >
-                      {busyKey === testKey ? "测试中…" : "测试此槽"}
-                    </button>
                   </div>
 
                   <label className="subagent-template-field">
@@ -455,7 +599,7 @@ export function SubagentProvidersPanel() {
                       className="input"
                       aria-label={`槽位 ${index + 1} Prompt 模板`}
                       value={slot.prompt_template_id ?? "custom"}
-                      disabled={busyKey != null}
+                      disabled={isBusy("save")}
                       onChange={(event) => {
                         const template = PROMPT_TEMPLATES.find((candidate) => candidate.id === event.target.value);
                         updateSlot(slot.slot_id, (current) => template
@@ -478,7 +622,7 @@ export function SubagentProvidersPanel() {
                       rows={4}
                       maxLength={MAX_PROMPT_CHARS}
                       value={slot.prompt}
-                      disabled={busyKey != null}
+                      disabled={isBusy("save")}
                       onChange={(event) => updateSlot(slot.slot_id, (current) => ({ ...current, prompt: event.target.value }))}
                     />
                   </label>
@@ -487,6 +631,21 @@ export function SubagentProvidersPanel() {
               );
             })}
           </div>
+
+          {slots.length > 0 && (
+            <div className="subagent-weight-bar-wrap">
+              <div className="subagent-weight-bar" role="img" aria-label={`权重分布，合计 ${weightTotal}%`}>
+                {slots.map((slot, index) => (
+                  <span
+                    key={slot.slot_id}
+                    className={`subagent-weight-seg seg-${index % 3}`}
+                    style={{ width: `${Math.max(0, Math.min(100, slot.weight))}%` }}
+                  />
+                ))}
+              </div>
+              {weightHint && <p className="subagent-weight-hint">{weightHint}</p>}
+            </div>
+          )}
 
           <footer className="subagent-pool-footer">
             <div className="subagent-validation" aria-live="polite">
@@ -497,10 +656,10 @@ export function SubagentProvidersPanel() {
             <button
               className="btn primary"
               data-testid="subagent-save-pool"
-              disabled={busyKey != null || validation.length > 0 || !dirty}
+              disabled={isBusy("save") || validation.length > 0 || !dirty}
               onClick={() => void save()}
             >
-              {busyKey === "save" ? "正在保存…" : "保存候选池"}
+              {isBusy("save") ? "正在保存…" : "保存候选池"}
             </button>
           </footer>
         </>

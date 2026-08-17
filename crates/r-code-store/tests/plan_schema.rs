@@ -213,8 +213,11 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
                  ON queued_messages(task_id, branch_id, state, priority DESC, created_at ASC);
              ALTER TABLE tasks DROP COLUMN goal_active;
              ALTER TABLE agent_runs DROP COLUMN require_approval;
+             ALTER TABLE agent_runs DROP COLUMN guard_trip;
+             ALTER TABLE agent_runs DROP COLUMN checkpoint_sha;
+             ALTER TABLE agent_runs DROP COLUMN checkpoint_base_head;
              ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);",
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31);",
         )
         .unwrap();
         conn.execute(
@@ -255,7 +258,17 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
         );
     }
     assert!(table_has_column(&conn, "queued_messages", "sort_order"));
-    assert!(table_has_column(&conn, "queued_messages", "attachments_json"));
+    assert!(table_has_column(
+        &conn,
+        "queued_messages",
+        "attachments_json"
+    ));
+    assert!(table_has_column(&conn, "plan_question_sets", "kind"));
+    assert!(table_has_column(
+        &conn,
+        "plan_question_sets",
+        "restore_mode"
+    ));
     assert!(table_has_column(&conn, "agent_runs", "require_approval"));
     assert!(table_has_column(
         &conn,
@@ -381,7 +394,7 @@ fn latest_schema_declares_every_check_and_foreign_key_contract() {
         ("plans", 8),
         ("plan_items", 6),
         ("plan_item_dependencies", 2),
-        ("plan_question_sets", 6),
+        ("plan_question_sets", 8),
         ("plan_questions", 6),
         ("plan_question_options", 3),
         ("plan_change_events", 9),

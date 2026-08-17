@@ -95,7 +95,7 @@ test("MCP management is redacted, independently busy, and confirmation-bound", a
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "工具与连接", exact: true }).click();
-  await page.getByText("内置联网工具", { exact: true }).waitFor();
+  await page.getByText("内置工具", { exact: true }).waitFor();
 
   await page.getByRole("button", { name: "自定义", exact: true }).click();
   const customEditor = page.locator(".mcp-editor");

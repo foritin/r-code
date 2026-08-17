@@ -534,8 +534,8 @@ pub const PRESETS: &[Preset] = &[
         endpoint_candidates: &[Endpoint {
             url: "https://ark.cn-beijing.volces.com/api/coding/v3",
             protocol: Protocol::OpenAiChat,
-            native: P_C,
-            label: "OpenAI 兼容口",
+            native: P_CR,
+            label: "OpenAI 兼容口（Chat / Responses）",
         }],
         template_vars: &[],
         max_output_tokens: None,
@@ -546,7 +546,7 @@ pub const PRESETS: &[Preset] = &[
         id: "ark_coding_openai",
         label: "火山方舟 Coding Plan（OpenAI 口）",
         protocol: Protocol::OpenAiChat,
-        native: P_C,
+        native: P_CR,
         auth: AuthStyle::Bearer,
         base_url: "https://ark.cn-beijing.volces.com/api/coding/v3",
         reasoning_replay: false,
@@ -559,7 +559,7 @@ pub const PRESETS: &[Preset] = &[
         template_vars: &[],
         max_output_tokens: None,
         context_window: Some(256_000),
-        note: Some("套餐网关只有 Chat Completions；thinking 支持 enabled/disabled/auto，adaptive 亦可透传"),
+        note: Some("套餐网关同址支持 Chat 与 Responses；thinking 支持 enabled/disabled/auto，adaptive 亦可透传"),
     },
     Preset {
         id: "ark_agent",
@@ -591,12 +591,17 @@ pub const PRESETS: &[Preset] = &[
         api_key_url: Some(
             "https://console.volcengine.com/ark/region:cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
         ),
-        endpoint_candidates: &[],
+        endpoint_candidates: &[Endpoint {
+            url: "https://ark.cn-beijing.volces.com/api/plan/v3",
+            protocol: Protocol::OpenAiResponses,
+            native: P_CR,
+            label: "OpenAI 兼容口（Chat / Responses）",
+        }],
         template_vars: &[],
         max_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some(
-            "官方现名 Agent Plan；Token 套餐必须走 /api/plan，改用 /api/v3 会进入按量线路。模型以套餐实际开通列表为准，也支持手填 ep-xxx 接入点",
+            "官方现名 Agent Plan；Token 套餐必须走 /api/plan（Anthropic 口），Chat / Responses 走 /api/plan/v3。模型以套餐实际开通列表为准，也支持手填 ep-xxx 接入点",
         ),
     },
     Preset {
@@ -1785,12 +1790,16 @@ mod tests {
             allowed_protocols("openai", ""),
             Some(vec![Protocol::OpenAiChat, Protocol::OpenAiResponses])
         );
-        // 备用线路：只认它自己那一个。ark_coding 的 native 是 [Anthropic]，
-        // 但候选 /v3 是 OpenAI 口——拿 native 卡它会把合法组合拦下。
+        // 备用线路：只认它自己声明的 native。ark_coding 的 /api/coding/v3
+        // 候选是 OpenAI 口，同址支持 Chat 与 Responses。
         let ark_openai_port = "https://ark.cn-beijing.volces.com/api/coding/v3";
         assert_eq!(
             allowed_protocols("ark_coding", ark_openai_port),
-            Some(vec![Protocol::OpenAiChat])
+            Some(vec![Protocol::OpenAiChat, Protocol::OpenAiResponses])
+        );
+        assert_eq!(
+            allowed_protocols("ark_agent", "https://ark.cn-beijing.volces.com/api/plan/v3"),
+            Some(vec![Protocol::OpenAiChat, Protocol::OpenAiResponses])
         );
         // 改到目录以外：不设限
         let gateway = "https://relay.example.com/v1";
@@ -1837,6 +1846,10 @@ mod tests {
         assert!(!payg.base_url.contains("/api/coding"));
         assert!(!payg.base_url.contains("/api/plan"));
         assert_eq!(agent.protocol, Protocol::AnthropicMessages);
+        assert!(agent.endpoint_candidates.iter().any(|candidate| {
+            candidate.protocol == Protocol::OpenAiResponses
+                && candidate.url.contains("/api/plan/v3")
+        }));
         assert!(agent.models.contains(&"ark-code-latest"));
         assert!(agent.models.contains(&"deepseek-v4-pro"));
         assert!(catalog_dto()

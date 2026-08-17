@@ -1,6 +1,6 @@
 //! R-Code 核心产品类型：DTO、状态机、错误类型。
 //!
-//! 本 crate 定义 R-Code 私有的产品类型，不修改 agent-core 公共枚举。
+//! 本 crate 定义 R-Code 私有的产品类型，不修改 agent-contracts 公共枚举。
 //! 产品专属块（file_ref, selection_ref）走 `ContentBlock::Custom` 透传。
 //!
 //! ## 模块结构

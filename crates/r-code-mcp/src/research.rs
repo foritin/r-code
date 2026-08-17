@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
+use agent_contract::ToolCallOutcome;
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
-use agent_contract::ToolCallOutcome;
 use rmcp::{
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,

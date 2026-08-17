@@ -322,6 +322,18 @@ export const browserMockSettings: SettingsResponse = {
       quality_loop: "off",
       quality_reviewer: "r_code",
       max_review_rounds: 1,
+      run_budget: {
+        max_tool_rounds: 60,
+        max_run_seconds: 14_400,
+        reasoning_budget_chars: 120_000,
+        same_error_limit: 3,
+        no_progress_rounds: 24,
+        replay_detection: true,
+        diff_file_limit: 60,
+        diff_byte_limit: 262_144,
+        test_fail_limit: 3,
+        checkpoint_enabled: true,
+      },
     },
     agent_prompts: {
       main_agent: "主 Agent 对最终结果负责；只在委派有明确收益时拆分边界清晰的子任务。",

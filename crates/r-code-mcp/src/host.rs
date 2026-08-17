@@ -3,8 +3,8 @@ use std::sync::{
     Arc,
 };
 
-use async_trait::async_trait;
 use agent_contract::{ToolCallOutcome, ToolSource, ToolSpec};
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use thiserror::Error;
 

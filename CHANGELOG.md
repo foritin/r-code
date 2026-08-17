@@ -6,13 +6,27 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- 火山方舟 Coding Plan（Anthropic/OpenAI 两个口）与 Agent Plan、Kimi For Coding 增加按「厂商 + 模型族」实测冻结的方言适配：thinking 词表与发送形状、temperature 策略、推理强度档位、流式 usage、上下文/输出能力与 User-Agent 均按真实接口行为发送；Ark 模型列表同步时过滤 `Shutdown/Retiring` 条目，前端为 Ark 各套餐口与 Kimi Coding 暴露正确的思考/推理强度入口。
+- 火山方舟 Coding Plan 与 Agent Plan 新增 Responses 线路：`/api/coding/v3/responses` 与 `/api/plan/v3/responses` 接入 `ArkResponses` Provider，reasoning 以 Ark 的明文 summary 形式保存并回传（`SummaryReplay`），推理强度按探针冻结的 low/medium/high/xhigh/max 档发送，不支持 none/minimal 时安全省略。
+
 ### Changed
 
-- DeepSeek V4 新增“智能平衡”推理策略：默认关键判断使用高档，昂贵的纯只读探索后仅给下一轮一个快速取证档，写入、命令、验证与最终收束自动恢复高档；Pro 不再伪造其不支持的 low，Chat、Responses 与 Anthropic 兼容口使用各自合法参数。显式开启、关闭或固定 high/max 始终优先，自动/手动上下文压缩与长子代理报告在智能模式下使用快速总结档。
+- DeepSeek 的 `deepseek-chat` 按服务端实测别名声明 1M 上下文窗口与 393,216 单次输出上限，避免过早触发压缩。
+- DeepSeek V4 新增“智能平衡”推理策略：默认关键判断使用高档，昂贵的纯只读探索后仅给下一轮一个快速取证档，写入、命令、验证与最终收束自动恢复高档；Pro 在 Chat/Anthropic 口用关闭思考替代其不支持的 low 档，Responses 口的快速取证轮保持 low 档思考开启以维持 reasoning 连续性，三者均使用各自合法参数。显式开启、关闭或固定 high/max 始终优先，自动/手动上下文压缩与长子代理报告在智能模式下使用快速总结档。
+- 原生 R-Code 子代理接入与主 Agent 相同的分层压缩闸门：按输入可用窗口（上下文窗口减去输出预留）在 75% 提示、85% 摘要折叠并连续两次防抖，压缩只改写交给模型的投影，canonical 完整证据仍用于最终报告重建。
+- 网络/MCP 政策按 run 内实际工具能力分层注入：网络条款常驻，MCP 管理条款仅在有 MCP 生命周期工具时注入，MCP 使用条款仅在已启用 `mcp__` 直连服务时注入；未启用任何 MCP 服务时每请求少付约 1,300 字符的固定开销。
+- MCP 草稿创建解除工作区绑定：MCP 是全局配置，未挂工作区的会话也能调用 `mcp_create_draft`，`source_path` 改为接受任意绝对路径；原有暂存目录清理契约与“创建后保持关闭”边界不变。
+- `mcp-creator` 技能精简为“创建 + 声明凭据变量名”：需要凭据时只声明 stdio 的 `environment_names` 或 HTTP 的 `header_names`，变量值由用户在“设置 → 工具与连接”的 MCP 条目中点击“配置”输入。
+- 纯聊天会话默认以用户主目录作为工作区：本地文件与终端工具以主目录为根、写入和命令仍需批准，Codex 主引擎同样可以直接在聊天会话中运行。
 
 ### Fixed
 
+- “上下文已超过模型上限”与“手动压缩单块超过上限”两类错误改为结构性防护：发送前按 1.15 安全系数做硬闸门（超窗先强制折叠、失败则保留首尾并裁剪中段），收到服务端上下文超限时自动压缩重试一次；手动压缩对超长消息/工具对与超长摘要一律切分或重试截断，不再以“本次未应用压缩”拒绝。
+- OpenAI Responses 线路补齐与 Chat 一致的 408/429/5xx 重试与 120 秒流空闲 watchdog；所有模型传输层统一连接超时与 User-Agent，压缩摘要与记忆评审的旁路请求增加 120 秒 deadline。
 - 小助手补齐 Windows 原生适配：恢复可编译/可打包的 Tauri feature 配置，防止 Alt+F4 销毁助手后无法重新开启，设置开启前会确认原生窗口存在并在失败时自动回弹；多显示器混合 DPI 定位、隐藏后的鼠标穿透与动画轮询、会话跳转后的 Windows 焦点容错也同步修正。
+- DeepSeek V4 Pro Responses 智能平衡的快速取证轮不再用 `none` 关闭思考——那会让该轮的工具调用没有 `reasoning_text`，下一轮切回高档时因未回传而被服务端 400（`reasoning_text must be passed back`）；改为 `low` 档保持 thinking 开启，主 Agent 与原生子代理共用该修复。
 
 ## [0.9.0] - 2026-08-12
 

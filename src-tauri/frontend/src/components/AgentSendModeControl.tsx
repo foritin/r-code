@@ -86,10 +86,13 @@ interface Props {
   mode: ExplicitAgentSendMode;
   running: boolean;
   disabled?: boolean;
+  /** 空闲时三种模式都退化为立即发送，模式选择没有意义；为 true 时不渲染。 */
+  hidden?: boolean;
   onChange: (mode: ExplicitAgentSendMode) => void;
 }
 
-export function AgentSendModeControl({ mode, running, disabled = false, onChange }: Props) {
+export function AgentSendModeControl({ mode, running, disabled = false, hidden = false, onChange }: Props) {
+  if (hidden) return null;
   const nextMode = nextAgentSendMode(mode);
   const idlePrefix = "当前空闲会直接发送；";
   return (

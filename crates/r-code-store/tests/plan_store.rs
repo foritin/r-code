@@ -8,8 +8,8 @@ use r_code_core::plan::{
     AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput,
     PlanContinuationState, PlanImplementationDispatchState, PlanItemDraft, PlanItemState,
     PlanQuestionAnswer, PlanQuestionAnswerInput, PlanQuestionDraft, PlanQuestionOptionDraft,
-    PlanQuestionSetState, PlanState, PublishPlanInput, RequestPlanQuestionsInput,
-    UpdatePlanItemInput,
+    PlanQuestionSetKind, PlanQuestionSetState, PlanState, PublishPlanInput,
+    RequestPlanQuestionsInput, RequestScopeDecisionInput, UpdatePlanItemInput,
 };
 use r_code_store::{
     Database, PlanStore, QueuedMessageRepository, SessionBranchRepository, TaskRepository,
@@ -48,6 +48,12 @@ impl Fixture {
 
 fn seed_task(db: &Database, goal: &str) -> Task {
     let task = Task::new(None, "Plan store test", goal, TaskMode::Plan);
+    TaskRepository::new(db).create(&task).unwrap();
+    task
+}
+
+fn seed_task_with_mode(db: &Database, goal: &str, mode: TaskMode) -> Task {
+    let task = Task::new(None, "Scope decision store test", goal, mode);
     TaskRepository::new(db).create(&task).unwrap();
     task
 }
@@ -1177,6 +1183,59 @@ fn hierarchy_validation_rejects_unsafe_paths_without_changing_the_plan() {
             original_projection
         );
     }
+}
+
+#[test]
+fn hierarchy_validation_rejects_numeric_only_section_labels() {
+    let fixture = Fixture::in_memory("Reject numeric section labels");
+    let created = fixture.create_plan();
+    let projection = projection_path(&created);
+    let original_projection = fs::read_to_string(&projection).unwrap();
+
+    for label in ["1", "01", " 2 "] {
+        let mut draft = item("feature", "Feature", &[]);
+        draft.section_path = vec![label.to_string(), "修复模式错位".to_string()];
+        let error = fixture
+            .store
+            .publish_plan(
+                &fixture.task.id,
+                &PublishPlanInput {
+                    plan_id: created.plan.id.clone(),
+                    expected_revision: created.plan.revision,
+                    items: vec![draft],
+                },
+            )
+            .expect_err("numeric-only section labels must be rejected");
+        assert!(
+            error.to_string().contains("descriptive text"),
+            "unexpected error: {error}"
+        );
+        let unchanged = fixture
+            .store
+            .current_for_task(&fixture.task.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.plan.revision, created.plan.revision);
+        assert_eq!(
+            fs::read_to_string(&projection).unwrap(),
+            original_projection
+        );
+    }
+
+    // Descriptive labels, including ones that merely contain numbers, remain valid.
+    let mut draft = item("feature", "Feature", &[]);
+    draft.section_path = vec!["阶段 1".to_string(), "修复模式错位".to_string()];
+    fixture
+        .store
+        .publish_plan(
+            &fixture.task.id,
+            &PublishPlanInput {
+                plan_id: created.plan.id.clone(),
+                expected_revision: created.plan.revision,
+                items: vec![draft],
+            },
+        )
+        .expect("descriptive labels must publish");
 }
 
 #[test]
@@ -2569,5 +2628,177 @@ fn interrupted_continuation_recovers_as_visible_retryable_failure() {
     assert_eq!(
         claimed_recovered.continuation_state,
         PlanContinuationState::Failed
+    );
+}
+
+#[test]
+fn scope_decision_creates_plan_and_switches_agent_task_to_plan() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let task = seed_task_with_mode(db.as_ref(), "Choose a scope", TaskMode::Edit);
+    let store = PlanStore::new(Arc::clone(&db), directory.path().join("plans"));
+
+    let view = store
+        .request_scope_decision(
+            &task.id,
+            &RequestScopeDecisionInput {
+                questions: vec![question("scope-q", 2)],
+            },
+        )
+        .unwrap();
+
+    assert_eq!(view.plan.state, PlanState::Draft);
+    assert_eq!(view.plan.revision, 1);
+    let question_set = view.pending_question_set.expect("pending scope decision");
+    assert_eq!(question_set.kind, PlanQuestionSetKind::ScopeDecision);
+    assert_eq!(question_set.restore_mode, Some(TaskMode::Edit));
+    assert_eq!(question_set.questions.len(), 1);
+
+    let task = TaskRepository::new(db.as_ref())
+        .get(&task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.mode, TaskMode::Plan);
+}
+
+#[test]
+fn repeated_scope_decision_is_rejected_without_a_second_question_set() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let task = seed_task_with_mode(db.as_ref(), "Choose a scope", TaskMode::Ask);
+    let store = PlanStore::new(Arc::clone(&db), directory.path().join("plans"));
+
+    let first = store
+        .request_scope_decision(
+            &task.id,
+            &RequestScopeDecisionInput {
+                questions: vec![question("first-q", 2)],
+            },
+        )
+        .unwrap();
+
+    let second = store.request_scope_decision(
+        &task.id,
+        &RequestScopeDecisionInput {
+            questions: vec![question("second-q", 2)],
+        },
+    );
+    assert!(
+        second.is_err(),
+        "the task is already in Plan mode awaiting the first decision"
+    );
+
+    let current = store.current_for_task(&task.id).unwrap().unwrap();
+    assert_eq!(current.plan.id, first.plan.id);
+    let pending = current
+        .pending_question_set
+        .expect("only one pending decision");
+    assert_eq!(pending.questions.len(), 1);
+    assert_eq!(pending.questions[0].id, "first-q");
+
+    let conn = db.conn().unwrap();
+    let plan_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM plans", [], |row| row.get(0))
+        .unwrap();
+    let question_set_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM plan_question_sets", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        plan_count, 1,
+        "a repeated request must not create a second Plan"
+    );
+    assert_eq!(
+        question_set_count, 1,
+        "a repeated request must not create a second question set"
+    );
+}
+
+#[test]
+fn concurrent_scope_decisions_have_one_winner_and_no_orphan_questions() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let task = seed_task_with_mode(db.as_ref(), "Race scope decisions", TaskMode::Auto);
+    let store = Arc::new(PlanStore::new(
+        Arc::clone(&db),
+        directory.path().join("plans"),
+    ));
+
+    let barrier = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for name in ["red", "blue"] {
+        let store = Arc::clone(&store);
+        let barrier = Arc::clone(&barrier);
+        let task_id = task.id.clone();
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            let result = store.request_scope_decision(
+                &task_id,
+                &RequestScopeDecisionInput {
+                    questions: vec![question(name, 2)],
+                },
+            );
+            (name, result)
+        }));
+    }
+
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(
+        results.iter().filter(|(_, result)| result.is_ok()).count(),
+        1
+    );
+    assert_eq!(
+        results.iter().filter(|(_, result)| result.is_err()).count(),
+        1
+    );
+
+    let current = store.current_for_task(&task.id).unwrap().unwrap();
+    let pending = current
+        .pending_question_set
+        .expect("one pending scope decision");
+    assert_eq!(pending.questions.len(), 1);
+
+    let conn = db.conn().unwrap();
+    let question_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM plan_questions", [], |row| row.get(0))
+        .unwrap();
+    let question_set_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM plan_question_sets", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        question_count, 1,
+        "losing transaction must roll back its questions"
+    );
+    assert_eq!(
+        question_set_count, 1,
+        "losing transaction must roll back its question set"
+    );
+}
+
+#[test]
+fn scope_decision_rejects_plan_mode_before_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let task = seed_task_with_mode(db.as_ref(), "Already planning", TaskMode::Plan);
+    let store = PlanStore::new(Arc::clone(&db), directory.path().join("plans"));
+
+    assert_error_contains(
+        store.request_scope_decision(
+            &task.id,
+            &RequestScopeDecisionInput {
+                questions: vec![question("too-late", 2)],
+            },
+        ),
+        "unavailable while task mode is plan",
+    );
+    assert!(
+        store.current_for_task(&task.id).unwrap().is_none(),
+        "rejected scope decision must not create a Plan"
     );
 }

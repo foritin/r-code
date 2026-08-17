@@ -698,7 +698,10 @@ fn r7_t5_accessibility_diff_text_mode() {
             .join("frontend/src/components/scenes/SettingsScene.tsx"),
     )
     .unwrap();
-    assert!(!settings.contains("accessibleDiffMode"), "retired settings toggle");
+    assert!(
+        !settings.contains("accessibleDiffMode"),
+        "retired settings toggle"
+    );
 
     let canvas = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend/src/components/room/Canvas.tsx"),

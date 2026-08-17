@@ -24,7 +24,7 @@ Plan documents follow the same local-data boundary: the durable state is stored 
 
 Local data remains on the device until it is removed through the application, by the user, or by operating-system cleanup. Uninstall behaviour varies by platform and installer, so do not assume uninstalling also erases the application-data directory.
 
-For the exact installed-data locations and safe backup, restore and uninstall procedures, see the [operations guide](./docs/OPERATIONS.en.md). A complete backup includes more than the SQLite database and does not export operating-system credential-store entries.
+For the exact installed-data locations and safe backup, restore and uninstall procedures, see the [operations guide](./docs/operations.en.md). A complete backup includes more than the SQLite database and does not export operating-system credential-store entries.
 
 Diagnostic logs are written as daily JSONL files under the application-data directory and are automatically limited to the most recent seven calendar days. This retention is fixed rather than user-configurable. Logs cover operational events such as Provider/model failures, tool failures, subagent failures, MCP connection/call failures and storage/recovery warnings; they are not intended to contain prompt bodies, source-file bodies or complete tool output. Tool failures may include a bounded error summary for diagnosis. Known credential patterns are redacted before the event reaches disk.
 

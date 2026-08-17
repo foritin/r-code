@@ -50,6 +50,16 @@ Enabled by the RTK switch in R-Code Settings. New R-Code-hosted Codex runs prefe
 for supported non-interactive shell commands. Rename this file to `rtk-policy.md.disabled` to \
 disable the policy without uninstalling RTK.\n";
 
+fn append_command_hint(target: &mut String, hint: &str) {
+    target.push_str(
+        "
+
+RTK command policy:
+",
+    );
+    target.push_str(hint);
+}
+
 static RTK_CHANGE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -172,6 +182,18 @@ impl RtkManager {
         } else {
             ""
         }
+    }
+
+    /// RTK 是全局开关：开启后所有模型的会话都优先使用 RTK 包装命令。
+    /// 这里把策略追加进原生运行时的主/子代理提示词；Codex 路径仍由
+    /// `command_hint()` 在各自 prompt 组装点单独注入，两者互不重叠。
+    pub fn apply_command_hint(&self, main_agent: &mut String, subagent: &mut String) {
+        let hint = self.command_hint();
+        if hint.is_empty() {
+            return;
+        }
+        append_command_hint(main_agent, hint);
+        append_command_hint(subagent, hint);
     }
 
     pub async fn status(&self) -> RtkStatus {
@@ -1175,5 +1197,28 @@ mod tests {
         assert!(rtk_version_matches_release("rtk 0.45.0", "v0.45.0"));
         assert!(!rtk_version_matches_release("rtk 0.44.2", "v0.45.0"));
         assert!(!rtk_version_matches_release("other 0.45.0", "v0.45.0"));
+    }
+
+    #[test]
+    fn command_hint_appends_to_native_agent_prompts() {
+        let mut main = String::from("base main prompt");
+        let mut subagent = String::from("base subagent prompt");
+        append_command_hint(&mut main, COMMAND_HINT);
+        append_command_hint(&mut subagent, COMMAND_HINT);
+        assert!(main.starts_with("base main prompt"));
+        assert!(main.contains("RTK command policy:"));
+        assert!(main.contains("must prefer its token-optimized wrappers"));
+        assert!(subagent.contains("`rtk cargo`"));
+    }
+
+    #[test]
+    fn apply_command_hint_is_inert_while_disabled() {
+        let manager =
+            RtkManager::from_config_dir(std::path::PathBuf::from("D:/nonexistent-rtk-home"));
+        let mut main = String::from("base");
+        let mut subagent = String::from("base");
+        manager.apply_command_hint(&mut main, &mut subagent);
+        assert_eq!(main, "base");
+        assert_eq!(subagent, "base");
     }
 }

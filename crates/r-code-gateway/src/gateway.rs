@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
+use async_trait::async_trait;
 use r_code_core::dto::{PermissionDecision, ProjectAccessMode, RiskLevel, ToolCall};
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;

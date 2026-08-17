@@ -53,7 +53,7 @@ R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展�
 | Persistence | `crates/r-code-store/` | SQLite、JSONL 投影、Blob、变更、Plan、审核与验证 |
 | Terminal | `crates/r-code-terminal/` | PTY、OSC 133、原始输出与外部 CLI 回放 |
 | Renderer | `src-tauri/frontend/` | React 场景、Zustand 状态与 typed Tauri IPC |
-| Shared contracts | `vendor/agent-core/` | `agent-*` 公共合同 crates；构建必需 Git 子模块 |
+| Shared contracts | `vendor/agent-contracts/` | `agent-*` 公共合同 crates；构建必需 Git 子模块 |
 
 JSONL 是会话内容源，SQLite 是任务、Run、权限、审计、Plan、记忆和变更等产品状态源。完整说明见 [架构与实现细节](./docs/architecture.md)。
 
@@ -62,7 +62,7 @@ JSONL 是会话内容源，SQLite 是任务、Run、权限、审计、Plan、记
 前置环境：Git、Rust stable、Node.js 20、Tauri 2 的平台系统依赖。Windows 还需要 Visual Studio Build Tools 2022 与 WebView2 Runtime；macOS/Linux 依赖见 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)。
 
 ```powershell
-# Windows：检查 Tauri CLI、agent-core 子模块和 npm 依赖，然后启动
+# Windows：检查 Tauri CLI、agent-contracts 子模块和 npm 依赖，然后启动
 ./dev.ps1
 
 # 只安装并验证依赖
@@ -92,7 +92,7 @@ Dev identifier，绝不会打开正式版数据。开发版更新器只读取独
 只手动初始化产品构建所需子模块时：
 
 ```bash
-git submodule update --init --recursive -- vendor/agent-core
+git submodule update --init --recursive -- vendor/agent-contracts
 ```
 
 `.agents` 是可选的仓库协作技能，不参与产品构建：
@@ -166,7 +166,7 @@ r-code/
 ├─ crates/                    # 产品私有 Rust crates
 ├─ installer/                 # Windows 品牌安装器与 NSIS 载荷封装
 ├─ src-tauri/                 # Tauri Host 与正式 React 前端
-├─ vendor/agent-core/         # 公共合同子模块
+├─ vendor/agent-contracts/         # 公共合同子模块
 ├─ docs/                      # 当前文档与 UI 参考图
 ├─ icons/                     # 打包图标和可维护源素材
 ├─ scripts/                   # 开发、签名与发布辅助脚本

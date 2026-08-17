@@ -3,8 +3,8 @@
 //! 这些类型在 P0 阶段冻结，后续阶段不得破坏性修改。
 //! 所有类型实现 `Serialize`/`Deserialize`，用于 SQLite 存储和 IPC 传输。
 
-use chrono::{DateTime, Utc};
 use agent_contract::InferenceOptions;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -1380,7 +1380,7 @@ impl QueuedMessage {
 }
 
 // ============================================================================
-// ContentBlock::Custom schema  [agent-core/04 §2-3]
+// ContentBlock::Custom schema  [agent-contracts/04 §2-3]
 // ============================================================================
 
 /// R-Code 产品专属 `ContentBlock::Custom` 类型名称。

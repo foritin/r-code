@@ -11,7 +11,7 @@ use r_code_core::dto::{RiskLevel, TaskMode};
 use r_code_core::error::ProductError;
 use r_code_core::plan::{
     PlanItemDraft, PlanItemState, PlanQuestionDraft, PlanView, PublishPlanInput,
-    RequestPlanQuestionsInput, UpdatePlanItemInput,
+    RequestPlanQuestionsInput, RequestScopeDecisionInput, UpdatePlanItemInput,
 };
 use r_code_gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
 use r_code_store::{Database, PlanStore, SessionBranchRepository, TaskRepository};
@@ -204,7 +204,7 @@ impl Tool for PlanPublishTool {
     }
 
     fn description(&self) -> &str {
-        "Publish the current Plan draft as 1-100 independently verifiable executable leaf items. Use section_path for optional hierarchy (for example phase -> area) instead of creating non-executable parent items. Each leaf must represent one coherent implementation outcome with explicit acceptance criteria and only real dependencies."
+        "Publish the current Plan draft as 1-100 independently verifiable executable leaf items. Use section_path for optional hierarchy (for example phase -> area) instead of creating non-executable parent items. Each section_path label must be descriptive text, never a bare number; numbering is rendered automatically. Each leaf must represent one coherent implementation outcome with explicit acceptance criteria and only real dependencies."
     }
 
     fn risk_level(&self) -> RiskLevel {
@@ -248,7 +248,7 @@ impl Tool for PlanPublishTool {
                             "section_path": {
                                 "type": "array",
                                 "maxItems": 4,
-                                "description": "Optional presentation hierarchy. Parent labels are not executable tasks; this item remains the tracked leaf.",
+                                "description": "Optional presentation hierarchy. Parent labels are not executable tasks; this item remains the tracked leaf. Labels must be descriptive text; bare numbers are rejected because numbering is added automatically.",
                                 "items": { "type": "string", "minLength": 1, "maxLength": 120 }
                             },
                             "depends_on": {
@@ -432,6 +432,132 @@ impl Tool for RequestUserInputTool {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RequestScopeDecisionArgs {
+    questions: Vec<PlanQuestionDraft>,
+}
+
+#[derive(Clone)]
+pub struct RequestScopeDecisionTool {
+    db: Arc<Database>,
+    plans: Arc<PlanStore>,
+}
+
+impl RequestScopeDecisionTool {
+    pub fn new(db: Arc<Database>, plans: Arc<PlanStore>) -> Self {
+        Self { db, plans }
+    }
+}
+
+#[async_trait]
+impl Tool for RequestScopeDecisionTool {
+    fn name(&self) -> &str {
+        "request_scope_decision"
+    }
+
+    fn description(&self) -> &str {
+        "Raise a blocking scope decision while the task is still in Agent mode. Use this when an attached image, OCR, or multi-part request is ambiguous about what the user actually wants, and proceeding without confirmation risks doing the wrong work. Ask 1-3 short questions with 2-3 mutually exclusive choices each and put the recommended choice first; the host switches the task to Plan mode, shows the questions, and resumes the original Agent task after the user answers. Do not use this from Plan mode."
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        &[]
+    }
+
+    fn requires_existing_path(&self) -> bool {
+        false
+    }
+
+    fn requires_workspace_scope(&self) -> bool {
+        false
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+                            "header": { "type": "string", "minLength": 1, "maxLength": 64 },
+                            "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 3,
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+                                        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+                                        "description": { "type": "string", "maxLength": 1000 }
+                                    },
+                                    "required": ["id", "label", "description"]
+                                }
+                            }
+                        },
+                        "required": ["id", "header", "question", "options"]
+                    }
+                }
+            },
+            "required": ["questions"]
+        })
+    }
+
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        Err(context_required())
+    }
+
+    async fn execute_with_context(
+        &self,
+        input: serde_json::Value,
+        context: &ToolExecutionContext,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        require_task_mode(
+            &self.db,
+            &context.task_id,
+            &[TaskMode::Ask, TaskMode::Edit, TaskMode::Auto],
+            "request_scope_decision",
+        )?;
+        let args: RequestScopeDecisionArgs = decode(input)?;
+        let view = self.plans.request_scope_decision(
+            &context.task_id,
+            &RequestScopeDecisionInput {
+                questions: args.questions,
+            },
+        )?;
+        let question_set = view
+            .pending_question_set
+            .clone()
+            .ok_or_else(|| invalid("Plan store did not return the pending scope decision"))?;
+        let content = serde_json::to_string(&serde_json::json!({
+            "status": "awaiting_user_input",
+            "question_set": &question_set,
+            "plan": &view,
+        }))
+        .map_err(|error| invalid(format!("serialize request_scope_decision result: {error}")))?;
+        Ok(
+            ToolExecutionResult::suspend_for_user(content).with_metadata(serde_json::json!({
+                "question_set": &question_set,
+                "plan": &view,
+                "r_code_authoritative_plan_view": &view,
+            })),
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateItemArgs {
     plan_id: String,
     item_id: String,
@@ -582,7 +708,7 @@ impl Tool for PlanItemUpdateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use r_code_core::dto::{ProjectAccessMode, Task};
+    use r_code_core::dto::{AgentEngine, ProjectAccessMode, Task};
     use r_code_core::plan::{ApprovePlanInput, CreatePlanInput, PlanItemDraft, PublishPlanInput};
     use r_code_store::QueuedMessageRepository;
 
@@ -874,5 +1000,117 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("resume that same blocked feature"));
+    }
+
+    #[tokio::test]
+    async fn scope_decision_switches_agent_to_plan_and_suspends() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        let task = Task::new(None, "Agent", "Choose a scope", TaskMode::Edit);
+        TaskRepository::new(&db).create(&task).unwrap();
+        let plans = Arc::new(PlanStore::new(db.clone(), temp.path().join("plans")));
+        let tool = RequestScopeDecisionTool::new(db.clone(), plans.clone());
+
+        let result = tool
+            .execute_with_context(
+                serde_json::json!({
+                    "questions": [{
+                        "id": "scope",
+                        "header": "Scope",
+                        "question": "Which parts should I implement?",
+                        "options": [
+                            {"id": "narrow", "label": "Narrow (Recommended)", "description": "Only the explicit request."},
+                            {"id": "all", "label": "Everything in the image", "description": "Also apply the OCR suggestions."}
+                        ]
+                    }]
+                }),
+                &context(&task.id),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.directive,
+            Some(r_code_gateway::ToolExecutionDirective::SuspendForUser)
+        );
+        assert_eq!(
+            TaskRepository::new(&db)
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .mode,
+            TaskMode::Plan
+        );
+        let current = plans.current_for_task(&task.id).unwrap().unwrap();
+        let question_set = current.pending_question_set.unwrap();
+        assert_eq!(
+            question_set.kind,
+            r_code_core::plan::PlanQuestionSetKind::ScopeDecision
+        );
+        assert_eq!(question_set.restore_mode, Some(TaskMode::Edit));
+        assert!(result.metadata.unwrap().get("question_set").is_some());
+    }
+
+    #[tokio::test]
+    async fn scope_decision_rejects_plan_mode() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        let task = Task::new(None, "Plan", "Already planning", TaskMode::Plan);
+        TaskRepository::new(&db).create(&task).unwrap();
+        let plans = Arc::new(PlanStore::new(db.clone(), temp.path().join("plans")));
+        let tool = RequestScopeDecisionTool::new(db, plans);
+
+        let error = tool
+            .execute_with_context(
+                serde_json::json!({
+                    "questions": [{
+                        "id": "scope",
+                        "header": "Scope",
+                        "question": "Which scope?",
+                        "options": [
+                            {"id": "a", "label": "A", "description": "First."},
+                            {"id": "b", "label": "B", "description": "Second."}
+                        ]
+                    }]
+                }),
+                &context(&task.id),
+            )
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("unavailable while task mode is plan"));
+    }
+
+    #[tokio::test]
+    async fn scope_decision_rejects_codex_main_agent() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        let task = Task::new(None, "Agent", "Choose a scope", TaskMode::Auto);
+        TaskRepository::new(&db).create(&task).unwrap();
+        TaskRepository::new(&db)
+            .set_agent_engine(&task.id, AgentEngine::Codex)
+            .unwrap();
+        let plans = Arc::new(PlanStore::new(db.clone(), temp.path().join("plans")));
+        let tool = RequestScopeDecisionTool::new(db, plans);
+
+        let error = tool
+            .execute_with_context(
+                serde_json::json!({
+                    "questions": [{
+                        "id": "scope",
+                        "header": "Scope",
+                        "question": "Which scope?",
+                        "options": [
+                            {"id": "a", "label": "A", "description": "First."},
+                            {"id": "b", "label": "B", "description": "Second."}
+                        ]
+                    }]
+                }),
+                &context(&task.id),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("R-Code main Agent"));
     }
 }

@@ -418,11 +418,10 @@ impl<'a> ReviewLedgerService<'a> {
             } else {
                 workspace_root.join(requested)
             };
-            let physical = guard.resolve(&physical)?;
-            let actual = match guard.open_existing_file(&physical, WorkspaceFileAccess::Read) {
-                Ok((_safe_path, mut file)) => {
+            let actual = match guard.open_file(&physical, WorkspaceFileAccess::Read) {
+                Ok(mut handle) => {
                     let mut bytes = Vec::new();
-                    file.read_to_end(&mut bytes)?;
+                    handle.file_mut().read_to_end(&mut bytes)?;
                     Some(hash_content(&bytes))
                 }
                 Err(ProductError::PathNotFound(_)) => None,

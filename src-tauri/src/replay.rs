@@ -408,11 +408,16 @@ impl ReplayService {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // 检查是否有被过滤的 Thinking 内容
-        let has_hidden_thinking = msg
-            .content
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Thinking { .. }));
+        // 检查是否有被过滤的 Thinking 内容。DeepSeek 工具调用轮可能回传空明文
+        // reasoning（仅为满足下一轮协议要求），这种空块没有需要隐藏的思维链，
+        // 不应打出误导性的 [reasoning hidden] 标记；签名块则始终代表被隐藏内容。
+        let has_hidden_thinking = msg.content.iter().any(|b| match b {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => !thinking.trim().is_empty() || signature.is_some(),
+            _ => false,
+        });
 
         let summary = if has_hidden_thinking {
             format!("{role}: {visible_text} [reasoning hidden]")
@@ -621,6 +626,35 @@ mod tests {
         assert!(msg.summary.contains("Visible response"));
         // 应标记 [reasoning hidden]
         assert!(msg.summary.contains("[reasoning hidden]"));
+    }
+
+    #[tokio::test]
+    async fn empty_plaintext_reasoning_does_not_mark_reasoning_hidden() {
+        use agent_contract::{ContentBlock, Message, Role};
+        // DeepSeek 工具调用轮可能回传空 reasoning_text（仅为满足协议要求），
+        // 它没有可隐藏的思维链，回放摘要不应打出误导性的 [reasoning hidden]。
+        let events = vec![
+            SessionEvent::Meta(sample_meta()),
+            SessionEvent::Message(Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: String::new(),
+                        signature: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "call_1".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path": "/a"}),
+                    },
+                ],
+            }),
+        ];
+        let (_dir, svc, sid) = setup_with_events(events).await;
+
+        let entries = svc.get_replay(&sid, ReplayDepth::Explore).await.unwrap();
+        let msg = entries.iter().find(|e| e.event_type == "message").unwrap();
+        assert!(!msg.summary.contains("[reasoning hidden]"));
     }
 
     #[tokio::test]

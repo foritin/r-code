@@ -236,13 +236,13 @@ pub struct OsPlanReviewFileSystem;
 
 impl PlanReviewFileSystem for OsPlanReviewFileSystem {
     fn read_snapshot(&self, guard: &PathGuard, path: &Path) -> io::Result<Option<Vec<u8>>> {
-        let (_, mut file) = match guard.open_existing_file(path, WorkspaceFileAccess::Read) {
-            Ok(file) => file,
+        let mut handle = match guard.open_file(path, WorkspaceFileAccess::Read) {
+            Ok(handle) => handle,
             Err(ProductError::PathNotFound(_)) => return Ok(None),
             Err(error) => return Err(product_error_to_io(error)),
         };
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+        handle.file_mut().read_to_end(&mut bytes)?;
         Ok(Some(bytes))
     }
 
@@ -258,7 +258,7 @@ impl PlanReviewFileSystem for OsPlanReviewFileSystem {
                 .map(|_| ())
                 .map_err(product_error_to_io),
             Some(content) => guard
-                .atomic_write_file(path, content)
+                .atomic_write_path(path, content)
                 .map(|_| ())
                 .map_err(product_error_to_io),
         }
@@ -1700,7 +1700,10 @@ impl<'a> PlanReviewStore<'a> {
         } else {
             configured_guard.root().join(path)
         };
-        let absolute = configured_guard.resolve(&candidate)?;
+        let absolute = configured_guard
+            .resolve_path(&candidate)?
+            .canonical()
+            .to_path_buf();
         let relative_path = absolute
             .strip_prefix(configured_guard.root())
             .map_err(|_| {

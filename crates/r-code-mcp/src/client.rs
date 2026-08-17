@@ -10,8 +10,8 @@ use std::{
 #[cfg(windows)]
 use std::path::Path;
 
-use async_trait::async_trait;
 use agent_contract::ToolCallOutcome;
+use async_trait::async_trait;
 use http::{HeaderName, HeaderValue};
 use rmcp::{
     model::{

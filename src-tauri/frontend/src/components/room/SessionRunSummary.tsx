@@ -3,7 +3,7 @@ import type { FileChange, PlanView } from "../../lib/types";
 import { useAppStore } from "../../store/app";
 import { IconCheck, IconChevronDown, IconFile } from "../icons";
 import { AnchoredSurface } from "../ui/AnchoredSurface";
-import type { PlanStep } from "./model";
+import { compactInstruction, type PlanStep } from "./model";
 import { changeTypeLabel, pathParts, useRunChangeStats } from "./run-change-stats";
 import {
   currentStepNumber,
@@ -18,6 +18,12 @@ interface Props {
   liveSteps: readonly PlanStep[];
   planView: PlanView | null;
   changes: readonly FileChange[];
+  /** 当前运行的可观察阶段文案（无计划步骤/文件变更时作为权威状态锚点）。 */
+  activityLabel?: string | null;
+  /** 当前仍在活动的子代理数量。 */
+  activeSubagents?: number;
+  /** 当前运行轮的发起指令；hover 时以 ≤10 字 + 省略号展示。 */
+  requestText?: string | null;
 }
 
 type OpenPanel = "steps" | "changes" | null;
@@ -33,13 +39,24 @@ function stepStateLabel(state: SessionSummaryStepState): string {
   }
 }
 
-export function SessionRunSummary({ taskId, runId, running, liveSteps, planView, changes }: Props) {
+export function SessionRunSummary({
+  taskId,
+  runId,
+  running,
+  liveSteps,
+  planView,
+  changes,
+  activityLabel = null,
+  activeSubagents = 0,
+  requestText = null,
+}: Props) {
   const openWorkbenchFile = useAppStore((state) => state.openWorkbenchFile);
   const [openPanel, setOpenPanel] = useState<OpenPanel>(null);
   const stepsAnchor = useRef<HTMLButtonElement>(null);
   const changesAnchor = useRef<HTMLButtonElement>(null);
   const stepsSurface = useRef<HTMLDivElement>(null);
   const changesSurface = useRef<HTMLDivElement>(null);
+  const requestHint = compactInstruction(requestText);
 
   const steps = useMemo(
     () => sessionSummarySteps(liveSteps, planView, running),
@@ -66,12 +83,31 @@ export function SessionRunSummary({ taskId, runId, running, liveSteps, planView,
   const dismiss = useCallback(() => setOpenPanel(null), []);
   const currentStep = currentStepNumber(steps);
   const completedSteps = steps.filter((step) => step.state === "completed").length;
+  const hasStatusAnchor = running && (Boolean(activityLabel?.trim()) || activeSubagents > 0);
 
-  if (steps.length === 0 && files.length === 0) return null;
+  if (steps.length === 0 && files.length === 0 && !hasStatusAnchor) return null;
 
   return (
     <div className="session-run-summary-slot" data-testid="session-run-summary">
       <div className={`session-run-summary${running ? " is-running" : " is-settled"}`}>
+        {steps.length === 0 && files.length === 0 && hasStatusAnchor && (
+          <div
+            className="session-run-summary-trigger status-trigger"
+            role="status"
+            aria-live="polite"
+            title={requestHint ?? undefined}
+          >
+            <span className="session-run-state" aria-hidden="true"><i /></span>
+            <span className="session-summary-long">
+              {activityLabel?.trim() || "运行中"}
+              {activeSubagents > 0 ? ` · ${activeSubagents} 个子代理` : ""}
+            </span>
+            <span className="session-summary-short" aria-hidden="true">
+              {activityLabel?.trim() || "运行中"}
+            </span>
+          </div>
+        )}
+
         {steps.length > 0 && (
           <button
             ref={stepsAnchor}
@@ -79,7 +115,7 @@ export function SessionRunSummary({ taskId, runId, running, liveSteps, planView,
             className="session-run-summary-trigger step-trigger"
             aria-expanded={openPanel === "steps"}
             aria-controls="session-step-popover"
-            title="查看当前任务步骤"
+            title={requestHint ?? "查看当前任务步骤"}
             onClick={() => setOpenPanel((current) => current === "steps" ? null : "steps")}
           >
             <span className="session-run-state" aria-hidden="true"><i /></span>
@@ -101,7 +137,7 @@ export function SessionRunSummary({ taskId, runId, running, liveSteps, planView,
             aria-expanded={openPanel === "changes"}
             aria-controls="session-change-popover"
             aria-busy={statsPending}
-            title="查看当前对话产生的文件变更"
+            title={requestHint ?? "查看当前对话产生的文件变更"}
             onClick={() => setOpenPanel((current) => current === "changes" ? null : "changes")}
           >
             {steps.length === 0 && <span className="session-run-state" aria-hidden="true"><i /></span>}
@@ -128,7 +164,7 @@ export function SessionRunSummary({ taskId, runId, running, liveSteps, planView,
           role="dialog"
           label="当前任务步骤"
           placement="up"
-          align="left"
+          align="center"
           gap={8}
           onDismiss={dismiss}
           onKeyDown={(event) => {

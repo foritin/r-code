@@ -22,7 +22,9 @@ pub(crate) struct QueuedPeerMessage {
 
 #[derive(Debug, Clone)]
 pub(crate) enum SendPeerMessageOutcome {
-    Queued(QueuedPeerMessage),
+    // QueuedPeerMessage 携带完整的 AgentEventScope，比 Duplicate 变体大一个数量级；
+    // 装箱避免每次匹配复制整个枚举。
+    Queued(Box<QueuedPeerMessage>),
     Duplicate {
         message_id: String,
         sender_agent_id: String,
@@ -319,7 +321,7 @@ impl DelegationTree {
             .expect("recipient checked above")
             .mailbox
             .push_back(queued.clone());
-        Ok(SendPeerMessageOutcome::Queued(queued))
+        Ok(SendPeerMessageOutcome::Queued(Box::new(queued)))
     }
 
     pub(crate) fn drain(&self, recipient_agent_id: &str) -> Result<Vec<QueuedPeerMessage>, String> {
@@ -458,11 +460,10 @@ mod tests {
                 "{error}"
             );
         }
-        assert!(
-            tree.send("child-a", "other-tree", "cross-tree", "no")
-                .unwrap_err()
-                .contains("跨树")
-        );
+        assert!(tree
+            .send("child-a", "other-tree", "cross-tree", "no")
+            .unwrap_err()
+            .contains("跨树"));
     }
 
     #[test]
@@ -495,36 +496,31 @@ mod tests {
             tree.send("root", "child-a", &format!("m-{index}"), "x")
                 .unwrap();
         }
-        assert!(
-            tree.send("root", "child-a", "overflow", "x")
-                .unwrap_err()
-                .contains("背压")
-        );
+        assert!(tree
+            .send("root", "child-a", "overflow", "x")
+            .unwrap_err()
+            .contains("背压"));
         tree.drain("child-a").unwrap();
-        assert!(
-            tree.send(
+        assert!(tree
+            .send(
                 "root",
                 "child-a",
                 "too-long",
                 &"x".repeat(MAX_PEER_MESSAGE_CHARS + 1),
             )
             .unwrap_err()
-            .contains("character limit")
-        );
-        assert!(
-            tree.send("root", "child-a", "nul-content", "bad\0payload")
-                .unwrap_err()
-                .contains("control character")
-        );
-        assert!(
-            tree.send("root", "child-a", "bad\nmessage-id", "content")
-                .unwrap_err()
-                .contains("control character")
-        );
-        assert!(
-            tree.send("root", "child-a", "multiline-ok", "line 1\nline 2\tvalue")
-                .is_ok()
-        );
+            .contains("character limit"));
+        assert!(tree
+            .send("root", "child-a", "nul-content", "bad\0payload")
+            .unwrap_err()
+            .contains("control character"));
+        assert!(tree
+            .send("root", "child-a", "bad\nmessage-id", "content")
+            .unwrap_err()
+            .contains("control character"));
+        assert!(tree
+            .send("root", "child-a", "multiline-ok", "line 1\nline 2\tvalue")
+            .is_ok());
     }
 
     #[test]
@@ -532,17 +528,15 @@ mod tests {
         let tree = fixture();
         tree.register_child(scope("codex", Some("root"), false), false)
             .unwrap();
-        assert!(
-            tree.send("root", "codex", "leaf", "no")
-                .unwrap_err()
-                .contains("叶节点")
-        );
+        assert!(tree
+            .send("root", "codex", "leaf", "no")
+            .unwrap_err()
+            .contains("叶节点"));
         tree.mark_terminal("child-a", SubagentState::Completed);
-        assert!(
-            tree.send("root", "child-a", "terminal", "no")
-                .unwrap_err()
-                .contains("已经结束")
-        );
+        assert!(tree
+            .send("root", "child-a", "terminal", "no")
+            .unwrap_err()
+            .contains("已经结束"));
     }
 
     #[test]

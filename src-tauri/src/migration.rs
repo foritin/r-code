@@ -563,6 +563,35 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 27,
+            to_version: 28,
+            description: "Agent-authored memory entries with run and task provenance".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 28,
+            to_version: 29,
+            description: "Durable attachments for messages queued during active runs".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 29,
+            to_version: 30,
+            description: "Agent-mode scope decisions with deterministic mode restoration"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 30,
+            to_version: 31,
+            description: "Long-task guard trips and green-test git checkpoints".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
@@ -617,6 +646,30 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let _ = Connection::open(&db_path).unwrap();
         (dir, db_path)
+    }
+
+    fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+        let sql = format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1");
+        conn.query_row(&sql, [column], |row| row.get::<_, i64>(0))
+            .unwrap()
+            > 0
+    }
+
+    fn downgrade_latest_schema_to_previous(conn: &Connection) {
+        conn.execute_batch(
+            "ALTER TABLE agent_runs DROP COLUMN checkpoint_base_head;
+             ALTER TABLE agent_runs DROP COLUMN checkpoint_sha;
+             ALTER TABLE agent_runs DROP COLUMN guard_trip;",
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM schema_version WHERE version = ?",
+            [TARGET_VERSION],
+        )
+        .unwrap();
+        assert!(!column_exists(conn, "agent_runs", "checkpoint_base_head"));
+        assert!(!column_exists(conn, "agent_runs", "checkpoint_sha"));
+        assert!(!column_exists(conn, "agent_runs", "guard_trip"));
     }
 
     // ── current_version / needs_migration ─────────────────────────
@@ -731,17 +784,11 @@ mod tests {
         let mgr = MigrationManager::new(db_path.clone());
         mgr.migrate().await.unwrap();
 
-        // Restore a coherent previous-version fixture before injecting the next migration failure.
-        // The failing runner writes a marker, letting us prove the whole database is replaced by
-        // the pre-migration snapshot rather than merely reporting an error.
+        // Restore a coherent v29 fixture before injecting the next migration failure. The failing
+        // runner writes a marker, letting us prove the whole database is replaced by the
+        // pre-migration snapshot rather than merely reporting an error.
         let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("DROP TABLE plan_tool_receipts;")
-            .unwrap();
-        conn.execute(
-            "DELETE FROM schema_version WHERE version = ?",
-            [TARGET_VERSION],
-        )
-        .unwrap();
+        downgrade_latest_schema_to_previous(&conn);
         drop(conn);
 
         let error = mgr
@@ -769,17 +816,21 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        let receipt_table_exists: i64 = restored
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name = 'plan_tool_receipts'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
         assert_eq!(marker_exists, 0);
         assert_eq!(restored_version, i64::from(TARGET_VERSION - 1));
-        assert_eq!(receipt_table_exists, 0);
+        assert!(column_exists(&restored, "plan_question_sets", "kind"));
+        assert!(column_exists(
+            &restored,
+            "plan_question_sets",
+            "restore_mode"
+        ));
+        assert!(!column_exists(&restored, "agent_runs", "guard_trip"));
+        assert!(!column_exists(&restored, "agent_runs", "checkpoint_sha"));
+        assert!(!column_exists(
+            &restored,
+            "agent_runs",
+            "checkpoint_base_head"
+        ));
     }
 
     #[tokio::test]
@@ -788,16 +839,11 @@ mod tests {
         let mgr = MigrationManager::new(db_path.clone());
         mgr.migrate().await.unwrap();
 
-        // Recreate the exact v26 boundary that exposed the startup regression: the store has
-        // a v27 migration, while the desktop migration metadata used to stop at v26.
+        // Recreate the exact previous-version boundary. This must remove both the version marker
+        // and the v30 columns; changing only schema_version would create an impossible fixture and
+        // make the additive migration fail with duplicate-column errors.
         let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("DROP TABLE plan_tool_receipts;")
-            .unwrap();
-        conn.execute(
-            "DELETE FROM schema_version WHERE version = ?",
-            [TARGET_VERSION],
-        )
-        .unwrap();
+        downgrade_latest_schema_to_previous(&conn);
         drop(conn);
 
         assert_eq!(mgr.current_version().unwrap(), TARGET_VERSION - 1);
@@ -813,15 +859,11 @@ mod tests {
         assert_eq!(mgr.current_version().unwrap(), TARGET_VERSION);
 
         let conn = Connection::open(&db_path).unwrap();
-        let receipt_table_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name = 'plan_tool_receipts'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(receipt_table_exists, 1);
+        assert!(column_exists(&conn, "plan_question_sets", "kind"));
+        assert!(column_exists(&conn, "plan_question_sets", "restore_mode"));
+        assert!(column_exists(&conn, "agent_runs", "guard_trip"));
+        assert!(column_exists(&conn, "agent_runs", "checkpoint_sha"));
+        assert!(column_exists(&conn, "agent_runs", "checkpoint_base_head"));
     }
 
     #[tokio::test]

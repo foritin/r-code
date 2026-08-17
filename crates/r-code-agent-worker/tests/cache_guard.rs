@@ -23,13 +23,13 @@
 
 use std::sync::Mutex;
 
-use async_trait::async_trait;
-use futures::stream::BoxStream;
 use agent_contract::{
     Capabilities, CompletionRequest, CompletionResponse, LlmProvider, Message, StopReason,
     StreamEvent, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
 };
 use agent_error::{Error, Result};
+use async_trait::async_trait;
+use futures::stream::BoxStream;
 use r_code_agent_worker::cache_shape::{capture, compare, CacheChangeCause};
 use r_code_agent_worker::run_agent_loop_iteration;
 use r_code_core::dto::AgentEvent;

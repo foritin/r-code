@@ -41,7 +41,9 @@ test("Agent exposes fixed MCP search and confirmation-preparation tools", () => 
   assert.match(runtime, /"mcp_create_draft"/);
   assert.match(runtime, /`mcp_save_draft`/);
   assert.match(workflowSkills, /"mcp-creator"/);
-  assert.match(workflowSkills, /不得启动服务、执行(?: MCP )?握手、tools\/list、注册、启用/);
+  assert.match(workflowSkills, /只在 transport 中声明环境变量名/);
+  assert.match(workflowSkills, /点“配置”输入变量值/);
+  assert.match(workflowSkills, /不得启动、测试、注册或启用服务/);
 });
 
 test("conversation confirmation cards are bound to exact MCP tools and host-issued tokens", () => {

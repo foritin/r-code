@@ -218,8 +218,14 @@ test("the same send strategy stays on Home and idle follow-ups while idle sends 
   await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
   const roomComposer = page.getByRole("textbox", { name: "给 Agent 的消息" });
   const roomModeSwitch = page.locator(".scene-room .run-send-mode-label");
-  await roomModeSwitch.waitFor({ state: "visible" });
-  assert.match(await roomModeSwitch.innerText(), /引导/, "the selected strategy should follow the user into the task");
+  // 空闲时三种模式都退化为立即发送，room 的策略切换器隐藏（Home 仍可切换）；
+  // 策略本身经 localStorage 保留，下次运行开始时直接生效。
+  assert.equal(await roomModeSwitch.count(), 0, "an idle room hides the strategy switcher");
+  assert.match(
+    await page.evaluate(() => window.localStorage.getItem("r-code:agent-send-mode")),
+    /steer/,
+    "the selected strategy persists for the next run",
+  );
 
   await roomComposer.fill("回答结束后继续追问");
   await page.locator(".scene-room .composer-primary-button").click();

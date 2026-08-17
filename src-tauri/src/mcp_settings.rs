@@ -7,8 +7,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use async_trait::async_trait;
 use agent_config::{Config, ServerSpec};
+use async_trait::async_trait;
 use r_code_core::error::ProductError;
 #[cfg(target_os = "macos")]
 use r_code_core::secret::EncryptedFileSecretStore;

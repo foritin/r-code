@@ -15,7 +15,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlight } from "../../lib/highlight";
 import { COPIED_RESET_MS, copyText } from "../../lib/clipboard";
-import { displayPathsInText, toolVerb } from "../../lib/format";
+import { displayPathsInText, toolDisplayName, toolVerb, type ToolDisplayLanguage } from "../../lib/format";
 import { mcpMarketInstall, mcpToggle } from "../../lib/ipc";
 import type { McpLaunchPreview, McpMarketInstallRequest } from "../../lib/types";
 import { useAppStore } from "../../store/app";
@@ -35,6 +35,8 @@ export interface ToolCardProps {
   dim?: string;
   /** 相对会话起点秒数（data-t）。 */
   t: number;
+  /** 用户对话语言；决定内部工具名映射成中文还是英文。 */
+  language?: ToolDisplayLanguage;
 }
 
 export const ToolCard = memo(function ToolCard({
@@ -46,6 +48,7 @@ export const ToolCard = memo(function ToolCard({
   outputJson,
   dim = "",
   t,
+  language = "zh",
 }: ToolCardProps) {
   const hasMcpConfirmation = hasMcpConfirmationPayload(name, outputJson);
   const hasMcpSettingsAction = hasMcpSettingsActionPayload(name, outputJson);
@@ -53,6 +56,7 @@ export const ToolCard = memo(function ToolCard({
   // 判据必须与 formatToolPayload 一致（它对纯空白返回 null），
   // 否则会出现「按钮可展开、展开后写着没有载荷」。
   const hasPayload = Boolean(inputJson?.trim() || outputJson?.trim());
+  const displayTarget = target || toolDisplayName(name, language);
 
   // Agent 只负责准备精确方案，真正安装/启用必须由用户点击确认。结果通常在工具
   // 从 active 变为 ok 时才到达，因此不能只依赖 useState 的首次初始化。
@@ -88,7 +92,7 @@ export const ToolCard = memo(function ToolCard({
           </span>
         )}
         <span className="verb">{toolVerb(name)}</span>
-        <span className="target">{target || name}</span>
+        <span className="target">{displayTarget}</span>
         {state === "ok" && <span className="ok">✓ {summary}</span>}
         {state === "fail" && <span className="fail">✗ {summary}</span>}
         {hasPayload && <span className="sr-only">{open ? "收起详情" : "展开详情"}</span>}

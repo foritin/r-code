@@ -11,7 +11,7 @@
 fn dual_end_test_rules_verified() {
     // Verify contract-lock.json exists and has correct structure
     let lock_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/agent-core/contract-lock.json");
+        .join("../../vendor/agent-contracts/contract-lock.json");
     assert!(lock_path.exists(), "contract-lock.json must exist");
 
     let content = std::fs::read_to_string(&lock_path).unwrap();

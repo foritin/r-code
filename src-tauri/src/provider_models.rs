@@ -307,6 +307,12 @@ fn parse_model_ids(value: &Value) -> Vec<String> {
     items
         .iter()
         .filter_map(|item| {
+            if matches!(
+                item.get("status").and_then(Value::as_str),
+                Some("Shutdown" | "Retiring")
+            ) {
+                return None;
+            }
             item.as_str().or_else(|| {
                 item.get("id")
                     .or_else(|| item.get("name"))
@@ -374,6 +380,21 @@ mod tests {
         assert_eq!(
             parse_model_ids(&json!({"models": ["one", {"name": "two"}, "one"]})),
             vec!["one", "two"]
+        );
+    }
+
+    #[test]
+    fn model_parser_filters_shutdown_and_retiring_ark_entries() {
+        assert_eq!(
+            parse_model_ids(&json!({
+                "data": [
+                    {"id": "active-model", "status": "Active"},
+                    {"id": "shutdown-model", "status": "Shutdown"},
+                    {"id": "retiring-model", "status": "Retiring"},
+                    {"id": "legacy-model"}
+                ]
+            })),
+            vec!["active-model", "legacy-model"]
         );
     }
 

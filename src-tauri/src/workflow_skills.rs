@@ -472,7 +472,7 @@ fn builtins() -> Vec<WorkflowSkill> {
         builtin(
             "mcp-creator",
             "优先通过 mcp_save_draft 保存已有 MCP 的禁用直连配置；确需自研时再离线验证并导入用户数据目录。",
-            "当用户要求接入、创建或修改 MCP Server 时使用。先识别本机操作系统并检查已有 HTTP endpoint、原生可执行文件和已保存配置；已有服务能够用 stdio 或 streamable HTTP 直连时，优先新增或修改配置，不创建桥接服务。明文 HTTP 只使用显式 127.0.0.1、localhost 或 [::1] 回环地址；Windows stdio 使用原生可执行文件与 UTF-8 JSON-RPC 管道，不生成依赖 GBK 文本模式的桥。只有确实没有可复用实现时才自研：确定最小工具集、Schema、只读/写入边界、传输与凭据环境变量；优先官方 MCP SDK，默认最小权限，不把密钥写入源码、参数、日志或草稿。补充错误处理、分层超时、输出限额与单元测试；可以编译、静态检查和运行不启动服务的测试，但不得启动服务、执行握手、tools/list、注册、启用或持久运行进程。验证成功后，将新源码写入工作区专用的 `.r-code-mcp-staging/<server_id>` 暂存目录，并创建内容严格为 `r-code-mcp-staging-v1\\nserver_id=<server_id>\\n` 的 `.r-code-mcp-staging-v1` 标记；再调用 mcp_create_draft，传入该 source_path、唯一 server_id、精确启动配置与 cleanup_source_after_import=true。工具会把源码原子导入 R-Code 的 AppData/Application Support 托管目录、改写本地启动路径，并且仅在目录结构、显式清理开关和标记全部匹配时清理专用暂存副本；已有项目源码必须传 cleanup_source_after_import=false，绝不删除。不得调用 mcp_prepare_enable，也不得声称服务已经运行。只有工具返回 status=draft_created 才能宣告草稿创建成功；最后明确告知用户服务仍为关闭状态，引导其前往“设置 → 工具与连接”审核配置、凭据并亲自打开滑钮。更新已有服务优先修改原配置；只有新的自研实现才使用新的唯一草稿 ID。",
+            "当用户要求接入、创建或修改 MCP Server 时使用。先检查是否已有可复用的 HTTP endpoint、原生可执行文件或已保存配置：有则优先用 mcp_save_draft 保存为禁用草稿，不创建桥接服务。确需自研时才生成最小实现：确定工具集、Schema、只读/写入边界与传输方式，优先官方 MCP SDK；需要凭据时只在 transport 中声明环境变量名（stdio 用 environment_names，HTTP 用 header_names），绝不写入、索要或携带密钥值。验证只做不启动服务的构建/测试；把新源码放入 `.r-code-mcp-staging/<server_id>` 暂存目录并创建内容严格为 `r-code-mcp-staging-v1\\nserver_id=<server_id>\\n` 的 `.r-code-mcp-staging-v1` 标记，再调用 mcp_create_draft：source_path 传绝对路径（MCP 是全局配置，不绑定工作区），仅该专用暂存副本传 cleanup_source_after_import=true。工具只创建禁用草稿，不得启动、测试、注册或启用服务；成功后告知用户前往“设置 → 工具与连接”审核，需要凭据时点“配置”输入变量值，并亲自打开滑钮。更新已有服务优先修改原配置。",
         ),
         builtin(
             "review-changes",

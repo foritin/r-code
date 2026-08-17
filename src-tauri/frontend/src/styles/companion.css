@@ -635,17 +635,28 @@
 }
 
 .companion-session-dot {
+  box-sizing: border-box;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #78878a;
-  box-shadow: 0 0 0 4px rgba(120, 135, 138, 0.1);
+  background: transparent;
+  box-shadow: none;
 }
 
-.companion-session-row.state-working .companion-session-dot { background: #49d6cb; box-shadow: 0 0 10px rgba(73, 214, 203, .72); }
-.companion-session-row.state-attention .companion-session-dot { background: #ffb444; box-shadow: 0 0 10px rgba(255, 180, 68, .65); }
-.companion-session-row.state-review .companion-session-dot { background: #8be68c; box-shadow: 0 0 10px rgba(139, 230, 140, .58); }
-.companion-session-row.state-error .companion-session-dot { background: #ef5965; box-shadow: 0 0 10px rgba(239, 89, 101, .62); }
+.companion-session-dot.is-done {
+  background: #46c98a;
+  box-shadow: 0 0 10px rgba(70, 201, 138, 0.42);
+}
+
+.companion-session-dot.is-loading {
+  border: 2px solid rgba(104, 221, 213, 0.26);
+  border-top-color: #68ddd5;
+  animation: companionSessionSpinner 0.8s linear infinite;
+}
+
+@keyframes companionSessionSpinner {
+  to { transform: rotate(360deg); }
+}
 
 .companion-session-copy { min-width: 0; }
 .companion-session-copy strong,
@@ -812,6 +823,7 @@
 .companion-window-root.motion-reduced .companion-frame-layer,
 .companion-window-root.motion-reduced .companion-aura,
 .companion-window-root.motion-reduced .companion-unread-badge,
+.companion-window-root.motion-reduced .companion-session-dot.is-loading,
 .companion-window-root.motion-reduced .companion-session-card {
   animation: none !important;
 }
@@ -825,6 +837,7 @@
   .companion-window-root:not(.motion-full) .companion-frame-layer,
   .companion-window-root:not(.motion-full) .companion-aura,
   .companion-window-root:not(.motion-full) .companion-unread-badge,
+  .companion-window-root:not(.motion-full) .companion-session-dot.is-loading,
   .companion-window-root:not(.motion-full) .companion-session-card {
     animation: none !important;
   }

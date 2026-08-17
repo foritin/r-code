@@ -129,12 +129,13 @@ export function TimelineContextEvent({
   const generatedId = useId().replace(/:/g, "");
   const detailId = `timeline-context-${generatedId}`;
   const hasDetails = Boolean(detail?.trim());
+  const isReasoning = label === "模型思考" || label === "Codex 思考摘要";
 
   if (collapsible && hasDetails) {
     const preview = detail?.replace(/\s+/g, " ").trim() ?? "";
     return (
       <div
-        className={`timeline-context-event is-collapsible${open ? " open" : ""}${dim}`}
+        className={`timeline-context-event is-collapsible${isReasoning ? " is-reasoning" : ""}${open ? " open" : ""}${dim}`}
         data-t={t}
       >
         <TimelineTraceAnchor label={label} />

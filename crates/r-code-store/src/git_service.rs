@@ -433,6 +433,24 @@ impl GitService {
         }
     }
 
+    /// 解析任意 revision 为完整 SHA（例如 `HEAD` 或 `<checkpoint>^`）。
+    pub fn rev_parse(&self, spec: &str) -> Result<String, ProductError> {
+        let out = self.run_git(&["rev-parse", "--verify", spec])?;
+        let sha = out.trim();
+        if sha.is_empty() {
+            return Err(ProductError::GitError(format!(
+                "git rev-parse {spec} returned an empty value"
+            )));
+        }
+        Ok(sha.to_string())
+    }
+
+    /// 把仓库硬重置到指定 commit。调用方必须已经完成外部 HEAD 移动校验；
+    /// untracked 文件不受影响。
+    pub fn reset_hard(&self, target: &str) -> Result<(), ProductError> {
+        self.run_git(&["reset", "--hard", target]).map(|_| ())
+    }
+
     /// Snapshot the real Git index without reading or changing the worktree.
     pub fn index_snapshot(&self) -> Result<Option<String>, ProductError> {
         if !Self::detect(&self.repo_path)? {

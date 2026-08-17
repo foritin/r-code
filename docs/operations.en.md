@@ -1,6 +1,6 @@
 # R-Code operations guide
 
-This guide is for people installing, upgrading, backing up, restoring, or removing a released R-Code desktop application. It describes the current `0.x` data layout and is separate from the maintainer-facing [release guide](./RELEASING.md).
+This guide is for people installing, upgrading, backing up, restoring, or removing a released R-Code desktop application. It describes the current `0.x` data layout and is separate from the maintainer-facing [release guide](./releasing.md).
 
 ## Safety rules
 

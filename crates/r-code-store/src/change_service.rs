@@ -30,7 +30,7 @@ use crate::Database;
 
 /// Read an existing workspace file through a previously-created directory capability.
 ///
-/// `PathGuard::resolve` is deliberately not used as the final I/O primitive here: a
+/// `PathGuard::resolve_path` is deliberately not used as the final I/O primitive here: a
 /// replacement symlink between validation and `std::fs::read` would otherwise escape the
 /// workspace boundary. A missing file is a normal rollback state; all other guard errors stay
 /// fail-closed.
@@ -38,13 +38,13 @@ fn read_guarded_file_if_exists(
     guard: &PathGuard,
     path: &Path,
 ) -> Result<Option<Vec<u8>>, ProductError> {
-    let (_, mut file) = match guard.open_existing_file(path, WorkspaceFileAccess::Read) {
-        Ok(file) => file,
+    let mut handle = match guard.open_file(path, WorkspaceFileAccess::Read) {
+        Ok(handle) => handle,
         Err(ProductError::PathNotFound(_)) => return Ok(None),
         Err(error) => return Err(error),
     };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|error| {
+    handle.file_mut().read_to_end(&mut bytes).map_err(|error| {
         ProductError::RollbackError(format!(
             "failed to read guarded rollback target {}: {error}",
             path.display()
@@ -675,7 +675,7 @@ impl<'a> ChangeService<'a> {
                         "review snapshot blob is corrupted: {hash}"
                     )));
                 }
-                guard.atomic_write_file(physical_path, &content)?;
+                guard.atomic_write_path(physical_path, &content)?;
             }
             None => {
                 guard.remove_file_if_exists(physical_path)?;
@@ -877,12 +877,12 @@ impl<'a> ChangeService<'a> {
                 if *actual == baseline.content_hash {
                     Ok(RollbackResult::AlreadyClean { path: path_str })
                 } else {
-                    guard.atomic_write_file(physical_path, &baseline_content)?;
+                    guard.atomic_write_path(physical_path, &baseline_content)?;
                     Ok(RollbackResult::Restored { path: path_str })
                 }
             }
             (None, None) => {
-                guard.atomic_write_file(physical_path, &baseline_content)?;
+                guard.atomic_write_path(physical_path, &baseline_content)?;
                 Ok(RollbackResult::Restored { path: path_str })
             }
             (Some(expected), None) => Ok(RollbackResult::ConflictDetected {

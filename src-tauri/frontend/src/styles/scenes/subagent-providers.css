@@ -1,10 +1,8 @@
-.subagent-configuration-sheet {
-  gap: 18px;
-}
-
+/* 子代理候选池：只保留最外层 settings-sheet 这一个“面”，
+   内部分区用分隔线与留白表达，避免框套框。 */
 .subagent-providers-panel {
   display: grid;
-  gap: 14px;
+  gap: var(--sp-6);
 }
 
 .subagent-providers-heading,
@@ -13,7 +11,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-7);
 }
 
 .subagent-providers-heading h3,
@@ -22,157 +20,272 @@
   margin: 0;
 }
 
+.subagent-providers-heading h3,
+.subagent-pool-heading h4 {
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: var(--weight-strong);
+  line-height: var(--lh-tight);
+}
+
 .subagent-providers-heading .desc,
 .subagent-pool-heading p {
-  margin: 5px 0 0;
-  color: var(--fg-muted);
+  margin: var(--sp-2) 0 0;
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
 }
 
 .subagent-provider-actions,
 .subagent-pool-summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-4);
   flex: none;
 }
 
-.subagent-provider-boundary,
-.subagent-pool-empty {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-inset);
+/* 规则说明默认折叠成一行，展开后只是左侧强调线 + 文字，不做底卡。 */
+.subagent-provider-boundary {
   color: var(--fg-muted);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+}
+
+.subagent-provider-boundary > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  cursor: pointer;
+  list-style: none;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+}
+
+.subagent-provider-boundary > summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-provider-boundary > summary::before {
+  content: "ⓘ";
+  color: var(--fg-faint);
+}
+
+.subagent-provider-boundary > summary:hover {
+  color: var(--fg);
+}
+
+.subagent-provider-boundary > p {
+  margin: var(--sp-3) 0 0;
+  padding-left: var(--sp-5);
+  border-left: 2px solid var(--border-strong);
+  color: var(--fg-muted);
+}
+
+.subagent-source-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  padding-top: var(--sp-6);
+  border-top: 1px solid var(--border);
+}
+
+.subagent-source-heading h4 {
+  margin: 0;
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: var(--weight-strong);
+  line-height: var(--lh-tight);
+}
+
+.subagent-source-count {
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
 }
 
 .subagent-provider-catalog,
 .subagent-slot-list {
   display: grid;
-  gap: 9px;
 }
 
 .subagent-provider-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 14px;
-  padding: 12px 13px;
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: var(--bg-card);
+  gap: var(--sp-5);
+  padding: var(--sp-6) 0;
+  border-top: 1px solid var(--border);
+}
+
+/* 厂商图标 tile：统一浅底，保证纯黑 logo（OpenAI / Anthropic）在深色主题下可读。 */
+.provider-icon-tile {
+  display: grid;
+  place-items: center;
+  width: var(--sp-10);
+  height: var(--sp-10);
+  border-radius: var(--radius-sm);
+  background: #f2ede6;
+  overflow: hidden;
+  flex: none;
+}
+
+.provider-icon-tile img {
+  display: block;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  object-fit: contain;
+}
+
+.provider-icon-tile.is-fallback {
+  background: var(--bg-chip);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
 }
 
 .subagent-provider-copy {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: var(--sp-1);
 }
 
-.subagent-provider-copy small,
-.subagent-slot-capability {
-  color: var(--fg-muted);
-  font-size: 12px;
-  line-height: 1.45;
+.subagent-provider-copy small {
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
 }
 
 .subagent-provider-name,
-.subagent-slot-card header > div {
+.subagent-slot-card header > div:first-child {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
 .subagent-provider-model {
   overflow: hidden;
-  color: var(--fg);
+  color: var(--fg-muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.subagent-health {
+/* 状态：小圆点 + 平文字。颜色只是辅助，文字始终在。 */
+.subagent-status {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  gap: var(--sp-3);
   color: var(--fg-muted);
-  background: var(--bg-chip);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--text-sm);
+  line-height: var(--lh-tight);
   white-space: nowrap;
 }
 
-.subagent-health.is-connected {
-  border-color: var(--edge-success);
-  color: var(--success);
-  background: var(--tint-success);
+.subagent-status::before {
+  content: "";
+  width: var(--sp-3);
+  height: var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--fg-faint);
+  flex: none;
 }
 
-.subagent-health.is-failed {
-  border-color: var(--edge-danger);
-  color: var(--danger);
-  background: var(--tint-danger);
-}
-
-.subagent-health.is-stale {
-  border-color: var(--edge-warning);
-  color: var(--warning);
-  background: var(--tint-warning);
-}
+.subagent-status.is-connected { color: var(--success); }
+.subagent-status.is-connected::before { background: var(--success); }
+.subagent-status.is-failed { color: var(--danger); }
+.subagent-status.is-failed::before { background: var(--danger); }
+.subagent-status.is-stale { color: var(--warning); }
+.subagent-status.is-stale::before { background: var(--warning); }
 
 .subagent-pool-heading {
-  padding-top: 5px;
+  padding-top: var(--sp-6);
   border-top: 1px solid var(--border);
 }
 
 .subagent-pool-summary > span {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   white-space: nowrap;
 }
 
 .subagent-pool-summary > span.invalid {
   color: var(--danger);
-  font-weight: 650;
+  font-weight: var(--weight-strong);
 }
 
+/* 空候选池：引导新用户理解“槽位是什么”，而不是一行孤零零的提示。 */
+.subagent-pool-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-7);
+  margin-top: var(--sp-5);
+  padding: var(--sp-7);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+}
+
+.subagent-pool-empty-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.subagent-pool-empty-copy strong {
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+}
+
+.subagent-pool-empty-copy p {
+  margin: var(--sp-2) 0 0;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+}
+
+.subagent-pool-empty-hint {
+  color: var(--fg-faint);
+}
+
+/* 槽位是较重实体：只保留顶部分隔线，不套整圈边框/圆角/底色。 */
 .subagent-slot-card {
   display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-panel));
+  gap: var(--sp-5);
+  padding: var(--sp-6) 0 var(--sp-7);
+  border-top: 1px solid var(--border-strong);
 }
 
 .subagent-slot-card > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-6);
+}
+
+.subagent-slot-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
 }
 
 .subagent-slot-grid {
   display: grid;
-  grid-template-columns: minmax(160px, 1.2fr) minmax(150px, 1fr) minmax(92px, 0.45fr) auto;
+  grid-template-columns: minmax(160px, 1.4fr) minmax(150px, 1fr) minmax(150px, 0.7fr);
   align-items: end;
-  gap: 10px;
+  gap: var(--sp-5);
 }
 
 .subagent-slot-grid label,
 .subagent-template-field,
 .subagent-prompt-field {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-3);
   min-width: 0;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .subagent-slot-grid .input,
@@ -181,56 +294,112 @@
   width: 100%;
 }
 
+/* 权重：步进按钮 + 数字输入并存；数字输入保持 spinbutton 语义，可直接键入。 */
 .subagent-weight-input {
   display: grid;
-  grid-template-columns: minmax(62px, 1fr) auto;
+  grid-template-columns: var(--control-h-sm) minmax(62px, 1fr) var(--control-h-sm) auto;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
-.subagent-slot-test {
-  min-height: 36px;
-  white-space: nowrap;
+.subagent-weight-step {
+  display: grid;
+  place-items: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+
+.subagent-weight-step:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--edge-accent);
+}
+
+.subagent-weight-step:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 权重分布条：细线，仅在有槽位时出现。 */
+.subagent-weight-bar-wrap {
+  display: grid;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+}
+
+.subagent-weight-bar {
+  display: flex;
+  height: var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.subagent-weight-seg {
+  height: 100%;
+  transition: width var(--dur-3) var(--ease);
+}
+
+.subagent-weight-seg.seg-0 { background: var(--accent); }
+.subagent-weight-seg.seg-1 { background: var(--warning); }
+.subagent-weight-seg.seg-2 { background: var(--success); }
+
+.subagent-weight-hint {
+  margin: 0;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
 }
 
 .subagent-prompt-field > span {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-6);
 }
 
 .subagent-prompt-field textarea {
-  min-height: 92px;
+  min-height: calc(var(--sp-10) * 3);
   resize: vertical;
-  line-height: 1.55;
+  line-height: var(--lh-base);
 }
 
 .subagent-slot-capability {
   margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+}
+
+.subagent-pool-footer {
+  padding-top: var(--sp-6);
+  border-top: 1px solid var(--border);
 }
 
 .subagent-validation {
   flex: 1;
   min-width: 0;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .subagent-validation ul {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-2);
   margin: 0;
-  padding-left: 18px;
+  padding-left: var(--sp-7);
   color: var(--danger);
 }
 
 @media (max-width: 900px) {
   .subagent-slot-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .subagent-slot-test {
-    justify-self: start;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -238,15 +407,27 @@
   .subagent-providers-heading,
   .subagent-pool-heading,
   .subagent-pool-footer,
-  .subagent-provider-row {
-    grid-template-columns: 1fr;
+  .subagent-slot-card > header,
+  .subagent-pool-empty {
     flex-direction: column;
     align-items: stretch;
   }
 
   .subagent-provider-actions,
-  .subagent-pool-summary {
+  .subagent-pool-summary,
+  .subagent-slot-actions {
     flex-wrap: wrap;
+  }
+
+  .subagent-provider-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--sp-4);
+  }
+
+  .subagent-provider-row > .subagent-status,
+  .subagent-provider-row > .btn {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .subagent-slot-grid {

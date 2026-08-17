@@ -66,9 +66,49 @@ test("ready styling and radio checks reflect actual state", () => {
 });
 
 test("Kimi providers expose thinking and reasoning controls", () => {
-  assert.match(capabilities, /providerKind === "kimi" \|\| providerKind === "kimi_coding"/);
-  assert.match(capabilities, /thinking: \{ label: "思考模式", options: THINKING/);
+  assert.match(capabilities, /providerKind === "kimi_coding"/);
+  assert.match(capabilities, /providerKind === "kimi"/);
+  assert.match(capabilities, /options: \[\{ value: "enabled", label: "始终思考" \}\]/);
+  assert.match(capabilities, /effort\(\["low", "high", "max"\]\)/);
   assert.match(capabilities, /reasoning: effort\(\["low", "medium", "high"\]\)/);
+});
+
+test("Ark plan providers expose adaptive thinking and native effort", () => {
+  const coding = capabilitiesModule.capabilitiesFor(
+    { name: "ark_coding", kind: "ark_coding" },
+    "ark-code-latest",
+  );
+  assert.equal(coding.thinking.defaultValue, "adaptive");
+  assert.deepEqual(
+    coding.thinking.options.map(({ value }) => value),
+    ["adaptive", "enabled", "disabled"],
+  );
+  assert.deepEqual(
+    coding.reasoning.options.map(({ value }) => value),
+    ["minimal", "low", "medium", "high"],
+  );
+});
+
+test("Ark Responses exposes the probed native effort vocabulary", () => {
+  const codingResponses = capabilitiesModule.capabilitiesFor(
+    { name: "ark_coding_openai", kind: "ark_coding_openai", protocol: "openai_responses" },
+    "ark-code-latest",
+  );
+  assert.deepEqual(
+    codingResponses.reasoning.options.map(({ value }) => value),
+    ["low", "medium", "high", "xhigh", "max"],
+  );
+  assert.match(codingResponses.note, /不支持 none\/minimal/);
+});
+
+test("Ark pay-as-you-go keeps generic defaults instead of thinking controls", () => {
+  const payg = capabilitiesModule.capabilitiesFor(
+    { name: "ark", kind: "ark" },
+    "doubao-seed-2-1-pro",
+  );
+  assert.equal(payg.thinking, undefined);
+  assert.equal(payg.reasoning, undefined);
+  assert.match(payg.note, /未声明可调推理参数/);
 });
 
 test("DeepSeek exposes an adaptive local strategy and model-specific native effort levels", () => {

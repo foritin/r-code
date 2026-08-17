@@ -10,6 +10,7 @@ import {
   agentAbort,
   agentAbortSubagent,
   prepareWorkbenchWindow,
+  sessionMessages,
   taskChooseWorkspace,
   taskSetWorkspace,
   workspaceSetAccessMode,
@@ -20,7 +21,8 @@ import type { AgentEvent, AgentSendMode, ProjectAccessMode, SessionBranch } from
 import { Timeline, type TimelineHandle } from "../room/Timeline";
 import { Composer } from "../room/Composer";
 import { SessionRunSummary } from "../room/SessionRunSummary";
-import type { PlanStep } from "../room/model";
+import { SteerStack, type SteerStackItem } from "../room/SteerStack";
+import { latestRunRequestText, type PlanStep } from "../room/model";
 import { PendingPermissions } from "../room/Permissions";
 import { Canvas } from "../room/Canvas";
 import { TaskActionsMenu } from "../TaskActionsMenu";
@@ -131,6 +133,10 @@ export function RoomScene() {
   const [roomWidth, setRoomWidth] = useState(0);
   const [roomSplitPct, setRoomSplitPct] = useState(() => roomSplitRef.current);
   const [isSplitDragging, setIsSplitDragging] = useState(false);
+  const [pendingSteers, setPendingSteers] = useState<SteerStackItem[]>([]);
+  const [activeRunRequestText, setActiveRunRequestText] = useState<string | null>(null);
+  const steerSequence = useRef(0);
+  const steerInFlightRef = useRef<string | null>(null);
   const autoOpenedPlanSignals = useRef(new Set<string>());
   const {
     running,
@@ -179,6 +185,9 @@ export function RoomScene() {
   useEffect(() => {
     setHistoryBranchId(null);
     setLivePlanSteps([]);
+    setPendingSteers([]);
+    setActiveRunRequestText(null);
+    steerInFlightRef.current = null;
   }, [currentTaskId]);
 
   const observePlan = useCallback((steps: readonly PlanStep[]) => {
@@ -311,11 +320,22 @@ export function RoomScene() {
 
   const observeAgentEvent = useCallback((event: AgentEvent) => {
     dispatchActivity({ type: "event", event, at: Date.now() });
+    // 引导一旦被应用即从浮窗栈移除（最旧一条，FIFO）；运行结束时全量清空。
+    if (event.type === "activity" && event.phase === "steer_applied") {
+      setPendingSteers((current) => current.slice(1));
+    }
   }, []);
 
   const observeSend = useCallback((mode: AgentSendMode) => {
     dispatchActivity({ type: "sent", mode, at: Date.now() });
+    if (mode === "steer") {
+      steerInFlightRef.current = null;
+    }
   }, []);
+
+  useEffect(() => {
+    if (!running) setPendingSteers([]);
+  }, [running]);
 
   const updateRoomSplit = useCallback((raw: number, persist = false) => {
     const width = roomRef.current?.getBoundingClientRect().width ?? roomWidth;
@@ -555,7 +575,7 @@ export function RoomScene() {
             </>
           ) : (
             <>
-              <span>用户路径 · 仅聊天，无本地工具</span>
+              <span>用户路径（默认工作区）· 写操作需批准</span>
               {detail?.active_branch.id && detail.active_branch.id !== "main" && (
                 <span className="room-scope-state">编辑分支</span>
               )}
@@ -619,32 +639,60 @@ export function RoomScene() {
                 liveSteps={livePlanSteps}
                 planView={planController.view}
                 changes={activeRunChanges}
+                activityLabel={activity.phase === "idle" ? null : activity.label}
+                activeSubagents={activity.subagents.filter((child) =>
+                  child.status === "queued" || child.status === "running" || child.status === "waiting_permission"
+                ).length}
               />
             )}
-            <Composer
-              key={currentTaskId}
-              taskId={currentTaskId}
-              workspacePath={workspacePath}
-              workspaceAttached={workspaceAttached}
-              workspaceName={workspace?.display_name ?? null}
-              workspaceAccessMode={workspaceAccessMode}
-              onAccessModeChange={setWorkspaceAccessMode}
-              scopeBusy={scopeBusy}
-              providerName={task.provider_name ?? null}
-              agentEngine={task.agent_engine}
-              model={task.model ?? null}
-              inference={task.inference ?? {}}
-              providerChoices={providers.choices}
-              providerFallback={providers.fallback}
-              onProviderChanged={() => void refreshDetail(currentTaskId)}
-              running={running}
-              queuedMessages={queuedMessages}
-              onAbort={abortRun}
-              onSent={(text, mode, attachments) => tlRef.current?.onSent(text, mode, attachments)}
-              onSendFailed={() => tlRef.current?.reload()}
-              onActivitySent={observeSend}
-              onShowSubagents={showSubagentList}
-            />
+            <div className="room-composer-region">
+              <Composer
+                key={currentTaskId}
+                taskId={currentTaskId}
+                workspacePath={workspacePath}
+                workspaceAttached={workspaceAttached}
+                workspaceName={workspace?.display_name ?? null}
+                workspaceAccessMode={workspaceAccessMode}
+                onAccessModeChange={setWorkspaceAccessMode}
+                scopeBusy={scopeBusy}
+                providerName={task.provider_name ?? null}
+                agentEngine={task.agent_engine}
+                model={task.model ?? null}
+                inference={task.inference ?? {}}
+                providerChoices={providers.choices}
+                providerFallback={providers.fallback}
+                onProviderChanged={() => void refreshDetail(currentTaskId)}
+                running={running}
+                queuedMessages={queuedMessages}
+                onAbort={abortRun}
+                onSent={(text, mode, attachments) => {
+                  if (mode === "steer") {
+                    steerSequence.current += 1;
+                    const id = `steer-${Date.now().toString(36)}-${steerSequence.current}`;
+                    steerInFlightRef.current = id;
+                    setPendingSteers((current) => [...current, {
+                      id,
+                      text: text.trim() || "（无文本引导）",
+                    }]);
+                    tlRef.current?.onSent(text, "steer", attachments);
+                    return;
+                  }
+                  steerInFlightRef.current = null;
+                  tlRef.current?.onSent(text, mode, attachments);
+                }}
+                onSendFailed={() => {
+                  const inFlightId = steerInFlightRef.current;
+                  if (inFlightId) {
+                    setPendingSteers((current) => current.filter((item) => item.id !== inFlightId));
+                    steerInFlightRef.current = null;
+                  }
+                  tlRef.current?.reload();
+                }}
+                onActivitySent={observeSend}
+                onShowSubagents={showSubagentList}
+              />
+              <SteerStack items={pendingSteers} />
+            </div>
           </>
         )}
       </div>

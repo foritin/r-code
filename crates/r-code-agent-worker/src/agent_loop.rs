@@ -19,11 +19,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use futures::StreamExt;
 use agent_contract::{
     CompletionRequest, ContentBlock, LlmProvider, Message, Role, StreamEvent, ToolHost, ToolSpec,
     Usage,
 };
+use futures::StreamExt;
 use r_code_core::dto::AgentEvent;
 use r_code_core::error::ProductError;
 
@@ -305,8 +305,15 @@ fn tool_outcome_exit_code(outcome: &agent_contract::ToolCallOutcome) -> Option<i
 
 /// 把一次真实工具执行转换为宿主侧护栏观察值。错误码与退出码都由宿主从结果
 /// 内容/元数据推导，模型无法在 ToolResult 之外伪造这些信号。
-fn tool_observation(call: &PendingToolCall, outcome: &agent_contract::ToolCallOutcome) -> ToolObservation {
-    let snippet: String = outcome.content.chars().take(OBSERVATION_SNIPPET_CHARS).collect();
+fn tool_observation(
+    call: &PendingToolCall,
+    outcome: &agent_contract::ToolCallOutcome,
+) -> ToolObservation {
+    let snippet: String = outcome
+        .content
+        .chars()
+        .take(OBSERVATION_SNIPPET_CHARS)
+        .collect();
     ToolObservation {
         name: call.name.clone(),
         input: call.input.clone(),
@@ -710,6 +717,7 @@ pub async fn run_agent_loop_iteration_with_abort(
 ///
 /// `event_tx` 的接收端由 runtime 的 `poll_events()` 排空。发送失败只代表 runtime
 /// 已被销毁，不应让已开始的 provider 请求因此崩溃。
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop_iteration_streaming_with_abort(
     provider: &dyn LlmProvider,
     tool_host: &dyn ToolHost,
@@ -826,6 +834,9 @@ where
         // 的能力声明决定，其余 provider 保持不落历史。
         let preserve_plaintext_reasoning = provider.echoes_reasoning();
         let mut replay_reasoning = String::new();
+        // DeepSeek V4 工具调用轮次可能返回空 reasoning_text。空内容不上屏，但仍需
+        // 记住“本轮产生过 reasoning item”，下一轮才能回传空 item（否则 400）。
+        let mut saw_plaintext_reasoning = false;
         let mut streaming_started = false;
         // A provider response has one forward-only visible phase: private reasoning may precede
         // the answer, but it must never resume after answer text has started. Some compatible
@@ -906,6 +917,9 @@ where
             match ev {
                 StreamEvent::ReasoningDelta { text } => {
                     if text.is_empty() {
+                        if preserve_plaintext_reasoning {
+                            saw_plaintext_reasoning = true;
+                        }
                         continue;
                     }
                     if !streaming_started {
@@ -920,6 +934,7 @@ where
                     reasoning_chars = reasoning_chars.saturating_add(text.chars().count());
                     if preserve_plaintext_reasoning {
                         replay_reasoning.push_str(&text);
+                        saw_plaintext_reasoning = true;
                     }
                     if !answer_started {
                         emit(AgentEvent::Reasoning { text, delta: true });
@@ -1140,6 +1155,10 @@ where
                 || !tool_calls.is_empty();
             // 空流 + 无工具 + 无空闲超时：多为线路/代理瞬断。用冻结请求指数退避
             // 重放（仅在**完全无输出**时安全），耗尽后才把空响应提升为终态错误。
+            // MAX_EMPTY_RESPONSE_RECOVERIES=0 时按策略不可达：空最终轮的恢复统一由
+            // 运行时层的“无工具最终总结恢复”处理（主 run_loop 与原生子代理循环均
+            // 已实现）；保留重放脚手架以便未来重新启用，故对恒假比较显式豁免。
+            #[allow(clippy::absurd_extreme_comparisons)]
             if !has_output && empty_response_recoveries < MAX_EMPTY_RESPONSE_RECOVERIES {
                 empty_response_recoveries += 1;
                 let delay = Duration::from_millis(
@@ -1197,7 +1216,12 @@ where
         // 回传方言：把本轮明文 reasoning 作为 Thinking 块插入 assistant 消息最前面，
         // 下一轮由协议适配器映射为 reasoning_content（Chat）或 thinking 块
         // （Anthropic）。EncryptedReplay 依赖 signature 块，无法从 delta 重建。
-        if preserve_plaintext_reasoning && !replay_reasoning.is_empty() {
+        // 空 reasoning 也要插入（DeepSeek V4 要求原样回传空 reasoning_text）；仅当
+        // 本轮有可回传的产物（文本/工具等）时才携带，纯空 reasoning 轮仍按空响应处理。
+        if preserve_plaintext_reasoning
+            && (saw_plaintext_reasoning || !replay_reasoning.is_empty())
+            && !assistant_blocks.is_empty()
+        {
             assistant_blocks.insert(
                 0,
                 ContentBlock::Thinking {
@@ -1360,29 +1384,72 @@ fn map_agent_err(err: agent_error::Error) -> ProductError {
 #[cfg(test)]
 mod tests {
     use super::STREAM_IDLE_TIMEOUT_REASON;
-    use async_trait::async_trait;
     use agent_contract::{
         Capabilities, CompletionRequest, CompletionResponse, ContentBlock, LlmProvider, Message,
         Role, StopReason, StreamEvent, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
     };
     use agent_error::{Error, Result};
     use agent_llm::{MockProvider, RecordedTurn};
+    use async_trait::async_trait;
     use r_code_core::dto::AgentEvent;
     use std::sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
     };
     use std::time::Duration;
 
     use super::{
-        EditRetryGuard, OBSERVATION_SNIPPET_CHARS, PendingToolCall, TOOL_NO_COMPLETION_TIMEOUT,
-        edit_intent,
-        normalized_tool_path, ordinary_tool_watchdog, repair_dangling_tool_uses,
+        edit_intent, normalized_tool_path, ordinary_tool_watchdog, repair_dangling_tool_uses,
         run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
         run_agent_loop_iteration_with_abort_and_emit,
-        run_agent_loop_iteration_with_abort_and_emit_with_retry_guard,
-        tool_observation, tool_outcome_exit_code,
+        run_agent_loop_iteration_with_abort_and_emit_with_retry_guard, tool_observation,
+        tool_outcome_exit_code, EditRetryGuard, PendingToolCall, OBSERVATION_SNIPPET_CHARS,
+        TOOL_NO_COMPLETION_TIMEOUT,
     };
+
+    /// 包装 `MockProvider`，声明需要回传明文 reasoning（DeepSeek Responses 语义）。
+    struct ReasoningEchoProvider {
+        inner: MockProvider,
+    }
+
+    impl ReasoningEchoProvider {
+        fn new(name: &str) -> Self {
+            Self {
+                inner: MockProvider::new(name),
+            }
+        }
+
+        fn push_turn(&self, turn: RecordedTurn) -> &Self {
+            self.inner.push_turn(turn);
+            self
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for ReasoningEchoProvider {
+        async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+            self.inner.complete(request).await
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<futures::stream::BoxStream<'static, StreamEvent>> {
+            self.inner.stream(request).await
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+
+        fn echoes_reasoning(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+    }
 
     fn edit_call(id: &str, old_string: &str) -> PendingToolCall {
         PendingToolCall {
@@ -2281,6 +2348,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_reasoning_is_still_replayed_for_a_tool_call_turn() {
+        // DeepSeek V4 工具调用轮次可能返回空 reasoning_text。空内容不上屏，但
+        // 必须作为空 Thinking 块写进 assistant 历史，下一轮才会回传空 reasoning
+        // item，否则服务端 400（"must be passed back to the API"）。
+        let provider = ReasoningEchoProvider::new("deepseek_responses");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ReasoningDelta {
+                text: String::new(),
+            },
+            StreamEvent::ToolUseStart {
+                id: "call_1".to_string(),
+                name: "noop".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "call_1".to_string(),
+                input: serde_json::json!({}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("noop");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("run noop")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.had_tool_call);
+        // 空 reasoning 不产生用户可见的 Reasoning 事件。
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Reasoning { .. })));
+        // assistant 历史：空 Thinking 块在最前，后面跟着本轮工具调用。
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(
+            &messages[1].content[..],
+            [
+                ContentBlock::Thinking {
+                    thinking,
+                    signature: None,
+                },
+                ContentBlock::ToolUse { id, .. },
+            ] if thinking.is_empty() && id == "call_1"
+        ));
+    }
+
+    #[tokio::test]
     async fn provider_hosted_tool_is_observed_but_never_executed_locally() {
         let provider = MockProvider::new("mock");
         provider.push_turn(RecordedTurn::ok(vec![
@@ -2626,12 +2752,10 @@ mod tests {
         assert_eq!(outcome.tool_metadata.len(), 1);
         assert_eq!(outcome.tool_metadata[0].tool_name, "plan_item_update");
         assert_eq!(outcome.tool_metadata[0].metadata, metadata);
-        assert!(
-            messages[2]
-                .content
-                .iter()
-                .any(|block| block.is_tool_result())
-        );
+        assert!(messages[2]
+            .content
+            .iter()
+            .any(|block| block.is_tool_result()));
     }
 
     #[tokio::test]
@@ -3119,11 +3243,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(messages.last().unwrap().text_content(), "recovered");
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, AgentEvent::StreamReplay { attempt: 1 }))
-        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::StreamReplay { attempt: 1 })));
     }
 
     #[tokio::test]
@@ -3304,11 +3426,9 @@ mod tests {
 
         assert!(!outcome.had_tool_call);
         // 重放成功：最终消息只含一轮文本，无重复产出。
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "recovered"))
-        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "recovered")));
         let assistant_text = messages
             .iter()
             .filter(|m| m.role == Role::Assistant)
@@ -3362,11 +3482,9 @@ mod tests {
 
         assert!(!outcome.had_tool_call);
         // 只消费了一轮（mock 无剩余轮次也不报错：重放被跳过）。
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "partial"))
-        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "partial")));
         let assistant_text = messages
             .iter()
             .filter(|m| m.role == Role::Assistant)
@@ -3476,11 +3594,9 @@ mod tests {
         .unwrap();
 
         assert!(!outcome.had_tool_call);
-        assert!(
-            !events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::StreamReplay { .. }))
-        );
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::StreamReplay { .. })));
     }
 
     /// 判断 ToolResult 是否为修复合成的 cancelled 结果（内容为
@@ -3539,12 +3655,10 @@ mod tests {
         )));
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[2].role, Role::User);
-        assert!(
-            messages[2]
-                .content
-                .iter()
-                .any(|block| block.is_tool_result())
-        );
+        assert!(messages[2]
+            .content
+            .iter()
+            .any(|block| block.is_tool_result()));
     }
 
     #[tokio::test]
@@ -3812,6 +3926,9 @@ mod tests {
             metadata: None,
         };
         let observation = tool_observation(&call, &outcome);
-        assert_eq!(observation.output_snippet.chars().count(), OBSERVATION_SNIPPET_CHARS);
+        assert_eq!(
+            observation.output_snippet.chars().count(),
+            OBSERVATION_SNIPPET_CHARS
+        );
     }
 }

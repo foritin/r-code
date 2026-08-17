@@ -13,7 +13,7 @@ use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
     SessionBranch, Task, TaskMode, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
-use r_code_core::error::{PROJECT_CONVERSATION_LIMIT_REACHED_CODE, ProductError};
+use r_code_core::error::{ProductError, PROJECT_CONVERSATION_LIMIT_REACHED_CODE};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };

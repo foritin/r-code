@@ -308,8 +308,10 @@ export function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
   let sectionSequence = 0;
   for (const item of items) {
     let children = root;
+    // The outline numbers every level automatically; legacy plans may carry numeric-only
+    // labels ("1", "2"…) that would render as a duplicated number instead of a section title.
     const path: string[] = Array.isArray(item.section_path)
-      ? item.section_path.map((segment) => segment.trim()).filter(Boolean)
+      ? item.section_path.map((segment) => segment.trim()).filter((segment) => segment && !/^\d+$/.test(segment))
       : [];
     const keyPath: string[] = [];
     for (const segment of path) {
@@ -661,9 +663,10 @@ export function PlanPanel({
             <span>同步修订 · {view.plan.projection_revision ?? "—"}</span>
           </div>
 
-          {view.goal.goal && (
-            <p className="plan-goal"><span>目标</span>{view.goal.goal}</p>
-          )}
+          <p className="plan-goal">
+            <span>目标</span>
+            {view.goal.goal.trim() || task.title.trim() || "未命名计划"}
+          </p>
 
           {view.plan.projection_error && (
             <StatusBar
@@ -692,11 +695,11 @@ export function PlanPanel({
           )}
 
           {questionSet && (
-            <div className="plan-hitl" role="group" aria-label="计划需要你的回答">
+            <div className="plan-hitl" role="group" aria-label={questionSet.kind === "scope_decision" ? "需要你确认决策" : "计划需要你的回答"}>
               <header>
                 <IconHelp width={16} height={16} />
                 <div>
-                  <strong>需要你确认 {questionSet.questions.length} 个问题</strong>
+                  <strong>{questionSet.kind === "scope_decision" ? "需要你确认决策" : `需要你确认 ${questionSet.questions.length} 个问题`}</strong>
                   <p>每个问题单独作答；选项和自定义回答不会串到其他问题。</p>
                 </div>
               </header>

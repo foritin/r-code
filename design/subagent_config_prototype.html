@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>R-Code · 设置 — 子代理配置 / 模型服务 原型 v3</title>
+<!--
+  设计原型 v3（去装饰化方向）
+  图标为各厂商官网 favicon，来源见 icons/sources.md，仅用于本原型。
+-->
+<style>
+  :root {
+    --bg-app:      #171310;
+    --bg-nav:      #1b1611;
+    --bg-card:     #1d1813;
+    --bg-row:      #221c16;
+    --border:      #2b241d;
+    --border-soft: #262019;
+
+    --text-1: #eae2d8;
+    --text-2: #9c9185;
+    --text-3: #6b6156;
+
+    --accent: #f4633a;
+    --accent-hover: #ff7348;
+
+    --ok:   #5cb587;
+    --warn: #d9a23f;
+
+    --font-ui: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+    --r: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-app);
+    color: var(--text-1);
+    font-size: 13px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+  button { font-family: inherit; cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: .45; }
+
+  /* ---------- 窗口框架（评审语境） ---------- */
+  .window { display: flex; flex-direction: column; height: 100vh; }
+  .titlebar {
+    height: 38px; flex: none;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px;
+    background: var(--bg-nav);
+    border-bottom: 1px solid var(--border-soft);
+    color: var(--text-3); font-size: 12px;
+    user-select: none;
+  }
+  .titlebar .menus { display: flex; gap: 18px; margin-left: 30px; }
+  .shell { display: flex; flex: 1; min-height: 0; }
+
+  /* ---------- 设置导航 ---------- */
+  .settings-nav {
+    width: 200px; flex: none;
+    background: var(--bg-nav);
+    border-right: 1px solid var(--border-soft);
+    padding: 16px 10px;
+  }
+  .nav-item {
+    display: block;
+    padding: 7px 10px;
+    border-radius: 6px;
+    color: var(--text-2); font-size: 13px;
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: color .12s ease, background .12s ease;
+  }
+  .nav-item:hover { color: var(--text-1); background: var(--bg-row); }
+  .nav-item.active {
+    color: var(--text-1);
+    background: var(--bg-row);
+    border-left-color: var(--accent);
+    border-radius: 0 6px 6px 0;
+    font-weight: 600;
+  }
+
+  /* ---------- 内容区 ---------- */
+  .content { flex: 1; min-width: 0; overflow-y: auto; }
+  .content-inner { max-width: 760px; margin: 0 auto; padding: 36px 44px 72px; }
+
+  .page-head { margin-bottom: 28px; }
+  .page-title { font-size: 20px; font-weight: 650; margin-bottom: 4px; }
+  .page-desc { color: var(--text-2); font-size: 13px; }
+
+  .page { display: none; }
+  .page.current { display: block; }
+
+  /* ---------- 分区 ---------- */
+  .section { margin-bottom: 34px; }
+  .section-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+  }
+  .section-title { font-size: 14px; font-weight: 600; }
+  .section-desc { color: var(--text-2); font-size: 12.5px; margin-top: 2px; }
+  .section-actions { display: flex; gap: 6px; flex: none; align-items: center; }
+
+  /* ---------- 行式列表 ---------- */
+  .row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 4px;
+    border-bottom: 1px solid var(--border-soft);
+    transition: background .12s ease;
+  }
+  .row:last-child { border-bottom: none; }
+  .row:hover { background: rgba(255,255,255,.015); }
+
+  /* 图标 tile：统一浅底，保证黑色 logo 可读 */
+  .icon-tile {
+    width: 30px; height: 30px; flex: none;
+    border-radius: 7px;
+    background: #f2ede6;
+    display: grid; place-items: center;
+    overflow: hidden;
+  }
+  .icon-tile img { width: 20px; height: 20px; object-fit: contain; display: block; }
+
+  .row-main { flex: 1; min-width: 0; }
+  .row-name { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .row-sub { color: var(--text-3); font-size: 12px; margin-top: 1px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .row-sub .mono { font-family: var(--font-mono); color: var(--text-2); }
+
+  /* 状态：小圆点 + 平文字 */
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+  .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+  .status.ok   { color: var(--ok); }   .status.ok::before   { background: var(--ok); }
+  .status.warn { color: var(--warn); } .status.warn::before { background: var(--warn); }
+  .status.mute { color: var(--text-3); }
+
+  /* ---------- 按钮体系（每种都自足，不依赖 UA 默认） ---------- */
+  .btn, .btn-text {
+    appearance: none;
+    -webkit-appearance: none;
+    border-radius: 6px;
+    font-size: 12.5px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 7px;
+    white-space: nowrap;
+    transition: border-color .12s ease, color .12s ease, background .12s ease;
+  }
+  .btn {
+    padding: 6px 13px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-1);
+  }
+  .btn:hover:not(:disabled) { border-color: #4a3f33; background: var(--bg-row); }
+  .btn-primary {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn-text {
+    padding: 6px 9px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-2);
+  }
+  .btn-text:hover:not(:disabled) { color: var(--text-1); background: var(--bg-row); }
+
+  .spinner {
+    width: 11px; height: 11px; flex: none;
+    border: 2px solid var(--text-3); border-top-color: var(--text-1);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  .btn-primary .spinner { border-color: rgba(255,255,255,.35); border-top-color: #fff; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- 规则说明：单行可折叠 ---------- */
+  .rule-note { margin: 12px 0 0; font-size: 12.5px; color: var(--text-2); }
+  .rule-note summary {
+    cursor: pointer; list-style: none; user-select: none;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .rule-note summary::-webkit-details-marker { display: none; }
+  .rule-note summary::before { content: "ⓘ"; color: var(--text-3); }
+  .rule-note summary:hover { color: var(--text-1); }
+  .rule-note .rule-body {
+    margin-top: 6px; padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r);
+    color: var(--text-2); line-height: 1.7;
+  }
+
+  /* ---------- 槽位：空状态（引导新用户） ---------- */
+  .slot-empty {
+    margin-top: 12px;
+    border: 1.5px dashed var(--border);
+    border-radius: var(--r);
+    padding: 22px 20px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .slot-empty .se-text { flex: 1; min-width: 0; }
+  .slot-empty .se-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+  .slot-empty .se-desc { font-size: 12px; color: var(--text-3); margin-top: 3px; line-height: 1.65; }
+  .slot-empty .se-desc em { font-style: normal; color: var(--text-2); }
+
+  /* ---------- 槽位：表格 ---------- */
+  .slots-head, .slot-row {
+    display: grid;
+    grid-template-columns: 52px 1fr 150px 56px;
+    align-items: center;
+    gap: 12px;
+  }
+  .slots-head {
+    padding: 10px 4px 8px;
+    font-size: 11.5px; color: var(--text-3);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .slots-head[hidden] { display: none; }
+  .slot-row { padding: 10px 4px; border-bottom: 1px solid var(--border-soft); }
+  .slot-idx { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-3); }
+  .slot-row select {
+    width: 100%;
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--bg-card) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239c9185' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+    color: var(--text-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12.5px;
+    padding: 6px 26px 6px 9px;
+    font-family: inherit;
+    transition: border-color .12s ease;
+  }
+  .slot-row select:hover:not(:disabled) { border-color: #4a3f33; }
+  .slot-row select:disabled { opacity: .5; }
+  .slot-row select.unset { color: var(--text-3); }
+
+  .stepper { display: flex; align-items: center; gap: 2px; justify-content: flex-end; }
+  .stepper button {
+    appearance: none;
+    width: 22px; height: 22px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-2);
+    border-radius: 5px;
+    font-size: 12px;
+    display: grid; place-items: center;
+    transition: color .12s ease, border-color .12s ease;
+    padding: 0;
+  }
+  .stepper button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+  .stepper .val {
+    font-family: var(--font-mono);
+    font-size: 12.5px; font-weight: 600;
+    min-width: 44px; text-align: center;
+  }
+  .slot-remove {
+    appearance: none;
+    background: transparent; border: none;
+    color: var(--text-3); font-size: 12px;
+    text-align: right;
+    padding: 4px;
+    transition: color .12s ease;
+  }
+  .slot-remove:hover { color: var(--accent); }
+
+  .slot-add-inline {
+    appearance: none;
+    display: block; width: 100%;
+    margin-top: 10px;
+    padding: 9px;
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--text-2); font-size: 12.5px;
+    text-align: center;
+    transition: color .12s ease, border-color .12s ease;
+  }
+  .slot-add-inline:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+
+  /* 权重条：细线 */
+  .weight-meta {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin: 16px 0 6px;
+    font-size: 12px; color: var(--text-3);
+  }
+  .weight-total { font-family: var(--font-mono); font-weight: 600; }
+  .weight-total.ok { color: var(--ok); }
+  .weight-total.bad { color: var(--warn); }
+  .weight-bar {
+    height: 4px; border-radius: 2px;
+    background: var(--bg-card);
+    display: flex; overflow: hidden;
+  }
+  .weight-seg { height: 100%; transition: width .2s ease; }
+  .weight-seg.s0 { background: var(--accent); }
+  .weight-seg.s1 { background: var(--warn); }
+  .weight-seg.s2 { background: var(--ok); }
+
+  .slot-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 14px; margin-top: 16px;
+  }
+  .slot-hint { font-size: 12px; color: var(--text-3); }
+  .slot-hint strong { color: var(--text-2); font-weight: 600; }
+
+  /* ---------- Codex 步骤 ---------- */
+  .steps { display: flex; align-items: center; padding: 14px 4px; }
+  .step { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
+  .step-marker {
+    width: 20px; height: 20px; flex: none;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-3);
+    display: grid; place-items: center;
+    font-size: 10.5px; font-weight: 700;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+  }
+  .step.done .step-marker { border-color: var(--ok); color: var(--ok); }
+  .step.now .step-marker { border-color: var(--accent); color: var(--accent); }
+  .step-name { font-size: 13px; font-weight: 600; }
+  .step-desc { font-size: 12px; color: var(--text-3); }
+  .step.todo { opacity: .55; }
+  .step-line { flex: none; width: 34px; height: 1px; background: var(--border); }
+
+  .codex-banner {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px;
+    margin: 4px 4px 0;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--border-soft);
+  }
+  .codex-banner .b-title { font-size: 13px; font-weight: 600; }
+  .codex-banner .b-desc { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+
+  /* ---------- 开关 ---------- */
+  .switch {
+    appearance: none;
+    position: relative;
+    width: 32px; height: 18px; flex: none;
+    background: var(--border);
+    border: none;
+    border-radius: 99px;
+    transition: background .15s ease;
+    padding: 0;
+  }
+  .switch::after {
+    content: "";
+    position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--text-2);
+    transition: transform .15s ease, background .15s ease;
+  }
+  .switch[aria-checked="true"] { background: var(--accent); }
+  .switch[aria-checked="true"]::after { transform: translateX(14px); background: #fff; }
+
+  /* ---------- Toast ---------- */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    background: #2a231c;
+    border: 1px solid var(--border);
+    color: var(--text-1);
+    font-size: 12.5px;
+    padding: 8px 16px;
+    border-radius: 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .18s ease;
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; }
+
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2e2720; border-radius: 99px; border: 2px solid var(--bg-app); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="menus"><span>文件</span><span>编辑</span><span>视图</span><span>帮助</span></div>
+    <div>R-Code — 设置</div>
+    <div>— ▢ ✕</div>
+  </div>
+
+  <div class="shell">
+    <nav class="settings-nav" aria-label="设置">
+      <a class="nav-item" href="#" data-page="providers">模型服务</a>
+      <a class="nav-item" href="#">Agent 编排</a>
+      <a class="nav-item" href="#">工具与连接</a>
+      <a class="nav-item" href="#">知识与指令</a>
+      <a class="nav-item" href="#">外观与小助手</a>
+      <a class="nav-item" href="#">诊断</a>
+      <a class="nav-item active" href="#" data-page="subagent">子代理配置</a>
+    </nav>
+
+    <main class="content">
+      <div class="content-inner">
+
+        <!-- ================= 子代理配置 ================= -->
+        <div class="page current" id="page-subagent">
+          <header class="page-head">
+            <h1 class="page-title">子代理配置</h1>
+            <p class="page-desc">组合 API Provider 与 Codex CLI 来源，配置子代理槽位、权重、Prompt 与连通性。</p>
+          </header>
+
+          <!-- 候选来源 -->
+          <section class="section" aria-labelledby="s-src">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title" id="s-src">候选来源</h2>
+                <p class="section-desc">已配置的 API Provider 与 Codex CLI，可组成最多 3 个槽位；同一来源可以重复使用。</p>
+              </div>
+              <div class="section-actions">
+                <button class="btn" id="btn-test-all">全部测试</button>
+                <button class="btn-text" id="btn-reload">重新加载</button>
+              </div>
+            </div>
+
+            <details class="rule-note">
+              <summary>连通性与保存规则</summary>
+              <div class="rule-body">连通测试只在点击后执行。未测试、失败、过期或配置已变化的来源会保持不可选；保存时 Host 会再次复核。</div>
+            </details>
+
+            <div style="margin-top: 8px;">
+              <div class="row" id="src-ark">
+                <div class="icon-tile"><img src="icons/ark.png" alt="火山引擎 Ark"></div>
+                <div class="row-main">
+                  <div class="row-name">
+                    ark_token_plan
+                    <span class="mono" style="font-size:12px; color: var(--text-2); font-family: var(--font-mono);">glm-5.3</span>
+                  </div>
+                  <div class="row-sub">
+                    <span>推理验证 · <span class="mono" data-role="latency">1019 ms</span></span>
+                    <span>原生节点，可继续委派和接收运行中消息</span>
+                  </div>
+                </div>
+                <span class="status warn" data-role="status">需重新测试</span>
+                <button class="btn" data-test="src-ark">测试连接</button>
+              </div>
+
+              <div class="row" id="src-cli">
+                <div class="icon-tile"><img src="icons/openai.png" alt="OpenAI Codex CLI"></div>
+                <div class="row-main">
+                  <div class="row-name">
+                    Codex CLI
+                    <span style="font-size:12px; color: var(--text-3); font-family: var(--font-mono);">未配置模型</span>
+                  </div>
+                  <div class="row-sub">
+                    <span>需要补全配置</span>
+                    <span>叶节点，不继续派生，不支持运行中消息</span>
+                  </div>
+                </div>
+                <span class="status mute" data-role="status">未测试</span>
+                <button class="btn" data-test="src-cli" disabled title="补全配置后才能测试">测试连接</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 候选槽位 -->
+          <section class="section" aria-labelledby="s-slot">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title" id="s-slot">候选槽位</h2>
+                <p class="section-desc">每个槽位绑定一个来源和一个权重；全部槽位权重合计等于 100% 时，候选池才能启用。</p>
+              </div>
+              <span style="font-size:12px; color: var(--text-3); font-family: var(--font-mono);" id="slot-count">0/3 槽</span>
+            </div>
+
+            <!-- 空状态：引导 -->
+            <div class="slot-empty" id="slot-empty">
+              <div class="se-text">
+                <div class="se-title">还没有槽位</div>
+                <div class="se-desc">
+                  槽位决定自动委派子代理时<em>按什么比例</em>把任务分给不同来源。<br>
+                  例如：槽位 1 选 ark_token_plan、权重 100%，表示所有子代理任务都走这个来源。
+                </div>
+              </div>
+              <button class="btn" id="slot-add-empty" type="button">＋ 添加槽位</button>
+            </div>
+
+            <!-- 槽位表格 -->
+            <div id="slot-list">
+              <div class="slots-head" id="slots-head" hidden>
+                <span>槽位</span><span>来源</span><span style="text-align:right;">权重</span><span></span>
+              </div>
+            </div>
+            <button class="slot-add-inline" id="slot-add" type="button" hidden>＋ 再添加一个槽位</button>
+
+            <div class="weight-meta">
+              <span>权重合计</span>
+              <span class="weight-total bad" id="weight-total">0%</span>
+            </div>
+            <div class="weight-bar" id="weight-bar" role="img" aria-label="权重分布"></div>
+
+            <div class="slot-foot">
+              <p class="slot-hint" id="slot-hint"><strong>未启用候选池。</strong>新的自动委派继续使用现有路由策略；空候选池会保留原有委派路由。</p>
+              <button class="btn btn-primary" id="btn-save" disabled>保存候选池</button>
+            </div>
+          </section>
+
+          <!-- Codex 协作 -->
+          <section class="section" aria-labelledby="s-codex">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title" id="s-codex">Codex 协作</h2>
+                <p class="section-desc">连接本机 Codex CLI，权限预设会在每次委派子代理时自动读取。登录凭据始终由 Codex 管理。</p>
+              </div>
+              <button class="btn-text" id="btn-refresh-codex">刷新</button>
+            </div>
+
+            <div class="steps">
+              <div class="step done">
+                <span class="step-marker">✓</span>
+                <div><div class="step-name">Codex CLI</div><div class="step-desc">可运行 · 系统 PATH</div></div>
+              </div>
+              <div class="step-line"></div>
+              <div class="step now" id="step-login">
+                <span class="step-marker">2</span>
+                <div><div class="step-name">登录</div><div class="step-desc" data-role="login-desc">尚未登录 — 当前阻塞项</div></div>
+              </div>
+              <div class="step-line"></div>
+              <div class="step todo" id="step-coop">
+                <span class="step-marker">3</span>
+                <div><div class="step-name">R-Code 协作</div><div class="step-desc">待配置</div></div>
+              </div>
+            </div>
+
+            <div class="codex-banner" id="codex-cta">
+              <div>
+                <div class="b-title"><span class="status warn">还需要登录 Codex</span></div>
+                <div class="b-desc">使用浏览器登录；设备码仅在浏览器回调不可用时使用。</div>
+              </div>
+              <button class="btn btn-primary" id="btn-login">登录并继续</button>
+            </div>
+          </section>
+        </div>
+
+        <!-- ================= 模型服务 ================= -->
+        <div class="page" id="page-providers">
+          <header class="page-head">
+            <h1 class="page-title">模型服务</h1>
+            <p class="page-desc">管理 API Provider 连接与可用模型，供对话和子代理调用。</p>
+          </header>
+
+          <section class="section" aria-labelledby="p-list">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title" id="p-list">API Provider</h2>
+                <p class="section-desc">停用的 Provider 不会出现在模型选择和子代理候选来源中。</p>
+              </div>
+              <div class="section-actions">
+                <button class="btn btn-primary" id="btn-add-provider">添加 Provider</button>
+              </div>
+            </div>
+
+            <div>
+              <div class="row">
+                <div class="icon-tile"><img src="icons/ark.png" alt="火山引擎 Ark"></div>
+                <div class="row-main">
+                  <div class="row-name">ark_token_plan</div>
+                  <div class="row-sub"><span>火山引擎 Ark</span><span>2 个模型：<span class="mono">glm-5.3, deepseek-v3.1</span></span></div>
+                </div>
+                <span class="status ok">连接正常 · <span class="mono">1019 ms</span></span>
+                <button class="btn-text" data-prov-test>测试</button>
+                <button class="switch" role="switch" aria-checked="true" aria-label="启用 ark_token_plan"></button>
+              </div>
+
+              <div class="row">
+                <div class="icon-tile"><img src="icons/zhipu.png" alt="智谱"></div>
+                <div class="row-main">
+                  <div class="row-name">zhipu_default</div>
+                  <div class="row-sub"><span>智谱开放平台</span><span>1 个模型：<span class="mono">glm-4.6</span></span></div>
+                </div>
+                <span class="status mute">未测试</span>
+                <button class="btn-text" data-prov-test>测试</button>
+                <button class="switch" role="switch" aria-checked="true" aria-label="启用 zhipu_default"></button>
+              </div>
+
+              <div class="row">
+                <div class="icon-tile"><img src="icons/deepseek.png" alt="DeepSeek"></div>
+                <div class="row-main">
+                  <div class="row-name">deepseek_backup</div>
+                  <div class="row-sub"><span>DeepSeek</span><span>1 个模型：<span class="mono">deepseek-chat</span></span></div>
+                </div>
+                <span class="status mute">未测试</span>
+                <button class="btn-text" data-prov-test>测试</button>
+                <button class="switch" role="switch" aria-checked="false" aria-label="启用 deepseek_backup"></button>
+              </div>
+
+              <div class="row">
+                <div class="icon-tile"><img src="icons/openai.png" alt="OpenAI"></div>
+                <div class="row-main">
+                  <div class="row-name">Codex CLI</div>
+                  <div class="row-sub"><span>OpenAI · 本机 CLI 来源</span><span>需要补全配置</span></div>
+                </div>
+                <span class="status warn">配置不完整</span>
+                <button class="btn-text" disabled>测试</button>
+                <button class="switch" role="switch" aria-checked="false" aria-label="启用 Codex CLI" disabled></button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var toastTimer = null;
+  function toast(msg) {
+    var el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove("show"); }, 2200);
+  }
+
+  /* ---------- 导航切换 ---------- */
+  document.querySelectorAll(".nav-item[data-page]").forEach(function (item) {
+    item.addEventListener("click", function (e) {
+      e.preventDefault();
+      document.querySelectorAll(".nav-item").forEach(function (n) { n.classList.remove("active"); });
+      item.classList.add("active");
+      document.querySelectorAll(".page").forEach(function (p) { p.classList.remove("current"); });
+      document.getElementById("page-" + item.getAttribute("data-page")).classList.add("current");
+    });
+  });
+
+  /* ---------- 状态工具 ---------- */
+  function setStatus(row, kind, text) {
+    var el = row.querySelector('[data-role="status"]');
+    el.className = "status " + kind;
+    el.textContent = text;
+  }
+
+  /* ---------- 子代理：来源测试 ---------- */
+  var sources = { "src-ark": { latency: 1019 }, "src-cli": { latency: null } };
+
+  function testSource(id, btn) {
+    var row = document.getElementById(id);
+    if (!sources[id] || btn.disabled) return Promise.resolve();
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>测试中';
+    setStatus(row, "mute", "测试中…");
+    return new Promise(function (resolve) {
+      setTimeout(function () {
+        var ms = 300 + Math.floor(Math.random() * 900);
+        sources[id].latency = ms;
+        setStatus(row, "ok", "连接正常 · " + ms + " ms");
+        btn.textContent = "重新测试";
+        btn.disabled = false;
+        resolve();
+      }, 900 + Math.random() * 700);
+    });
+  }
+
+  document.querySelectorAll("[data-test]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      testSource(btn.getAttribute("data-test"), btn).then(function () {
+        toast("连通测试完成");
+        renderSlots();
+      });
+    });
+  });
+
+  document.getElementById("btn-test-all").addEventListener("click", function () {
+    var jobs = [];
+    document.querySelectorAll("[data-test]").forEach(function (btn) {
+      jobs.push(testSource(btn.getAttribute("data-test"), btn));
+    });
+    Promise.all(jobs).then(function () { toast("全部来源测试完成"); renderSlots(); });
+  });
+
+  document.getElementById("btn-reload").addEventListener("click", function () { toast("已重新加载来源配置"); });
+
+  /* ---------- 槽位 ---------- */
+  var MAX_SLOTS = 3;
+  var slotList = document.getElementById("slot-list");
+  var slotsHead = document.getElementById("slots-head");
+  var emptyBox = document.getElementById("slot-empty");
+  var addInline = document.getElementById("slot-add");
+  var slots = [];
+
+  function testedSources() {
+    var out = [];
+    if (sources["src-ark"].latency != null) out.push({ id: "ark", label: "ark_token_plan · glm-5.3" });
+    if (sources["src-cli"].latency != null) out.push({ id: "cli", label: "Codex CLI" });
+    return out;
+  }
+
+  function addSlot() {
+    if (slots.length >= MAX_SLOTS) return;
+    if (testedSources().length === 0) { toast("请先通过至少一个来源的连通测试"); return; }
+    var total = slots.reduce(function (a, s) { return a + s.weight; }, 0);
+    /* 新槽位默认拿剩余权重，第一个槽位即 100%，降低理解成本 */
+    slots.push({ source: null, weight: Math.max(0, 100 - total) });
+    renderSlots();
+  }
+
+  document.getElementById("slot-add-empty").addEventListener("click", addSlot);
+  addInline.addEventListener("click", addSlot);
+
+  function renderSlots() {
+    slotList.querySelectorAll(".slot-row").forEach(function (n) { n.remove(); });
+
+    slots.forEach(function (s, i) {
+      var row = document.createElement("div");
+      row.className = "slot-row";
+      row.innerHTML =
+        '<span class="slot-idx"># ' + (i + 1) + '</span>' +
+        '<select aria-label="槽位 ' + (i + 1) + ' 来源"></select>' +
+        '<span class="stepper">' +
+          '<button type="button" data-step="-5" aria-label="减少权重">−</button>' +
+          '<span class="val">' + s.weight + '%</span>' +
+          '<button type="button" data-step="5" aria-label="增加权重">＋</button>' +
+        '</span>' +
+        '<button class="slot-remove" type="button" aria-label="移除槽位 ' + (i + 1) + '">移除</button>';
+
+      var sel = row.querySelector("select");
+      var opts = testedSources();
+      if (opts.length === 0) {
+        var o0 = document.createElement("option");
+        o0.value = ""; o0.textContent = "暂无可选来源（先通过连通测试）";
+        sel.appendChild(o0);
+        sel.disabled = true;
+      } else {
+        var ph = document.createElement("option");
+        ph.value = ""; ph.textContent = "选择来源…"; ph.disabled = true;
+        sel.appendChild(ph);
+        opts.forEach(function (t) {
+          var o = document.createElement("option");
+          o.value = t.id; o.textContent = t.label;
+          sel.appendChild(o);
+        });
+        sel.value = s.source || "";
+        sel.classList.toggle("unset", !sel.value);
+        sel.addEventListener("change", function () {
+          s.source = sel.value;
+          sel.classList.remove("unset");
+          renderWeight();
+        });
+      }
+
+      row.querySelector(".slot-remove").addEventListener("click", function () {
+        slots.splice(i, 1); renderSlots();
+      });
+      row.querySelectorAll(".stepper button").forEach(function (b) {
+        b.addEventListener("click", function () {
+          s.weight = Math.min(100, Math.max(0, s.weight + parseInt(b.getAttribute("data-step"), 10)));
+          renderSlots();
+        });
+      });
+      slotList.appendChild(row);
+    });
+
+    var empty = slots.length === 0;
+    emptyBox.hidden = !empty;
+    slotsHead.hidden = empty;
+    addInline.hidden = empty;
+    addInline.disabled = slots.length >= MAX_SLOTS;
+    addInline.textContent = slots.length >= MAX_SLOTS
+      ? "已达 3 个槽位上限"
+      : "＋ 再添加一个槽位（还能添加 " + (MAX_SLOTS - slots.length) + " 个）";
+    document.getElementById("slot-count").textContent = slots.length + "/" + MAX_SLOTS + " 槽";
+    renderWeight();
+  }
+
+  function renderWeight() {
+    var total = slots.reduce(function (a, s) { return a + s.weight; }, 0);
+    var bar = document.getElementById("weight-bar");
+    bar.innerHTML = "";
+    slots.forEach(function (s, i) {
+      var seg = document.createElement("div");
+      seg.className = "weight-seg s" + (i % 3);
+      seg.style.width = s.weight + "%";
+      bar.appendChild(seg);
+    });
+
+    var allSet = slots.length > 0 && slots.every(function (s) { return !!s.source; });
+    var valid = allSet && total === 100;
+
+    var totalEl = document.getElementById("weight-total");
+    totalEl.textContent = total + "%";
+    totalEl.className = "weight-total " + (valid ? "ok" : "bad");
+    document.getElementById("btn-save").disabled = !valid;
+
+    var hint = document.getElementById("slot-hint");
+    if (slots.length === 0) {
+      hint.innerHTML = "<strong>未启用候选池。</strong>新的自动委派继续使用现有路由策略；空候选池会保留原有委派路由。";
+    } else if (!allSet) {
+      hint.innerHTML = "还有槽位<strong>未选择来源</strong>，全部选定后才能保存。";
+    } else if (total < 100) {
+      hint.innerHTML = "权重还差 <strong>" + (100 - total) + "%</strong>，用 ＋ 补齐到 100% 后即可保存。";
+    } else if (total > 100) {
+      hint.innerHTML = "权重超出 <strong>" + (total - 100) + "%</strong>，用 − 调低到 100% 后即可保存。";
+    } else {
+      hint.innerHTML = "<strong>可以保存。</strong>保存后新的自动委派将按此池路由。";
+    }
+  }
+
+  document.getElementById("btn-save").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Host 复核中';
+    setTimeout(function () {
+      btn.textContent = "保存候选池";
+      btn.disabled = false;
+      toast("候选池已保存，Host 复核通过");
+    }, 1000);
+  });
+
+  /* ---------- Codex 登录 ---------- */
+  document.getElementById("btn-login").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>等待浏览器回调';
+    setTimeout(function () {
+      var step = document.getElementById("step-login");
+      step.classList.remove("now"); step.classList.add("done");
+      step.querySelector(".step-marker").textContent = "✓";
+      step.querySelector('[data-role="login-desc"]').textContent = "已登录 · 凭据由 Codex 管理";
+      var coop = document.getElementById("step-coop");
+      coop.classList.remove("todo"); coop.classList.add("now");
+      var cta = document.getElementById("codex-cta");
+      cta.querySelector(".b-title").innerHTML = '<span class="status ok">登录完成</span>';
+      cta.querySelector(".b-desc").textContent = "下一步：为 R-Code 协作选择权限预设。";
+      btn.remove();
+      toast("Codex 登录成功");
+    }, 1300);
+  });
+
+  document.getElementById("btn-refresh-codex").addEventListener("click", function () { toast("已刷新 Codex 状态"); });
+
+  /* ---------- 模型服务页 ---------- */
+  document.querySelectorAll(".switch").forEach(function (sw) {
+    sw.addEventListener("click", function () {
+      if (sw.disabled) return;
+      var on = sw.getAttribute("aria-checked") === "true";
+      sw.setAttribute("aria-checked", String(!on));
+      toast(!on ? "已启用 Provider" : "已停用 Provider");
+    });
+  });
+  document.querySelectorAll("[data-prov-test]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>';
+      setTimeout(function () {
+        btn.textContent = "测试";
+        btn.disabled = false;
+        toast("Provider 连接正常");
+      }, 900);
+    });
+  });
+  document.getElementById("btn-add-provider").addEventListener("click", function () {
+    toast("原型占位：此处打开添加 Provider 表单");
+  });
+
+  renderSlots();
+})();
+</script>
+</body>
+</html>

@@ -229,7 +229,7 @@ impl Tool for WorkspaceCapabilityTool {
             .get("content")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("changed");
-        guard.atomic_write_file(Path::new(path), content.as_bytes())?;
+        guard.atomic_write_path(Path::new(path), content.as_bytes())?;
         Ok(ToolExecutionResult::success("written through capability"))
     }
 }

@@ -90,8 +90,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # GITHUB_TOKEN is scoped to this repository and cannot clone the
-          # private agent-core submodule. PAT_TOKEN is a read-only fine-grained
-          # token with Contents access to foritin/agent-core.
+          # private agent-contracts submodule. PAT_TOKEN is a read-only fine-grained
+          # token with Contents access to foritin/agent-contracts.
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
           persist-credentials: false
@@ -213,24 +213,24 @@ jobs:
           persist-credentials: false
       # 比对的是「父仓记录的 gitlink」与「实际 checkout 出来的 HEAD」。
       #
-      # 这里曾经拿 vendor/agent-core/contract-lock.json 里的 "commit" 去比 HEAD，
+      # 这里曾经拿 vendor/agent-contracts/contract-lock.json 里的 "commit" 去比 HEAD，
       # 那是个死循环：lock 文件本身就在子模块里，要它记录自己所在提交的 SHA 永远
       # 不可能成立——写 lock 会产生新提交，新提交的 SHA 又不等于 lock 里的值。
       # 这个 job 因此长期是红的。真正该验的是「子模块有没有被意外 checkout 到
       # 父仓指针以外的位置」，那就是下面这个比对。
-      - name: Verify agent-core submodule pin
+      - name: Verify agent-contracts submodule pin
         run: |
-          EXPECTED=$(git ls-tree HEAD vendor/agent-core | awk '{print $3}')
-          ACTUAL=$(git -C vendor/agent-core rev-parse HEAD)
+          EXPECTED=$(git ls-tree HEAD vendor/agent-contracts | awk '{print $3}')
+          ACTUAL=$(git -C vendor/agent-contracts rev-parse HEAD)
           echo "Expected (parent repo gitlink): $EXPECTED"
           echo "Actual   (submodule HEAD):      $ACTUAL"
           if [ -z "$EXPECTED" ]; then
-            echo "ERROR: vendor/agent-core is not registered as a submodule in HEAD"
+            echo "ERROR: vendor/agent-contracts is not registered as a submodule in HEAD"
             exit 1
           fi
           if [ "$EXPECTED" != "$ACTUAL" ]; then
-            echo "ERROR: agent-core submodule commit mismatch!"
-            echo "父仓指针与实际 checkout 不一致，通常是忘了 git add vendor/agent-core"
+            echo "ERROR: agent-contracts submodule commit mismatch!"
+            echo "父仓指针与实际 checkout 不一致，通常是忘了 git add vendor/agent-contracts"
             exit 1
           fi
           echo "✅ Submodule pin verified"

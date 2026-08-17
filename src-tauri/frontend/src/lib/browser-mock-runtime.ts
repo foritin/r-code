@@ -184,7 +184,7 @@ const defaultWorkflowSkills: WorkflowSkill[] = [
     id: "builtin:mcp-creator",
     name: "mcp-creator",
     description: "创建 MCP 服务源码并保存为待用户审核的禁用草稿。",
-    instructions: "不得启动或启用服务；验证后调用 mcp_create_draft。",
+    instructions: "帮用户创建全局 MCP 草稿：只声明凭据变量名，不填值；不得启动或启用服务；验证后调用 mcp_create_draft。",
     source: "builtin",
     enabled: true,
     overridden: false,
@@ -1079,6 +1079,8 @@ function requestMockPlanQuestions(taskId: string): void {
     plan_id: view.plan.id,
     revision,
     state: "pending",
+    kind: "plan",
+    restore_mode: null,
     answer_idempotency_key: null,
     continuation_state: "not_requested",
     continuation_error: null,
@@ -2159,6 +2161,13 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     };
 
     case "cmd_agent_send": sendMessage(args); return undefined;
+    case "cmd_agent_attachment_preview": {
+      // 与正式后端同形状：media_type + 标准 Base64（1×1 透明 PNG）。
+      return {
+        media_type: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      };
+    }
     case "cmd_agent_abort": abortTask(stringArg(args, "taskId")); return undefined;
     case "cmd_agent_abort_subagent": browserMockAbortSubagent(stringArg(args, "taskId"), stringArg(args, "subagentId")); return undefined;
     case "cmd_agent_delegate_codex": return copy(delegateTask(args, "codex_exec"));
@@ -2461,6 +2470,20 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return path;
     }
     case "cmd_rollback_task": {
+      const taskId = stringArg(args, "taskId");
+      const detail = detailById(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const paths = detail.changes
+        .filter((change) => !accepted.has(change.path) && !rejected.has(change.path))
+        .map((change) => change.path);
+      detail.changes = detail.changes.filter((change) => accepted.has(change.path));
+      detail.task.state = "idle";
+      touchTask(detail.task);
+      markTaskNotificationsRead(taskId);
+      return paths;
+    }
+    case "cmd_rollback_task_to_checkpoint": {
       const taskId = stringArg(args, "taskId");
       const detail = detailById(taskId);
       const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();

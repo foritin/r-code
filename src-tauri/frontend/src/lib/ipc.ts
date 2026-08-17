@@ -30,6 +30,7 @@ import type {
   SubagentSessionMessagePage,
   SubagentSessionMessagePageRequest,
   AttachmentInput,
+  AttachmentPreviewPayload,
   SettingsResponse,
   SupportBundlePreview,
   Task,
@@ -322,6 +323,10 @@ export const agentSend = (
 
 export const agentAbort = (taskId: string) => ipc<void>("cmd_agent_abort", { taskId });
 
+/** 按引用取回时间线图片附件预览（OCR 落盘原图或会话内联 Image 块）。 */
+export const agentAttachmentPreview = (taskId: string, reference: string) =>
+  ipc<AttachmentPreviewPayload>("cmd_agent_attachment_preview", { taskId, reference });
+
 export const agentAbortSubagent = async (taskId: string, subagentId: string) => {
   try {
     return await ipc<void>("cmd_agent_abort_subagent", { taskId, subagentId });
@@ -422,6 +427,9 @@ export const rollbackFile = (taskId: string, path: string) =>
 
 export const rollbackTask = (taskId: string) =>
   ipc<string[]>("cmd_rollback_task", { taskId });
+
+export const rollbackTaskToCheckpoint = (taskId: string) =>
+  ipc<string[]>("cmd_rollback_task_to_checkpoint", { taskId });
 
 export const acceptTask = (taskId: string) => ipc<void>("cmd_accept_task", { taskId });
 

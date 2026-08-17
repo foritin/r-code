@@ -8,9 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use async_trait::async_trait;
 use futures::future::join_all;
-use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use r_code_core::{dto::RiskLevel, error::ProductError};
 use r_code_gateway::{PathBinding, Tool};
 use r_code_mcp::{
@@ -842,7 +842,9 @@ impl McpManager {
 
         let source_path = PathBuf::from(request.source_path.trim());
         if !source_path.is_absolute() {
-            return Err("待导入的 MCP 源码必须使用绝对路径；MCP 是全局配置，不绑定当前工作区".to_string());
+            return Err(
+                "待导入的 MCP 源码必须使用绝对路径；MCP 是全局配置，不绑定当前工作区".to_string(),
+            );
         }
         let source_path = std::fs::canonicalize(&source_path)
             .map_err(|_| "待导入的 MCP 源码不存在或无法读取".to_string())?;

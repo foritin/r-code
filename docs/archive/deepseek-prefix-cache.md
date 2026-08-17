@@ -55,7 +55,7 @@ DeepSeek 的 prefix cache 是**字节级自动**的：两次请求的公共前�
 
 ## 3. 现状盘点（r-code 实测，含对应实施项）
 
-DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `agent-llm` 的 `OpenAiProvider`（序列化与发送，`vendor/agent-core/crates/agent-llm/src/`）。
+DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `agent-llm` 的 `OpenAiProvider`（序列化与发送，`vendor/agent-contracts/crates/agent-llm/src/`）。
 
 | # | 现状 | 位置 | 对缓存/速度的影响 | 实施项 |
 | --- | --- | --- | --- | --- |
@@ -128,7 +128,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `agen
 3. 持久化与展示：agent-worker 原生线路补写 `usage_json`（`dto.rs:366` 列已存在；复用 Codex 线路的 `set_usage` 写库 API `repositories.rs:854-858`）；UI 展示会话累计命中率——扩展 `Timeline.tsx:107-120` 的 `runUsageLabel` 解析 `cache_read_tokens/cache_write_tokens`（前端文件位置以实施时为准）。
 4. `deepseek.rs:60` / `openai.rs:225`：`supports_prompt_caching` 置 true（DeepSeek 自动缓存确实存在；注意 `openai.rs:225` 影响**所有** OpenAI 兼容 provider 的能力声明，需确认 UI 只把它用于提示展示，生产代码不消费 `enable_caching`——已确认 `openai.rs` 不消费，风险见 §8）。
 
-**涉及文件**：`vendor/agent-core/crates/agent-llm/src/openai.rs`（44-52、90-95、773-785）、`vendor/agent-core/crates/agent-llm/src/deepseek.rs`（60）；`crates/r-code-agent-worker/src/agent_loop.rs`（562-567）、`crates/r-code-core/src/dto.rs`（366）、`crates/r-code-store/src/repositories.rs`（854-858 复用）、`src-tauri/src/commands.rs`、前端 `Timeline.tsx`。
+**涉及文件**：`vendor/agent-contracts/crates/agent-llm/src/openai.rs`（44-52、90-95、773-785）、`vendor/agent-contracts/crates/agent-llm/src/deepseek.rs`（60）；`crates/r-code-agent-worker/src/agent_loop.rs`（562-567）、`crates/r-code-core/src/dto.rs`（366）、`crates/r-code-store/src/repositories.rs`（854-858 复用）、`src-tauri/src/commands.rs`、前端 `Timeline.tsx`。
 
 **改动规模**：5-6 个文件（含 2 个 vendor 文件）。
 
@@ -183,7 +183,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `agen
 3. 流空闲 watchdog：SSE 无数据超过阈值（Reasonix `defaultStreamIdleTimeout = 120s`，`openai.go:43-50`）视为流死，关闭连接走恢复路径——与连接超时互补（区分"连接断了"与"流死了"）。
 4. 重试边界：仅 5xx/连接类/流中断可重试；4xx/AuthFailed 不重试（`agent_loop.rs:1547` `provider_error_propagates` 测试契约）。
 
-**涉及文件**：`vendor/agent-core/crates/agent-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`（345-405、1547）。
+**涉及文件**：`vendor/agent-contracts/crates/agent-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`（345-405、1547）。
 
 **改动规模**：2 个文件。
 
@@ -201,7 +201,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `agen
 1. **键恒发**（Reasonix `openai.go:688-735`）：thinking 模式对 assistant tool_calls 轮**恒发 `reasoning_content` 键**（空串可接受，缺键 DeepSeek 400 "must be passed back"，724-730）；tool 消息恒发 `name` 键（719-723）；发送前修复悬空工具调用对（`SanitizeToolPairing`，689-692）。对应 r-code 的 `openai.rs` 序列化层。
 2. **missing-reasoning 精确回放**（Reasonix `run_loop.go:444-493`）：工具轮 reasoning 缺失时用**同一冻结请求**精确重放一次（不造合成 prompt），带审计事件——与 P1-E 同一冻结基础设施。
 
-**涉及文件**：`vendor/agent-core/crates/agent-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`。
+**涉及文件**：`vendor/agent-contracts/crates/agent-llm/src/openai.rs`、`crates/r-code-agent-worker/src/agent_loop.rs`。
 
 **改动规模**：2 个文件。
 
@@ -270,7 +270,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `agen
 | 真实 API | `#[ignore]` 集成测试（需 key） | 实测 `prompt_cache_hit_tokens` 增长曲线；探针设计参考 Reasonix `realcache_test.go`（前缀需明显超过 64-token 缓存块粒度） |
 | 产品 | UI 命中率展示 | P0-B 之后，状态栏/会话详情显示累计命中率（`runUsageLabel` 扩展） |
 
-协议切换回归位于 `vendor/agent-core/crates/agent-llm/tests/deepseek_protocol_routes.rs`：使用本机 loopback HTTP/SSE 逐条验证 Chat 自定义网关、Responses、Anthropic 兼容口与旧网关兼容回退的 endpoint、公共请求前缀、缓存 usage 及能力声明。它证明 R-Code 的协议适配，不宣称任意第三方网关都完整兼容 DeepSeek。
+协议切换回归位于 `vendor/agent-contracts/crates/agent-llm/tests/deepseek_protocol_routes.rs`：使用本机 loopback HTTP/SSE 逐条验证 Chat 自定义网关、Responses、Anthropic 兼容口与旧网关兼容回退的 endpoint、公共请求前缀、缓存 usage 及能力声明。它证明 R-Code 的协议适配，不宣称任意第三方网关都完整兼容 DeepSeek。
 
 **发布门槛**（两个时点，缺一不可）：① **P0-A 落地前**采集 10 轮以上工具会话的缓存命中率基线并**存档**（预期 ≈0%，作为"优化前"对照）；② **P0-A 完成后**复测同场景，基线应 ≥85%（作为"优化后"对照）。基线采集细节见 P0-B 验收；若未达 85%，回退路径见 §8。
 

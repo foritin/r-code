@@ -76,7 +76,7 @@ Reviewer 请求满足以下约束：
 
 ## 持久化、恢复与清理
 
-Schema 18 使用下列表：
+演进记忆的表结构由 Migration 018 引入，后续 Migration 026/028 又扩展了 `memory_review_turns` 与 `memory_entries`。当前 schema 版本见 `crates/r-code-store/src/migrations.rs` 的 `LATEST_SCHEMA_VERSION`。相关表包括：
 
 - `memory_settings`：全局开关、Reviewer 和触发设置；
 - `memory_entries` / `memory_entry_revisions`：当前正文与版本历史；

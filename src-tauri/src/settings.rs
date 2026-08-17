@@ -9,7 +9,7 @@
 //! 或 `R_CODE_PROVIDER_<配置名>_API_KEY`）在合并后应用，
 //! 优先级最高（仅次于显式参数）。校验在最后执行。
 //!
-//! [doc-14 阶段1] [agent-core/08]
+//! [doc-14 阶段1] [agent-contracts/08]
 
 #[cfg(all(not(test), not(target_os = "macos")))]
 use std::sync::LazyLock;

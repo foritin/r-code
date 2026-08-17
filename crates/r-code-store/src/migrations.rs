@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 29;
+pub const LATEST_SCHEMA_VERSION: u32 = 31;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -58,6 +58,8 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(27, MIGRATION_027, false),
     MigrationSpec::new(28, MIGRATION_028, true),
     MigrationSpec::new(29, MIGRATION_029, false),
+    MigrationSpec::new(30, MIGRATION_030, false),
+    MigrationSpec::new(31, MIGRATION_031, false),
 ];
 
 impl MigrationSpec {
@@ -1494,6 +1496,25 @@ CREATE INDEX idx_memory_entries_agent_run
 /// active no longer has to be rejected or have its files silently dropped.
 const MIGRATION_029: &str = r#"
 ALTER TABLE queued_messages ADD COLUMN attachments_json TEXT;
+"#;
+
+/// Migration 030: distinguish scope decisions raised in Agent mode from ordinary Plan
+/// questions and remember the Agent mode to restore after the user answers.
+const MIGRATION_030: &str = r#"
+ALTER TABLE plan_question_sets ADD COLUMN kind TEXT NOT NULL DEFAULT 'plan'
+    CHECK (kind IN ('plan', 'scope_decision'));
+ALTER TABLE plan_question_sets ADD COLUMN restore_mode TEXT
+    CHECK (restore_mode IS NULL OR restore_mode IN ('ask', 'edit', 'auto'));
+"#;
+
+/// Migration 031: persist long-task guardrail trips and green-checkpoint SHAs per run.
+/// `guard_trip` is a JSON object `{reason, detail}` written by the drain loop; the
+/// ReviewReady card reads it directly. `checkpoint_sha` is the latest `git stash create`
+/// commit SHA and is only used by the explicit checkpoint rollback action.
+const MIGRATION_031: &str = r#"
+ALTER TABLE agent_runs ADD COLUMN guard_trip TEXT;
+ALTER TABLE agent_runs ADD COLUMN checkpoint_sha TEXT;
+ALTER TABLE agent_runs ADD COLUMN checkpoint_base_head TEXT;
 "#;
 
 #[cfg(test)]

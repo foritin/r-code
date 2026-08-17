@@ -135,7 +135,7 @@ svg { flex: none; }
 .btn.primary { background: var(--warning); border-color: var(--warning); color: var(--on-solid); font-weight: var(--weight-strong); }
 .btn.accent { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: var(--weight-strong); }
 .btn.primary:hover:not(:disabled),
-.btn.accent:hover:not(:disabled) { filter: brightness(1.08); }
+.btn.accent:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); filter: brightness(1.08); }
 .btn.danger { background: var(--danger); border-color: var(--danger); color: var(--on-solid); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
 .btn.ghost:hover:not(:disabled) { color: var(--fg); background: var(--bg-chip); border-color: transparent; }

@@ -509,6 +509,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.message-attachment-thumbnail {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.message-attachment-item.is-previewable {
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
+}
+.message-attachment-item.is-previewable:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
 .attachment-chip.is-unsupported {
   border-color: var(--edge-warning);
   color: var(--warning);

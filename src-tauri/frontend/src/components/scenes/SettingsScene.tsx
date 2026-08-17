@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errText } from "../../lib/format";
 import { useAppStore, type SettingsPane } from "../../store/app";
 import { usePoll } from "../../lib/poll";
@@ -12,11 +12,6 @@ import {
   companionEnsure,
   logsTail,
   providerModels,
-  IpcCommandError,
-  RTK_BLOCKED_BY_SECURITY_SOFTWARE,
-  rtkOpenSecurityExclusions,
-  rtkSetEnabled,
-  rtkStatus,
   settingsDeleteProvider,
   settingsGet,
   settingsSaveProvider,
@@ -38,7 +33,7 @@ import type {
   ProviderPreset,
   ProviderProtocol,
   ProviderStatus,
-  RtkStatus,
+  RunBudgetConfig,
   SupportBundlePreview,
 } from "../../lib/types";
 import { clockTime } from "../../lib/format";
@@ -57,6 +52,7 @@ import { Menu, MenuEmpty, MenuItem } from "../ui/Menu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pushToast } from "../../store/toast";
 import { useCompanionStore, type CompanionMotion } from "../../store/companion";
+import { providerIconFor, providerInitial } from "../../lib/provider-icons";
 import { McpPanel } from "./McpPanel";
 import { KnowledgeSettingsPane } from "./KnowledgeSettingsPane";
 import { SubagentProvidersPanel } from "./SubagentProvidersPanel";
@@ -75,7 +71,7 @@ const SETTINGS_PANES: Array<{
 }> = [
   { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
   { key: "agents", label: "Agent 编排", description: "选择主 Agent、委派路由和可观察的质量复核。" },
-  { key: "tools", label: "工具与连接", description: "管理内置联网、MCP 服务、凭据和扩展市场。" },
+  { key: "tools", label: "工具与连接", description: "管理内置工具、RTK 加速、MCP 服务、凭据和扩展市场。" },
   { key: "knowledge", label: "知识与指令", description: "管理公共与项目记忆、协作 Prompt 和可复用 Skills。" },
   { key: "preferences", label: "外观与小助手", description: "选择界面主题，并管理桌面小助手的反馈方式。" },
   { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
@@ -513,6 +509,31 @@ export function SettingsScene() {
     void loadConfig();
   }, [loadConfig]);
 
+  // Codex 协作的就绪签名变化（CLI 可用 / 登录 / 协作配置）会改变 Host 侧的
+  // 子代理候选目录；把变化转成递增信号，让候选来源面板在不丢草稿的前提下刷新。
+  const [subagentRefreshSignal, setSubagentRefreshSignal] = useState(0);
+  const codexReadinessRef = useRef("");
+  const handleCodexStatusChange = useCallback((status: CodexIntegrationStatus) => {
+    const signature = [
+      status.cli_available,
+      status.auth_status,
+      status.skill_status,
+      status.mcp_server_configured,
+    ].join("|");
+    if (signature === codexReadinessRef.current) return;
+    codexReadinessRef.current = signature;
+    setSubagentRefreshSignal((value) => value + 1);
+  }, []);
+
+  // provider 档案名 → 目录 kind，用于给子代理候选来源匹配厂商图标。
+  const providerKinds = useMemo(
+    () => Object.fromEntries(
+      Object.entries(config?.providers ?? EMPTY_PROVIDERS)
+        .map(([name, profile]) => [name, (profile as ProviderConfig).provider_kind]),
+    ),
+    [config],
+  );
+
   const pane = SETTINGS_PANES.find((item) => item.key === activePane) ?? SETTINGS_PANES[0];
 
   return (
@@ -603,8 +624,8 @@ export function SettingsScene() {
 
             {activePane === "subagents" && (
               <div className="settings-sheet subagent-configuration-sheet">
-                <SubagentProvidersPanel />
-                <CodexIntegrationSection config={config} reloadConfig={loadConfig} />
+                <SubagentProvidersPanel providerKinds={providerKinds} refreshSignal={subagentRefreshSignal} />
+                <CodexIntegrationSection config={config} reloadConfig={loadConfig} onStatusChange={handleCodexStatusChange} />
               </div>
             )}
           </div>
@@ -686,9 +707,9 @@ function ProviderSection({
     setFields({
       base_url: preset?.base_url ?? "",
       model: preset?.model ?? "",
-      // 预设声明了单次输出上限时用它，避免保存后被服务端 400
+      // 预设声明了单次输出上限时，直接采用厂商值并锁定，避免保存后被服务端 400
       max_tokens: preset?.max_output_tokens != null
-        ? String(Math.min(preset.max_output_tokens, Number(OUTPUT_DEFAULT)))
+        ? String(preset.max_output_tokens)
         : OUTPUT_DEFAULT,
       temperature: "0.2",
       // 新建同样不预选 Responses：下拉框里"看得见"不等于用户确认过。想用 Responses
@@ -720,7 +741,10 @@ function ProviderSection({
     setFields({
       base_url: profile?.base_url ?? preset?.base_url ?? "",
       model: profile?.model ?? preset?.model ?? "",
-      max_tokens: profile?.max_tokens != null ? String(profile.max_tokens) : OUTPUT_DEFAULT,
+      // 厂商预设声明了单次输出上限时，编辑态同样锁定为厂商值，避免历史误填继续生效。
+      max_tokens: preset?.max_output_tokens != null
+        ? String(preset.max_output_tokens)
+        : profile?.max_tokens != null ? String(profile.max_tokens) : OUTPUT_DEFAULT,
       temperature: displayNumber(profile?.temperature) || "0.2",
       // 编辑已有配置时以后端算出的 effective_protocol 为准——它已经把"存过的值"
       // 和"地址被改写后的推断"都算进去了。前端再推一遍只会和后端对不上，而用户
@@ -864,6 +888,8 @@ function ProviderSection({
     : "尚未保存";
   const deepSeekV4 = isDeepSeekV4(fields.base_url, fields.model, presetName);
   const outputValue = Number(fields.max_tokens.trim());
+  // 预设声明了厂商单次输出上限时锁定该字段，避免把上下文窗口误填成输出上限。
+  const maxOutputLocked = activePreset?.max_output_tokens != null;
   const outputExceedsDeepSeekLimit = deepSeekV4 && Number.isFinite(outputValue) && outputValue > 393_216;
   const deepSeekResponsesModelUnsupported =
     activePreset?.id === "deepseek" &&
@@ -923,6 +949,7 @@ function ProviderSection({
               type="button"
               disabled={busy}
             >
+              <span className="provider-icon-tile is-fallback" aria-hidden="true">＋</span>
               <span className="provider-row-title">未保存的新服务</span>
               <span className="provider-row-model">正在填写，保存后生效</span>
               <span className="provider-row-state">草稿</span>
@@ -935,6 +962,7 @@ function ProviderSection({
               const profile = providers[name] as ProviderConfig;
               const active = name === configDefault;
               const status = providerStatus[name];
+              const icon = providerIconFor(profile.provider_kind ?? presetOf(name)?.id ?? name);
               return (
                 <button
                   key={name}
@@ -942,6 +970,9 @@ function ProviderSection({
                   disabled={busy}
                   onClick={() => (drafting ? setPendingSelect(name) : setSelectedProvider(name))}
                 >
+                  <span className={`provider-icon-tile${icon ? "" : " is-fallback"}`} aria-hidden="true">
+                    {icon ? <img src={icon} alt="" /> : providerInitial(providerLabel(name))}
+                  </span>
                   <span className="provider-row-title">
                     {providerLabel(name)}
                     {active && <em>正在使用</em>}
@@ -1175,7 +1206,11 @@ function ProviderSection({
                         className="quiet-link"
                         type="button"
                         disabled={busy}
-                        title={`${activePreset.base_url}（${PROTOCOL_LABELS[activePreset.protocol]}）`}
+                        title={`${activePreset.base_url}（${(
+                          allowedProtocols(activePreset, activePreset.base_url) ?? []
+                        )
+                          .map((protocol) => PROTOCOL_LABELS[protocol])
+                          .join(" / ")}）`}
                         onClick={() =>
                           setFields((value) => ({
                             ...value,
@@ -1193,7 +1228,11 @@ function ProviderSection({
                             className="quiet-link"
                             type="button"
                             disabled={busy}
-                            title={`${candidate.url}（${PROTOCOL_LABELS[candidate.protocol]}）`}
+                            title={`${candidate.url}（${(
+                              allowedProtocols(activePreset, candidate.url) ?? []
+                            )
+                              .map((protocol) => PROTOCOL_LABELS[protocol])
+                              .join(" / ")}）`}
                             // 协议必须跟着地址一起切：多数备用线路是同一厂商的另一个协议口，
                             // 只改地址会把 Anthropic 的请求发到一个只有 Chat 的 endpoint 上。
                             onClick={() =>
@@ -1258,10 +1297,13 @@ function ProviderSection({
                     className="input"
                     inputMode="numeric"
                     value={fields.max_tokens}
+                    disabled={maxOutputLocked}
                     onChange={(event) => setFields((value) => ({ ...value, max_tokens: event.target.value }))}
                   />
                   <span className="provider-field-meta">
-                    {deepSeekV4 ? "V4 最大 393,216，建议 8,192" : "通常建议 8,192"}
+                    {maxOutputLocked
+                      ? `已按厂商上限固定为 ${Number(fields.max_tokens).toLocaleString()}`
+                      : deepSeekV4 ? "V4 最大 393,216" : "通常建议 8,192"}
                   </span>
                   {outputExceedsDeepSeekLimit && (
                     <span className="provider-field-warning" role="alert">
@@ -1322,14 +1364,27 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
   quality_loop: "off",
   quality_reviewer: "r_code",
   max_review_rounds: 1,
+  run_budget: {
+    max_tool_rounds: 60,
+    max_run_seconds: 14_400,
+    reasoning_budget_chars: 120_000,
+    same_error_limit: 3,
+    no_progress_rounds: 24,
+    replay_detection: true,
+    diff_file_limit: 60,
+    diff_byte_limit: 262_144,
+    test_fail_limit: 3,
+    checkpoint_enabled: true,
+  },
 };
 
 function OrchestrationSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
   const policy = config.orchestration ?? DEFAULT_ORCHESTRATION;
+  const budget: RunBudgetConfig = policy.run_budget ?? DEFAULT_ORCHESTRATION.run_budget!;
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const save = async (field: keyof OrchestrationConfig, value: unknown) => {
+  const save = async (field: string, value: unknown) => {
     setBusy(field);
     setErr(null);
     try {
@@ -1462,6 +1517,160 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
             <option value={2}>2 轮</option>
             <option value={3}>3 轮</option>
           </select>
+        </div>
+      </section>
+
+      <section className="settings-block">
+        <h3>运行护栏</h3>
+        <p className="desc">
+          宿主侧硬上限与停止信号：工具轮数、运行时长、思考量、同错连败、零进展、变更范围发散和测试连败
+          任一触发后，run 会先做一次总结再进入审核，工作区改动保留、绝不自动回滚。
+        </p>
+        <div className="field">
+          <label htmlFor="set-budget-rounds">工具轮数上限</label>
+          <input
+            id="set-budget-rounds"
+            className="input"
+            type="number"
+            min={4}
+            max={200}
+            step={1}
+            value={budget.max_tool_rounds}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.max_tool_rounds", Number(event.target.value))}
+          />
+          <span className="hint">默认 60；模型回合产出工具调用即计 1 轮。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-seconds">运行时长上限（秒）</label>
+          <input
+            id="set-budget-seconds"
+            className="input"
+            type="number"
+            min={300}
+            max={86_400}
+            step={300}
+            value={budget.max_run_seconds}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.max_run_seconds", Number(event.target.value))}
+          />
+          <span className="hint">默认 14400（4 小时）；超时前仍会先做收尾总结。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-reasoning">思考量上限（字符）</label>
+          <input
+            id="set-budget-reasoning"
+            className="input"
+            type="number"
+            min={20_000}
+            max={4_000_000}
+            step={10_000}
+            value={budget.reasoning_budget_chars}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.reasoning_budget_chars", Number(event.target.value))}
+          />
+          <span className="hint">默认 120000；无流式用量时按 4 字符/token 估算。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-same-error">同一错误连败上限</label>
+          <input
+            id="set-budget-same-error"
+            className="input"
+            type="number"
+            min={1}
+            max={10}
+            step={1}
+            value={budget.same_error_limit}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.same_error_limit", Number(event.target.value))}
+          />
+          <span className="hint">默认 3；按「工具名 + 稳定参数 + 错误码」识别同一错误，成功即清零。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-no-progress">零进展轮数上限</label>
+          <input
+            id="set-budget-no-progress"
+            className="input"
+            type="number"
+            min={2}
+            max={200}
+            step={1}
+            value={budget.no_progress_rounds}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.no_progress_rounds", Number(event.target.value))}
+          />
+          <span className="hint">默认 24；连续没有成功修改或通过测试的轮次达到上限即停。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-diff-files">修改文件数上限</label>
+          <input
+            id="set-budget-diff-files"
+            className="input"
+            type="number"
+            min={1}
+            max={1_000}
+            step={1}
+            value={budget.diff_file_limit}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.diff_file_limit", Number(event.target.value))}
+          />
+          <span className="hint">默认 60；超过即视为变更范围发散并停止。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-diff-bytes">累计变更字节上限</label>
+          <input
+            id="set-budget-diff-bytes"
+            className="input"
+            type="number"
+            min={65_536}
+            max={1_073_741_824}
+            step={65_536}
+            value={budget.diff_byte_limit}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.diff_byte_limit", Number(event.target.value))}
+          />
+          <span className="hint">默认 262144（256 KiB）；按 old+new 内容长度累计。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-test-fails">测试连败上限</label>
+          <input
+            id="set-budget-test-fails"
+            className="input"
+            type="number"
+            min={1}
+            max={10}
+            step={1}
+            value={budget.test_fail_limit}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.test_fail_limit", Number(event.target.value))}
+          />
+          <span className="hint">默认 3；覆盖 cargo/pytest/npm/pnpm/yarn/go/dotnet 测试命令。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-replay">相邻轮 replay 检测</label>
+          <input
+            id="set-budget-replay"
+            className="switch"
+            type="checkbox"
+            role="switch"
+            checked={budget.replay_detection}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.replay_detection", event.target.checked)}
+          />
+          <span className="hint">相邻两轮工具请求与结果完全一致时立即停止。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-budget-checkpoint">绿灯 git checkpoint</label>
+          <input
+            id="set-budget-checkpoint"
+            className="switch"
+            type="checkbox"
+            role="switch"
+            checked={budget.checkpoint_enabled}
+            disabled={busy != null}
+            onChange={(event) => void save("run_budget.checkpoint_enabled", event.target.checked)}
+          />
+          <span className="hint">测试全绿后用 git stash 快照；审核页可一键回滚到最近绿灯，untracked 文件不回滚。</span>
         </div>
       </section>
 
@@ -2205,151 +2414,15 @@ function CodexRuntimePreferences({
   );
 }
 
-type RtkTransition = "enabling" | "disabling" | null;
-
-function RtkIntegrationControl() {
-  const [status, setStatus] = useState<RtkStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [transition, setTransition] = useState<RtkTransition>(null);
-  const [optimisticEnabled, setOptimisticEnabled] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const next = await rtkStatus();
-      setStatus(next);
-      setOptimisticEnabled(next.enabled);
-    } catch {
-      setStatus(null);
-      setOptimisticEnabled(false);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const toggle = async (enabled: boolean) => {
-    if (transition || loading) return;
-    const previous = status;
-    setOptimisticEnabled(enabled);
-    setTransition(enabled ? "enabling" : "disabling");
-    try {
-      const next = await rtkSetEnabled(enabled);
-      setStatus(next);
-      setOptimisticEnabled(next.enabled);
-    } catch (error) {
-      setStatus(previous);
-      setOptimisticEnabled(previous?.enabled ?? false);
-      if (
-        enabled &&
-        error instanceof IpcCommandError &&
-        error.code === RTK_BLOCKED_BY_SECURITY_SOFTWARE
-      ) {
-        pushToast({
-          kind: "warn",
-          title: "RTK 被安全软件拦截",
-          body: `Windows 安全中心可能隔离了 RTK 二进制。请把「${status?.bin_dir ?? "R-Code 的 bin 目录"}」加入排除项，然后重新开启。`,
-          action: {
-            label: "打开安全中心",
-            run: () => void rtkOpenSecurityExclusions().catch(() => {}),
-          },
-          timeout: 0,
-        });
-      } else {
-        pushToast({
-          kind: "warn",
-          title: enabled ? "RTK 未能启用" : "RTK 未能关闭",
-          body: "请稍后重试；详细原因已写入诊断日志。",
-          timeout: 5200,
-        });
-      }
-    } finally {
-      setTransition(null);
-    }
-  };
-
-  const busy = transition !== null;
-  const state = transition === "enabling"
-    ? "enabling"
-    : transition === "disabling"
-      ? "disabling"
-      : status?.enabled
-        ? "enabled"
-        : status?.available
-          ? "available"
-          : "unavailable";
-  const badge = loading
-    ? "正在检测"
-    : transition === "enabling"
-      ? status?.available ? "正在配置" : "正在安装"
-      : transition === "disabling"
-        ? "正在关闭"
-        : status?.enabled
-          ? "已启用"
-          : status?.available
-            ? "已安装"
-            : status
-              ? "未安装"
-              : "暂不可用";
-  const detail = loading
-    ? "正在确认本机 RTK 与 R-Code 策略状态。"
-    : transition === "enabling"
-      ? status?.available
-        ? "正在为之后创建的 Codex 会话启用命令策略。"
-        : "正在从 rtk-ai/rtk 官方 Release 下载并校验适合当前系统的版本。"
-      : transition === "disabling"
-        ? "正在停用新会话策略；已安装的 RTK 会完整保留。"
-        : status?.enabled
-          ? "之后启动的 Codex 主 Agent 与子代理会优先使用 RTK；当前运行不会重启。"
-          : status?.available
-            ? "已检测到可用的 RTK。开启后从下一次 Codex 运行开始生效。"
-            : status
-              ? "开启时自动检测系统安装；若不存在，将安全安装到 R-Code 的应用数据目录。"
-              : "暂时无法读取状态。可重试，详细原因会保留在诊断日志。";
-  const installation = status?.available
-    ? `${status.version ?? "RTK"} · ${status.managed ? "R-Code 托管" : "系统安装"}`
-    : status?.platform ?? "按当前系统选择版本";
-
-  return (
-    <div className={`rtk-control state-${state}`} aria-busy={loading || busy}>
-      <div className="rtk-mark" aria-hidden="true">RTK</div>
-      <div className="rtk-control-copy">
-        <div className="rtk-control-title">
-          <strong>RTK 命令压缩</strong>
-          <span className="rtk-state-badge" role="status" aria-live="polite">{badge}</span>
-        </div>
-        <p>{detail}</p>
-        <div className="rtk-control-meta">
-          <span>{installation}</span>
-          <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noreferrer">官方项目</a>
-          {!loading && !status && (
-            <button className="quiet-link" onClick={() => void load()}>重新检测</button>
-          )}
-        </div>
-      </div>
-      <input
-        id="rtk-enabled"
-        className="switch rtk-switch"
-        type="checkbox"
-        role="switch"
-        aria-label="为新 Codex 会话启用 RTK"
-        checked={optimisticEnabled}
-        disabled={loading || busy || !status}
-        onChange={(event) => void toggle(event.target.checked)}
-      />
-    </div>
-  );
-}
-
 function CodexIntegrationSection({
   config,
   reloadConfig,
+  onStatusChange,
 }: {
   config: AppConfig | null;
   reloadConfig: () => Promise<void>;
+  /** Codex 状态每次刷新都会回调；用于联动子代理候选来源面板。 */
+  onStatusChange?: (status: CodexIntegrationStatus) => void;
 }) {
   const { runWithCodexCli } = useCodexCliGate();
   const [status, setStatus] = useState<CodexIntegrationStatus | null>(null);
@@ -2366,6 +2439,7 @@ function CodexIntegrationSection({
     try {
       const next = await codexIntegrationStatus(force);
       setStatus(next);
+      onStatusChange?.(next);
       if (!quiet) setErr(null);
       return next;
     } catch (e) {
@@ -2374,7 +2448,7 @@ function CodexIntegrationSection({
     } finally {
       if (!quiet) setChecking(false);
     }
-  }, []);
+  }, [onStatusChange]);
 
   useEffect(() => {
     // 初次进入设置复用 Home/Room 已完成的应用级探测；手动刷新和登录轮询会强制重查。
@@ -2454,6 +2528,7 @@ function CodexIntegrationSection({
       await runWithCodexCli({ feature: "完成 Codex 设置", requireAuth: true }, async () => {
         const next = await codexSetupCollaboration();
         setStatus(next);
+        onStatusChange?.(next);
       setNotice("Codex 已就绪，可以作为 R-Code 的协作代理使用。");
       });
     } catch (e) {
@@ -2502,7 +2577,10 @@ function CodexIntegrationSection({
     <section className="settings-block codex-setup">
       <div className="codex-setup-heading">
         <div>
-          <h3>Codex 协作</h3>
+          <h3 className="codex-setup-title">
+            <span className="provider-icon-tile" aria-hidden="true"><img src={providerIconFor("codex_cli") ?? undefined} alt="" /></span>
+            Codex 协作
+          </h3>
           <p className="desc">连接本机 Codex CLI，权限预设会在每次委派子代理时自动读取。登录凭据始终由 Codex 管理。</p>
         </div>
         <button
@@ -2551,7 +2629,6 @@ function CodexIntegrationSection({
       {notice && <p className="codex-inline-note" role="status"><IconCheck width={14} height={14} />{notice}</p>}
       {status?.cli_error && setupState === "install_cli" && <p className="codex-inline-warning">{status.cli_error}</p>}
 
-      <RtkIntegrationControl />
 
       {setupState === "ready" && (
         <CodexRuntimePreferences

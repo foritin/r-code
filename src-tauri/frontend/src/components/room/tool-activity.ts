@@ -1,9 +1,10 @@
-import { toolVerb } from "../../lib/format";
+import { isPlanToolName, toolDisplayName, toolVerb, type ToolDisplayLanguage } from "../../lib/format";
 
-export type ToolActivityKind = "command" | "file" | "lookup" | "tool";
+export type ToolActivityKind = "command" | "file" | "lookup" | "plan" | "tool";
 export type ToolActivityState = "active" | "ok" | "fail";
 
 export function toolActivityKind(toolName: string): ToolActivityKind {
+  if (isPlanToolName(toolName)) return "plan";
   const verb = toolVerb(toolName);
   if (verb === "run") return "command";
   if (verb === "edit" || verb === "write") return "file";
@@ -16,9 +17,16 @@ export function toolActivityTitle(
   count: number,
   state: ToolActivityState,
   target = "",
+  language: ToolDisplayLanguage = "zh",
 ): string {
   const compactTarget = compactActivityTarget(target);
   const multiple = count > 1;
+  if (kind === "plan") {
+    const label = toolDisplayName(target, language);
+    if (state === "active") return multiple ? `正在推进 ${count} 项计划` : `正在${label}`;
+    if (state === "fail") return multiple ? `${count} 项计划操作中有失败` : `${label}失败`;
+    return multiple ? `已完成 ${count} 项计划操作` : `已${label}`;
+  }
   if (kind === "command") {
     if (state === "active") return multiple ? `正在执行 ${count} 个命令` : compactTarget ? `正在执行 ${compactTarget}` : "正在执行命令";
     if (state === "fail") return multiple ? `${count} 个命令中有执行失败` : compactTarget ? `命令执行失败：${compactTarget}` : "命令执行失败";

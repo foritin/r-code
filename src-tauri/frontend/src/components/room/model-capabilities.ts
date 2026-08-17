@@ -105,11 +105,49 @@ export function capabilitiesFor(provider: ProviderChoice | undefined, model: str
     };
   }
 
-  if (providerKind === "kimi" || providerKind === "kimi_coding") {
+  if (providerKind === "kimi_coding") {
+    return {
+      thinking: {
+        label: "思考模式",
+        options: [{ value: "enabled", label: "始终思考" }],
+        defaultLabel: "服务默认（持续思考）",
+      },
+      reasoning: effort(["low", "high", "max"]),
+      note: "K3/K3-256k 始终思考；推理强度仅支持低/高/最大，且不会发送 temperature。",
+    };
+  }
+
+  if (providerKind === "kimi") {
     return {
       thinking: { label: "思考模式", options: THINKING, defaultLabel: "服务默认" },
       reasoning: effort(["low", "medium", "high"]),
       note: "Kimi 的思考开关与推理强度会通过当前 Anthropic 兼容线路发送；留空时沿用服务默认。",
+    };
+  }
+
+  if (
+    providerKind === "ark_coding"
+    || providerKind === "ark_coding_openai"
+    || providerKind === "ark_agent"
+  ) {
+    const responses = protocol === "openai_responses";
+    return {
+      thinking: {
+        label: "思考模式",
+        options: [
+          { value: "adaptive", label: "自适应(auto)" },
+          { value: "enabled", label: "始终开启" },
+          { value: "disabled", label: "关闭" },
+        ],
+        defaultLabel: "自适应(auto)",
+        defaultValue: "adaptive",
+      },
+      reasoning: effort(
+        responses ? ["low", "medium", "high", "xhigh", "max"] : ["minimal", "low", "medium", "high"],
+      ),
+      note: responses
+        ? "Responses 口按 reasoning_effort 发送；不支持 none/minimal，关闭思考时省略该参数。"
+        : "Anthropic 套餐口不发送推理强度；OpenAI 兼容口按 reasoning_effort 发送。",
     };
   }
 
@@ -192,6 +230,7 @@ export function imageCapabilityFor(
     "glm-4.6v",
     "pixtral",
     "llava",
+    "doubao-seed",
   ].some((needle) => modelName.includes(needle));
   if (explicitVisionModel) {
     return { state: "supported", modelLabel, reason: `${modelLabel} 声明了视觉输入能力。` };

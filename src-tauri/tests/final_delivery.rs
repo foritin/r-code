@@ -175,10 +175,10 @@ fn f11_dod_documentation_links() {
     let required_docs = [
         "README.md",
         "CHANGELOG.md",
-        "docs/README.md",
+        "docs/readme.md",
         ".github/workflows/release.yml",
-        "vendor/agent-core/docs/index.html",
-        "vendor/agent-core/docs/checklist.html",
+        "vendor/agent-contracts/docs/index.html",
+        "vendor/agent-contracts/docs/checklist.html",
     ];
 
     for doc in required_docs {

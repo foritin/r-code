@@ -1,6 +1,6 @@
 # R-Code 发布手册
 
-本文是维护者从“准备版本”到“GitHub Release 可下载、客户端可更新”的唯一操作入口。架构背景见 [ARCHITECTURE.md](./ARCHITECTURE.md)，用户可见变化见根目录 [CHANGELOG.md](../CHANGELOG.md)。
+本文是维护者从“准备版本”到“GitHub Release 可下载、客户端可更新”的唯一操作入口。架构背景见 [ARCHITECTURE.md](./architecture.md)，用户可见变化见根目录 [CHANGELOG.md](../CHANGELOG.md)。
 
 ## 1. 发布链路
 
@@ -45,7 +45,7 @@ flowchart LR
 
 `.github/workflows/release.yml` 的默认权限和 metadata 校验 job 都是 `contents: read`；只有需要上传发行资产或发布 Draft 的构建/finalize job 才声明 `contents: write`。如果组织级策略禁止 `GITHUB_TOKEN` 写 Release，需要在仓库 Settings → Actions → General 中允许工作流写入，或按组织策略改用受控的发布 App/token。所有 checkout 都设置 `persist-credentials: false`，避免 PAT 或 `GITHUB_TOKEN` 留在 runner Git 配置中。
 
-不要把长期 PAT 写入 workflow 文件。`vendor/agent-core` 是私有子模块，仓库 Secret `PAT_TOKEN` 必须是一个只授予 `foritin/agent-core` **Contents: read** 的 fine-grained token；CI 和 Release 仅通过 `actions/checkout` 使用它，不把令牌写入脚本、日志或仓库。父仓 gitlink 负责锁定精确 commit，PAT 只负责让 runner 读取该 commit。Release 的 tag/版本/CI 质量校验 job 不读取 `PAT_TOKEN` 或 updater 私钥；这些 Secret 只在后续的发布前置校验和实际构建 job 中使用。
+不要把长期 PAT 写入 workflow 文件。`vendor/agent-contracts` 是私有子模块，仓库 Secret `PAT_TOKEN` 必须是一个只授予 `foritin/agent-contracts` **Contents: read** 的 fine-grained token；CI 和 Release 仅通过 `actions/checkout` 使用它，不把令牌写入脚本、日志或仓库。父仓 gitlink 负责锁定精确 commit，PAT 只负责让 runner 读取该 commit。Release 的 tag/版本/CI 质量校验 job 不读取 `PAT_TOKEN` 或 updater 私钥；这些 Secret 只在后续的发布前置校验和实际构建 job 中使用。
 
 ### 3.2 Tauri updater 签名
 
@@ -158,7 +158,7 @@ node scripts/publish-release.mjs vX.Y.Z-unsigned.1
 git switch main
 git pull --ff-only origin main
 git status --short
-git submodule status vendor/agent-core
+git submodule status vendor/agent-contracts
 node scripts/release.mjs check
 ```
 
@@ -325,7 +325,7 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 ## 8. 首次发布额外清单
 
 - [ ] 仓库还没有同名 tag，版本号和 `CHANGELOG.md` 已准备。
-- [ ] `vendor/agent-core` gitlink 指向可访问且已审核的 commit。
+- [ ] `vendor/agent-contracts` gitlink 指向可访问且已审核的 commit。
 - [ ] updater 私钥已备份，Secrets 与内置公钥配对验证通过。
 - [ ] GitHub Actions 具有创建 Release 的权限。
 - [ ] `main` ruleset、`v*` tag protection、受审批保护的 `release` Environment、Secret Scanning、Push Protection、Dependabot alerts 均已由仓库管理员启用并做过实际权限验证。

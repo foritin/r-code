@@ -3,8 +3,8 @@ use std::sync::{
     Arc,
 };
 
-use async_trait::async_trait;
 use agent_contract::ToolCallOutcome;
+use async_trait::async_trait;
 use r_code_mcp::{
     McpClientError, McpClientSession, McpConnector, McpServerConfig, McpServerSource,
     McpServerState, McpSupervisor, McpToolDescriptor, McpTransportConfig,

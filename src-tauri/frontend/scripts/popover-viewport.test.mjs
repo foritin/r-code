@@ -208,9 +208,10 @@ test("review-ready sessions stay green without losing their review semantics", a
 
   assert.match(status.reviewReady.className, /\breview\b/, "review-ready remains a distinct semantic state");
   assert.equal(status.reviewReady.color, status.success, "review-ready is completed work, not a live orange run");
-  for (const active of [status.running, status.waitingUser]) {
-    assert.equal(active.color, status.warning);
-  }
+  // 运行中圆点是透明背景 + 旋转边框的 spinner（新视觉），不再是 warning 实心点；
+  // 等待用户（attention）仍保持 warning 实心色。
+  assert.equal(status.running.color, "rgba(0, 0, 0, 0)", "running dot is a transparent spinner");
+  assert.equal(status.waitingUser.color, status.warning);
   assert.match(status.running.className, /\brunning\b/);
   assert.match(status.waitingUser.className, /\battention\b/);
 

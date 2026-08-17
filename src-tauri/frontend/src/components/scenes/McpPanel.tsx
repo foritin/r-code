@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { errText } from "../../lib/format";
 import {
+  IpcCommandError,
+  RTK_BLOCKED_BY_SECURITY_SOFTWARE,
+  rtkOpenSecurityExclusions,
+  rtkSetEnabled,
+  rtkStatus,
   mcpCredentialStatus,
   mcpDeleteCredential,
   mcpMarketInstall,
@@ -24,8 +29,10 @@ import type {
   McpServerState,
   McpServerView,
   McpUpsertRequest,
+  RtkStatus,
 } from "../../lib/types";
 import { useAppStore } from "../../store/app";
+import { pushToast } from "../../store/toast";
 import { IconCheck, IconPlus, IconRefresh, IconSearch, IconShield, IconTrash } from "../icons";
 
 type ApprovalAction =
@@ -190,34 +197,36 @@ export function McpPanel() {
 
   return (
     <div className="mcp-panel">
-      <header className="knowledge-panel-head">
-        <div>
-          <span>TOOLS &amp; CONNECTIONS</span>
-          <h2>联网与 MCP</h2>
-          <p>普通联网优先使用 R-Code 内置工具；只有深度调研、专用数据源或鉴权服务才交给 MCP。</p>
-        </div>
-        <button className="iconbtn" aria-label="刷新 MCP 状态" title="刷新" disabled={busyKeys.has("reload")} onClick={() => void run("reload", reload)}>
-          <IconRefresh width={15} height={15} />
-        </button>
-      </header>
 
       {error && <div className="mcp-banner error" role="alert"><strong>操作未完成</strong><span>{error}</span></div>}
       {notice && <div className="mcp-banner ok" role="status"><IconCheck width={14} height={14} /><span>{notice}</span></div>}
       {snapshot?.settings_error && <div className="mcp-banner error" role="alert"><strong>MCP 配置文件不可用</strong><span>{snapshot.settings_error}</span></div>}
 
-      <section className="mcp-native">
-        <div className="mcp-native-mark" aria-hidden="true">WEB</div>
-        <div>
-          <strong>内置联网工具</strong>
-          <p><code>web_search</code> 与 <code>web_fetch</code> 使用无密钥的安全读取通道，限制重定向、响应大小和内网地址。无需 MCP，也不会启动外部进程。</p>
+      <section className="mcp-section">
+        <div className="mcp-section-head">
+          <div><h3>内置工具</h3><p>无需 MCP、不启动外部服务的本机能力，对所有模型生效。</p></div>
         </div>
-        <span className="mcp-state is-running"><i />可用</span>
+        <div className="mcp-builtin-list">
+          <div className="mcp-builtin-row">
+            <div className="mcp-builtin-copy">
+              <strong>联网工具</strong>
+              <p><code>web_search</code> 与 <code>web_fetch</code> 使用无密钥的安全读取通道，限制重定向、响应大小和内网地址；不会启动外部进程。</p>
+            </div>
+            <span className="mcp-state is-running"><i />可用</span>
+          </div>
+          <RtkControl />
+        </div>
       </section>
 
       <section className="mcp-section">
         <div className="mcp-section-head">
           <div><h3>MCP 服务</h3><p>已安装服务只在模型实际调用时启动；关闭会立即阻止后续调用并安全结束连接。</p></div>
-          <button className="btn" onClick={() => setEditing("new")}><IconPlus width={13} height={13} />自定义</button>
+          <div className="mcp-section-actions">
+            <button className="iconbtn" aria-label="刷新 MCP 状态" title="刷新" disabled={busyKeys.has("reload")} onClick={() => void run("reload", reload)}>
+              <IconRefresh width={15} height={15} />
+            </button>
+            <button className="btn" onClick={() => setEditing("new")}><IconPlus width={13} height={13} />自定义</button>
+          </div>
         </div>
         {!snapshot && !error && <div className="knowledge-state">正在读取本机 MCP 配置…</div>}
         {snapshot && servers.length === 0 && <div className="mcp-empty">暂无 MCP 服务。内置联网工具仍然可用。</div>}
@@ -488,3 +497,142 @@ function stateLabel(state: McpServerState, enabled: boolean) {
   if (state === "error") return "连接错误";
   return "按需就绪";
 }
+
+type RtkTransition = "enabling" | "disabling" | null;
+
+function RtkControl() {
+  const [status, setStatus] = useState<RtkStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [transition, setTransition] = useState<RtkTransition>(null);
+  const [optimisticEnabled, setOptimisticEnabled] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const next = await rtkStatus();
+      setStatus(next);
+      setOptimisticEnabled(next.enabled);
+    } catch {
+      setStatus(null);
+      setOptimisticEnabled(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const toggle = async (enabled: boolean) => {
+    if (transition || loading) return;
+    const previous = status;
+    setOptimisticEnabled(enabled);
+    setTransition(enabled ? "enabling" : "disabling");
+    try {
+      const next = await rtkSetEnabled(enabled);
+      setStatus(next);
+      setOptimisticEnabled(next.enabled);
+    } catch (error) {
+      setStatus(previous);
+      setOptimisticEnabled(previous?.enabled ?? false);
+      if (
+        enabled &&
+        error instanceof IpcCommandError &&
+        error.code === RTK_BLOCKED_BY_SECURITY_SOFTWARE
+      ) {
+        pushToast({
+          kind: "warn",
+          title: "RTK 被安全软件拦截",
+          body: `Windows 安全中心可能隔离了 RTK 二进制。请把「${status?.bin_dir ?? "R-Code 的 bin 目录"}」加入排除项，然后重新开启。`,
+          action: {
+            label: "打开安全中心",
+            run: () => void rtkOpenSecurityExclusions().catch(() => {}),
+          },
+          timeout: 0,
+        });
+      } else {
+        pushToast({
+          kind: "warn",
+          title: enabled ? "RTK 未能启用" : "RTK 未能关闭",
+          body: "请稍后重试；详细原因已写入诊断日志。",
+          timeout: 5200,
+        });
+      }
+    } finally {
+      setTransition(null);
+    }
+  };
+
+  const busy = transition !== null;
+  const state = transition === "enabling"
+    ? "enabling"
+    : transition === "disabling"
+      ? "disabling"
+      : status?.enabled
+        ? "enabled"
+        : status?.available
+          ? "available"
+          : "unavailable";
+  const badge = loading
+    ? "正在检测"
+    : transition === "enabling"
+      ? status?.available ? "正在配置" : "正在安装"
+      : transition === "disabling"
+        ? "正在关闭"
+        : status?.enabled
+          ? "已启用"
+          : status?.available
+            ? "已安装"
+            : status
+              ? "未安装"
+              : "暂不可用";
+  const detail = loading
+    ? "正在确认本机 RTK 与 R-Code 策略状态。"
+    : transition === "enabling"
+      ? status?.available
+        ? "正在为之后启动的所有模型会话启用命令策略。"
+        : "正在从 rtk-ai/rtk 官方 Release 下载并校验适合当前系统的版本，安装到用户级应用数据目录。"
+      : transition === "disabling"
+        ? "正在停用新会话策略；已安装的 RTK 会完整保留，系统提示词中的策略说明随之移除。"
+        : status?.enabled
+          ? "之后启动的所有模型会话与子代理都会优先使用 RTK；策略说明会自动追加到系统提示词，当前运行不会重启。"
+          : status?.available
+            ? "已检测到可用的 RTK。开启后从下一次会话开始生效，对所有模型生效。"
+            : status
+              ? "开启时自动检测系统安装；若不存在，将安全安装到用户级应用数据目录（与项目目录无关）。"
+              : "暂时无法读取状态。可重试，详细原因会保留在诊断日志。";
+  const installation = status?.available
+    ? `${status.version ?? "RTK"} · ${status.managed ? "R-Code 托管" : "系统安装"}`
+    : status?.platform ?? "按当前系统选择版本";
+
+  return (
+    <div className={`rtk-control state-${state}`} aria-busy={loading || busy}>
+      <div className="rtk-mark" aria-hidden="true">RTK</div>
+      <div className="rtk-control-copy">
+        <div className="rtk-control-title">
+          <strong>RTK 命令加速</strong>
+          <span className="rtk-state-badge" role="status" aria-live="polite">{badge}</span>
+        </div>
+        <p>{detail}</p>
+        <div className="rtk-control-meta">
+          <span>{installation}</span>
+          <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noreferrer">官方项目</a>
+          {!loading && !status && (
+            <button className="quiet-link" onClick={() => void load()}>重新检测</button>
+          )}
+        </div>
+      </div>
+      <input
+        id="rtk-enabled"
+        className="switch rtk-switch"
+        type="checkbox"
+        role="switch"
+        aria-label="为所有模型会话启用 RTK"
+        checked={optimisticEnabled}
+        disabled={loading || busy || !status}
+        onChange={(event) => void toggle(event.target.checked)}
+      />
+    </div>
+  );
+}

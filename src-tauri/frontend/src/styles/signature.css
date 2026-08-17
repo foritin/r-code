@@ -364,6 +364,16 @@
   border-radius: 2px;
 }
 
+#app.r-code-signature .app-sidebar .task-state-dot.running {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--fg-muted);
+  animation: rot 0.8s linear infinite;
+}
+
 #app.r-code-signature .sidebar-footer {
   border-top-color: color-mix(in srgb, var(--fg) 7%, transparent);
 }
@@ -1004,7 +1014,7 @@
 
 #app.r-code-signature .scene-room .composer-queue-stack {
   width:min(100%, 33.333%);
-  margin:0 auto 8px;
+  margin:0;
   border-color: var(--signature-panel-edge);
   border-radius: 12px;
   background: var(--signature-control);

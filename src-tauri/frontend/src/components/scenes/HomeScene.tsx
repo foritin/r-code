@@ -299,10 +299,6 @@ export function HomeScene() {
       setError("先连接并保存一个模型服务，随后即可直接开始聊天。");
       return;
     }
-    if (agentEngine === "codex" && !currentWorkspace) {
-      setError("Codex 主 Agent 需要先附加一个本地工作区。");
-      return;
-    }
     if (agentEngine === "codex" && !codexReady) {
       setError("Codex CLI 尚未完成安装、登录或 R-Code 协作配置。请先前往设置完成连接。");
       return;
@@ -732,10 +728,10 @@ export function HomeScene() {
                     <MenuItem
                       close={close}
                       checked={currentWorkspacePath === null}
-                      hint="不读取本地文件"
+                      hint="以主目录为根，写操作需批准"
                       onSelect={() => setCurrentWorkspace(null)}
                     >
-                      仅聊天
+                      用户路径（默认工作区）
                     </MenuItem>
                     {workspaces.map((workspace) => (
                       <MenuItem

@@ -139,6 +139,55 @@ export function toolVerb(toolName: string): string {
   return "tool";
 }
 
+export type ToolDisplayLanguage = "zh" | "en";
+
+/** 内部工具名 → 面向用户的中英文文案。未命中时调用方应回退到原工具名。 */
+const TOOL_DISPLAY_NAMES: Record<string, { zh: string; en: string }> = {
+  enter_plan_mode: { zh: "进入计划模式", en: "Enter plan mode" },
+  plan_publish: { zh: "发布计划", en: "Publish plan" },
+  plan_item_update: { zh: "更新计划进度", en: "Update plan progress" },
+  request_user_input: { zh: "请求用户确认", en: "Request user input" },
+  request_scope_decision: { zh: "请求范围决策", en: "Request scope decision" },
+  plan_repair_projection: { zh: "修复计划文档", en: "Repair plan document" },
+  plan_retry_continuation: { zh: "重试计划续接", en: "Retry plan continuation" },
+  plan_retry_implementation: { zh: "重试计划实施", en: "Retry plan implementation" },
+  plan_approve: { zh: "批准计划", en: "Approve plan" },
+  plan_cancel: { zh: "取消计划", en: "Cancel plan" },
+  delegate_task: { zh: "委派子代理", en: "Delegate subagent" },
+  collect_subagents: { zh: "汇总子代理", en: "Collect subagents" },
+  list_agents: { zh: "查看子代理", en: "List subagents" },
+  send_agent_message: { zh: "发送子代理消息", en: "Send subagent message" },
+};
+
+/** 判断文本是否以 CJK 为主，用于按用户对话语言切换工具文案。 */
+export function isCjkText(text: string): boolean {
+  return /[\u3400-\u4dbf\u4e00-\u9fff\u20000-\u2a6df\u2a700-\u2ebef]/.test(text);
+}
+
+/** 把内部工具名转成用户语言文案；未知工具名原样返回。 */
+export function toolDisplayName(toolName: string, language: ToolDisplayLanguage): string {
+  const mapped = TOOL_DISPLAY_NAMES[toolName];
+  return mapped ? mapped[language] : toolName;
+}
+
+/** 计划编排工具应单独归组，避免掉进通用“正在使用工具”文案。 */
+const PLAN_TOOL_NAMES = new Set([
+  "enter_plan_mode",
+  "plan_publish",
+  "plan_item_update",
+  "request_user_input",
+  "request_scope_decision",
+  "plan_repair_projection",
+  "plan_retry_continuation",
+  "plan_retry_implementation",
+  "plan_approve",
+  "plan_cancel",
+]);
+
+export function isPlanToolName(toolName: string): boolean {
+  return PLAN_TOOL_NAMES.has(toolName);
+}
+
 /** 从工具输入 JSON 提取展示目标（路径或命令）。 */
 export function toolTarget(inputJson: string | null | undefined): string {
   if (!inputJson) return "";

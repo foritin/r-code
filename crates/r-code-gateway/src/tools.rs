@@ -186,8 +186,8 @@ fn open_text_file(
     let display_path = path_for_display(path);
     match workspace_guard {
         Some(guard) => guard
-            .open_existing_file(Path::new(path), WorkspaceFileAccess::Read)
-            .map(|(_, file)| file),
+            .open_file(Path::new(path), WorkspaceFileAccess::Read)
+            .map(|handle| handle.into_file()),
         None => std::fs::File::open(path)
             .map_err(|e| ProductError::Other(format!("failed to read {display_path}: {e}"))),
     }
@@ -214,8 +214,8 @@ fn list_directory_names(
     let display_path = path_for_display(path);
     let mut names = match workspace_guard {
         Some(guard) => guard
-            .list_existing_directory(Path::new(path))?
-            .1
+            .list_directory(Path::new(path))?
+            .into_entries()
             .into_iter()
             .map(|entry| entry.name.to_string_lossy().to_string())
             .collect(),
@@ -241,7 +241,7 @@ fn atomic_write_scoped(
     workspace_guard: Option<&PathGuard>,
 ) -> Result<(), ProductError> {
     match workspace_guard {
-        Some(guard) => guard.atomic_write_file(path, content).map(|_| ()),
+        Some(guard) => guard.atomic_write_path(path, content).map(|_| ()),
         None => atomic_write(path, content),
     }
 }
@@ -252,7 +252,7 @@ fn create_new_file_scoped(
     workspace_guard: Option<&PathGuard>,
 ) -> Result<(), ProductError> {
     match workspace_guard {
-        Some(guard) => guard.create_new_file(path, content).map(|_| ()),
+        Some(guard) => guard.create_new_path(path, content).map(|_| ()),
         None => {
             use std::io::Write;
             let display_path = path_for_display(path);
@@ -656,6 +656,116 @@ impl Tool for GitStatusTool {
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
+}
+
+// ============================================================================
+// git_diff_stat -- R0
+// ============================================================================
+
+/// `git_diff_stat` 工具 -- 报告未提交变更的逐文件增删行数。
+///
+/// R0：只读。内部运行 `git diff --numstat`，汇总成与审查面板一致的
+/// `+X −Y` 行数统计，让模型在编辑后无需再 shell 调用 `git diff`。
+pub struct GitDiffStatTool;
+
+/// `path` 在模型契约中是可选的；缺省时由会话的 `PathGuard` 注入工作区根。
+const GIT_DIFF_STAT_PATH_BINDINGS: &[PathBinding] = &[PathBinding::default_root("path")];
+
+#[async_trait]
+impl Tool for GitDiffStatTool {
+    fn name(&self) -> &str {
+        "git_diff_stat"
+    }
+    fn description(&self) -> &str {
+        "Report per-file insertions/deletions and totals for uncommitted changes in a git \
+repository (git diff --numstat). Use it after editing files to report line-level change stats. \
+Path defaults to the workspace root."
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        GIT_DIFF_STAT_PATH_BINDINGS
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Repository path (defaults to current working directory)."
+                }
+            }
+        })
+    }
+    async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let numstat = run_git(path, &["diff", "--numstat"])?;
+
+        let mut files: Vec<(String, i64, i64)> = Vec::new();
+        let mut binary_files: Vec<String> = Vec::new();
+        let mut total_added: i64 = 0;
+        let mut total_deleted: i64 = 0;
+
+        for line in numstat.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let mut parts = line.split('\t');
+            let added_s = parts.next().unwrap_or("");
+            let deleted_s = parts.next().unwrap_or("");
+            let file = parts.next().unwrap_or("");
+            if file.is_empty() {
+                continue;
+            }
+            if added_s == "-" || deleted_s == "-" {
+                binary_files.push(file.to_string());
+                continue;
+            }
+            let added = added_s.parse::<i64>().unwrap_or(0);
+            let deleted = deleted_s.parse::<i64>().unwrap_or(0);
+            // 纯重命名在 numstat 里是 0/0，无行数变化，不计入统计。
+            if added == 0 && deleted == 0 {
+                continue;
+            }
+            total_added += added;
+            total_deleted += deleted;
+            files.push((file.to_string(), added, deleted));
+        }
+
+        if files.is_empty() && binary_files.is_empty() {
+            return Ok("(无未提交变更)".to_string());
+        }
+
+        let mut out = format!(
+            "{} 个文件变更，+{} −{}\n",
+            files.len() + binary_files.len(),
+            total_added,
+            total_deleted
+        );
+        for (file, added, deleted) in files {
+            out.push_str(&format!("{file} +{added} −{deleted}\n"));
+        }
+        for file in binary_files {
+            out.push_str(&format!("{file} (二进制)\n"));
+        }
+        Ok(out)
+    }
+}
+
+fn run_git(path: &str, args: &[&str]) -> Result<String, ProductError> {
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(path).args(args);
+    hide_background_console(&mut command);
+    let output = command
+        .output()
+        .map_err(|e| ProductError::GitError(format!("failed to run git: {e}")))?;
+    if !output.status.success() {
+        return Err(ProductError::GitError(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 // ============================================================================
@@ -2188,7 +2298,7 @@ mod tests {
                 assert!(details["current_revision"]
                     .as_str()
                     .is_some_and(|revision| revision.starts_with("blake3:")));
-                assert_eq!(details["retry_policy"].as_str().is_some(), true);
+                assert!(details["retry_policy"].as_str().is_some());
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -2513,6 +2623,8 @@ mod tests {
         assert!(!ReadFileTool.description().is_empty());
         assert_eq!(ListFilesTool.name(), "list_files");
         assert_eq!(GitStatusTool.name(), "git_status");
+        assert_eq!(GitDiffStatTool.name(), "git_diff_stat");
+        assert!(!GitDiffStatTool.description().is_empty());
         assert_eq!(EditTool.name(), "edit");
         assert!(!EditTool.description().is_empty());
         assert_eq!(LoadSkillTool.name(), "load_skill");
@@ -2528,6 +2640,7 @@ mod tests {
             ReadFileTool.input_schema(),
             ListFilesTool.input_schema(),
             GitStatusTool.input_schema(),
+            GitDiffStatTool.input_schema(),
             EditTool.input_schema(),
             LoadSkillTool.input_schema(),
             ApplyPatchTool.input_schema(),

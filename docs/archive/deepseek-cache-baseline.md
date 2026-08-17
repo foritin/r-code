@@ -48,7 +48,7 @@
 3. 早期轮命中率低是结构性稀释：每轮追加的 assistant 回复（max_tokens=256）占短 prompt 比例高；轮次增加后稀释收敛，命中率趋近 95%+。真实 agent 长会话历史远大于每轮追加，同构——10 轮内的 tail_avg（82.2%）不代表稳态。
 4. 此前 3 轮实测 tail_avg=79.7%（vendor commit `d26f02e`）与本曲线早期段一致；字节前缀 mock 守卫 tail_avg=96.5%（commit `69c49e9`）与稳态段一致。
 
-复跑命令（vendor/agent-core 目录下，key 从环境变量读取、不落盘）：
+复跑命令（vendor/agent-contracts 目录下，key 从环境变量读取、不落盘）：
 
 ```bash
 DEEPSEEK_API_KEY=sk-... cargo test -p agent-llm --test deepseek_cache_probe -- --ignored --nocapture

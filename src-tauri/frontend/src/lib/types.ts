@@ -36,6 +36,16 @@ export interface SessionAttachmentMeta {
   name: string;
   media_type: string;
   kind: AttachmentKind;
+  /** 前端专用的乐观预览 data URL；仅发送瞬间的时间线气泡使用，后端 DTO 不携带。 */
+  previewUrl?: string;
+  /** 后端提供的按需预览引用；用于历史时间线图片缩略图懒加载。 */
+  preview_id?: string;
+}
+
+/** 时间线图片附件的按需预览载荷；data 是不含 data: 前缀的标准 Base64。 */
+export interface AttachmentPreviewPayload {
+  media_type: string;
+  data: string;
 }
 export type TaskState =
   | "idle"
@@ -88,6 +98,7 @@ export type PlanItemState =
   | "cancelled";
 
 export type PlanQuestionSetState = "pending" | "answered" | "skipped";
+export type PlanQuestionSetKind = "plan" | "scope_decision";
 export type PlanContinuationState =
   | "not_requested"
   | "pending"
@@ -157,6 +168,8 @@ export interface PlanQuestionSet {
   plan_id: string;
   revision: number;
   state: PlanQuestionSetState;
+  kind: PlanQuestionSetKind;
+  restore_mode: TaskMode | null;
   answer_idempotency_key: string | null;
   continuation_state: PlanContinuationState;
   continuation_error: string | null;
@@ -313,6 +326,10 @@ export interface AgentRun {
   /** 旧运行可能缺失；仅 full_access + true 表示仍需宿主审批。 */
   require_approval?: boolean;
   routing_reason: string | null;
+  /** 长任务循环护栏触发记录（JSON：`{"reason": ..., "detail": ...}`）；旧运行缺失。 */
+  guard_trip?: string | null;
+  /** 最近一次绿灯 git checkpoint 的 commit SHA；未启用或无快照时为 null。 */
+  checkpoint_sha?: string | null;
 }
 
 export type TaskEventType =
@@ -519,6 +536,17 @@ export interface SessionBranch {
 }
 
 export type QueuedMessageState = "queued" | "dispatching" | "sent" | "cancelled" | "failed";
+
+/** 排队消息附件的展示元数据；与后端 `QueuedAttachmentPayload` 对齐。 */
+export interface QueuedAttachmentMeta {
+  name: string;
+  media_type: string;
+  kind: AttachmentKind;
+  /** 非 OCR 附件的原始 Base64（不含 data: 前缀）；OCR 文本附件同样存文本 Base64。 */
+  data?: string;
+  /** 本机 OCR 原图的按需预览引用；非 OCR 附件或旧数据可能缺失。 */
+  preview_id?: string;
+}
 
 export interface QueuedMessage {
   id: string;
@@ -739,6 +767,15 @@ export type SubagentAccessMode = "read_only" | "full_access";
 
 export type PeerMessageDeliveryStatus = "queued" | "delivered";
 
+export type GuardTripReason =
+  | "tool_round_budget"
+  | "wall_clock_budget"
+  | "reasoning_budget"
+  | "same_error"
+  | "no_progress"
+  | "diff_divergence"
+  | "test_failures";
+
 export interface AgentEventScope {
   run_id: string;
   agent_id: string;
@@ -773,7 +810,9 @@ export type AgentEvent =
       content_chars?: number;
     }
   | { type: "subagent_lifecycle"; state: SubagentState; detail?: string }
-  | { type: "state"; state: TaskState };
+  | { type: "state"; state: TaskState }
+  | { type: "guard_trip"; reason: GuardTripReason; detail: string }
+  | { type: "checkpoint"; sha: string; base_head?: string };
 
 /** "agent-event" Tauri 事件的信封（后端 drain 循环 emit）。 */
 export interface AgentEventEnvelope {
@@ -1441,6 +1480,21 @@ export interface OrchestrationConfig {
   quality_reviewer: "auto" | "r_code" | "codex";
   max_review_rounds: number;
   subagent_pool?: SubagentPoolConfig;
+  /** 长任务循环护栏预算；旧配置缺失时由后端回填默认值。 */
+  run_budget?: RunBudgetConfig;
+}
+
+export interface RunBudgetConfig {
+  max_tool_rounds: number;
+  max_run_seconds: number;
+  reasoning_budget_chars: number;
+  same_error_limit: number;
+  no_progress_rounds: number;
+  replay_detection: boolean;
+  diff_file_limit: number;
+  diff_byte_limit: number;
+  test_fail_limit: number;
+  checkpoint_enabled: boolean;
 }
 
 /** cmd_settings_get 返回：宽松加载，validation 为软提示（未配置 provider 等）。 */

@@ -15,15 +15,15 @@
 
 ## 开发环境
 
-需要 Git、Rust stable、Node.js 20，以及 [Tauri 2 对应平台依赖](https://v2.tauri.app/start/prerequisites/)。产品构建依赖 `vendor/agent-core` 私有子模块；`.agents` 子模块只用于仓库协作，不参与产品构建。
+需要 Git、Rust stable、Node.js 20，以及 [Tauri 2 对应平台依赖](https://v2.tauri.app/start/prerequisites/)。产品构建依赖 `vendor/agent-contracts` 私有子模块；`.agents` 子模块只用于仓库协作，不参与产品构建。
 
 ```bash
 git clone git@github.com:foritin/r-code.git
 cd r-code
-git submodule update --init --recursive -- vendor/agent-core
+git submodule update --init --recursive -- vendor/agent-contracts
 ```
 
-`vendor/agent-core` 当前是私有构建依赖，需要相应仓库读权限。没有权限时仍可检出主仓并处理文档或不依赖该子模块的前端工作，但无法完成 Rust 全工作区构建。
+`vendor/agent-contracts` 当前是私有构建依赖，需要相应仓库读权限。没有权限时仍可检出主仓并处理文档或不依赖该子模块的前端工作，但无法完成 Rust 全工作区构建。
 
 Windows：
 
@@ -81,7 +81,7 @@ npm run build
 
 ## 文档与用户可见变化
 
-- 架构、数据流、隐私边界或安全边界变化时，同步 `docs/ARCHITECTURE.md`、`PRIVACY.md` 或 `SECURITY.md`。
+- 架构、数据流、隐私边界或安全边界变化时，同步 `docs/architecture.md`、`PRIVACY.md` 或 `SECURITY.md`。
 - 记忆、MCP、Provider、Codex 或发布行为变化时，同步对应专题文档。
 - 用户可见变化写入 `CHANGELOG.md` 的 `Unreleased` 部分。
 - 截图中不得出现密钥、私有路径、私有项目名或真实对话内容。

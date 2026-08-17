@@ -258,12 +258,14 @@ function presentRawTurn(turn: RawTurn): TimelineTurn | null {
 }
 
 /**
- * Queued messages belong to the reorderable composer queue until dispatch succeeds.
- * Rendering them in the conversation at the same time duplicates the same content and
- * makes queue reordering look like it rewrites chat history.
+ * Queued and steer messages belong to the composer surfaces (reorderable queue /
+ * floating steer stack) until dispatch succeeds. Rendering them in the conversation at
+ * the same time duplicates the same content and makes queue reordering look like it
+ * rewrites chat history.
  */
 function composerOwnsQueuedMessage(user: TimelineUserItem | null): boolean {
-  return user?.queuedState === "queued"
+  return user?.sendMode === "steer"
+    || user?.queuedState === "queued"
     || user?.queuedState === "dispatching"
     || user?.queuedState === "failed";
 }

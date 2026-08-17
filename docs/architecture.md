@@ -42,7 +42,7 @@ flowchart LR
 | 产品存储 | `crates/r-code-store/` | SQLite、变更基线、Blob、Git、验证、审核和备份 |
 | 终端 | `crates/r-code-terminal/` | PTY、OSC 133、增量输出、外部 CLI transcript |
 | 产品 DTO 与安全 | `crates/r-code-core/` | 状态机、请求/响应类型、密钥、路径边界 |
-| 公共合同 | `vendor/agent-core/` | `agent-*` 会话、模型、配置、IPC、MCP 与 Tauri 合同；Git 子模块 |
+| 公共合同 | `vendor/agent-contracts/` | `agent-*` 会话、模型、配置、IPC、MCP 与 Tauri 合同；Git 子模块 |
 | Renderer | `src-tauri/frontend/` | React 场景、Zustand 状态、typed IPC、流式时间线与工作台 |
 
 ## 2. 启动与运行模式
@@ -100,12 +100,12 @@ flowchart TD
     Gateway --> Core
     Terminal --> Gateway
     Terminal --> Core
-    Core --> AgentCore["vendor/agent-core / agent-*"]
-    Worker --> AgentCore
-    Host --> AgentCore
+    Core --> AgentContracts["vendor/agent-contracts / agent-*"]
+    Worker --> AgentContracts
+    Host --> AgentContracts
 ```
 
-产品 crate 通过根 `Cargo.toml` 的 workspace dependencies 共享版本和依赖。`vendor/agent-core` 是构建必需子模块；`.agents` 只提供仓库内开发技能，不进入产品构建。
+产品 crate 通过根 `Cargo.toml` 的 workspace dependencies 共享版本和依赖。`vendor/agent-contracts` 是构建必需子模块；`.agents` 只提供仓库内开发技能，不进入产品构建。
 
 ### 3.2 `CommandState`
 
@@ -272,7 +272,7 @@ DeepSeek `/chat/completions` 的前缀缓存是字节级自动的（无 API 开�
 - **重试与恢复**：连接层指数退避（≤10 次，仅 408/429/5xx/连接类）、未产出内容前的空闲流用冻结请求重放（≤5 次，字节与首试一致，失败不写 session）；120s SSE 空闲 watchdog；重放次数经 `AgentEvent::StreamReplay` 累计进 `usage_json.stream_retries`，UI 展示「重试 N 次」。
 - **可观测**：usage 解析 `prompt_cache_hit/miss_tokens`（回落 OpenAI `prompt_tokens_details.cached_tokens`，DeepSeek 字段优先）；原生线路持久化 `usage_json`，Timeline 展示命中率；`PrefixShape`（system/tools 哈希 + `rewrite_version`）每轮请求前 capture/compare，前缀变化时 tracing 记录归因 cause（`cache_shape.rs`）。
 - **分层压缩**：50% 提示 / 60% 剪旧工具结果 / 80% 摘要折叠（复用 vendor `agent-compaction` 策略 + 自实现决策状态机与机械折叠兜底），带防抖（连续 2 次暂停）与真实 usage 的 tokens/字符校准；压缩是唯一的常规缓存重置点，`rewrite_version` 计入 PrefixShape 归因。
-- **守卫与探针**：`crates/r-code-agent-worker/tests/cache_guard.rs` 用字节前缀 mock 断言多轮 tail_avg ≥90%（env `R_CODE_CACHE_GUARD=1` 启用，默认 skip）；真实 API 探针 `vendor/agent-core/crates/agent-llm/tests/deepseek_cache_probe.rs`（`#[ignore]`，需 `DEEPSEEK_API_KEY`）。
+- **守卫与探针**：`crates/r-code-agent-worker/tests/cache_guard.rs` 用字节前缀 mock 断言多轮 tail_avg ≥90%（env `R_CODE_CACHE_GUARD=1` 启用，默认 skip）；真实 API 探针 `vendor/agent-contracts/crates/agent-llm/tests/deepseek_cache_probe.rs`（`#[ignore]`，需 `DEEPSEEK_API_KEY`）。
 
 ## 7. 子智能体与 Codex 协作
 

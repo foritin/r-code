@@ -10,13 +10,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use chrono::{DateTime, Utc};
+use r_code_core::dto::TaskMode;
 use r_code_core::error::ProductError;
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput, Plan,
     PlanContinuationState, PlanGoal, PlanImplementationDispatchState, PlanItem, PlanItemDraft,
-    PlanItemState, PlanQuestion, PlanQuestionAnswer, PlanQuestionAnswerInput, PlanQuestionOption,
-    PlanQuestionSet, PlanQuestionSetState, PlanState, PlanView, PublishPlanInput,
-    RequestPlanQuestionsInput, UpdatePlanItemInput,
+    PlanItemState, PlanQuestion, PlanQuestionAnswer, PlanQuestionAnswerInput, PlanQuestionDraft,
+    PlanQuestionOption, PlanQuestionSet, PlanQuestionSetKind, PlanQuestionSetState, PlanState,
+    PlanView, PublishPlanInput, RequestPlanQuestionsInput, RequestScopeDecisionInput,
+    UpdatePlanItemInput,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use tempfile::NamedTempFile;
@@ -307,6 +309,130 @@ impl PlanStore {
         self.require_view(task_id, &plan_id)
     }
 
+    /// Persists a scope decision raised while the task is still in Agent mode. It creates the
+    /// owning Plan draft, records the original Agent mode to restore, and switches the task to
+    /// Plan mode in one transaction. The per-task active-Plan unique index is the CAS boundary:
+    /// a concurrent request that loses the race is rejected instead of creating a second Plan.
+    pub fn request_scope_decision(
+        &self,
+        task_id: &str,
+        input: &RequestScopeDecisionInput,
+    ) -> Result<PlanView, ProductError> {
+        validate_question_draft_list(&input.questions)?;
+        let plan_id = Uuid::new_v4().to_string();
+        let question_set_id = Uuid::new_v4().to_string();
+        let lock = plan_lock(&plan_id)?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| ProductError::Other("Plan lock is poisoned".to_string()))?;
+        let projection_path = self
+            .canonical_projection_path(&plan_id)?
+            .to_string_lossy()
+            .into_owned();
+        let now = Utc::now().to_rfc3339();
+
+        {
+            let mut conn = self.db.conn()?;
+            let tx = conn.transaction().map_err(db_err)?;
+            let task: Option<(String, String, String)> = tx
+                .query_row(
+                    "SELECT state, agent_engine, mode FROM tasks WHERE id = ?1",
+                    params![task_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(db_err)?;
+            let Some((task_state, agent_engine, task_mode)) = task else {
+                return Err(invalid(format!("task does not exist: {task_id}")));
+            };
+            if task_state == "archived" {
+                return Err(invalid("an archived task cannot raise a scope decision"));
+            }
+            if agent_engine != "r_code" {
+                return Err(invalid("scope decisions require the R-Code main Agent"));
+            }
+            if !matches!(task_mode.as_str(), "ask" | "edit" | "auto") {
+                return Err(invalid(format!(
+                    "request_scope_decision is unavailable while task mode is {task_mode}"
+                )));
+            }
+
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM plans WHERE task_id = ?1 \
+                     AND state NOT IN ('completed', 'cancelled') LIMIT 1",
+                    params![task_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            if let Some(existing) = existing {
+                return Err(invalid(format!(
+                    "task already has an active Plan: {existing}"
+                )));
+            }
+
+            tx.execute(
+                "INSERT INTO plans \
+                 (id, task_id, revision, state, projection_path, created_at, updated_at) \
+                 VALUES (?1, ?2, 1, 'draft', ?3, ?4, ?4)",
+                params![plan_id, task_id, projection_path, now],
+            )
+            .map_err(db_err)?;
+            tx.execute(
+                "INSERT INTO plan_question_sets \
+                 (id, plan_id, revision, state, kind, restore_mode, continuation_state, created_at) \
+                 VALUES (?1, ?2, 1, 'pending', 'scope_decision', ?3, 'not_requested', ?4)",
+                params![question_set_id, plan_id, task_mode.as_str(), now],
+            )
+            .map_err(db_err)?;
+            for (ordinal, question) in input.questions.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO plan_questions \
+                     (id, question_set_id, ordinal, header, question) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        question.id,
+                        question_set_id,
+                        ordinal as i64,
+                        question.header.trim(),
+                        question.question.trim(),
+                    ],
+                )
+                .map_err(db_err)?;
+                for (option_ordinal, option) in question.options.iter().enumerate() {
+                    tx.execute(
+                        "INSERT INTO plan_question_options \
+                         (id, question_id, question_set_id, ordinal, label, description) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            option.id,
+                            question.id,
+                            question_set_id,
+                            option_ordinal as i64,
+                            option.label.trim(),
+                            option.description.trim(),
+                        ],
+                    )
+                    .map_err(db_err)?;
+                }
+            }
+            let changed = tx
+                .execute(
+                    "UPDATE tasks SET mode = 'plan', updated_at = ?1 \
+                     WHERE id = ?2 AND mode IN ('ask', 'edit', 'auto')",
+                    params![now, task_id],
+                )
+                .map_err(db_err)?;
+            if changed != 1 {
+                return Err(invalid("task mode changed while scope decision was staged"));
+            }
+            tx.commit().map_err(db_err)?;
+        }
+
+        self.sync_projection_locked(&plan_id)?;
+        self.require_view(task_id, &plan_id)
+    }
+
     pub fn current_for_task(&self, task_id: &str) -> Result<Option<PlanView>, ProductError> {
         let conn = self.db.conn()?;
         let plan_id: Option<String> = conn
@@ -582,7 +708,13 @@ impl PlanStore {
                 {
                     return Err(stale_revision(input.expected_revision, plan.revision));
                 }
-                if plan.state != PlanState::AwaitingInput {
+                let scope_decision = set.kind == PlanQuestionSetKind::ScopeDecision;
+                let plan_state_ok = if scope_decision {
+                    plan.state == PlanState::Draft
+                } else {
+                    plan.state == PlanState::AwaitingInput
+                };
+                if !plan_state_ok {
                     return Err(invalid(format!(
                         "cannot answer questions while Plan is {}",
                         plan.state
@@ -636,8 +768,24 @@ impl PlanStore {
                     ],
                 )
                 .map_err(db_err)?;
-                let updated = tx
-                    .execute(
+                let updated = if scope_decision {
+                    // 范围决策是 Agent 模式的临时脚手架：回答后立即终止临时 Plan，
+                    // 但任务模式由宿主按 restore_mode 恢复，不在这里改。
+                    tx.execute(
+                        "UPDATE plans SET revision = ?1, state = 'cancelled', updated_at = ?2, \
+                         projection_error = NULL WHERE id = ?3 AND task_id = ?4 AND revision = ?5 \
+                         AND state = 'draft'",
+                        params![
+                            sql_revision(next_revision)?,
+                            now,
+                            set.plan_id,
+                            task_id,
+                            sql_revision(input.expected_revision)?,
+                        ],
+                    )
+                    .map_err(db_err)?
+                } else {
+                    tx.execute(
                         "UPDATE plans SET revision = ?1, state = 'draft', updated_at = ?2, \
                          projection_error = NULL WHERE id = ?3 AND task_id = ?4 AND revision = ?5 \
                          AND state = 'awaiting_input'",
@@ -649,7 +797,8 @@ impl PlanStore {
                             sql_revision(input.expected_revision)?,
                         ],
                     )
-                    .map_err(db_err)?;
+                    .map_err(db_err)?
+                };
                 if updated != 1 {
                     return Err(invalid("Plan changed while the question set was answered"));
                 }
@@ -1902,6 +2051,13 @@ fn validate_item_drafts(items: &[PlanItemDraft]) -> Result<(), ProductError> {
                     "feature section_path labels must be 1-120 safe characters",
                 ));
             }
+            // The UI already numbers every outline level; a numeric-only label renders as a
+            // duplicated number and looks like a missing section title.
+            if segment.trim().chars().all(|c| c.is_ascii_digit()) {
+                return Err(invalid(
+                    "feature section_path labels must be descriptive text, not bare numbers (numbering is added automatically)",
+                ));
+            }
         }
         let mut dependencies = HashSet::new();
         for dependency in &item.depends_on {
@@ -1933,12 +2089,12 @@ fn validate_item_drafts(items: &[PlanItemDraft]) -> Result<(), ProductError> {
     Ok(())
 }
 
-fn validate_question_drafts(input: &RequestPlanQuestionsInput) -> Result<(), ProductError> {
-    if !(1..=3).contains(&input.questions.len()) {
+fn validate_question_draft_list(questions: &[PlanQuestionDraft]) -> Result<(), ProductError> {
+    if !(1..=3).contains(&questions.len()) {
         return Err(invalid("a question set must contain 1-3 questions"));
     }
     let mut identities = HashSet::new();
-    for question in &input.questions {
+    for question in questions {
         validate_identifier(&question.id, "question id")?;
         if !identities.insert(question.id.as_str()) {
             return Err(invalid(format!("duplicate question id: {}", question.id)));
@@ -1970,6 +2126,10 @@ fn validate_question_drafts(input: &RequestPlanQuestionsInput) -> Result<(), Pro
         }
     }
     Ok(())
+}
+
+fn validate_question_drafts(input: &RequestPlanQuestionsInput) -> Result<(), ProductError> {
+    validate_question_draft_list(&input.questions)
 }
 
 fn validate_answer_shape(input: &AnswerPlanQuestionsInput) -> Result<(), ProductError> {
@@ -2290,8 +2450,8 @@ fn load_question_set(
 ) -> Result<PlanQuestionSet, ProductError> {
     let mut statement = conn
         .prepare(
-            "SELECT id, plan_id, revision, state, answer_idempotency_key, continuation_state, \
-             continuation_error, created_at, resolved_at, dispatched_at \
+            "SELECT id, plan_id, revision, state, kind, restore_mode, answer_idempotency_key, \
+             continuation_state, continuation_error, created_at, resolved_at, dispatched_at \
              FROM plan_question_sets WHERE id = ?1",
         )
         .map_err(db_err)?;
@@ -2302,10 +2462,12 @@ fn load_question_set(
         .ok_or_else(|| invalid(format!("unknown question set: {question_set_id}")))?;
     let revision: i64 = row.get(2).map_err(db_err)?;
     let state: String = row.get(3).map_err(db_err)?;
-    let continuation_state: String = row.get(5).map_err(db_err)?;
-    let created_at: String = row.get(7).map_err(db_err)?;
-    let resolved_at: Option<String> = row.get(8).map_err(db_err)?;
-    let dispatched_at: Option<String> = row.get(9).map_err(db_err)?;
+    let kind: String = row.get(4).map_err(db_err)?;
+    let restore_mode: Option<String> = row.get(5).map_err(db_err)?;
+    let continuation_state: String = row.get(7).map_err(db_err)?;
+    let created_at: String = row.get(9).map_err(db_err)?;
+    let resolved_at: Option<String> = row.get(10).map_err(db_err)?;
+    let dispatched_at: Option<String> = row.get(11).map_err(db_err)?;
     Ok(PlanQuestionSet {
         id: row.get(0).map_err(db_err)?,
         plan_id: row.get(1).map_err(db_err)?,
@@ -2313,7 +2475,16 @@ fn load_question_set(
         state: PlanQuestionSetState::try_from_str(&state).ok_or_else(|| {
             ProductError::DatabaseError(format!("invalid question set state: {state}"))
         })?,
-        answer_idempotency_key: row.get(4).map_err(db_err)?,
+        kind: PlanQuestionSetKind::try_from_str(&kind).ok_or_else(|| {
+            ProductError::DatabaseError(format!("invalid question set kind: {kind}"))
+        })?,
+        restore_mode: match restore_mode.as_deref() {
+            Some(mode) => Some(TaskMode::try_from_str(mode).ok_or_else(|| {
+                ProductError::DatabaseError(format!("invalid restore mode: {mode:?}"))
+            })?),
+            None => None,
+        },
+        answer_idempotency_key: row.get(6).map_err(db_err)?,
         continuation_state: PlanContinuationState::try_from_str(&continuation_state).ok_or_else(
             || {
                 ProductError::DatabaseError(format!(
@@ -2321,7 +2492,7 @@ fn load_question_set(
                 ))
             },
         )?,
-        continuation_error: row.get(6).map_err(db_err)?,
+        continuation_error: row.get(8).map_err(db_err)?,
         questions: load_questions(conn, question_set_id)?,
         created_at: parse_ts(&created_at)?,
         resolved_at: resolved_at.as_deref().map(parse_ts).transpose()?,
@@ -2495,7 +2666,7 @@ fn render_plan_markdown(view: &PlanView) -> String {
     }
     output.push_str("\n## Goal\n\n");
     if view.goal.goal.trim().is_empty() {
-        output.push_str("_No goal set._\n");
+        output.push_str("_未填写目标_\n");
     } else {
         output.push_str(view.goal.goal.trim());
         output.push('\n');

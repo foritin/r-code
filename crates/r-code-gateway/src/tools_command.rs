@@ -32,6 +32,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
@@ -40,8 +41,9 @@ use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
 use r_code_core::process::hide_background_console;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 use crate::classifier::classify_shell_command;
 use crate::gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
@@ -53,6 +55,10 @@ const MAX_TIMEOUT_MS: u64 = 600_000;
 /// stdout / stderr 各自的输出上限（字符）。
 const MAX_STREAM_CHARS: usize = 30_000;
 const ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+/// 进程退出后，等待 stdout/stderr 读端冲刷的宽限时间。个别后代进程可能继承了
+/// 管道写端且迟迟不退，`read_to_end` 会一直等 EOF；这个宽限保证命令一旦正常退出
+/// 就立即返回已读到的输出，而不是干等整个 `timeout_ms`。
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 enum CommandWaitResult {
     Exited(std::io::Result<std::process::ExitStatus>),
@@ -264,7 +270,7 @@ fn plan_shell(command: &str) -> Result<ShellPlan, ProductError> {
 
 /// 把流输出截断到 `MAX_STREAM_CHARS`：保留头尾，中间省略。
 ///
-/// 只留头部会丢掉最有价值的错误尾巴（编译器的 error 摘要通常在最后）。
+/// 只留头部会丢掉最有价值的错误���巴（编译器的 error 摘要通常在最后）。
 fn clip_stream(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
     let total = text.chars().count();
@@ -277,6 +283,48 @@ fn clip_stream(raw: &[u8]) -> String {
     let tail: String = text.chars().skip(total - tail_len).collect();
     let omitted = total - head_len - tail_len;
     format!("{head}\n\n… [中间省略 {omitted} 个字符] …\n\n{tail}")
+}
+
+/// 后台流式排空一根输出管道。
+///
+/// 与 `read_to_end` 的区别：字节是边读边存进共享缓冲的，所以即使读端被提前
+/// 中止，已经读到的内容也不会丢；这用于「进程已退出、但某个继承管道句柄的
+/// 后代还没退」的场景——我们只给 `DRAIN_GRACE` 宽限，随后带部分输出返回。
+struct StreamDrain {
+    buffer: Arc<Mutex<Vec<u8>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+fn spawn_stream_drain<R>(mut reader: R) -> StreamDrain
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let shared = Arc::clone(&buffer);
+    let task = tokio::spawn(async move {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => shared.lock().await.extend_from_slice(&chunk[..n]),
+            }
+        }
+    });
+    StreamDrain { buffer, task }
+}
+
+impl StreamDrain {
+    /// 等待读端在 `DRAIN_GRACE` 内自然收尾；超时则中止读任务并取走已读字节。
+    async fn finish(mut self) -> Vec<u8> {
+        match tokio::time::timeout(DRAIN_GRACE, &mut self.task).await {
+            Ok(Ok(())) | Ok(Err(_)) => {}
+            Err(_) => {
+                self.task.abort();
+                let _ = self.task.await;
+            }
+        }
+        self.buffer.lock().await.clone()
+    }
 }
 
 /// `bash` 工具 -- 在工作区内执行 shell 命令。
@@ -299,6 +347,9 @@ head and awk are not available. \
 Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, \
 create_file and edit instead — they behave identically on every platform and need no approval \
 for reads. Reserve this tool for builds, tests, linters, git, and package managers. \
+Keep commands short and single-purpose: break a multi-step build/test/package pipeline into \
+separate calls, one step at a time, and check each step's output before the next. A command \
+finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. \
 cwd defaults to the workspace root and cannot escape it."
         }
         #[cfg(not(windows))]
@@ -307,6 +358,9 @@ cwd defaults to the workspace root and cannot escape it."
 Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, \
 create_file and edit instead — they are faster, respect .gitignore, and need no approval \
 for reads. Reserve this tool for builds, tests, linters, git, and package managers. \
+Keep commands short and single-purpose: break a multi-step build/test/package pipeline into \
+separate calls, one step at a time, and check each step's output before the next. A command \
+finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. \
 cwd defaults to the workspace root and cannot escape it."
         }
     }
@@ -441,20 +495,8 @@ async fn execute_bash(
 
     // 不用 `wait_with_output()`：超时时必须保留 Child 句柄，Windows 才能用
     // taskkill 结束整棵进程树，而不是留下 node / cargo 等后代继续跑。
-    let stdout_task = child.stdout.take().map(|mut pipe| {
-        tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            let _ = pipe.read_to_end(&mut bytes).await;
-            bytes
-        })
-    });
-    let stderr_task = child.stderr.take().map(|mut pipe| {
-        tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            let _ = pipe.read_to_end(&mut bytes).await;
-            bytes
-        })
-    });
+    let stdout_drain = child.stdout.take().map(spawn_stream_drain);
+    let stderr_drain = child.stderr.take().map(spawn_stream_drain);
 
     let timeout = std::time::Duration::from_millis(timeout_ms);
     let wait_result = {
@@ -494,12 +536,12 @@ async fn execute_bash(
         }
     };
 
-    let stdout = match stdout_task {
-        Some(task) => task.await.unwrap_or_default(),
+    let stdout = match stdout_drain {
+        Some(drain) => drain.finish().await,
         None => Vec::new(),
     };
-    let stderr = match stderr_task {
-        Some(task) => task.await.unwrap_or_default(),
+    let stderr = match stderr_drain {
+        Some(drain) => drain.finish().await,
         None => Vec::new(),
     };
     plan.cleanup();

@@ -8,6 +8,7 @@ import type {
   AgentEvent,
   AgentSendMode,
   AgentRun,
+  GuardTripReason,
   QueuedMessage,
   QueuedMessageState,
   SessionAttachmentMeta,
@@ -153,6 +154,7 @@ export type TimelineItem =
       startedAt: string;
       endedAt: string | null;
       usageJson: string | null;
+      requestText: string | null;
       state: RunViewState;
       label: string;
     }
@@ -177,6 +179,41 @@ export function relSec(iso: string | null | undefined, startMs: number): number 
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return 0;
   return Math.max(0, (t - startMs) / 1000);
+}
+
+/** 取前 10 个码点，超出追加省略号；用于 hover 显示发起指令。 */
+export function compactInstruction(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const normalized = text.trim().replace(/\s+/g, " ");
+  const chars = Array.from(normalized);
+  if (chars.length <= 10) return normalized;
+  return `${chars.slice(0, 10).join("")}…`;
+}
+
+/** 最近一条非引导用户消息文本；用于当前运行 hover 的发起指令。 */
+export function latestRunRequestText(messages: readonly SessionMessage[]): string | null {
+  // 模式标记写在用户消息之后，作为尾随标记作用于其前最近的用户消息。
+  let last: string | null = null;
+  let pendingUserText: string | null = null;
+  for (const message of messages) {
+    if (message.kind === "system" && message.text === "r_code_user_message_mode") {
+      const mode = parseUserSendMode(message.output_json) ?? "auto";
+      if (pendingUserText != null && mode !== "steer") {
+        last = pendingUserText;
+      }
+      pendingUserText = null;
+      continue;
+    }
+    if (message.kind !== "message" || message.role !== "user") continue;
+    const text = (message.text ?? "").trim();
+    if (!text) {
+      pendingUserText = null;
+      continue;
+    }
+    pendingUserText = text;
+  }
+  // 末条用户消息没有尾随标记（旧数据）时按 auto 处理。
+  return pendingUserText ?? last;
 }
 
 /** tool_result 输出 → 单行摘要。 */
@@ -370,7 +407,8 @@ export function buildTimeline(
   const items: TimelineItem[] = [];
   let lastT = 0;
   let seq = 0;
-  let nextUserSendMode: AgentSendMode | null = null;
+  // 模式标记写在用户消息之后，作为尾随标记作用于其前最近的用户消息。
+  let lastUserItemIndex: number | null = null;
   const nid = (p: string) => `${p}-${seq++}`;
 
   for (const m of messages) {
@@ -399,9 +437,9 @@ export function buildTimeline(
             imageMediaTypes: m.image_media_types ?? [],
             attachments,
             messageId: m.id,
-            sendMode: nextUserSendMode ?? "auto",
+            sendMode: "auto",
           });
-          nextUserSendMode = null;
+          lastUserItemIndex = items.length - 1;
         } else {
           if (!text) break;
           items.push({
@@ -416,7 +454,13 @@ export function buildTimeline(
       }
       case "system": {
         if (m.text === "r_code_user_message_mode") {
-          nextUserSendMode = parseUserSendMode(m.output_json) ?? "auto";
+          const mode = parseUserSendMode(m.output_json) ?? "auto";
+          if (lastUserItemIndex != null) {
+            const target = items[lastUserItemIndex];
+            if (target?.kind === "you") {
+              items[lastUserItemIndex] = { ...target, sendMode: mode };
+            }
+          }
         } else if (m.text === "plan" && m.output_json) {
           try {
             const data = JSON.parse(m.output_json) as { steps?: PlanStep[] };
@@ -609,7 +653,7 @@ export function mergeRunItems(
   const lastSlot = Math.max(0, turns.length - 1);
   const eligibleSlots = turns
     .map((turn, slot) => ({ turn, slot }))
-    .filter(({ turn }) => turn.user != null && turn.user.queuedState == null)
+    .filter(({ turn }) => turn.user != null && turn.user.queuedState == null && turn.user.sendMode !== "steer")
     .map(({ slot }) => slot);
   const toolSlotByCallId = new Map<string, number>();
   turns.forEach((turn, slot) => {
@@ -681,6 +725,7 @@ export function mergeRunItems(
         startedAt: run.started_at,
         endedAt: run.ended_at,
         usageJson: run.usage_json,
+        requestText: turns[slot]?.user?.text ?? null,
         ...runPresentation(run),
       }))
     );
@@ -988,6 +1033,28 @@ export function applyAgentEventInPlace(
       // 其余活动由顶部活动条消费，不进入时间线。
       return mutation(changedAt);
     }
+    case "guard_trip": {
+      const changedAt = finishStreamingAgents(items);
+      items.push({
+        kind: "context",
+        id: nid(),
+        t: nowSec,
+        label: guardTripLabel(ev.reason),
+        detail: ev.detail || null,
+      });
+      return mutation(earliest(changedAt, items.length - 1));
+    }
+    case "checkpoint": {
+      const changedAt = finishStreamingAgents(items);
+      items.push({
+        kind: "context",
+        id: nid(),
+        t: nowSec,
+        label: "已保存绿灯检查点",
+        detail: ev.sha ? `可回滚到 ${ev.sha.slice(0, 8)}` : null,
+      });
+      return mutation(earliest(changedAt, items.length - 1));
+    }
     case "scoped":
     case "peer_message":
     case "subagent_lifecycle":
@@ -995,6 +1062,18 @@ export function applyAgentEventInPlace(
       return mutation(-1);
     case "state":
       return mutation(finishStreamingAgents(items));
+  }
+}
+
+export function guardTripLabel(reason: GuardTripReason): string {
+  switch (reason) {
+    case "tool_round_budget": return "护栏触发 · 工具轮数超出预算";
+    case "wall_clock_budget": return "护栏触发 · 运行时长超出预算";
+    case "reasoning_budget": return "护栏触发 · 思考量超出预算";
+    case "same_error": return "护栏触发 · 同一错误连续出现";
+    case "no_progress": return "护栏触发 · 持续调用但无进展";
+    case "diff_divergence": return "护栏触发 · 变更范围持续发散";
+    case "test_failures": return "护栏触发 · 测试连续失败";
   }
 }
 

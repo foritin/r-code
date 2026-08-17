@@ -1,4 +1,4 @@
-//! P1 MCP 测试夹具 [agent-core/14 §3]。
+//! P1 MCP 测试夹具 [agent-contracts/14 §3]。
 //!
 //! 验证 MCP 合同向量与故障演练：
 //! - V-TOOL-01：未知工具被拒绝

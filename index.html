@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
-  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-contracts/index.html">Agent Contracts</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
   <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="r-code-r-code-重构文档集">R-Code（R-Code）重构文档集</h1>
 <p>本目录包含使用 Rust 重构 R-Code 桌面应用的完整产品与开发链路文档。<br>文档按模块组织，涵盖架构、产品合同、技术选型、实施、测试、发布、恢复与可追溯性；所有交付页面均可离线浏览。</p>
 <hr>
@@ -21,24 +21,24 @@
 <table><thead><tr><th>文档</th><th>说明</th></tr></thead><tbody><tr><td><a href="docs/07-security-model.html">07-security-model.html</a></td><td>安全模型</td></tr><tr><td><a href="docs/08-ipc-and-process.html">08-ipc-and-process.html</a></td><td>IPC 与进程通信</td></tr><tr><td><a href="docs/09-render-layer.html">09-render-layer.html</a></td><td>渲染层（React、Monaco、xterm、状态管理）</td></tr><tr><td><a href="docs/10-external-cli-integration.html">10-external-cli-integration.html</a></td><td>外部 CLI 集成（检测、replay解析、控制门、安全）</td></tr><tr><td><a href="docs/11-ui-ux-design-system.html">11-ui-ux-design-system.html</a></td><td>UI/UX 设计系统（Tokens、Mockup索引、组件规范）</td></tr></tbody></table>
 <hr>
 <h2 id="与共享模块的关系">与共享模块的关系</h2>
-<p><strong>依赖方向是单向的：</strong><a href="../agent-core/index.html">agent-core（公共重构包）</a> 定义跨产品可复用的合同、边界和质量门；<strong>R-Code（R-Code）</strong> 只定义桌面产品能力、Electron 落地方式与验收。重构时先冻结公共合同，再实现 R-Code，不能反过来从 UI 或某个服务私自改写公共语义。</p>
+<p><strong>依赖方向是单向的：</strong><a href="../agent-contracts/index.html">agent-contracts（公共重构包）</a> 定义跨产品可复用的合同、边界和质量门；<strong>R-Code（R-Code）</strong> 只定义桌面产品能力、Electron 落地方式与验收。重构时先冻结公共合同，再实现 R-Code，不能反过来从 UI 或某个服务私自改写公共语义。</p>
 <div class="dependency-chain">
 <span class="dependency-label">交付拓扑</span><span class="dependency-label">先公共、后产品</span><span class="dependency-label">HTML 离线可读</span>
 <ol>
-<li>将三个文件夹保持同级，或将 <code>agent-core</code> 作为 <code>vendor/agent-core</code> 子模块；从 <a href="../agent-core/00-overview.html">公共层总览</a> 开始读取。</li>
-<li>按公共层的 Provider、会话、工具、消息、MCP、配置、错误、IPC 合同完成可编译的共享边界，并执行 <a href="../agent-core/14-common-quality-gates.html">公共质量门</a>。</li>
+<li>将三个文件夹保持同级，或将 <code>agent-contracts</code> 作为 <code>vendor/agent-contracts</code> 子模块；从 <a href="../agent-contracts/00-overview.html">公共层总览</a> 开始读取。</li>
+<li>按公共层的 Provider、会话、工具、消息、MCP、配置、错误、IPC 合同完成可编译的共享边界，并执行 <a href="../agent-contracts/14-common-quality-gates.html">公共质量门</a>。</li>
 <li>再按本包的 <a href="docs/19-reconstruction-runbook.html">R-Code 重构运行手册</a> 实现领域服务、桌面进程、渲染层与产品验收。</li>
-<li>每次公共层升级都回到 <a href="../agent-core/13-submodule-and-workspace-integration.html">子模块与 workspace 集成</a>，确认版本、适配器、回归和发布记录已同步。</li>
+<li>每次公共层升级都回到 <a href="../agent-contracts/13-submodule-and-workspace-integration.html">子模块与 workspace 集成</a>，确认版本、适配器、回归和发布记录已同步。</li>
 </ol>
 </div>
 <table><thead><tr><th>公共 HTML 规范（上游）</th><th>R-Code 中的落点（下游）</th><th>实施时的强制检查</th></tr></thead><tbody>
-<tr><td><a href="../agent-core/01-llm-provider.html">LLM Provider 合同</a>、<a href="../agent-core/08-config-management.html">配置管理</a></td><td>Agent Runtime、模型选择、密钥引用、mock/runtime 适配器</td><td>Provider 接口只在适配层实现；UI 不直接持有密钥或厂商 SDK。</td></tr>
-<tr><td><a href="../agent-core/02-session-management.html">会话模型</a>、<a href="../agent-core/04-message-types.html">消息类型</a>、<a href="../agent-core/06-compaction.html">上下文压缩</a></td><td>会话编排、持久化、重放、变更与文档上下文</td><td>消息顺序、快照、压缩前后语义和恢复路径均有可重复测试。</td></tr>
-<tr><td><a href="../agent-core/03-tool-host.html">工具宿主</a>、<a href="../agent-core/05-mcp-client.html">MCP 客户端</a></td><td>Tool Gateway、权限、外部 CLI、Git / 搜索 / 终端服务</td><td>每个工具声明权限、输入输出、超时、审计和失败归一化规则。</td></tr>
-<tr><td><a href="../agent-core/07-error-handling.html">错误处理</a>、<a href="../agent-core/09-ipc-transport.html">IPC 传输</a>、<a href="../agent-core/10-tauri-shell.html">桌面壳边界</a></td><td>Electron main / preload / renderer / agent worker 进程边界</td><td>只通过版本化 IPC 合同跨进程；错误可序列化、可呈现、可定位。</td></tr>
-<tr><td><a href="../agent-core/11-crate-mapping.html">模块映射</a>、<a href="../agent-core/12-api-contracts.html">API 合同</a>、<a href="../agent-core/15-document-boundary-and-traceability.html">边界与追溯</a></td><td>领域包、服务包、桌面应用与交付追溯</td><td>每个 R-Code 包都能映射到需求、合同、测试、验收和发布证据。</td></tr>
+<tr><td><a href="../agent-contracts/01-llm-provider.html">LLM Provider 合同</a>、<a href="../agent-contracts/08-config-management.html">配置管理</a></td><td>Agent Runtime、模型选择、密钥引用、mock/runtime 适配器</td><td>Provider 接口只在适配层实现；UI 不直接持有密钥或厂商 SDK。</td></tr>
+<tr><td><a href="../agent-contracts/02-session-management.html">会话模型</a>、<a href="../agent-contracts/04-message-types.html">消息类型</a>、<a href="../agent-contracts/06-compaction.html">上下文压缩</a></td><td>会话编排、持久化、重放、变更与文档上下文</td><td>消息顺序、快照、压缩前后语义和恢复路径均有可重复测试。</td></tr>
+<tr><td><a href="../agent-contracts/03-tool-host.html">工具宿主</a>、<a href="../agent-contracts/05-mcp-client.html">MCP 客户端</a></td><td>Tool Gateway、权限、外部 CLI、Git / 搜索 / 终端服务</td><td>每个工具声明权限、输入输出、超时、审计和失败归一化规则。</td></tr>
+<tr><td><a href="../agent-contracts/07-error-handling.html">错误处理</a>、<a href="../agent-contracts/09-ipc-transport.html">IPC 传输</a>、<a href="../agent-contracts/10-tauri-shell.html">桌面壳边界</a></td><td>Electron main / preload / renderer / agent worker 进程边界</td><td>只通过版本化 IPC 合同跨进程；错误可序列化、可呈现、可定位。</td></tr>
+<tr><td><a href="../agent-contracts/11-crate-mapping.html">模块映射</a>、<a href="../agent-contracts/12-api-contracts.html">API 合同</a>、<a href="../agent-contracts/15-document-boundary-and-traceability.html">边界与追溯</a></td><td>领域包、服务包、桌面应用与交付追溯</td><td>每个 R-Code 包都能映射到需求、合同、测试、验收和发布证据。</td></tr>
 </tbody></table>
-<p><strong>封装后的启动顺序：</strong>打开 <a href="../agent-core/index.html">agent-core（公共重构包）</a> 完成 P0–P15，再打开本页的文档索引并按 C0–C19 执行；两者之间只通过上述公共 HTML 合同连接。这样即使只交付 <code>agent-core</code>、<code>r-code</code> 与 <code>tiny-hermes</code> 三个文件夹，也不会依赖仓库其他说明文件。</p>
+<p><strong>封装后的启动顺序：</strong>打开 <a href="../agent-contracts/index.html">agent-contracts（公共重构包）</a> 完成 P0–P15，再打开本页的文档索引并按 C0–C19 执行；两者之间只通过上述公共 HTML 合同连接。这样即使只交付 <code>agent-contracts</code>、<code>r-code</code> 与 <code>tiny-hermes</code> 三个文件夹，也不会依赖仓库其他说明文件。</p>
 <h2 id="正式规格与交付证据">正式规格与交付证据</h2>
 <p>C0–C19 是重构时的<strong>规范执行顺序</strong>；以下页面把当前项目的产品、验收、安全、发布、恢复和决策证据一并封装为 HTML，供实现者在需要精确细节时离线查阅。它们补充执行细节，不改变公共层优先、产品包后置的依赖方向。</p>
 <div class="catalog">

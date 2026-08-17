@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$BootstrapOnly
 )
@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = $PSScriptRoot
 $frontendDir = Join-Path $repoRoot "src-tauri\frontend"
-$agentCoreManifest = Join-Path $repoRoot "vendor\agent-core\Cargo.toml"
+$agentCoreManifest = Join-Path $repoRoot "vendor\agent-contracts\Cargo.toml"
 $scriptExitCode = 0
 $locationPushed = $false
 
@@ -28,52 +28,83 @@ function Assert-Command {
     }
 }
 
-function Sync-AgentCoreSubmodule {
-    $treeEntry = ((& git ls-tree HEAD -- "vendor/agent-core") | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $treeEntry) {
-        throw "无法读取父仓库锁定的 agent-core 提交。"
-    }
-    $expectedCommit = ($treeEntry -split '\s+')[2]
-
-    if (-not (Test-Path -LiteralPath $agentCoreManifest)) {
-        Write-Step "初始化 agent-core 子模块"
-        & git submodule update --init --recursive --checkout -- "vendor/agent-core"
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $agentCoreManifest)) {
-            throw "agent-core 子模块初始化失败。"
+function Get-ParentLockedAgentContractsCommit {
+    # 优先读暂存区（索引）：`vendor/agent-core` 到 `vendor/agent-contracts` 的重命名
+    # 处于已 staged、未 commit 状态时，HEAD 还看不到新路径，只有索引里有 gitlink。
+    $indexEntry = ((& git ls-files -s -- "vendor/agent-contracts") | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $indexEntry) {
+        $indexFields = $indexEntry -split '\s+'
+        if ($indexFields.Count -ge 4) {
+            return $indexFields[1]
         }
     }
 
-    $actualCommit = ((& git -C "vendor/agent-core" rev-parse HEAD) | Out-String).Trim()
+    # 其次读 HEAD 的新路径，兼容已经提交重命名的父仓库。
+    $treeEntry = ((& git ls-tree HEAD -- "vendor/agent-contracts") | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $treeEntry) {
+        $treeFields = $treeEntry -split '\s+'
+        if ($treeFields.Count -ge 3) {
+            return $treeFields[2]
+        }
+    }
+
+    # 最后回退到旧路径，兼容尚未重命名的历史提交。
+    $legacyEntry = ((& git ls-tree HEAD -- "vendor/agent-core") | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $legacyEntry) {
+        $legacyFields = $legacyEntry -split '\s+'
+        if ($legacyFields.Count -ge 3) {
+            return $legacyFields[2]
+        }
+    }
+
+    return $null
+}
+
+function Sync-AgentContractsSubmodule {
+    $expectedCommit = Get-ParentLockedAgentContractsCommit
+    if (-not $expectedCommit) {
+        throw "无法读取父仓库锁定的 agent-contracts 提交。"
+    }
+
+    if (-not (Test-Path -LiteralPath $agentCoreManifest)) {
+        Write-Step "初始化 agent-contracts 子模块"
+        & git submodule update --init --recursive --checkout -- "vendor/agent-contracts"
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $agentCoreManifest)) {
+            throw "agent-contracts 子模块初始化失败。"
+        }
+    }
+
+    $actualCommit = ((& git -C "vendor/agent-contracts" rev-parse HEAD) | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $actualCommit) {
-        throw "无法读取 agent-core 当前提交。"
+        throw "无法读取 agent-contracts 当前提交。"
     }
 
     if ($actualCommit -ne $expectedCommit) {
-        $localChanges = @(& git -C "vendor/agent-core" status --porcelain --untracked-files=all)
+        $localChanges = @(& git -C "vendor/agent-contracts" status --porcelain --untracked-files=all)
         if ($LASTEXITCODE -ne 0) {
-            throw "无法检查 agent-core 本地改动。"
+            throw "无法检查 agent-contracts 本地改动。"
         }
         if ($localChanges.Count -gt 0) {
-            throw "agent-core 位于 $actualCommit，但父仓库锁定 $expectedCommit，且子模块含本地改动。请先提交或暂存这些改动，再运行 'git submodule update --init --recursive --checkout -- vendor/agent-core'。"
+            throw "agent-contracts 位于 $actualCommit，但父仓库锁定 $expectedCommit，且子模块含本地改动。请先提交或暂存这些改动，再运行 'git submodule update --init --recursive --checkout -- vendor/agent-contracts'。"
         }
 
-        Write-Step "同步 agent-core 到父仓库锁定版本"
-        & git submodule update --init --recursive --checkout -- "vendor/agent-core"
+        Write-Step "同步 agent-contracts 到父仓库锁定版本"
+        & git submodule update --init --recursive --checkout -- "vendor/agent-contracts"
         if ($LASTEXITCODE -ne 0) {
-            throw "agent-core 子模块同步失败。"
+            throw "agent-contracts 子模块同步失败。"
         }
-        $actualCommit = ((& git -C "vendor/agent-core" rev-parse HEAD) | Out-String).Trim()
+        $actualCommit = ((& git -C "vendor/agent-contracts" rev-parse HEAD) | Out-String).Trim()
         if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $expectedCommit) {
-            throw "agent-core 同步后仍与父仓库锁定提交不一致。"
+            throw "agent-contracts 同步后仍与父仓库锁定提交不一致。"
         }
     }
 
-    $remainingChanges = @(& git -C "vendor/agent-core" status --porcelain --untracked-files=all)
+    $remainingChanges = @(& git -C "vendor/agent-contracts" status --porcelain --untracked-files=all)
     if ($LASTEXITCODE -ne 0) {
-        throw "无法检查 agent-core 本地改动。"
+        throw "无法检查 agent-contracts 本地改动。"
     }
     if ($remainingChanges.Count -gt 0) {
-        Write-Host "[R-Code] agent-core 含本地改动；将按当前工作树继续。" -ForegroundColor Yellow
+        Write-Host "[R-Code] agent-contracts 含本地改动；将按当前工作树继续。" -ForegroundColor Yellow
     }
 }
 
@@ -111,8 +142,8 @@ try {
     }
     Write-Host "[R-Code] $tauriVersion" -ForegroundColor DarkGray
 
-    Write-Step "检查 agent-core 子模块版本"
-    Sync-AgentCoreSubmodule
+    Write-Step "检查 agent-contracts 子模块版本"
+    Sync-AgentContractsSubmodule
 
     Write-Step "检查前端依赖"
     $viteCommand = Join-Path $frontendDir "node_modules\.bin\vite.cmd"

@@ -7,8 +7,8 @@ use std::{
     },
 };
 
-use async_trait::async_trait;
 use agent_contract::ToolHost;
+use async_trait::async_trait;
 use r_code_mcp::{
     is_blocked_ip, DnsResolver, WebClient, WebError, WebHttpAdapter, WebHttpRequest,
     WebHttpResponse, WebLimits, WebSearchConfiguration, WebSearchProvider, WebToolHost,

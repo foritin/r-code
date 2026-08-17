@@ -20,6 +20,7 @@ import {
   gitStageAccepted,
   gitSuggestCommitMessage,
   rollbackTask,
+  rollbackTaskToCheckpoint,
   reviewAcceptAll,
   reviewAcceptFile,
   reviewAcceptLine,
@@ -42,11 +43,13 @@ import {
   type FileContent,
   type FileTreeEntry,
 } from "../../lib/ipc";
+import { guardTripLabel } from "./model";
 import type {
   ChangeDiff,
   ChangeDiffLine,
   FileChange,
   GitDeliveryStatus,
+  GuardTripReason,
   ProjectAccessMode,
   ReviewGitStatus,
   SessionMessage,
@@ -674,8 +677,8 @@ function SummaryPanel({
   // 项目权限仍独立决定 Agent 在工作区中可以使用的能力。
   const accessLabel =
     workspaceAttached && workspaceAccessMode ? projectAccessModeLabel(workspaceAccessMode) : null;
-  const policyLabel = `${modeShortLabel(task.mode)} · ${accessLabel ?? "仅聊天"}`;
-  const policyTitle = `${modeLabel(task.mode)}\n项目权限：${accessLabel ?? "用户路径 · 仅聊天，无本地工具"}`;
+  const policyLabel = `${modeShortLabel(task.mode)} · ${accessLabel ?? "默认工作区"}`;
+  const policyTitle = `${modeLabel(task.mode)}\n项目权限：${accessLabel ?? "用户路径（默认工作区）· 写操作需批准"}`;
 
   return (
     <div className="sum-wrap">
@@ -1879,7 +1882,7 @@ function FilesPanel({
   };
 
   if (!workspacePath) {
-    return <div className="empty">当前为用户路径（仅聊天）。附加工作区后即可浏览和编辑文件。</div>;
+    return <div className="empty">当前为用户路径（默认工作区）。文件与终端以主目录为根，写操作与命令需要批准。</div>;
   }
   if (!workspaceAttached) {
     return <div className="empty">工作区尚未就绪，暂时无法浏览或编辑本地文件。</div>;
@@ -2676,6 +2679,12 @@ function ReviewPanel({ taskId }: { taskId: string }) {
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const taskState = useTasksStore((s) => s.details[taskId]?.task.state);
+  const latestRun = useTasksStore((s) => {
+    const runs = s.details[taskId]?.runs;
+    return runs && runs.length > 0 ? runs[runs.length - 1] : null;
+  });
+  const guardTrip = useMemo(() => parseGuardTrip(latestRun?.guard_trip ?? null), [latestRun?.guard_trip]);
+  const checkpointSha = latestRun?.checkpoint_sha ?? null;
   // 输出查看（点击记录行展开，懒加载 + 缓存）
   const [openId, setOpenId] = useState<string | null>(session?.openVerificationId ?? null);
   const [outputs, setOutputs] = useState<Record<string, string>>(session?.outputs ?? {});
@@ -2848,6 +2857,9 @@ function ReviewPanel({ taskId }: { taskId: string }) {
       if (kind === "accept") {
         await acceptTask(taskId);
         setNotice("已接受全部变更,任务关闭。");
+      } else if (checkpointSha) {
+        await rollbackTaskToCheckpoint(taskId);
+        setNotice("已回滚到最近绿灯检查点。");
       } else {
         const results = await rollbackTask(taskId);
         setNotice(`已回滚 ${results.length} 个文件。`);
@@ -2975,6 +2987,12 @@ function ReviewPanel({ taskId }: { taskId: string }) {
           <div><button className="btn accent" disabled={!feedback.trim()} onClick={() => void requestChanges()}>发送修改请求</button><button className="btn" onClick={() => setRequestingChange(false)}>取消</button></div>
         </div>
       )}
+      {guardTrip && (
+        <div className="guard-trip-banner" role="status">
+          <strong>{guardTripLabel(guardTrip.reason)}</strong>
+          <span>{guardTrip.detail}</span>
+        </div>
+      )}
       <div className="review-actions">
         <button
           className={"btn accent" + (confirm === "accept" ? " confirm" : "")}
@@ -2986,13 +3004,30 @@ function ReviewPanel({ taskId }: { taskId: string }) {
           className={"btn danger" + (confirm === "rollback" ? " confirm" : "")}
           onClick={() => void act("rollback")}
         >
-          {confirm === "rollback" ? "确认回滚?" : "Rollback"}
+          {confirm === "rollback"
+            ? (checkpointSha ? "确认回滚到检查点?" : "确认回滚?")
+            : (checkpointSha ? "回滚到检查点" : "Rollback")}
         </button>
         {taskState === "review_ready" && <button className="btn" onClick={() => setRequestingChange((open) => !open)}>{requestingChange ? "收起修改说明" : "请求修改"}</button>}
-        <span className="review-hint">审阅门永远显式 — 接受或回滚,不留中间态。</span>
+        <span className="review-hint">
+          审阅门永远显式 — 接受或回滚,不留中间态。
+          {guardTrip && !checkpointSha ? " 本 run 没有可用检查点,回滚退回逐文件恢复。" : ""}
+          {checkpointSha ? ` 最近绿灯检查点 ${checkpointSha.slice(0, 8)}。` : ""}
+        </span>
       </div>
     </div>
   );
+}
+
+function parseGuardTrip(raw: string | null | undefined): { reason: GuardTripReason; detail: string } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { reason?: unknown; detail?: unknown };
+    if (typeof parsed?.reason !== "string" || typeof parsed?.detail !== "string") return null;
+    return { reason: parsed.reason as GuardTripReason, detail: parsed.detail };
+  } catch {
+    return null;
+  }
 }
 
 function dur(r: VerificationRecord): string {

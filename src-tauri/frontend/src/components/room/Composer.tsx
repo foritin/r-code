@@ -30,11 +30,21 @@ import type {
   CodexCliPreferences,
   InferenceOptions,
   ProjectAccessMode,
+  QueuedAttachmentMeta,
   QueuedMessage,
   SessionAttachmentMeta,
   TaskAgentEngine,
   WorkflowSkill,
 } from "../../lib/types";
+import {
+  cachedAttachmentPreview,
+  loadAttachmentPreview,
+} from "../../lib/attachment-preview";
+import {
+  firstImageAttachment,
+  imageAttachmentCount,
+  parseQueuedAttachments,
+} from "../../lib/queued-attachments";
 import { resolveActive, type ProviderChoice } from "../../lib/provider";
 import { useAsyncAction } from "../../lib/hooks";
 import { usePoll } from "../../lib/poll";
@@ -58,10 +68,11 @@ import {
   IconTrash,
 } from "../icons";
 import { Menu, MenuItem } from "../ui/Menu";
+import { ImageLightbox } from "../ImageLightbox";
 import {
   AttachmentTray,
   firstBlockedAttachmentReason,
-  nativeOcrTextName,
+  optimisticAttachmentMeta,
   sendableAttachmentInputs,
   useAttachments,
   type DraftAttachment,
@@ -167,6 +178,61 @@ function sameQueueOrder(left: QueuedMessage[], right: QueuedMessage[]): boolean 
   return left.length === right.length && left.every((item, index) => item.id === right[index]?.id);
 }
 
+function QueueImageThumb({
+  taskId,
+  attachment,
+  imageCount,
+  onPreview,
+}: {
+  taskId: string;
+  attachment: QueuedAttachmentMeta;
+  imageCount: number;
+  onPreview: (src: string, name: string) => void;
+}) {
+  const reference = attachment.preview_id;
+  const cached = reference ? cachedAttachmentPreview(reference) : undefined;
+  const direct = !reference && attachment.data
+    ? `data:${attachment.media_type};base64,${attachment.data}`
+    : undefined;
+  const [loaded, setLoaded] = useState<string | null>(direct ?? cached ?? null);
+
+  useEffect(() => {
+    if (!reference || direct || cached) return;
+    let cancelled = false;
+    loadAttachmentPreview(taskId, reference)
+      .then((src) => {
+        if (!cancelled) setLoaded(src);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId, reference, direct, cached]);
+
+  if (!loaded) {
+    return (
+      <span className="queue-kind-icon" aria-hidden="true">
+        <IconSteer width={15} height={15} />
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="queue-image-thumb"
+      aria-label={`预览图片 ${attachment.name}`}
+      title={`预览图片 ${attachment.name}`}
+      onClick={() => onPreview(loaded, attachment.name)}
+    >
+      <img src={loaded} alt="" aria-hidden="true" />
+      {imageCount > 1 && (
+        <span className="queue-image-count" aria-hidden="true">+{imageCount - 1}</span>
+      )}
+    </button>
+  );
+}
+
 export function Composer({
   taskId,
   workspacePath,
@@ -216,6 +282,7 @@ export function Composer({
   const [queueActionBusyId, setQueueActionBusyId] = useState<string | null>(null);
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [queueEditText, setQueueEditText] = useState("");
+  const [queuePreview, setQueuePreview] = useState<{ src: string; name: string } | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const compBoxRef = useRef<HTMLDivElement>(null);
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -477,22 +544,11 @@ export function Composer({
     setNotice(null);
     try {
       // 不等待 IPC 往返：运行中的引导、排队和立即发送都应立即可见。
+      // OCR 图片在时间线里仍显示原图（乐观 data URL），绝不展示合成的 .ocr.txt。
       onSent(
         message || `已附加 ${files.length} 个文件`,
         mode,
-        files.map((file) => file.nativeOcr ? {
-          name: nativeOcrTextName(file.name),
-          media_type: "text/plain",
-          kind: "text",
-        } : {
-          name: file.name,
-          media_type: file.mediaType,
-          kind: file.mediaType.startsWith("image/")
-            ? "image"
-            : file.mediaType === "application/pdf"
-              ? "pdf"
-              : "text",
-        }),
+        optimisticAttachmentMeta(files),
       );
       await agentSend(taskId, message, mode, files);
       const firstTurnTitle = /^新对话(?:\s+\d+)?$/.test(task?.title.trim() ?? "") && !task?.goal.trim()
@@ -582,7 +638,7 @@ export function Composer({
         const activeAgents = (useTasksStore.getState().details[taskId]?.runs ?? [])
           .filter((run) => run.ended_at == null).length;
         setNotice(
-          `${workspaceAttached ? `项目 ${workspaceName ?? "已附加"} · ${projectAccessModeLabel(workspaceAccessMode)}` : "用户路径 · 仅聊天，无本地工具"}；` +
+          `${workspaceAttached ? `项目 ${workspaceName ?? "已附加"} · ${projectAccessModeLabel(workspaceAccessMode)}` : "用户路径（默认工作区）· 写操作需批准"}；` +
           `主 Agent ${agentEngine === "codex" ? "Codex CLI" : "R-Code"}；` +
           (agentEngine === "r_code" ? `模型 ${providerName ?? "默认服务"} / ${model ?? "服务默认"}；` : "模型使用 Codex CLI 设置；") +
           `${messageCount} 条消息 · ${activeAgents} 个运行中 Agent · ${queuedMessages.length} 条排队。`,
@@ -1324,6 +1380,9 @@ export function Composer({
               const steerTitle = running
                 ? "在模型的下一个可介入点引导当前运行"
                 : "当前没有可引导的运行";
+              const queuedAttachments = parseQueuedAttachments(item.attachments_json);
+              const queueImage = firstImageAttachment(queuedAttachments);
+              const queueImageCount = imageAttachmentCount(queuedAttachments);
               return (
                 <li
                   className={`composer-queue-row${editing ? " is-editing" : ""}${draggedQueueId === item.id ? " is-dragging" : ""}${dropClass}`}
@@ -1342,9 +1401,18 @@ export function Composer({
                   onDrop={(event) => dropQueueItem(event, item.id)}
                 >
                   <span className="queue-row-leading">
-                    <span className="queue-kind-icon" aria-hidden="true">
-                      <IconSteer width={15} height={15} />
-                    </span>
+                    {queueImage ? (
+                      <QueueImageThumb
+                        taskId={taskId}
+                        attachment={queueImage}
+                        imageCount={queueImageCount}
+                        onPreview={(src, name) => setQueuePreview({ src, name })}
+                      />
+                    ) : (
+                      <span className="queue-kind-icon" aria-hidden="true">
+                        <IconSteer width={15} height={15} />
+                      </span>
+                    )}
                     {canReorder && (
                       <button
                         type="button"
@@ -1639,6 +1707,7 @@ export function Composer({
                 mode={sendMode}
                 running={running}
                 disabled={sending || commandBusy}
+                hidden={!running}
                 onChange={setSendMode}
               />
               {sending ? (
@@ -1690,6 +1759,14 @@ export function Composer({
         </div>
 
       </div>
+      {queuePreview && (
+        <ImageLightbox
+          src={queuePreview.src}
+          alt={queuePreview.name}
+          name={queuePreview.name}
+          onClose={() => setQueuePreview(null)}
+        />
+      )}
     </div>
   );
 }

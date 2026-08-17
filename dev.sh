@@ -26,7 +26,7 @@ done
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 frontend_dir="$repo_root/src-tauri/frontend"
-agent_core_manifest="$repo_root/vendor/agent-core/Cargo.toml"
+agent_contracts_manifest="$repo_root/vendor/agent-contracts/Cargo.toml"
 
 step() {
   printf '\033[36m[R-Code] %s\033[0m\n' "$1"
@@ -46,40 +46,60 @@ require_command() {
   fi
 }
 
-sync_agent_core_submodule() {
-  local expected_commit actual_commit local_changes
-  expected_commit="$(git ls-tree HEAD -- vendor/agent-core | awk '{print $3}')"
-  [[ -n "$expected_commit" ]] || fail "The parent repository does not contain an agent-core gitlink."
-
-  if [[ ! -f "$agent_core_manifest" ]]; then
-    step "Initializing the agent-core submodule"
-    git submodule update --init --recursive --checkout -- vendor/agent-core ||
-      fail "The agent-core submodule could not be initialized."
-    [[ -f "$agent_core_manifest" ]] || fail "The agent-core manifest is still missing after initialization."
+parent_locked_agent_contracts_commit() {
+  local entry commit
+  # Prefer the index: the agent-core -> agent-contracts rename may be staged but
+  # not yet committed, in which case HEAD has no gitlink at the new path yet.
+  entry="$(git ls-files -s -- vendor/agent-contracts | awk '{print $2}')"
+  if [[ -n "$entry" ]]; then
+    printf '%s' "$entry"
+    return 0
   fi
 
-  actual_commit="$(git -C vendor/agent-core rev-parse HEAD)" ||
-    fail "The current agent-core commit could not be read."
+  commit="$(git ls-tree HEAD -- vendor/agent-contracts | awk '{print $3}')"
+  if [[ -n "$commit" ]]; then
+    printf '%s' "$commit"
+    return 0
+  fi
+
+  # Fall back to the legacy path for history before the rename.
+  git ls-tree HEAD -- vendor/agent-core | awk '{print $3}'
+}
+
+sync_agent_contracts_submodule() {
+  local expected_commit actual_commit local_changes
+  expected_commit="$(parent_locked_agent_contracts_commit)"
+  [[ -n "$expected_commit" ]] || fail "The parent repository does not contain an agent-contracts gitlink."
+
+  if [[ ! -f "$agent_contracts_manifest" ]]; then
+    step "Initializing the agent-contracts submodule"
+    git submodule update --init --recursive --checkout -- vendor/agent-contracts ||
+      fail "The agent-contracts submodule could not be initialized."
+    [[ -f "$agent_contracts_manifest" ]] || fail "The agent-contracts manifest is still missing after initialization."
+  fi
+
+  actual_commit="$(git -C vendor/agent-contracts rev-parse HEAD)" ||
+    fail "The current agent-contracts commit could not be read."
   if [[ "$actual_commit" != "$expected_commit" ]]; then
-    local_changes="$(git -C vendor/agent-core status --porcelain --untracked-files=all)" ||
-      fail "The agent-core working tree could not be inspected."
+    local_changes="$(git -C vendor/agent-contracts status --porcelain --untracked-files=all)" ||
+      fail "The agent-contracts working tree could not be inspected."
     if [[ -n "$local_changes" ]]; then
-      fail "agent-core is at $actual_commit while the parent pins $expected_commit, and the submodule has local changes. Commit or stash them, then run 'git submodule update --init --recursive --checkout -- vendor/agent-core'."
+      fail "agent-contracts is at $actual_commit while the parent pins $expected_commit, and the submodule has local changes. Commit or stash them, then run 'git submodule update --init --recursive --checkout -- vendor/agent-contracts'."
     fi
 
-    step "Synchronizing agent-core to the parent repository pin"
-    git submodule update --init --recursive --checkout -- vendor/agent-core ||
-      fail "The agent-core submodule could not be synchronized."
-    actual_commit="$(git -C vendor/agent-core rev-parse HEAD)" ||
-      fail "The synchronized agent-core commit could not be read."
+    step "Synchronizing agent-contracts to the parent repository pin"
+    git submodule update --init --recursive --checkout -- vendor/agent-contracts ||
+      fail "The agent-contracts submodule could not be synchronized."
+    actual_commit="$(git -C vendor/agent-contracts rev-parse HEAD)" ||
+      fail "The synchronized agent-contracts commit could not be read."
     [[ "$actual_commit" == "$expected_commit" ]] ||
-      fail "agent-core still differs from the parent repository pin after synchronization."
+      fail "agent-contracts still differs from the parent repository pin after synchronization."
   fi
 
-  local_changes="$(git -C vendor/agent-core status --porcelain --untracked-files=all)" ||
-    fail "The agent-core working tree could not be inspected."
+  local_changes="$(git -C vendor/agent-contracts status --porcelain --untracked-files=all)" ||
+    fail "The agent-contracts working tree could not be inspected."
   if [[ -n "$local_changes" ]]; then
-    printf '\033[33m[R-Code] agent-core has local changes; continuing with the current working tree.\033[0m\n'
+    printf '\033[33m[R-Code] agent-contracts has local changes; continuing with the current working tree.\033[0m\n'
   fi
 }
 
@@ -119,8 +139,8 @@ if [[ ! "$tauri_version" =~ ^tauri-cli\ 2\. ]]; then
 fi
 printf '[R-Code] %s\n' "$tauri_version"
 
-step "Checking the agent-core submodule pin"
-sync_agent_core_submodule
+step "Checking the agent-contracts submodule pin"
+sync_agent_contracts_submodule
 
 step "Checking frontend dependencies"
 vite_command="$frontend_dir/node_modules/.bin/vite"

@@ -1093,12 +1093,8 @@ export function CompanionWindow() {
     })), [details, tasks, unread]);
 
   const sessions = useMemo<SessionProgress[]>(() => [...allSessions]
-    .sort((a, b) => {
-      const priorityDelta = MOOD_PRIORITY[b.mood] - MOOD_PRIORITY[a.mood];
-      if (priorityDelta) return priorityDelta;
-      const unreadDelta = Number(b.unread) - Number(a.unread);
-      return unreadDelta || Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
-    }), [allSessions]);
+    .sort((a, b) => Date.parse(b.task.created_at) - Date.parse(a.task.created_at)),
+    [allSessions]);
 
   const trackedSessions = useMemo<SessionProgress[]>(() => [...allSessions]
     .filter((session) => {
@@ -1110,15 +1106,8 @@ export function CompanionWindow() {
         && signatureWasLive(taskSignatures.current.get(session.task.id));
       return live || session.unread || pendingUnreadTransition;
     })
-    .sort((a, b) => {
-      // The red badge is an unread count, so its rows must win the compact viewport. Live but
-      // already-seen work remains reachable through the explicit overflow/full panel.
-      const unreadDelta = Number(b.unread) - Number(a.unread);
-      if (unreadDelta) return unreadDelta;
-      const priorityDelta = MOOD_PRIORITY[b.mood] - MOOD_PRIORITY[a.mood];
-      if (priorityDelta) return priorityDelta;
-      return Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
-    }), [allSessions, details]);
+    .sort((a, b) => Date.parse(b.task.created_at) - Date.parse(a.task.created_at)),
+    [allSessions, details]);
   const pulseSessions = useMemo(
     () => trackedSessions.slice(0, MAX_PULSE_SESSIONS),
     [trackedSessions],
@@ -1519,6 +1508,7 @@ export function CompanionWindow() {
   const renderSessionCard = (session: SessionProgress, compact: boolean) => {
     const detail = details[session.task.id];
     const live = isTaskLive(session.task, detail);
+    const completed = !live && session.task.state === "idle";
     const stopping = stoppingTaskIds.has(session.task.id);
     const navigating = navigatingTaskId === session.task.id;
     const stopError = stopErrors[session.task.id];
@@ -1535,7 +1525,7 @@ export function CompanionWindow() {
           onClick={() => void navigateToSession(session.task.id)}
           aria-label={`${session.task.title}，${session.label}，${relativeTime(session.task.updated_at)}${session.unread ? "，未读" : ""}`}
         >
-          <span className="companion-session-dot" aria-hidden="true" />
+          <span className={`companion-session-dot${live ? " is-loading" : completed ? " is-done" : ""}`} aria-hidden="true" />
           <span className="companion-session-copy">
             <strong>{session.task.title}</strong>
             <small>{session.label} · {relativeTime(session.task.updated_at)}</small>

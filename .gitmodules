@@ -1,6 +1,6 @@
-[submodule "vendor/agent-core"]
-	path = vendor/agent-core
-	url = https://github.com/foritin/agent-core.git
+[submodule "vendor/agent-contracts"]
+	path = vendor/agent-contracts
+	url = https://github.com/foritin/agent-contracts.git
 [submodule ".agents"]
 	path = .agents
 	url = https://github.com/foritin/kimi.git

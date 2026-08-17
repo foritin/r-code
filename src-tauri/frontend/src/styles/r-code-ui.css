@@ -218,6 +218,13 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .sidebar-task-row.active .sidebar-task time { opacity: 0; }
 .task-state-dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); }
 .task-state-dot.running, .task-state-dot.attention { background: var(--warning); }
+.app-sidebar .task-state-dot.running {
+  width: 8px; height: 8px;
+  background: transparent;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--fg-muted);
+  animation: rot 0.8s linear infinite;
+}
 .task-state-dot.review, .task-state-dot.done { background: var(--success); }
 .task-state-dot.stopped { background: var(--danger); }
 .task-state-dot.review, .task-state-dot.done { opacity: .82; }

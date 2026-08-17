@@ -422,13 +422,13 @@ test("an empty provider form applies the complete first preset and keeps the pri
   await page.locator("#set-model").fill("deepseek-v4-pro");
   assert.equal(await webCapability.getAttribute("data-search-state"), "hosted");
   await webCapability.getByText("DeepSeek 托管", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), false);
+  assert.equal(await page.getByRole("button", { name: "保存并用于新对话", exact: true }).isDisabled(), false);
 
   await page.locator("#set-model").fill("deepseek-v4-unknown");
   await page.getByText(/Responses 支持 deepseek-v4-flash.*deepseek-v4-pro/).waitFor({ state: "visible" });
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
   await webCapability.getByText("需切换线路", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "保存并用于新对话", exact: true }).isDisabled(), true);
   await page.close();
 });
 

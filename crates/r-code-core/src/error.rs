@@ -184,10 +184,7 @@ mod tests {
     fn product_error_to_agent_error() {
         let err = ProductError::PathEscape("/etc/passwd".to_string());
         let agent_err: agent_error::Error = err.into();
-        assert!(matches!(
-            agent_err,
-            agent_error::Error::PermissionDenied(_)
-        ));
+        assert!(matches!(agent_err, agent_error::Error::PermissionDenied(_)));
     }
 
     #[test]

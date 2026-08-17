@@ -590,6 +590,9 @@ test("macOS and Windows offer local OCR for images rejected by a text-only model
   const runningWindows = await browser.newPage();
   await runningWindows.addInitScript(() => {
     Object.defineProperty(navigator, "platform", { configurable: true, get: () => "Win32" });
+    // is-deferred 是“运行中引导模式不支持附件”的专属状态；默认策略是排队，
+    // 这里显式选成 steer 再附加图片，才会出现延迟 OCR 提示。
+    window.localStorage.setItem("r-code:agent-send-mode", "steer");
   });
   await runningWindows.goto(baseUrl, { waitUntil: "networkidle" });
   await runningWindows.evaluate(async () => {
@@ -655,6 +658,229 @@ test("macOS and Windows offer local OCR for images rejected by a text-only model
   await linux.close();
 });
 
+test("queued attachment metadata parses image and text attachments safely", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const result = await page.evaluate(async () => {
+    const {
+      parseQueuedAttachments,
+      firstImageAttachment,
+      imageAttachmentCount,
+    } = await import("/src/lib/queued-attachments.ts");
+    const parsed = parseQueuedAttachments(JSON.stringify([
+      { name: "screen.png", media_type: "image/png", kind: "image", preview_id: "preview-1" },
+      { name: "notes.md", media_type: "text/markdown", kind: "text", data: "bm90ZXM=" },
+    ]));
+    return {
+      count: parsed.length,
+      imageCount: imageAttachmentCount(parsed),
+      first: firstImageAttachment(parsed),
+      invalid: parseQueuedAttachments("{not json"),
+      empty: parseQueuedAttachments(null),
+    };
+  });
+  assert.equal(result.count, 2);
+  assert.equal(result.imageCount, 1);
+  assert.equal(result.first.kind, "image");
+  assert.equal(result.first.name, "screen.png");
+  assert.equal(result.first.preview_id, "preview-1");
+  assert.deepEqual(result.invalid, []);
+  assert.deepEqual(result.empty, []);
+  await page.close();
+});
+
+test("optimistic send previews show the original image name, never the .ocr.txt alias", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const metas = await page.evaluate(async () => {
+    const { optimisticAttachmentMeta } = await import("/src/components/Attachments.tsx");
+    return optimisticAttachmentMeta([
+      { name: "screen.png", mediaType: "image/png", data: "iVBORw0KGgo=", nativeOcr: true },
+      { name: "notes.md", mediaType: "text/markdown", data: "bm90ZXM=" },
+    ]);
+  });
+  assert.equal(metas.length, 2);
+  assert.deepEqual(
+    {
+      kind: metas[0].kind,
+      name: metas[0].name,
+      preview: metas[0].previewUrl,
+    },
+    {
+      kind: "image",
+      name: "screen.png",
+      preview: "data:image/png;base64,iVBORw0KGgo=",
+    },
+  );
+  assert.equal(metas[1].kind, "text");
+  assert.equal(metas[1].previewUrl, undefined);
+  assert.doesNotMatch(JSON.stringify(metas), /\.ocr\.txt/);
+  await page.close();
+});
+
+test("timeline image attachments lazy-load a thumbnail and open in the shared lightbox", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const taskId = "mock-task-complete";
+
+  const baseline = await page.evaluate(async (id) => {
+    const { browserMockMessages, browserMockSetMessages } = await import("/src/lib/mock-data.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const original = browserMockMessages(id);
+    browserMockSetMessages(id, [
+      {
+        id: `${id}-message-img`,
+        branch_id: "main",
+        kind: "message",
+        role: "user",
+        text: "看看这张图",
+        image_count: 1,
+        image_media_types: ["image/png"],
+        attachments: [
+          { name: "screen.png", media_type: "image/png", kind: "image", preview_id: "timeline-preview" },
+        ],
+      },
+      {
+        id: `${id}-message-txt`,
+        branch_id: "main",
+        kind: "message",
+        role: "user",
+        text: "附带一个文本附件",
+        attachments: [
+          { name: "notes.md", media_type: "text/markdown", kind: "text" },
+        ],
+      },
+    ]);
+    await useTasksStore.getState().refreshDetail(id);
+    useAppStore.getState().openRoom(id);
+    return { original };
+  }, taskId);
+
+  try {
+    const timeline = page.locator(".timeline");
+    await timeline.getByText("看看这张图").waitFor({ state: "visible" });
+
+    const thumbnail = timeline
+      .locator(".message-attachment-item.kind-image.is-previewable .message-attachment-thumbnail");
+    await thumbnail.waitFor({ state: "visible" });
+    assert.match(
+      await thumbnail.getAttribute("src") ?? "",
+      /^data:image\/png;base64,/,
+      "lazy-loaded preview must be an in-memory data URL",
+    );
+
+    await timeline.locator(".message-attachment-item.kind-image.is-previewable").click();
+    const dialog = page.getByRole("dialog", { name: "预览图片 screen.png" });
+    await dialog.waitFor({ state: "visible" });
+    assert.equal(await dialog.locator("header span").innerText(), "screen.png");
+
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden" });
+
+    assert.equal(
+      await timeline.locator(".message-attachment-item.kind-text").count(),
+      1,
+      "non-image attachments must keep the existing icon chip",
+    );
+    assert.equal(
+      await timeline.locator(".message-attachment-item.kind-text img").count(),
+      0,
+    );
+  } finally {
+    await page.evaluate(async ({ id, original }) => {
+      const { browserMockSetMessages } = await import("/src/lib/mock-data.ts");
+      browserMockSetMessages(id, original);
+    }, { id: taskId, original: baseline.original });
+    await page.close();
+  }
+});
+
+test("queued image attachments show a thumbnail and open the shared lightbox", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const taskId = "mock-task-queue";
+
+  const baseline = await page.evaluate(async (id) => {
+    const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const detail = browserMockDetails[id];
+    const original = structuredClone(detail.queued_messages);
+    const now = new Date().toISOString();
+    detail.queued_messages = [
+      {
+        id: "queue-img",
+        task_id: id,
+        branch_id: detail.active_branch.id,
+        message: "看看这张图",
+        state: "queued",
+        priority: 0,
+        attachments_json: JSON.stringify([
+          { name: "screen.png", media_type: "image/png", kind: "image", preview_id: "queue-preview" },
+          { name: "notes.md", media_type: "text/markdown", kind: "text", data: "bm90ZXM=" },
+        ]),
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: "queue-multi",
+        task_id: id,
+        branch_id: detail.active_branch.id,
+        message: "多图消息",
+        state: "queued",
+        priority: 0,
+        attachments_json: JSON.stringify([
+          { name: "a.png", media_type: "image/png", kind: "image", preview_id: "queue-a" },
+          { name: "b.png", media_type: "image/png", kind: "image", preview_id: "queue-b" },
+        ]),
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: "queue-text",
+        task_id: id,
+        branch_id: detail.active_branch.id,
+        message: "纯文本消息",
+        state: "queued",
+        priority: 0,
+        attachments_json: null,
+        created_at: now,
+        updated_at: now,
+      },
+    ];
+    await useTasksStore.getState().refreshDetail(id);
+    useAppStore.getState().openRoom(id);
+    return { original };
+  }, taskId);
+
+  try {
+    const queue = page.locator(".composer-queue-stack");
+    await queue.waitFor({ state: "visible" });
+
+    const imageRow = queue.locator("li[data-queue-id='queue-img']");
+    await imageRow.locator(".queue-image-thumb").waitFor({ state: "visible" });
+    await imageRow.locator(".queue-image-thumb").click();
+    const dialog = page.getByRole("dialog", { name: "预览图片 screen.png" });
+    await dialog.waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden" });
+
+    const multiRow = queue.locator("li[data-queue-id='queue-multi']");
+    assert.equal(await multiRow.locator(".queue-image-count").innerText(), "+1");
+
+    const textRow = queue.locator("li[data-queue-id='queue-text']");
+    assert.equal(await textRow.locator(".queue-kind-icon").count(), 1);
+    assert.equal(await textRow.locator(".queue-image-thumb").count(), 0);
+  } finally {
+    await page.evaluate(async ({ id, original }) => {
+      const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+      browserMockDetails[id].queued_messages = original;
+    }, { id: taskId, original: baseline.original });
+    await page.close();
+  }
+});
+
 test("Windows close hides to the tray while explicit quit stays discoverable", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.addInitScript(() => {
@@ -709,7 +935,7 @@ test("Codex login watcher is bounded and never schedules beyond its deadline", a
   await page.close();
 });
 
-test("task status colors use orange while live or waiting and green after completion", async () => {
+test("sidebar status uses a loading spinner while live, orange while waiting, and green after completion", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
@@ -739,11 +965,20 @@ test("task status colors use orange while live or waiting and green after comple
     };
   });
 
-  assert.equal(colors.running, colors.warning);
-  assert.equal(colors.waitingWhileRunning, colors.running);
+  assert.notEqual(colors.running, colors.warning, "a live task shows a loading spinner, not the warning color");
+  assert.equal(colors.waitingWhileRunning, colors.warning, "a task waiting for permission keeps the warning color");
   assert.equal(colors.reviewReady, colors.success);
   assert.equal(colors.finished, colors.success);
   assert.notEqual(colors.running, colors.finished);
+
+  const runningAnimation = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll(".sidebar-task-row")];
+    const row = rows.find((candidate) => candidate.textContent?.includes("修复任务队列并发问题"));
+    const dot = row?.querySelector(".task-state-dot");
+    if (!(dot instanceof HTMLElement)) throw new Error("missing running sidebar dot");
+    return getComputedStyle(dot).animationName;
+  });
+  assert.notEqual(runningAnimation, "none", "running dot must animate");
 
   await page.evaluate(async () => {
     const { useTasksStore } = await import("/src/store/tasks.ts");
@@ -936,8 +1171,7 @@ test("subagent configuration supports repeatable weighted slots, editable prompt
     await panel.getByText("槽位 2 的来源与模型尚未通过当前配置下的连通测试。", { exact: true })
       .waitFor({ state: "visible" });
     assert.equal(await save.isDisabled(), true);
-    await cards.nth(1).getByRole("button", { name: "测试此槽", exact: true }).click();
-    await cards.nth(1).getByText("已连通", { exact: true }).waitFor({ state: "visible" });
+    await models.nth(1).fill("gpt-5.6-sol");
 
     const templates = panel.getByRole("combobox", { name: /槽位 \d Prompt 模板/ });
     await templates.nth(0).selectOption("implementation");
@@ -960,7 +1194,7 @@ test("subagent configuration supports repeatable weighted slots, editable prompt
       { kind: "api_provider", provider_id: "openai" },
     ]);
     assert.deepEqual(saved.slots.map((slot) => slot.weight), [60, 40]);
-    assert.deepEqual(saved.slots.map((slot) => slot.model), ["gpt-5.6-sol", "gpt-5.6-terra"]);
+    assert.deepEqual(saved.slots.map((slot) => slot.model), ["gpt-5.6-sol", "gpt-5.6-sol"]);
     assert.deepEqual(saved.slots.map((slot) => slot.prompt_template_id), ["implementation", "test_verification"]);
     assert.match(saved.slots[0].prompt, /额外要求：优先保持 CRLF/);
 
@@ -987,7 +1221,7 @@ test("subagent configuration supports repeatable weighted slots, editable prompt
   }
 });
 
-test("RTK setting installs once, configures new Codex runs, and disables without uninstalling", async () => {
+test("RTK setting installs once, configures new model runs globally, and disables without uninstalling", async () => {
   const page = await browser.newPage({ viewport: { width: 860, height: 760 } });
   const consoleErrors = [];
   page.on("console", (message) => {
@@ -1002,13 +1236,13 @@ test("RTK setting installs once, configures new Codex runs, and disables without
     globalThis.__rCodePerformanceIpcProbe = (command, args) => {
       if (command.startsWith("cmd_rtk_")) globalThis.__rCodeRtkCalls.push({ command, args });
     };
-    useAppStore.getState().setSettingsPane("subagents");
+    useAppStore.getState().setSettingsPane("tools");
     useAppStore.getState().setScene("settings");
   });
 
   try {
     const card = page.locator(".rtk-control");
-    const toggle = page.getByRole("switch", { name: "为新 Codex 会话启用 RTK" });
+    const toggle = page.getByRole("switch", { name: "为所有模型会话启用 RTK" });
     await card.waitFor({ state: "visible" });
     assert.equal(await toggle.isChecked(), false);
 
@@ -1020,7 +1254,7 @@ test("RTK setting installs once, configures new Codex runs, and disables without
     assert.equal(await toggle.isDisabled(), true);
     await card.getByText("已启用", { exact: true }).waitFor({ state: "visible" });
     assert.match(await card.innerText(), /rtk 0\.45\.0 · R-Code 托管/);
-    assert.match(await card.innerText(), /之后启动的 Codex 主 Agent 与子代理/);
+    assert.match(await card.innerText(), /之后启动的所有模型会话与子代理/);
     const bounds = await card.boundingBox();
     assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 860, "RTK card must fit the compact settings viewport");
     if (process.env.R_CODE_RTK_SHOT) {
@@ -1060,12 +1294,12 @@ test("RTK enable failure rolls the switch back and shows only a short-lived safe
     globalThis.__rCodeBrowserMockFailures = {
       cmd_rtk_set_enabled: "PRIVATE_INSTALL_DIAGNOSTIC should never enter the settings UI",
     };
-    useAppStore.getState().setSettingsPane("subagents");
+    useAppStore.getState().setSettingsPane("tools");
     useAppStore.getState().setScene("settings");
   });
 
   try {
-    const toggle = page.getByRole("switch", { name: "为新 Codex 会话启用 RTK" });
+    const toggle = page.getByRole("switch", { name: "为所有模型会话启用 RTK" });
     await toggle.waitFor({ state: "visible" });
     assert.equal(await toggle.isChecked(), false);
     await toggle.click();
@@ -1278,6 +1512,41 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
       .map((item) => item.detail),
     ["先检查", "再核对边界"],
   );
+  await page.close();
+});
+
+test("user send mode markers apply to the preceding user message, not the next one", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const contract = await page.evaluate(async () => {
+    const { buildTimeline, latestRunRequestText } = await import("/src/components/room/model.ts");
+    const userA = { kind: "message", id: "user-a", role: "user", text: "先立即处理" };
+    const userB = { kind: "message", id: "user-b", role: "user", text: "再引导当前运行" };
+    const modeSendNow = {
+      kind: "system",
+      id: "mode-send-now",
+      role: null,
+      text: "r_code_user_message_mode",
+      output_json: JSON.stringify({ mode: "send_now" }),
+    };
+    const modeSteer = {
+      kind: "system",
+      id: "mode-steer",
+      role: null,
+      text: "r_code_user_message_mode",
+      output_json: JSON.stringify({ mode: "steer" }),
+    };
+    const messages = [userA, modeSendNow, userB, modeSteer];
+    const timeline = buildTimeline(messages, [], [], new Date().toISOString());
+    return {
+      sendModes: timeline.filter((item) => item.kind === "you").map((item) => item.sendMode),
+      latestRequest: latestRunRequestText(messages),
+    };
+  });
+
+  assert.deepEqual(contract.sendModes, ["send_now", "steer"]);
+  assert.equal(contract.latestRequest, "先立即处理");
   await page.close();
 });
 

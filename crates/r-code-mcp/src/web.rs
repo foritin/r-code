@@ -5,10 +5,10 @@ use std::{
     time::Duration,
 };
 
+use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::{future::join_all, StreamExt};
-use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use serde_json::{json, Value};
 use thiserror::Error;
 use url::Url;

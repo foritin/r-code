@@ -1,16 +1,16 @@
 use super::*;
-use chrono::TimeZone;
-use futures::StreamExt;
 use agent_contract::{Capabilities, CompletionResponse, StopReason, StreamEvent, Usage};
 use agent_error::Error as AgentError;
 use agent_llm::{MockProvider, RecordedTurn};
+use chrono::TimeZone;
+use futures::StreamExt;
 use r_code_core::dto::{GuardTripReason, PermissionDecision, ProjectAccessMode, TaskMode};
 use r_code_gateway::{
     PermissionEngine, Tool, ToolExecutionContext, ToolExecutionResult, ToolGateway,
 };
 use std::collections::VecDeque;
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex as StdMutex;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 
@@ -597,11 +597,9 @@ impl CodexSubagentRunner for GatedQualityRunner {
         &self,
         request: CodexSubagentRequest,
     ) -> Result<CodexSubagentOutcome, ProductError> {
-        assert!(
-            request
-                .goal
-                .contains("Provisional draft (not yet delivered)")
-        );
+        assert!(request
+            .goal
+            .contains("Provisional draft (not yet delivered)"));
         self.started.notify_one();
         self.release.notified().await;
         Ok(CodexSubagentOutcome::Completed(
@@ -1574,18 +1572,14 @@ async fn weighted_candidate_route_is_deterministic_and_executes_the_selected_slo
     assert_eq!(second_requests.len(), 1);
     assert_eq!(first_requests[0].model, "model-a");
     assert_eq!(second_requests[0].model, "model-b");
-    assert!(
-        first_requests[0]
-            .system
-            .as_deref()
-            .is_some_and(|system| system.contains("Implement the delegated task."))
-    );
-    assert!(
-        second_requests[0]
-            .system
-            .as_deref()
-            .is_some_and(|system| system.contains("Verify the delegated task."))
-    );
+    assert!(first_requests[0]
+        .system
+        .as_deref()
+        .is_some_and(|system| system.contains("Implement the delegated task.")));
+    assert!(second_requests[0]
+        .system
+        .as_deref()
+        .is_some_and(|system| system.contains("Verify the delegated task.")));
 }
 
 #[test]
@@ -1630,11 +1624,9 @@ fn api_only_candidate_pool_delegate_spec_describes_the_configured_subagent_route
         .into_iter()
         .find(|tool| tool.name == "delegate_task")
         .unwrap();
-    assert!(
-        delegate
-            .description
-            .contains("configured subagent candidate pool/router")
-    );
+    assert!(delegate
+        .description
+        .contains("configured subagent candidate pool/router"));
     assert!(delegate.description.contains("weighted API Provider"));
     assert!(!delegate.description.contains("independent R-Code subagent"));
     assert_eq!(
@@ -1704,18 +1696,14 @@ async fn native_candidate_uses_its_slot_request_profile_without_root_provider_le
     assert_eq!(request.max_tokens, 2_048);
     assert_eq!(request.temperature, Some(0.37));
     assert_eq!(request.inference, slot_inference);
-    assert!(
-        request
-            .system
-            .as_deref()
-            .is_some_and(|system| system.contains("Use the configured slot role prompt."))
-    );
-    assert!(
-        request
-            .hosted_tools
-            .iter()
-            .any(HostedToolSpec::is_web_fetch)
-    );
+    assert!(request
+        .system
+        .as_deref()
+        .is_some_and(|system| system.contains("Use the configured slot role prompt.")));
+    assert!(request
+        .hosted_tools
+        .iter()
+        .any(HostedToolSpec::is_web_fetch));
     assert!(
         !request
             .hosted_tools
@@ -2151,11 +2139,9 @@ async fn disabled_cross_engine_switch_blocks_external_candidate_pool_routes_and_
             "disabled-child",
         )
         .unwrap_err();
-    assert!(
-        explicit_error
-            .to_string()
-            .contains("外部 Agent 子代理协作已关闭")
-    );
+    assert!(explicit_error
+        .to_string()
+        .contains("外部 Agent 子代理协作已关闭"));
     let error = supervisor
         .spawn_with_run_id(
             "disabled-direct-spawn".to_string(),
@@ -2278,7 +2264,9 @@ async fn guard_tool_round_budget_stops_run_and_enters_review_ready() {
         ..OrchestrationPolicy::default()
     });
     let session = rt.create_session(input()).await.unwrap();
-    rt.start_run(&session.meta.id, "keep reading").await.unwrap();
+    rt.start_run(&session.meta.id, "keep reading")
+        .await
+        .unwrap();
     for _ in 0..200 {
         if !rt.is_running() {
             break;
@@ -2289,11 +2277,16 @@ async fn guard_tool_round_budget_stops_run_and_enters_review_ready() {
     let events = rt.poll_events().await.unwrap();
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::GuardTrip { reason: GuardTripReason::ToolRoundsExceeded, .. }
+        AgentEvent::GuardTrip {
+            reason: GuardTripReason::ToolRoundsExceeded,
+            ..
+        }
     )));
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::State { state: TaskState::ReviewReady }
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
     )));
     assert!(events.iter().any(|event| matches!(
         event,
@@ -2347,11 +2340,16 @@ async fn guard_reasoning_budget_trips_before_the_next_request() {
     let events = rt.poll_events().await.unwrap();
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::GuardTrip { reason: GuardTripReason::ReasoningBudgetExceeded, .. }
+        AgentEvent::GuardTrip {
+            reason: GuardTripReason::ReasoningBudgetExceeded,
+            ..
+        }
     )));
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::State { state: TaskState::ReviewReady }
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
     )));
 }
 
@@ -2377,7 +2375,9 @@ async fn guard_same_error_streak_stops_run_and_enters_review_ready() {
         ..OrchestrationPolicy::default()
     });
     let session = rt.create_session(input()).await.unwrap();
-    rt.start_run(&session.meta.id, "retry forever").await.unwrap();
+    rt.start_run(&session.meta.id, "retry forever")
+        .await
+        .unwrap();
     for _ in 0..200 {
         if !rt.is_running() {
             break;
@@ -2388,11 +2388,16 @@ async fn guard_same_error_streak_stops_run_and_enters_review_ready() {
     let events = rt.poll_events().await.unwrap();
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::GuardTrip { reason: GuardTripReason::SameErrorLimit, .. }
+        AgentEvent::GuardTrip {
+            reason: GuardTripReason::SameErrorLimit,
+            ..
+        }
     )));
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::State { state: TaskState::ReviewReady }
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
     )));
 }
 
@@ -2754,11 +2759,10 @@ async fn workspace_free_suspend_tool_closes_the_per_run_tool_gate() {
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
 
-    assert!(
-        host.tool_specs()
-            .iter()
-            .any(|tool| tool.name == "request_user_input")
-    );
+    assert!(host
+        .tool_specs()
+        .iter()
+        .any(|tool| tool.name == "request_user_input"));
     let first = host
         .call_inner(Some("call-1"), "request_user_input", serde_json::json!({}))
         .await
@@ -2996,17 +3000,15 @@ async fn hosted_tool_without_text_gets_exactly_one_tool_free_summary_request() {
     assert!(!requests[0].hosted_tools.is_empty());
     assert!(requests[1].tools.is_empty());
     assert!(requests[1].hosted_tools.is_empty());
-    assert!(
-        requests[1]
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .any(|block| matches!(
-                block,
-                ContentBlock::Custom { type_name, .. }
-                    if type_name == "web_search_tool_result"
-            ))
-    );
+    assert!(requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .any(|block| matches!(
+            block,
+            ContentBlock::Custom { type_name, .. }
+                if type_name == "web_search_tool_result"
+        )));
     assert!(requests[1].messages.iter().any(|message| {
         message
             .text_content()
@@ -3044,19 +3046,15 @@ async fn deepseek_hosted_web_contract_error_retries_once_with_only_local_web_sea
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 2, "fallback must be attempted exactly once");
     assert!(has_hosted_web_search(&requests[0].hosted_tools));
-    assert!(
-        !requests[0]
-            .tools
-            .iter()
-            .any(|tool| tool.name == "web_search")
-    );
+    assert!(!requests[0]
+        .tools
+        .iter()
+        .any(|tool| tool.name == "web_search"));
     assert!(requests[1].hosted_tools.is_empty());
-    assert!(
-        requests[1]
-            .tools
-            .iter()
-            .any(|tool| tool.name == "web_search")
-    );
+    assert!(requests[1]
+        .tools
+        .iter()
+        .any(|tool| tool.name == "web_search"));
     assert!(requests[1].messages.iter().any(|message| {
         message
             .text_content()
@@ -3095,12 +3093,10 @@ async fn deepseek_hosted_web_fallback_never_loops_after_the_local_retry_fails() 
     assert_eq!(requests.len(), 2, "one hosted request plus one local retry");
     assert!(has_hosted_web_search(&requests[0].hosted_tools));
     assert!(requests[1].hosted_tools.is_empty());
-    assert!(
-        requests[1]
-            .tools
-            .iter()
-            .any(|tool| tool.name == "web_search")
-    );
+    assert!(requests[1]
+        .tools
+        .iter()
+        .any(|tool| tool.name == "web_search"));
 }
 
 #[tokio::test]
@@ -3139,12 +3135,10 @@ async fn deepseek_hosted_web_error_result_precedes_summary_recovery_and_falls_ba
     );
     assert!(has_hosted_web_search(&requests[0].hosted_tools));
     assert!(requests[1].hosted_tools.is_empty());
-    assert!(
-        requests[1]
-            .tools
-            .iter()
-            .any(|tool| tool.name == "web_search")
-    );
+    assert!(requests[1]
+        .tools
+        .iter()
+        .any(|tool| tool.name == "web_search"));
     assert!(requests[1].messages.iter().any(|message| {
         message
             .text_content()
@@ -3204,19 +3198,15 @@ async fn deepseek_child_hosted_web_contract_error_uses_the_same_one_shot_fallbac
         "child fallback must be attempted exactly once"
     );
     assert!(has_hosted_web_search(&requests[0].hosted_tools));
-    assert!(
-        !requests[0]
-            .tools
-            .iter()
-            .any(|tool| tool.name == "web_search")
-    );
+    assert!(!requests[0]
+        .tools
+        .iter()
+        .any(|tool| tool.name == "web_search"));
     assert!(requests[1].hosted_tools.is_empty());
-    assert!(
-        requests[1]
-            .tools
-            .iter()
-            .any(|tool| tool.name == "web_search")
-    );
+    assert!(requests[1]
+        .tools
+        .iter()
+        .any(|tool| tool.name == "web_search"));
 }
 
 #[tokio::test]
@@ -3694,12 +3684,10 @@ async fn pure_chat_main_run_is_not_misidentified_as_a_subagent() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(tail_texts.contains("requires an attached workspace"));
-    assert!(
-        !request
-            .tools
-            .iter()
-            .any(|tool| tool.name == "delegate_task")
-    );
+    assert!(!request
+        .tools
+        .iter()
+        .any(|tool| tool.name == "delegate_task"));
 }
 
 #[tokio::test]
@@ -3777,19 +3765,15 @@ async fn ask_main_run_exposes_codex_delegation_after_workspace_is_attached() {
         .iter()
         .find(|tool| tool.name == "delegate_task")
         .unwrap();
-    assert!(
-        delegate.input_schema["properties"]["agent"]["enum"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "codex")
-    );
-    assert!(
-        request
-            .tools
-            .iter()
-            .any(|tool| tool.name == "collect_subagents")
-    );
+    assert!(delegate.input_schema["properties"]["agent"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "codex"));
+    assert!(request
+        .tools
+        .iter()
+        .any(|tool| tool.name == "collect_subagents"));
 }
 
 #[tokio::test]
@@ -3849,13 +3833,11 @@ async fn explicit_opt_out_hides_delegation_tools_even_with_codex_and_workspace()
     let requests = requests.lock().unwrap();
     let request = requests.first().unwrap();
     // P0-A：显式禁用委派的提示下沉为尾部 user 消息。
-    assert!(
-        !request
-            .system
-            .as_deref()
-            .unwrap()
-            .contains("explicitly disables subagents")
-    );
+    assert!(!request
+        .system
+        .as_deref()
+        .unwrap()
+        .contains("explicitly disables subagents"));
     let tail_texts = request
         .messages
         .iter()
@@ -3863,12 +3845,10 @@ async fn explicit_opt_out_hides_delegation_tools_even_with_codex_and_workspace()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(tail_texts.contains("explicitly disables subagents"));
-    assert!(
-        !request
-            .tools
-            .iter()
-            .any(|tool| matches!(tool.name.as_str(), "delegate_task" | "collect_subagents"))
-    );
+    assert!(!request
+        .tools
+        .iter()
+        .any(|tool| matches!(tool.name.as_str(), "delegate_task" | "collect_subagents")));
 }
 
 #[tokio::test]
@@ -3962,11 +3942,9 @@ async fn consecutive_tool_turns_keep_system_and_sent_prefix_byte_stable() {
         assert!(texts[0].starts_with("Current local time: "));
         assert!(texts[1].contains("Agent mode is active"));
         assert!(texts[2].contains("For independent investigation"));
-        assert!(
-            messages_tail
-                .iter()
-                .all(|message| message.role == agent_contract::Role::User)
-        );
+        assert!(messages_tail
+            .iter()
+            .all(|message| message.role == agent_contract::Role::User));
     }
 
     // 3) 已发送历史前缀不变：第二轮历史 = 第一轮历史 + 本轮迭代产物；
@@ -4363,11 +4341,11 @@ async fn native_to_codex_runner_receives_the_exact_frozen_memory_snapshot() {
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     supervisor.collect(Some(vec![child_id])).await.unwrap();
 
     assert_eq!(
@@ -4428,13 +4406,11 @@ async fn delegate_task_routes_explicit_codex_requests_through_the_host_runner() 
         .find(|tool| tool.name == "delegate_task")
         .unwrap();
     assert!(delegate_spec.description.contains("Codex CLI"));
-    assert!(
-        delegate_spec.input_schema["properties"]["agent"]["enum"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "codex")
-    );
+    assert!(delegate_spec.input_schema["properties"]["agent"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "codex"));
     assert_eq!(
         delegate_spec.input_schema["properties"]["access"]["default"],
         "read_only"
@@ -4452,11 +4428,11 @@ async fn delegate_task_routes_explicit_codex_requests_through_the_host_runner() 
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let collected = tool_host
         .call_inner(
             Some("collect-codex"),
@@ -4892,11 +4868,9 @@ async fn delegation_codex_availability_is_frozen_within_a_run() {
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
-    assert!(
-        !delegate_enum(&fresh_host)
-            .iter()
-            .any(|value| value == "codex")
-    );
+    assert!(!delegate_enum(&fresh_host)
+        .iter()
+        .any(|value| value == "codex"));
 }
 
 #[test]
@@ -4968,11 +4942,11 @@ async fn long_subagent_report_uses_a_tool_free_summary_turn() {
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let collected = supervisor.collect(Some(vec![child_id])).await.unwrap();
     let payload: serde_json::Value = serde_json::from_str(&collected.content).unwrap();
 
@@ -4988,18 +4962,14 @@ async fn long_subagent_report_uses_a_tool_free_summary_turn() {
     assert!(request.tools.is_empty());
     assert!(request.hosted_tools.is_empty());
     assert!(!request.enable_caching);
-    assert!(
-        request
-            .system
-            .as_deref()
-            .is_some_and(|system| system.contains("2000-5000 characters"))
-    );
-    assert!(
-        request
-            .messages
-            .iter()
-            .any(|message| message.text_content().contains("ORIGINAL-REPORT-END"))
-    );
+    assert!(request
+        .system
+        .as_deref()
+        .is_some_and(|system| system.contains("2000-5000 characters")));
+    assert!(request
+        .messages
+        .iter()
+        .any(|message| message.text_content().contains("ORIGINAL-REPORT-END")));
 }
 
 #[tokio::test]
@@ -5027,11 +4997,11 @@ async fn r_code_child_can_be_cancelled_while_its_long_report_is_being_condensed(
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
         summary_started.notified(),
@@ -5107,11 +5077,11 @@ async fn codex_child_can_be_cancelled_while_its_long_report_is_being_condensed()
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
         summary_started.notified(),
@@ -5165,11 +5135,11 @@ async fn token_limited_long_report_summary_falls_back_without_silent_truncation(
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let collected = supervisor.collect(Some(vec![child_id])).await.unwrap();
     let payload: serde_json::Value = serde_json::from_str(&collected.content).unwrap();
 
@@ -5208,11 +5178,11 @@ async fn failed_long_report_summary_uses_an_explicit_head_tail_fallback() {
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let collected = supervisor.collect(Some(vec![child_id])).await.unwrap();
     let payload: serde_json::Value = serde_json::from_str(&collected.content).unwrap();
     let summary = payload
@@ -5246,11 +5216,11 @@ async fn delegated_subagent_emits_scoped_lifecycle_and_returns_isolated_summary(
         )
         .await
         .unwrap();
-    let child_id =
-        serde_json::from_str::<serde_json::Value>(&started.content).unwrap()["subagent_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let collected = supervisor
         .collect(Some(vec![child_id.clone()]))
         .await
@@ -5361,11 +5331,9 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
         )
         .await
         .unwrap_err();
-    assert!(
-        forged
-            .to_string()
-            .contains("unsupported argument 'message_id'")
-    );
+    assert!(forged
+        .to_string()
+        .contains("unsupported argument 'message_id'"));
     let missing_call_id = host
         .call(
             "send_agent_message",
@@ -5497,31 +5465,26 @@ async fn root_peer_mail_is_injected_once_without_entering_canonical_history() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     assert!(!runtime.is_running());
-    let captured = requests.lock().unwrap();
-    assert_eq!(captured.len(), 2);
-    assert!(
-        !captured[0]
+    {
+        let captured = requests.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert!(!captured[0]
             .messages
             .iter()
-            .any(|message| message.text_content().contains(sentinel))
-    );
-    assert!(
-        captured[1]
+            .any(|message| message.text_content().contains(sentinel)));
+        assert!(captured[1]
             .messages
             .iter()
-            .any(|message| message.text_content().contains(sentinel))
-    );
-    drop(captured);
+            .any(|message| message.text_content().contains(sentinel)));
+    }
     let history = runtime
         .history_snapshot(&session.meta.id)
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        !history
-            .iter()
-            .any(|message| message.text_content().contains(sentinel))
-    );
+    assert!(!history
+        .iter()
+        .any(|message| message.text_content().contains(sentinel)));
     let events = runtime.poll_events().await.unwrap();
     assert!(!serde_json::to_string(&events).unwrap().contains(sentinel));
 }
@@ -5609,11 +5572,9 @@ async fn child_completion_race_peer_mail_is_removed_after_exactly_one_provider_r
     .await
     .expect("completion-race child must finish")
     .unwrap();
-    assert!(
-        collected
-            .content
-            .contains("final after one-shot peer evidence")
-    );
+    assert!(collected
+        .content
+        .contains("final after one-shot peer evidence"));
 
     let captured = requests.lock().unwrap();
     assert_eq!(captured.len(), 3);
@@ -5680,6 +5641,342 @@ async fn native_child_can_delegate_and_collect_a_grandchild_in_the_same_root_tre
     let grandchild_scope = grandchild_scope.expect("grandchild must emit a direct-parent scope");
     assert_ne!(grandchild_scope.run_id, "level-one-run");
     assert_eq!(grandchild_scope.runtime_kind, AgentRunRuntimeKind::Native);
+}
+
+/// 原生子代理回归夹具：第一轮调用 read_file，之后的最终轮只返回 Stop（模拟
+/// 推理耗尽输出预算后没有正文），恢复轮按 `recovery_empty` 决定产出总结或再次为空。
+struct ChildEmptyFinalProvider {
+    requests: Arc<StdMutex<Vec<CompletionRequest>>>,
+    recovery_empty: bool,
+}
+
+#[async_trait]
+impl LlmProvider for ChildEmptyFinalProvider {
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> agent_error::Result<CompletionResponse> {
+        Err(AgentError::Internal(
+            "ChildEmptyFinalProvider only supports stream".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
+        let transcript = format!("{:?}", request.messages);
+        self.requests.lock().unwrap().push(request);
+        let events = if transcript.contains("single final-summary recovery attempt") {
+            if self.recovery_empty {
+                vec![StreamEvent::Stop {
+                    reason: StopReason::EndTurn,
+                }]
+            } else {
+                vec![
+                    StreamEvent::TextDelta {
+                        text: "CHILD-RECOVERY-SUMMARY：探针文件已读取并验证。".to_string(),
+                    },
+                    StreamEvent::Stop {
+                        reason: StopReason::EndTurn,
+                    },
+                ]
+            }
+        } else if transcript.contains("ToolResult") {
+            vec![StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            }]
+        } else {
+            vec![
+                StreamEvent::ToolUseStart {
+                    id: "empty-final-probe".to_string(),
+                    name: "read_file".to_string(),
+                },
+                StreamEvent::ToolUseComplete {
+                    id: "empty-final-probe".to_string(),
+                    input: serde_json::json!({ "path": "probe.txt" }),
+                },
+                StreamEvent::Stop {
+                    reason: StopReason::ToolUse,
+                },
+            ]
+        };
+        Ok(Box::pin(futures::stream::iter(events)))
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            supports_streaming: true,
+            supports_tool_use: true,
+            supports_vision: false,
+            supports_prompt_caching: false,
+            max_context_tokens: 16_000,
+            max_output_tokens: 0,
+        }
+    }
+
+    fn name(&self) -> &str {
+        "child-empty-final"
+    }
+}
+
+fn empty_final_supervisor(
+    provider: Arc<dyn LlmProvider>,
+    event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    directory: &TempDir,
+) -> SubagentSupervisor {
+    let mut supervisor = SubagentSupervisor::new(
+        provider,
+        test_gateway(),
+        None,
+        event_tx,
+        "task-child-empty-final".to_string(),
+        "parent-run".to_string(),
+        "child-model".to_string(),
+        512,
+        None,
+        InferenceOptions::default(),
+        Arc::new(AtomicBool::new(false)),
+        None,
+        None,
+        Arc::new(AtomicBool::new(true)),
+        OrchestrationPolicy::default(),
+        AgentPromptPolicy::default(),
+    );
+    supervisor.workspace_scope = WorkspaceScope::from_binding(
+        Some(directory.path().to_string_lossy().to_string()),
+        ProjectAccessMode::FullAccess,
+    )
+    .unwrap();
+    supervisor
+}
+
+#[tokio::test]
+async fn native_child_empty_final_after_tools_recovers_with_one_tool_free_summary() {
+    let directory = TempDir::new().unwrap();
+    std::fs::write(directory.path().join("probe.txt"), "probe evidence").unwrap();
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let provider: Arc<dyn LlmProvider> = Arc::new(ChildEmptyFinalProvider {
+        requests: requests.clone(),
+        recovery_empty: false,
+    });
+    let supervisor = empty_final_supervisor(provider, event_tx, &directory);
+    supervisor
+        .spawn_with_run_id(
+            "child-empty-final-recovered".to_string(),
+            SubagentBackend::RCode,
+            None,
+            "read the probe file, then answer".to_string(),
+            SubagentAccessMode::FullAccess,
+            None,
+            "empty final recovery fixture".to_string(),
+        )
+        .await
+        .unwrap();
+    let collected = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        supervisor.collect(Some(vec!["child-empty-final-recovered".to_string()])),
+    )
+    .await
+    .expect("child must finish")
+    .unwrap();
+    assert!(
+        collected.content.contains("CHILD-RECOVERY-SUMMARY"),
+        "child must finish with the recovered summary: {}",
+        collected.content
+    );
+
+    let captured = requests.lock().unwrap();
+    assert_eq!(
+        captured.len(),
+        3,
+        "expected exactly probe round, empty final round, and one recovery round"
+    );
+    assert!(captured[0]
+        .tools
+        .iter()
+        .any(|tool| tool.name == "read_file"));
+    let recovery_request = &captured[2];
+    assert!(
+        recovery_request.tools.is_empty(),
+        "the recovery round must disable all tools"
+    );
+    assert!(recovery_request.hosted_tools.is_empty());
+    assert!(
+        recovery_request.messages.iter().any(|message| message
+            .text_content()
+            .contains("single final-summary recovery attempt")),
+        "the recovery round must carry the final-summary recovery prompt"
+    );
+}
+
+#[tokio::test]
+async fn native_child_empty_final_recovery_failure_is_terminal_after_one_attempt() {
+    let directory = TempDir::new().unwrap();
+    std::fs::write(directory.path().join("probe.txt"), "probe evidence").unwrap();
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let provider: Arc<dyn LlmProvider> = Arc::new(ChildEmptyFinalProvider {
+        requests: requests.clone(),
+        recovery_empty: true,
+    });
+    let supervisor = empty_final_supervisor(provider, event_tx, &directory);
+    supervisor
+        .spawn_with_run_id(
+            "child-empty-final-failed".to_string(),
+            SubagentBackend::RCode,
+            None,
+            "read the probe file, then answer".to_string(),
+            SubagentAccessMode::FullAccess,
+            None,
+            "empty final recovery failure fixture".to_string(),
+        )
+        .await
+        .unwrap();
+    let collected = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        supervisor.collect(Some(vec!["child-empty-final-failed".to_string()])),
+    )
+    .await
+    .expect("child must finish")
+    .unwrap();
+    assert!(
+        collected.content.contains("failed"),
+        "child must terminate in the failed state: {}",
+        collected.content
+    );
+    assert!(
+        collected
+            .content
+            .contains("工具已经执行，但模型在一次恢复尝试后仍未生成最终总结"),
+        "the terminal error must keep FINAL_SUMMARY_RECOVERY_FAILED semantics: {}",
+        collected.content
+    );
+
+    let captured = requests.lock().unwrap();
+    assert_eq!(
+        captured.len(),
+        3,
+        "recovery must not be attempted a second time"
+    );
+}
+
+/// 原生子代理 hosted 恢复夹具：第一轮只完成 provider 托管工具（无可见正文），
+/// 触发 requires_final_summary_recovery；恢复轮返回最终总结。
+struct ChildHostedToolNoAnswerProvider {
+    requests: Arc<StdMutex<Vec<CompletionRequest>>>,
+}
+
+#[async_trait]
+impl LlmProvider for ChildHostedToolNoAnswerProvider {
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> agent_error::Result<CompletionResponse> {
+        Err(AgentError::Internal(
+            "ChildHostedToolNoAnswerProvider only supports stream".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
+        let transcript = format!("{:?}", request.messages);
+        self.requests.lock().unwrap().push(request);
+        let events = if transcript.contains("single final-summary recovery attempt") {
+            vec![
+                StreamEvent::TextDelta {
+                    text: "CHILD-HOSTED-RECOVERY-SUMMARY：搜索证据已整理。".to_string(),
+                },
+                StreamEvent::Stop {
+                    reason: StopReason::EndTurn,
+                },
+            ]
+        } else {
+            vec![
+                StreamEvent::HostedToolUse {
+                    id: "hosted-search-1".to_string(),
+                    name: "web_search".to_string(),
+                    input: serde_json::json!({ "query": "probe topic" }),
+                    provider_content: None,
+                },
+                StreamEvent::Stop {
+                    reason: StopReason::EndTurn,
+                },
+            ]
+        };
+        Ok(Box::pin(futures::stream::iter(events)))
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            supports_streaming: true,
+            supports_tool_use: true,
+            supports_vision: false,
+            supports_prompt_caching: false,
+            max_context_tokens: 16_000,
+            max_output_tokens: 0,
+        }
+    }
+
+    fn name(&self) -> &str {
+        "child-hosted-no-answer"
+    }
+}
+
+#[tokio::test]
+async fn native_child_hosted_tools_without_answer_get_one_summary_recovery() {
+    let directory = TempDir::new().unwrap();
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let provider: Arc<dyn LlmProvider> = Arc::new(ChildHostedToolNoAnswerProvider {
+        requests: requests.clone(),
+    });
+    let supervisor = empty_final_supervisor(provider, event_tx, &directory);
+    supervisor
+        .spawn_with_run_id(
+            "child-hosted-recovery".to_string(),
+            SubagentBackend::RCode,
+            None,
+            "search the probe topic, then answer".to_string(),
+            SubagentAccessMode::FullAccess,
+            None,
+            "hosted tool recovery fixture".to_string(),
+        )
+        .await
+        .unwrap();
+    let collected = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        supervisor.collect(Some(vec!["child-hosted-recovery".to_string()])),
+    )
+    .await
+    .expect("child must finish")
+    .unwrap();
+    assert!(
+        collected.content.contains("CHILD-HOSTED-RECOVERY-SUMMARY"),
+        "child must finish with the recovered summary: {}",
+        collected.content
+    );
+
+    let captured = requests.lock().unwrap();
+    assert_eq!(
+        captured.len(),
+        2,
+        "expected exactly the hosted tool round and one recovery round"
+    );
+    let recovery_request = &captured[1];
+    assert!(
+        recovery_request.tools.is_empty(),
+        "the recovery round must disable all tools"
+    );
+    assert!(
+        recovery_request.messages.iter().any(|message| message
+            .text_content()
+            .contains("single final-summary recovery attempt")),
+        "the recovery round must carry the final-summary recovery prompt"
+    );
 }
 
 #[tokio::test]
@@ -6100,7 +6397,10 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
 async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
     let provider = MockProvider::new("mock");
     for index in 0..MAX_DESCENDANTS_PER_TREE {
-        provider.push_text_turn(format!("child {index} done"), agent_contract::Usage::default());
+        provider.push_text_turn(
+            format!("child {index} done"),
+            agent_contract::Usage::default(),
+        );
     }
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     let supervisor = test_supervisor(Arc::new(provider), event_tx);
@@ -6133,9 +6433,9 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
         )
         .await
         .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains(&format!("生命周期内最多可创建 {MAX_DESCENDANTS_PER_TREE} 个后代")));
+    assert!(error.to_string().contains(&format!(
+        "生命周期内最多可创建 {MAX_DESCENDANTS_PER_TREE} 个后代"
+    )));
 
     let provider = Arc::new(MockProvider::new("unused"));
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -6230,11 +6530,9 @@ async fn external_main_runner_injects_frozen_memory_first_and_omits_empty_snapsh
     let empty = captured_child_messages(Some(" \n\t ".to_string()), "empty").await;
     assert_eq!(empty.len(), 1, "blank memory must not inject a message");
     assert_eq!(empty[0].text_content(), "inspect memory propagation empty");
-    assert!(
-        !empty[0]
-            .text_content()
-            .contains("R-Code durable memory snapshot")
-    );
+    assert!(!empty[0]
+        .text_content()
+        .contains("R-Code durable memory snapshot"));
 }
 
 #[tokio::test]
@@ -6742,10 +7040,9 @@ fn full_access_subagent_policy_exposes_bash_in_an_attached_workspace() {
     };
 
     assert!(host.tool_specs().iter().any(|tool| tool.name == "bash"));
-    assert!(
-        host.scoped_input("bash", serde_json::json!({ "command": "cargo test" }))
-            .is_ok()
-    );
+    assert!(host
+        .scoped_input("bash", serde_json::json!({ "command": "cargo test" }))
+        .is_ok());
 }
 
 #[test]
@@ -6777,10 +7074,9 @@ fn request_approval_subagent_policy_exposes_bash_but_gates_through_approval() {
     };
 
     assert!(host.tool_specs().iter().any(|tool| tool.name == "bash"));
-    assert!(
-        host.scoped_input("bash", serde_json::json!({ "command": "cargo test" }))
-            .is_ok()
-    );
+    assert!(host
+        .scoped_input("bash", serde_json::json!({ "command": "cargo test" }))
+        .is_ok());
     // 显式审批能力不继承 workspace 的 FullAccess；只读能力则保留工具白名单，
     // 但允许的读取继承父运行审批模式，不应把 FullAccess 父降级。
     assert_eq!(
@@ -6988,10 +7284,9 @@ async fn full_access_parent_read_only_child_reads_without_approval() {
     };
 
     assert!(!host.tool_allowed("edit"));
-    assert!(
-        host.scoped_input("edit", serde_json::json!({ "path": input_path.clone() }))
-            .is_err()
-    );
+    assert!(host
+        .scoped_input("edit", serde_json::json!({ "path": input_path.clone() }))
+        .is_err());
 
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -7250,28 +7545,24 @@ fn bind_paths_resolves_every_declared_key() {
     assert!(bound["cwd"].as_str().unwrap().ends_with("sub"));
 
     // 必填键缺失 -> 报错，绝不回落到进程 CWD
-    assert!(
-        bind_workspace_paths(
-            "glob",
-            &[PathBinding::required("path")],
-            serde_json::json!({"pattern": "**/*.rs"}),
-            &guard,
-            true,
-        )
-        .is_err()
-    );
+    assert!(bind_workspace_paths(
+        "glob",
+        &[PathBinding::required("path")],
+        serde_json::json!({"pattern": "**/*.rs"}),
+        &guard,
+        true,
+    )
+    .is_err());
 
     // 逃逸尝试被 PathGuard 拒绝
-    assert!(
-        bind_workspace_paths(
-            "bash",
-            &[PathBinding::default_root("cwd")],
-            serde_json::json!({"command": "ls", "cwd": "../../etc"}),
-            &guard,
-            true,
-        )
-        .is_err()
-    );
+    assert!(bind_workspace_paths(
+        "bash",
+        &[PathBinding::default_root("cwd")],
+        serde_json::json!({"command": "ls", "cwd": "../../etc"}),
+        &guard,
+        true,
+    )
+    .is_err());
 }
 
 #[test]
@@ -7405,6 +7696,16 @@ fn max_tokens_provider_error_is_actionable() {
     );
     assert!(message.contains("1,000,000 是上下文窗口"));
     assert!(message.contains("8,192"));
+}
+
+#[test]
+fn deepseek_reasoning_replay_provider_error_gets_a_dedicated_hint() {
+    let message = user_facing_provider_error(
+        "API error: 400 - The `reasoning_text` in the thinking mode must be passed back to the API. (type=invalid_request_error, code=invalid_request_error)",
+    );
+    // 这个 400 与接口地址/流式能力无关，必须命中专用提示而不是通用 invalid_request_error 分支。
+    assert!(message.contains("thinking 模式"));
+    assert!(!message.contains("接口地址与模型匹配"));
 }
 
 #[test]
@@ -7703,31 +8004,23 @@ fn mcp_save_draft_is_visible_to_the_main_agent_but_not_subagents() {
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
 
-    assert!(
-        host("agent")
-            .tool_specs()
-            .iter()
-            .any(|tool| tool.name == "mcp_save_draft")
-    );
+    assert!(host("agent")
+        .tool_specs()
+        .iter()
+        .any(|tool| tool.name == "mcp_save_draft"));
     // MCP 是全局配置：无工作区的主 Agent 也能创建草稿。
-    assert!(
-        host("agent")
-            .tool_specs()
-            .iter()
-            .any(|tool| tool.name == "mcp_create_draft")
-    );
-    assert!(
-        !host("subagent:child")
-            .tool_specs()
-            .iter()
-            .any(|tool| tool.name == "mcp_save_draft")
-    );
-    assert!(
-        !host("subagent:child")
-            .tool_specs()
-            .iter()
-            .any(|tool| tool.name == "mcp_create_draft")
-    );
+    assert!(host("agent")
+        .tool_specs()
+        .iter()
+        .any(|tool| tool.name == "mcp_create_draft"));
+    assert!(!host("subagent:child")
+        .tool_specs()
+        .iter()
+        .any(|tool| tool.name == "mcp_save_draft"));
+    assert!(!host("subagent:child")
+        .tool_specs()
+        .iter()
+        .any(|tool| tool.name == "mcp_create_draft"));
 }
 
 #[test]

@@ -53,7 +53,7 @@ The normal desktop application is not three permanently separate processes. The 
 | Persistence | `crates/r-code-store/` | SQLite, JSONL projections, blobs, changes, Plan, review, verification |
 | Terminal | `crates/r-code-terminal/` | PTY, OSC 133, raw output, external CLI replay |
 | Renderer | `src-tauri/frontend/` | React scenes, Zustand state, typed Tauri IPC |
-| Shared contracts | `vendor/agent-core/` | required `agent-*` contract crates Git submodule |
+| Shared contracts | `vendor/agent-contracts/` | required `agent-*` contract crates Git submodule |
 
 JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See [Architecture](./docs/architecture.md) for the full model and diagrams.
 
@@ -62,7 +62,7 @@ JSONL is the conversation-content source, while SQLite is the product-state sour
 Prerequisites: Git, stable Rust, Node.js 20, and the platform dependencies required by Tauri 2. Windows additionally needs Visual Studio Build Tools 2022 and WebView2 Runtime. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for macOS and Linux.
 
 ```powershell
-# Windows: verify the Tauri CLI, agent-core submodule, and npm dependencies, then start
+# Windows: verify the Tauri CLI, agent-contracts submodule, and npm dependencies, then start
 ./dev.ps1
 
 # Bootstrap only
@@ -94,7 +94,7 @@ Vite/Tauri.
 Initialize only the required product submodule manually with:
 
 ```bash
-git submodule update --init --recursive -- vendor/agent-core
+git submodule update --init --recursive -- vendor/agent-contracts
 ```
 
 The `.agents` submodule contains optional repository collaboration skills and is not part of the product build:
@@ -168,7 +168,7 @@ r-code/
 ├─ crates/                    # product-specific Rust crates
 ├─ installer/                 # Windows branded installer and NSIS payload wrapper
 ├─ src-tauri/                 # Tauri host and production React frontend
-├─ vendor/agent-core/         # required shared contract submodule
+├─ vendor/agent-contracts/         # required shared contract submodule
 ├─ docs/                      # current documentation and UI reference images
 ├─ icons/                     # package icons and maintainable source assets
 ├─ scripts/                   # development, signing, and release helpers

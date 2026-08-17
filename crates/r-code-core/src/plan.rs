@@ -8,6 +8,8 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::dto::TaskMode;
+
 macro_rules! stable_string_enum {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
         impl $name {
@@ -94,6 +96,21 @@ stable_string_enum!(PlanQuestionSetState {
     Pending => "pending",
     Answered => "answered",
     Skipped => "skipped",
+});
+
+/// Distinguishes ordinary Plan clarification from a scope decision raised while the task is
+/// still in Agent mode. Scope decisions remember the Agent mode to restore after the user answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanQuestionSetKind {
+    #[default]
+    Plan,
+    ScopeDecision,
+}
+
+stable_string_enum!(PlanQuestionSetKind {
+    Plan => "plan",
+    ScopeDecision => "scope_decision",
 });
 
 /// Durable dispatch state makes answering/skipping idempotent across process restarts.
@@ -307,6 +324,12 @@ pub struct PlanQuestionSet {
     pub plan_id: String,
     pub revision: u64,
     pub state: PlanQuestionSetState,
+    /// Distinguishes ordinary Plan clarification from a scope decision raised in Agent mode.
+    #[serde(default)]
+    pub kind: PlanQuestionSetKind,
+    /// For scope decisions, the Agent mode to restore after the user answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_mode: Option<TaskMode>,
     /// Stable client submission identity used to make answer/skip retry-safe across restarts.
     pub answer_idempotency_key: Option<String>,
     pub continuation_state: PlanContinuationState,
@@ -431,6 +454,13 @@ pub struct PlanQuestionDraft {
 pub struct RequestPlanQuestionsInput {
     pub plan_id: String,
     pub expected_revision: u64,
+    pub questions: Vec<PlanQuestionDraft>,
+}
+
+/// Persists a scope decision raised while the task is still in Agent mode. The store creates the
+/// owning Plan aggregate, records the Agent mode to restore, and switches the task to Plan mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestScopeDecisionInput {
     pub questions: Vec<PlanQuestionDraft>,
 }
 
