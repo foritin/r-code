@@ -486,7 +486,7 @@ function SubagentList({
         <SubagentListSection
           key="active"
           kind="active"
-          title="进行中"
+          title="正在运行"
           children={active}
           indexById={indexById}
           now={now}
@@ -501,7 +501,7 @@ function SubagentList({
         <SubagentListSection
           key="completed"
           kind="completed"
-          title="已完成"
+          title="已结束"
           children={completed}
           indexById={indexById}
           now={now}
@@ -646,14 +646,13 @@ function SubagentListSection({
         <span className="subagent-list-section-indicator" aria-hidden="true" />
         <span className="subagent-list-section-title" id={titleId}>{title}</span>
         <span className="subagent-list-section-count" aria-hidden="true">
-          {String(flatChildren.length).padStart(2, "0")}
+          {String(flatChildren.length)}
         </span>
         <IconChevronDown className="subagent-list-section-chevron" width={14} height={14} aria-hidden="true" />
       </button>
       <div className="subagent-list-rows" id={rowsId} hidden={!expanded}>
         {flatChildren.map((node) => {
           const child = node.child;
-          const index = indexById.get(child.id) ?? 0;
           const branchActive = isActive(child.status) || node.activeDescendantCount > 0;
           const canAbortBranch = node.descendantCount > 0 && branchActive;
           const stopping = stoppingTreeId === child.id;
@@ -676,12 +675,7 @@ function SubagentListSection({
                 }}
                 aria-label={`${child.label}，深度 ${node.depth}，${statusLabel(child.status)}${anomaly ? `，${anomaly}` : ""}`}
               >
-                <SubagentAvatar
-                  index={index}
-                  identity={child.id}
-                  runtimeKind={child.runtimeKind}
-                  className={`subagent-list-avatar status-${child.status}`}
-                />
+                <SubagentStateMark status={child.status} />
                 <span className="subagent-list-row-copy">
                   <strong title={child.label}>{child.label}</strong>
                   <small title={listObservation(child)}>{listObservation(child)}</small>
@@ -1906,7 +1900,7 @@ function runStatus(run: AgentRun): SubagentStatus {
 function statusLabel(status: SubagentStatus): string {
   switch (status) {
     case "queued": return "等待中";
-    case "running": return "进行中";
+    case "running": return "运行中";
     case "waiting_permission": return "等待权限";
     case "completed": return "已完成";
     case "failed": return "失败";

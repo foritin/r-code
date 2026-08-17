@@ -3936,8 +3936,8 @@ test("subagents open in deduplicated tabs while the overview stays available", a
 
   await summaryTab.click();
   await page.getByTestId("subagent-list").waitFor({ state: "visible" });
-  const activeSectionToggle = page.getByRole("button", { name: /进行中子代理/ });
-  const completedSectionToggle = page.getByRole("button", { name: /已完成子代理/ });
+  const activeSectionToggle = page.getByRole("button", { name: /正在运行子代理/ });
+  const completedSectionToggle = page.getByRole("button", { name: /已结束子代理/ });
   assert.equal(await activeSectionToggle.getAttribute("aria-expanded"), "true", "active subagents are expanded by default");
   assert.equal(await completedSectionToggle.getAttribute("aria-expanded"), "false", "completed subagents are collapsed by default");
   assert.equal(await activeSubagent.isVisible(), true);
@@ -4171,7 +4171,7 @@ test("subagent permissions stay three-state across live events and persisted rel
 
   const summaryTab = workbench.getByRole("tab", { name: /^运行与子代理/ });
   await summaryTab.click();
-  await workbench.getByRole("button", { name: /已完成子代理/ }).click();
+  await workbench.getByRole("button", { name: /已结束子代理/ }).click();
   await workbench.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 核对锁顺序" }).click();
   await permission.waitFor({ state: "visible" });
   assert.equal(await permission.innerText(), "完全访问");

@@ -275,10 +275,10 @@ const TimelineFileRow = memo(function TimelineFileRow({ tool }: { tool: Timeline
         title={target}
         onClick={() => setOpen((value) => !value)}
       >
+        <span className="timeline-file-verb">{fileVerbLabel(tool.name, verb)}</span>
         <span className="timeline-file-icon" aria-hidden="true">
           <FileTypeIcon path={target} />
         </span>
-        <span className="timeline-file-verb">{fileVerbLabel(tool.name, verb)}</span>
         <span className="timeline-file-name">{fileNameOf(target)}</span>
         {tool.state === "active" ? (
           <span className="timeline-file-stat"><span className="spin" aria-hidden="true" /></span>

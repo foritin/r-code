@@ -245,6 +245,53 @@ const RunDuration = memo(function RunDuration({ startedAt, endedAt }: {
   return <span className="run-duration">{duration}</span>;
 });
 
+/**
+ * 待办卡（原型 C+）：默认折叠的计数卡，展开后是 ✓/→/○ 三态步骤列表。
+ * 标题位显示当前进行中的步骤（全部完成后显示「全部完成」），计数 n/总。
+ */
+function PlanTodoCard({ steps, t, dim = "" }: { steps: PlanStep[]; t: number; dim?: string }) {
+  const [open, setOpen] = useState(false);
+  const firstTodo = steps.findIndex((step) => !step.completed);
+  const completed = steps.filter((step) => step.completed).length;
+  const title = firstTodo === -1 ? "全部完成" : steps[firstTodo].description;
+  return (
+    <div className={"todo-card" + dim} data-t={t}>
+      <button
+        type="button"
+        className="todo-head"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="todo-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" width="14" height="14">
+            <path d="M9 6h11M9 12h11M9 18h11" />
+            <path d="M4 5.5l1 1 2-2M4 11.5l1 1 2-2M4 17.5l1 1 2-2" />
+          </svg>
+        </span>
+        <span className="todo-k">待办</span>
+        <span className="todo-m" title={title}>{title}</span>
+        <span className="todo-n">{completed}/{steps.length}</span>
+        <span className="todo-chev" aria-hidden="true">
+          {open ? <IconChevronDown width="11" height="11" /> : <IconChevronRight width="11" height="11" />}
+        </span>
+      </button>
+      {open && (
+        <ol className="todo-list">
+          {steps.map((step, index) => (
+            <li
+              key={index}
+              className={step.completed ? "done" : index === firstTodo ? "cur" : ""}
+            >
+              <b aria-hidden="true">{step.completed ? "✓" : index === firstTodo ? "→" : "○"}</b>
+              {step.description}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function TimelineAttachmentChip({
   taskId,
   attachment,
@@ -795,25 +842,10 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             <Markdown text={it.text} streaming={it.streaming} taskId={taskId} workspacePath={workspacePath} />
           </div>
         );
-      case "plan": {
-        const firstTodo = it.steps.findIndex((step) => !step.completed);
+      case "plan":
         return (
-          <div className={"plan-card" + dim(it.t)} data-t={it.t} key={it.id}>
-            <div className="head">
-              计划 · {it.steps.length} 步
-              {firstTodo === -1 && <span className="ok">✓ 全部完成</span>}
-            </div>
-            <ol>
-              {it.steps.map((step, index) => (
-                <li key={index} className={step.completed ? "done" : index === firstTodo ? "now" : ""}>
-                  <b>{step.completed ? "✓" : index + 1}</b>
-                  {step.description}
-                </li>
-              ))}
-            </ol>
-          </div>
+          <PlanTodoCard key={it.id} steps={it.steps} t={it.t} dim={dim(it.t)} />
         );
-      }
       case "run": {
         const expanded = expandedRunIds.has(it.id);
         const detailId = `${it.id}-details`;

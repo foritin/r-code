@@ -644,10 +644,10 @@
 .timeline-command-list { display:flex; flex-direction:column; gap:var(--sp-2); }
 .timeline-command-list .tcard { max-width:100%; margin:0; }
 
-/* 文件活动：每个文件一行，类型图标 + 行内 +− 差异 */
+/* 文件活动：每个文件一行，动词 + 文件名前类型图标 + 行内 +− 差异 */
 .timeline-file-event { display:flex; flex-direction:column; gap:1px; margin:var(--sp-3) 0 var(--sp-5); }
 .timeline-file-row {
-  display:grid; grid-template-columns:20px auto minmax(0,1fr) auto 14px; align-items:center; gap:var(--sp-3);
+  display:grid; grid-template-columns:auto 20px minmax(0,1fr) auto 14px; align-items:center; gap:var(--sp-3);
   width:100%; min-height:30px; padding:var(--sp-1) var(--sp-2); border:0; border-radius:var(--radius-xs);
   background:transparent; color:var(--fg-muted); cursor:pointer; font:var(--text-meta) var(--font-ui); text-align:left;
 }
@@ -655,7 +655,8 @@
 .timeline-file-row:hover:not(:disabled),
 .timeline-file-row:focus-visible { color:var(--fg); background:var(--bg-panel); }
 .timeline-file-row .timeline-file-icon { display:grid; place-items:center; width:20px; height:18px; }
-.timeline-file-row .timeline-file-icon svg { display:block; }
+.timeline-file-row .timeline-file-icon svg,
+.timeline-file-row .timeline-file-icon img { display:block; }
 .timeline-file-verb { color:var(--fg-muted); white-space:nowrap; }
 .timeline-file-name { overflow:hidden; color:var(--fg); font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 .timeline-file-stat { color:var(--fg-faint); font:var(--text-meta) var(--font-mono); white-space:nowrap; }
@@ -941,25 +942,35 @@
 }
 .agent .caret { margin-left:var(--sp-2); vertical-align: -1px; }
 
-.plan-card {
-  margin:var(--sp-2) 0 var(--sp-6); padding:var(--sp-6) var(--sp-6); max-width: min(94%, var(--measure));
-  background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
+/* 待办卡（原型 C+）：默认折叠的计数卡，展开后 ✓/→/○ 三态步骤 */
+.todo-card {
+  margin: var(--sp-3) 0 var(--sp-5); border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--bg-panel);
 }
-.plan-card .head {
-  display: flex; gap:var(--sp-5); align-items: center; margin-bottom:var(--sp-4);
-  font-family: var(--font-display); font-size: var(--text-base);
+.todo-head {
+  display:flex; align-items:center; gap:var(--sp-4); width:100%; min-height:38px;
+  padding: var(--sp-2) var(--sp-5); border:0; background:transparent; border-radius:inherit;
+  color:var(--fg-muted); font:var(--text-meta) var(--font-ui); text-align:left; cursor:pointer;
 }
-.plan-card .head .ok { margin-left:auto; font-size: var(--text-meta); color: var(--success); }
-.plan-card ol { list-style: none; display: flex; flex-direction: column; gap:var(--sp-3); }
-.plan-card li { display: flex; gap:var(--sp-5); font-size: var(--text-sm); color: var(--fg-muted); }
-.plan-card li b {
-  width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--border-strong);
-  font-family: var(--font-mono); font-size: var(--text-meta); font-weight: 400;
-  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top:1px;
+.todo-head:hover { background: color-mix(in srgb, var(--fg) 3%, transparent); }
+.todo-head .todo-ic { display:grid; place-items:center; width:18px; height:18px; color:var(--fg-faint); flex:none; }
+.todo-head .todo-k { color:var(--fg); font-weight:550; flex:none; }
+.todo-head .todo-m { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.todo-head .todo-n { margin-left:auto; flex:none; font-family:var(--font-mono); font-size:var(--text-meta); color:var(--fg-faint); font-variant-numeric:tabular-nums; }
+.todo-head .todo-chev {
+  flex:none; width:22px; height:22px; border-radius:50%;
+  border:1px solid var(--border); display:inline-flex; align-items:center; justify-content:center; color:var(--fg-faint);
 }
-.plan-card li.done b { border-color: var(--success); color: var(--success); }
-.plan-card li.now { color: var(--fg); }
-.plan-card li.now b { border-color: var(--accent); color: var(--accent); }
+.todo-card .todo-list {
+  list-style:none; margin:0; padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  display:grid; gap:2px; border-top:1px solid var(--border);
+}
+.todo-list li { display:flex; align-items:center; gap:var(--sp-4); padding:3px 0; font-size:var(--text-sm); color:var(--fg-faint); }
+.todo-list li b { width:15px; flex:none; text-align:center; font-weight:400; font-size:var(--text-meta); }
+.todo-list li.done { color: var(--fg-muted); }
+.todo-list li.done b { color: var(--success); }
+.todo-list li.cur { color: var(--fg); }
+.todo-list li.cur b { color: var(--accent); }
 
 /* ---------------------------------------------------------------- 工具调用卡片
    折叠态沿用原 .trow 的单行密度（一次运行几十个调用，全展开会淹没对话本身）；
@@ -1696,8 +1707,8 @@
 }
 .subagent-list-row.has-orphan,.subagent-list-row.has-cycle { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--warning) 65%,transparent); }
 .subagent-list-row-select {
-  display:grid; grid-template-columns:40px minmax(0,1fr) auto; align-items:center; min-width:0; min-height:78px; flex:1; gap:12px;
-  padding:9px 10px; border:0; border-radius:inherit; background:transparent; color:inherit; cursor:pointer; font:inherit; text-align:left;
+  display:grid; grid-template-columns:24px minmax(0,1fr) auto; align-items:center; min-width:0; min-height:54px; flex:1; gap:10px;
+  padding:8px 10px; border:0; border-radius:inherit; background:transparent; color:inherit; cursor:pointer; font:inherit; text-align:left;
 }
 .subagent-list-row-select:focus-visible { outline:2px solid var(--edge-accent); outline-offset:-2px; }
 .subagent-list-avatar::after {

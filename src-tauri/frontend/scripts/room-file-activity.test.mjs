@@ -111,9 +111,17 @@ test("file activities render one row per file with inline diff stats", async () 
   assert.match(await rows.nth(0).locator(".timeline-file-name").innerText(), /Monitor\.tsx/);
   assert.match(await rows.nth(0).locator(".timeline-file-verb").innerText(), /读取/);
   assert.ok(
-    await rows.nth(0).locator(".timeline-file-icon svg").count() > 0,
-    "读取行必须有彩色类型图标",
+    await rows.nth(0).locator(".timeline-file-icon img").count() > 0
+      || await rows.nth(0).locator(".timeline-file-icon svg").count() > 0,
+    "读取行必须有扩展名类型图标（已知扩展为 img 资产，未知扩展回退 svg）",
   );
+  const tsxIcon = rows.nth(0).locator(".timeline-file-icon img");
+  if (await tsxIcon.count() > 0) {
+    assert.ok(
+      await tsxIcon.evaluate((img) => img.complete && img.naturalWidth > 0),
+      "tsx 扩展名应加载真实图标资产",
+    );
+  }
   assert.match(await rows.nth(1).locator(".timeline-file-name").innerText(), /MonitorDetail\.tsx/);
   assert.match(await rows.nth(1).locator(".timeline-file-stat").innerText(), /\+4/, "edit 行的新增行数来自 new_string");
   assert.match(await rows.nth(1).locator(".timeline-file-stat").innerText(), /−3/, "edit 行的删除行数来自 old_string");
