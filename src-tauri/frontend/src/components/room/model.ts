@@ -19,7 +19,7 @@ import { displayPathsInText, toolTarget } from "../../lib/format";
 
 const CODEX_REASONING_SUMMARY_EVENT = "codex_reasoning_summary";
 const R_CODE_REASONING_EVENT = "r_code_reasoning";
-const R_CODE_REASONING_LABEL = "模型思考";
+const R_CODE_REASONING_LABEL = "思考过程";
 const R_CODE_INTERIM_EVENT = "r_code_interim";
 const R_CODE_INTERIM_LABEL = "执行过程";
 // 旧格式前缀（已持久化事件的兼容回退；新事件为结构化 JSON，见 codexReasoningSummary）。

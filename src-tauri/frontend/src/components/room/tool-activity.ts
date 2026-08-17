@@ -8,8 +8,15 @@ export function toolActivityKind(toolName: string): ToolActivityKind {
   const verb = toolVerb(toolName);
   if (verb === "run") return "command";
   if (verb === "edit" || verb === "write") return "file";
+  // 读取/查看具体文件与编辑同流呈现：彩色类型图标 + 动词的文件行（原型 C）。
+  // 目录/清单类（list_*）仍归「探索」，避免目录行淹没时间线。
+  if (verb === "read" && !isListingTool(toolName)) return "file";
   if (verb === "read" || verb === "search") return "lookup";
   return "tool";
+}
+
+function isListingTool(toolName: string): boolean {
+  return toolName.toLowerCase().includes("list_");
 }
 
 export function toolActivityTitle(
@@ -33,14 +40,14 @@ export function toolActivityTitle(
     return multiple ? `已执行 ${count} 个命令` : compactTarget ? `已执行 ${compactTarget}` : "已执行命令";
   }
   if (kind === "file") {
-    if (state === "active") return multiple ? `正在编辑 ${count} 个文件` : "正在编辑文件";
-    if (state === "fail") return multiple ? `${count} 个文件未全部编辑完成` : "文件编辑未完成";
-    return multiple ? `已编辑 ${count} 个文件` : "已编辑文件";
+    if (state === "active") return multiple ? `正在处理 ${count} 个文件` : "正在处理文件";
+    if (state === "fail") return multiple ? `${count} 个文件未全部处理完成` : "文件处理未完成";
+    return multiple ? `已处理 ${count} 个文件` : "已处理文件";
   }
   if (kind === "lookup") {
-    if (state === "active") return multiple ? `正在检查 ${count} 项` : compactTarget ? `正在检查 ${compactTarget}` : "正在检查文件";
-    if (state === "fail") return multiple ? `${count} 项检查中有失败` : compactTarget ? `检查失败：${compactTarget}` : "检查失败";
-    return multiple ? `已检查 ${count} 项` : compactTarget ? `已检查 ${compactTarget}` : "已检查文件";
+    if (state === "active") return multiple ? `正在探索 ${count} 项` : compactTarget ? `正在探索 ${compactTarget}` : "正在探索";
+    if (state === "fail") return multiple ? `${count} 项探索中有失败` : compactTarget ? `探索失败：${compactTarget}` : "探索失败";
+    return multiple ? `已探索 ${count} 项` : compactTarget ? `已探索 ${compactTarget}` : "已探索";
   }
   if (state === "active") return multiple ? `正在使用 ${count} 个工具` : `正在使用 ${compactTarget || "工具"}`;
   if (state === "fail") return multiple ? `${count} 个工具中有执行失败` : `${compactTarget || "工具"}执行失败`;

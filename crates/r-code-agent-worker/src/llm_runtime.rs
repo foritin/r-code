@@ -183,6 +183,11 @@ impl SubagentNameAllocator {
     }
 }
 
+/// 目标文本的首行（去首尾空白），用于计划摘要展示。
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or_default().trim()
+}
+
 /// Fixed safety limits shared by routing, the future delegation tree and host-facing UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DelegationLimits {
@@ -1090,11 +1095,16 @@ fn command_invokes_external_agent(command: &str) -> bool {
         })
 }
 
-const DELEGATION_PROMPT_HINT: &str = "\n\nFor independent investigation, delegate when it actually pays off: call \
-`delegate_task` to start up to five subagents in parallel when the request has two or more independent \
+const DELEGATION_PROMPT_HINT: &str = "\n\nFor independent investigation, delegate when it actually pays off: when the request has two or more independent \
 investigations or verifications that can run concurrently, when it would otherwise require many sequential \
 expensive steps, or when the user explicitly asks to parallelize. Solve a single, small, immediately answerable \
-request directly — do not delegate for its own sake. Subagents default to `access='read_only'`. \
+request directly — do not delegate for its own sake. You may start ONE subagent directly with `delegate_task`. \
+To run two or more in parallel, first call `plan_subagents` with one entry per genuinely distinct direction, \
+read the returned analysis (count, role-slot distribution, duplicate-role warnings), then re-call it with \
+`confirm=true` to lock the batch; `delegate_task` beyond the locked batch is rejected until you submit and \
+confirm a revised plan. Do not pad the plan with entries that restate the same direction — several same-role \
+subagents confuse the user; prefer fewer, broader subagents, and let a blocked subagent delegate its own child \
+(up to depth 2) instead of pre-spawning extras. Subagents default to `access='read_only'`. \
 Use `access='full_access'` only when the user conversation or your explicit parent plan delegates \
 workspace edits or command execution to that child. Continue any independent parent work after \
 delegating. Call `collect_subagents` only when you are ready to synthesize; it waits for unfinished \
@@ -4581,9 +4591,10 @@ impl SessionToolHost {
         self.gateway.owns_tool(name)
             || matches!(
                 name,
-                "delegate_task" | "collect_subagents" | "list_agents" | "send_agent_message"
+                "delegate_task" | "plan_subagents" | "collect_subagents" | "list_agents"
+                    | "send_agent_message"
             )
-    }
+        }
 
     fn tool_allowed(&self, name: &str) -> bool {
         if matches!(name, "mcp_create_draft" | "mcp_save_draft")
@@ -4763,7 +4774,8 @@ impl SessionToolHost {
         if delegation_disabled
             && matches!(
                 name,
-                "delegate_task" | "collect_subagents" | "list_agents" | "send_agent_message"
+                "delegate_task" | "plan_subagents" | "collect_subagents" | "list_agents"
+                    | "send_agent_message"
             )
         {
             return Err(agent_error::Error::ToolHost(
@@ -4832,6 +4844,23 @@ impl SessionToolHost {
                 .send_agent_message(recipient_agent_id, &message_id, content)
                 .map_err(agent_error::Error::ToolHost);
         }
+        if name == "plan_subagents" {
+            let supervisor = self.delegation.as_ref().ok_or_else(|| {
+                agent_error::Error::ToolHost(
+                    "plan_subagents is unavailable in this run".to_string(),
+                )
+            })?;
+            // 计划的输入问题（缺条目、空 goal、超上限）都是模型可自行修正的，
+            // 按仓库规约作为工具结果返回而不是终止 iteration。
+            return match supervisor.handle_plan_subagents(&args).await {
+                Ok(outcome) => Ok(outcome),
+                Err(error) => Ok(ToolCallOutcome {
+                    content: error.to_string(),
+                    is_error: true,
+                    metadata: None,
+                }),
+            };
+        }
         if name == "delegate_task" {
             let supervisor = self.delegation.as_ref().ok_or_else(|| {
                 agent_error::Error::ToolHost("delegate_task is unavailable in this run".to_string())
@@ -4893,6 +4922,7 @@ impl SessionToolHost {
                     access_mode,
                     call_id.map(ToOwned::to_owned),
                     routing_reason,
+                    DelegationInitiator::Model,
                 )
                 .await
                 .map_err(|e| agent_error::Error::ToolHost(e.to_string()));
@@ -5265,7 +5295,60 @@ continue independent parent work and call collect_subagents only when ready to s
 your final answer."
         )
     };
+    let delegate_description = format!(
+        "{delegate_description} Starting a second or further subagent in the same run requires a \
+confirmed plan_subagents batch: call plan_subagents with one entry per distinct direction and \
+confirm=true before delegating beyond the first subagent."
+    );
     tools.extend([
+        ToolSpec {
+            name: "plan_subagents".to_string(),
+            description: "Plan a parallel subagent batch before delegating more than one subagent. \
+One entry per genuinely distinct direction (goal, optional agent/label). The first call returns a \
+plan analysis — count, role-slot distribution, duplicate-role warnings. Re-call with confirm=true \
+to lock the batch: delegate_task is then accepted up to the locked total and rejected beyond it. \
+Submit and confirm a new plan whenever the batch needs to change. A single subagent does not need \
+this plan; delegate it directly."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "entries": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "Planned subagents, one entry per distinct direction.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "goal": {
+                                    "type": "string",
+                                    "description": "Focused goal for one subagent."
+                                },
+                                "agent": {
+                                    "type": "string",
+                                    "description": "Backend for this entry: 'auto', 'r_code', an external backend id, or 'slot:<slot_id>' to pin a configured role slot."
+                                },
+                                "label": {
+                                    "type": "string",
+                                    "description": "Short user-visible direction label."
+                                }
+                            },
+                            "required": ["goal"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "confirm": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Set true on the second call to lock the plan."
+                    }
+                },
+                "required": ["entries"],
+                "additionalProperties": false
+            }),
+            source: ToolSource::Builtin,
+            requires_confirmation: false,
+        },
         ToolSpec {
             name: "delegate_task".to_string(),
             description: delegate_description,
@@ -5464,6 +5547,71 @@ impl Drop for SubagentActivityPermitGuard {
     }
 }
 
+/// 派生来源：模型经 `delegate_task` 发起（受计划门约束），或运行时内部发起
+/// （质量复核、外部主代理桥，不受约束）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DelegationInitiator {
+    Model,
+    Runtime,
+}
+
+/// 已锁定的子代理批次计划：允许的子代理总数上限与各方向摘要。
+#[derive(Clone, Debug)]
+struct ConfirmedDelegationPlan {
+    allowed_total: usize,
+    entries: Vec<String>,
+}
+
+/// 派生计划门：`delegate_task` 的确认回路。
+///
+/// 首个子代理免计划直接派生；从第二个起，主代理必须先经
+/// `plan_subagents(confirm=true)` 锁定"开多少个、各是什么方向"，防止随意撒出
+/// 多名同角色子代理给用户造成困扰。计数按本 supervisor 生命周期单调累加，
+/// 与子代理是否已完成无关。
+struct DelegationPlanGate {
+    confirmed: Option<ConfirmedDelegationPlan>,
+    spawns_used: usize,
+    revision: u32,
+}
+
+impl DelegationPlanGate {
+    fn new() -> Self {
+        Self {
+            confirmed: None,
+            spawns_used: 0,
+            revision: 0,
+        }
+    }
+
+    /// 模型发起的派生：校验并占用一个名额。未确认计划时只放行第 1 个；
+    /// 已确认计划时按 `allowed_total` 放行，超出即拒绝并引导修订计划。
+    fn reserve_model_spawn(&mut self) -> Result<(), String> {
+        let allowed = match &self.confirmed {
+            None if self.spawns_used == 0 => 1,
+            None => {
+                return Err(format!(
+                    "已派生 {} 个子代理。要并行派生更多，请先调用 plan_subagents 为每个方向\
+声明一条条目（goal/agent/label），阅读返回的计划分析后带 confirm=true 再次调用确认，\
+再继续 delegate_task。",
+                    self.spawns_used
+                ));
+            }
+            Some(plan) => plan.allowed_total,
+        };
+        if self.spawns_used >= allowed {
+            let plan = self.confirmed.as_ref().expect("matched Some above");
+            let directions = plan.entries.join("；");
+            return Err(format!(
+                "已超出确认计划允许的 {} 个子代理（已派生 {}；已确认方向：{directions}）。\
+如需更多方向，请重新调用 plan_subagents 提交并确认修订后的计划。",
+                plan.allowed_total, self.spawns_used
+            ));
+        }
+        self.spawns_used += 1;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 struct SubagentSupervisor {
     provider: Arc<dyn LlmProvider>,
@@ -5498,6 +5646,9 @@ struct SubagentSupervisor {
     memory_context: Option<String>,
     /// Session-scoped display-name allocator shared by every node in this delegation tree.
     name_allocator: Arc<SubagentNameAllocator>,
+    /// 派生计划门：模型发起的第 2+ 个子代理必须先经 plan_subagents 确认
+    /// （每个节点各有一份——子代理为自己的孙代理批次独立计划）。
+    plan_gate: Arc<SyncMutex<DelegationPlanGate>>,
     /// 外部主 Agent（Codex App Server）委派路径：工具全部可见，但写入/命令
     /// 必须经 Gateway 审批（inherit 自非 FullAccess 父运行的语义，F3）。
     require_approval: bool,
@@ -5685,6 +5836,7 @@ impl SubagentSupervisor {
             agent_prompts,
             memory_context: None,
             name_allocator: Arc::new(SubagentNameAllocator::default()),
+            plan_gate: Arc::new(SyncMutex::new(DelegationPlanGate::new())),
             require_approval: false,
             // 构造器默认采用最小权限；生产入口必须通过下面两个 builder 之一显式
             // 派生 native 父边界或外部父边界。
@@ -5756,6 +5908,8 @@ impl SubagentSupervisor {
             agent_prompts,
             memory_context: self.memory_context.clone(),
             name_allocator: self.name_allocator.clone(),
+            // 嵌套 supervisor 用全新的计划门：子代理要开孙代理批次时独立计划。
+            plan_gate: Arc::new(SyncMutex::new(DelegationPlanGate::new())),
             require_approval,
             access_ceiling,
         }))
@@ -5938,6 +6092,247 @@ impl SubagentSupervisor {
             )));
         }
         Ok(())
+    }
+
+    /// `plan_subagents` 的两段式回路：先返回计划分析（数量、角色槽位分布、
+    /// 同角色警告），模型修订后带 `confirm=true` 再次调用才锁定名额。
+    /// 首个子代理不需要计划；从第二个起 `delegate_task` 会被计划门拦下。
+    async fn handle_plan_subagents(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<ToolCallOutcome, ProductError> {
+        let entries_value = args
+            .get("entries")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| {
+                ProductError::Other("plan_subagents requires an 'entries' array".to_string())
+            })?;
+        let mut entries: Vec<(String, String, Option<String>)> =
+            Vec::with_capacity(entries_value.len());
+        for (index, value) in entries_value.iter().enumerate() {
+            let goal = value
+                .get("goal")
+                .and_then(|item| item.as_str())
+                .map(str::trim)
+                .filter(|goal| !goal.is_empty())
+                .ok_or_else(|| {
+                    ProductError::Other(format!(
+                        "plan_subagents entries[{index}] requires a non-empty 'goal'"
+                    ))
+                })?;
+            let agent = value
+                .get("agent")
+                .and_then(|item| item.as_str())
+                .unwrap_or("auto")
+                .to_string();
+            let label = value
+                .get("label")
+                .and_then(|item| item.as_str())
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+                .map(ToOwned::to_owned);
+            entries.push((goal.to_string(), agent, label));
+        }
+        if entries.is_empty() {
+            return Err(ProductError::Other(
+                "plan_subagents requires at least one entry；单个子代理无需计划，请直接调用 \
+delegate_task"
+                    .to_string(),
+            ));
+        }
+        let confirm = args.get("confirm").and_then(|value| value.as_bool()).unwrap_or(false);
+        let existing_children = self.children.lock().await.len();
+        let planned = entries.len();
+        let allowed_total = existing_children + planned;
+        if allowed_total > MAX_SUBAGENTS_PER_RUN {
+            return Err(ProductError::Other(format!(
+                "计划将使子代理总数达到 {allowed_total}，超过单次运行上限 \
+{MAX_SUBAGENTS_PER_RUN}；请收敛条目"
+            )));
+        }
+
+        let joined_goals = entries
+            .iter()
+            .map(|(goal, _, _)| goal.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let language = detect_subagent_name_language(&joined_goals);
+        let pool_slots = &self.candidate_pool.slots;
+        let mut auto_count = 0_usize;
+        let mut explicit_role_counts: Vec<(String, usize)> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+        let entry_reports = entries
+            .iter()
+            .map(|(goal, agent, label)| {
+                let role = if agent == "auto" {
+                    if pool_slots.is_empty() {
+                        "auto（无候选池：R-Code/外部路由）".to_string()
+                    } else {
+                        auto_count += 1;
+                        "auto（候选池加权路由）".to_string()
+                    }
+                } else if let Some(slot_id) = agent.strip_prefix("slot:") {
+                    match pool_slots
+                        .iter()
+                        .find(|slot| slot.descriptor.slot_id == slot_id)
+                    {
+                        Some(slot) => {
+                            let role = self.name_allocator.role_label(
+                                language,
+                                slot.descriptor.role_key.as_deref(),
+                            );
+                            match explicit_role_counts
+                                .iter_mut()
+                                .find(|(seen, _)| seen == &role)
+                            {
+                                Some((_, count)) => *count += 1,
+                                None => explicit_role_counts.push((role.clone(), 1)),
+                            }
+                            format!("slot:{slot_id}（{role}）")
+                        }
+                        None => {
+                            warnings.push(format!(
+                                "条目『{}』引用了未知或未就绪的槽位 '{slot_id}'，确认前请修正 \
+agent 或改用 auto",
+                                first_line(goal)
+                            ));
+                            format!("slot:{slot_id}（未知槽位）")
+                        }
+                    }
+                } else if matches!(agent.as_str(), "r_code" | "native") {
+                    "R-Code 通用子代理".to_string()
+                } else {
+                    match ExternalAgentId::try_from_str(agent) {
+                        Some(id) => format!("{} 外部子代理", id.display_name()),
+                        None => {
+                            warnings.push(format!(
+                                "条目『{}』的 agent '{agent}' 无法识别；可用值见 \
+delegate_task 的 agent 枚举",
+                                first_line(goal)
+                            ));
+                            agent.clone()
+                        }
+                    }
+                };
+                serde_json::json!({
+                    "goal": goal,
+                    "agent": agent,
+                    "label": label,
+                    "role": role,
+                })
+            })
+            .collect::<Vec<_>>();
+        if planned > 1 {
+            let mut seen = HashSet::new();
+            for (goal, _, _) in &entries {
+                if !seen.insert(goal.trim().to_ascii_lowercase()) {
+                    warnings.push(
+                        "存在 goal 完全相同的条目；同一方向重复开子代理通常意味着计划可以收敛"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        for (role, count) in &explicit_role_counts {
+            if *count > 1 {
+                warnings.push(format!(
+                    "有 {count} 个条目显式指定了同一角色『{role}』；请确认这是有意的分工，\
+而非把一个方向拆成多个子代理"
+                ));
+            }
+        }
+        if auto_count > 0 && !pool_slots.is_empty() {
+            let distinct_roles = pool_slots
+                .iter()
+                .map(|slot| {
+                    slot.descriptor
+                        .role_key
+                        .clone()
+                        .unwrap_or_else(|| slot.descriptor.slot_id.clone())
+                })
+                .collect::<HashSet<_>>()
+                .len();
+            if auto_count > distinct_roles {
+                warnings.push(format!(
+                    "{auto_count} 个 auto 条目经加权路由只会落到 {distinct_roles} 个角色槽位\
+上，必然出现同角色子代理；若非有意为之，请收敛条目或用 slot:<id> 指定不同角色"
+                ));
+            }
+        }
+        if !confirm {
+            let mut payload = serde_json::json!({
+                "status": "needs_confirmation",
+                "planned_entries": planned,
+                "existing_children": existing_children,
+                "allowed_total_after_confirm": allowed_total,
+                "entries": entry_reports,
+                "warnings": warnings,
+                "guidance": "Revise the entries as needed, then call plan_subagents again with \
+confirm=true to lock the batch. delegate_task beyond the locked total is rejected until a revised \
+plan is confirmed.",
+            });
+            if !pool_slots.is_empty() {
+                payload["candidate_pool"] = serde_json::json!({
+                    "revision": self.candidate_pool.revision,
+                    "slots": pool_slots
+                        .iter()
+                        .map(|slot| format!(
+                            "{} {}%",
+                            self.name_allocator
+                                .role_label(language, slot.descriptor.role_key.as_deref()),
+                            slot.descriptor.weight
+                        ))
+                        .collect::<Vec<_>>(),
+                });
+            }
+            return Ok(ToolCallOutcome {
+                content: payload.to_string(),
+                is_error: false,
+                metadata: None,
+            });
+        }
+
+        let entry_digest = entries
+            .iter()
+            .map(|(goal, _, label)| match label {
+                Some(label) => format!("{label}：{}", first_line(goal)),
+                None => first_line(goal).to_string(),
+            })
+            .collect::<Vec<_>>();
+        let revision = {
+            let mut gate = self
+                .plan_gate
+                .lock()
+                .expect("delegation plan gate lock poisoned");
+            gate.revision += 1;
+            gate.confirmed = Some(ConfirmedDelegationPlan {
+                allowed_total,
+                entries: entry_digest.clone(),
+            });
+            gate.revision
+        };
+        tracing::info!(
+            task_id = %self.task_id,
+            parent_run_id = %self.parent_run_id,
+            revision,
+            allowed_total,
+            "子代理派生计划已确认"
+        );
+        let payload = serde_json::json!({
+            "status": "confirmed",
+            "revision": revision,
+            "planned_entries": planned,
+            "existing_children": existing_children,
+            "allowed_total": allowed_total,
+            "entries": entry_digest,
+            "next": "Now call delegate_task once per planned entry; spawns beyond allowed_total \
+are rejected until a revised plan is confirmed.",
+        });
+        Ok(ToolCallOutcome {
+            content: payload.to_string(),
+            is_error: false,
+            metadata: None,
+        })
     }
 
     fn route_backend_for_run(
@@ -6187,6 +6582,7 @@ impl SubagentSupervisor {
             access_mode,
             delegated_by_tool_call_id,
             routing_reason,
+            DelegationInitiator::Runtime,
         )
         .await
     }
@@ -6201,6 +6597,7 @@ impl SubagentSupervisor {
         access_mode: SubagentAccessMode,
         delegated_by_tool_call_id: Option<String>,
         routing_reason: String,
+        initiator: DelegationInitiator,
     ) -> Result<ToolCallOutcome, ProductError> {
         if self.parent_abort.load(Ordering::Relaxed) {
             return Err(ProductError::Other(
@@ -6419,6 +6816,18 @@ impl SubagentSupervisor {
                 return Err(ProductError::Other(format!(
                     "单棵运行树生命周期内最多可创建 {MAX_DESCENDANTS_PER_TREE} 个后代"
                 )));
+            }
+            // 计划门占用放在全部静态校验之后、树注册之前：失败时只回滚后代计数。
+            if initiator == DelegationInitiator::Model {
+                if let Err(message) = self
+                    .plan_gate
+                    .lock()
+                    .expect("delegation plan gate lock poisoned")
+                    .reserve_model_spawn()
+                {
+                    self.descendants_created.fetch_sub(1, Ordering::SeqCst);
+                    return Err(ProductError::Other(message));
+                }
             }
             let accepts_peer_messages = nested_supervisor.is_some();
             if let Err(error) = self
@@ -7934,6 +8343,7 @@ impl RCodeSubagentRunner {
                 access_mode,
                 delegated_by_tool_call_id,
                 "Codex 主 Agent 通过会话内工具委派 R-Code 子智能体".to_string(),
+                DelegationInitiator::Runtime,
             )
             .await;
         if let Err(error) = queued {

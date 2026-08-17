@@ -154,6 +154,7 @@ const TOOL_DISPLAY_NAMES: Record<string, { zh: string; en: string }> = {
   plan_approve: { zh: "批准计划", en: "Approve plan" },
   plan_cancel: { zh: "取消计划", en: "Cancel plan" },
   delegate_task: { zh: "委派子代理", en: "Delegate subagent" },
+  plan_subagents: { zh: "规划子代理批次", en: "Plan subagent batch" },
   collect_subagents: { zh: "汇总子代理", en: "Collect subagents" },
   list_agents: { zh: "查看子代理", en: "List subagents" },
   send_agent_message: { zh: "发送子代理消息", en: "Send subagent message" },

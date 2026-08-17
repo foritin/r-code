@@ -107,15 +107,21 @@ test("file activities render one row per file with inline diff stats", async () 
 
   const rows = page.locator(".timeline-process-body .timeline-file-row");
   await rows.first().waitFor({ state: "visible" });
-  assert.equal(await rows.count(), 2, "edit 与 write 各占一行，不再折叠成「已编辑 N 个文件」");
-  assert.match(await rows.nth(0).locator(".timeline-file-name").innerText(), /MonitorDetail\.tsx/);
-  assert.match(await rows.nth(0).locator(".timeline-file-stat").innerText(), /\+4/, "edit 行的新增行数来自 new_string");
-  assert.match(await rows.nth(0).locator(".timeline-file-stat").innerText(), /−3/, "edit 行的删除行数来自 old_string");
-  assert.match(await rows.nth(1).locator(".timeline-file-name").innerText(), /monitor\.css/);
-  assert.match(await rows.nth(1).locator(".timeline-file-stat").innerText(), /\+3/, "write 行按整份内容行数计新增");
-  assert.match(await rows.nth(1).locator(".timeline-file-stat").innerText(), /−0/, "write 行没有可知的删除行数");
+  assert.equal(await rows.count(), 3, "读取/编辑/写入各占一行，读取也是彩色图标文件行");
+  assert.match(await rows.nth(0).locator(".timeline-file-name").innerText(), /Monitor\.tsx/);
+  assert.match(await rows.nth(0).locator(".timeline-file-verb").innerText(), /读取/);
+  assert.ok(
+    await rows.nth(0).locator(".timeline-file-icon svg").count() > 0,
+    "读取行必须有彩色类型图标",
+  );
+  assert.match(await rows.nth(1).locator(".timeline-file-name").innerText(), /MonitorDetail\.tsx/);
+  assert.match(await rows.nth(1).locator(".timeline-file-stat").innerText(), /\+4/, "edit 行的新增行数来自 new_string");
+  assert.match(await rows.nth(1).locator(".timeline-file-stat").innerText(), /−3/, "edit 行的删除行数来自 old_string");
+  assert.match(await rows.nth(2).locator(".timeline-file-name").innerText(), /monitor\.css/);
+  assert.match(await rows.nth(2).locator(".timeline-file-stat").innerText(), /\+3/, "write 行按整份内容行数计新增");
+  assert.match(await rows.nth(2).locator(".timeline-file-stat").innerText(), /−0/, "write 行没有可知的删除行数");
 
-  await rows.nth(0).click();
+  await rows.nth(1).click();
   await page.locator(".timeline-process-body .timeline-activity-single-detail").waitFor({ state: "visible" });
   await page.close();
 });

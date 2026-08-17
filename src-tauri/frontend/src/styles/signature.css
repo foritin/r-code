@@ -979,6 +979,33 @@
   background: var(--signature-control);
 }
 
+/* 原型 C：主操作按钮是带文字的胶囊（↑ 发送 / ■ 中断），不是纯图标方块 */
+#app.r-code-signature .scene-room .comp-meta .send {
+  width: auto;
+  min-width: 66px;
+  height: 32px;
+  gap: 6px;
+  padding: 0 13px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+#app.r-code-signature .scene-room .comp-meta .composer-stop-button {
+  background: var(--signature-control);
+  color: var(--fg-muted);
+  border: 1px solid var(--signature-panel-edge);
+}
+
+#app.r-code-signature .scene-room .comp-meta .composer-stop-button:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+#app.r-code-signature .scene-room .comp-meta .composer-stop-button:not(:disabled) .send-stop-icon {
+  color: var(--danger);
+}
+
 @media (max-height: 700px) {
   #app.r-code-signature .scene-home .home-stage {
     padding-top: 24px;

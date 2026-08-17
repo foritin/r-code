@@ -104,14 +104,9 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
   await stop.waitFor({ state: "visible" });
   assert.match(await stop.getAttribute("class"), /composer-primary-button/, "Stop should replace the primary Send button while the draft is empty");
   const stopButtonBox = await stop.boundingBox();
-  assert.ok(stopButtonBox && stopButtonBox.width >= 40 && stopButtonBox.height >= 40, "Stop needs the same substantial target as Send");
+  assert.ok(stopButtonBox && stopButtonBox.width >= 60 && stopButtonBox.height >= 28, "中断是带文字的胶囊按钮（原型 C），保持可点尺寸");
   assert.equal(await stop.locator("svg").count(), 1, "running controls should expose a square Stop icon");
-  const stopIconBox = await stop.locator("svg").boundingBox();
-  const stopGlyphBox = await stop.locator("svg rect").boundingBox();
-  assert.ok(stopIconBox && stopIconBox.width >= 19, "Stop icon should have enough visual weight inside the primary circle");
-  assert.ok(stopGlyphBox && stopGlyphBox.width >= 12, "Stop square must read clearly inside the primary circle");
-  const stopCopyBox = await stop.locator(".sr-only").boundingBox();
-  assert.ok(!stopCopyBox || stopCopyBox.width <= 1, "Stop copy should stay accessible without a text button");
+  assert.equal(await stop.locator(".send-label").innerText(), "中断", "Stop 显示可见文字「中断」而不是纯图标");
 
   await composer.fill("准备补充当前运行");
   await send.waitFor({ state: "visible" });

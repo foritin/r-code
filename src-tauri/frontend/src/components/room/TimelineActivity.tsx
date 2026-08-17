@@ -138,7 +138,7 @@ export function TimelineContextEvent({
   const generatedId = useId().replace(/:/g, "");
   const detailId = `timeline-context-${generatedId}`;
   const hasDetails = Boolean(detail?.trim());
-  const isReasoning = label === "模型思考" || label === "Codex 思考摘要";
+  const isReasoning = label === "思考过程" || label === "Codex 思考摘要";
 
   if (collapsible && hasDetails) {
     const preview = detail?.replace(/\s+/g, " ").trim() ?? "";
@@ -278,7 +278,7 @@ const TimelineFileRow = memo(function TimelineFileRow({ tool }: { tool: Timeline
         <span className="timeline-file-icon" aria-hidden="true">
           <FileTypeIcon path={target} />
         </span>
-        <span className="timeline-file-verb">{verb === "write" ? "写入" : "编辑"}</span>
+        <span className="timeline-file-verb">{fileVerbLabel(tool.name, verb)}</span>
         <span className="timeline-file-name">{fileNameOf(target)}</span>
         {tool.state === "active" ? (
           <span className="timeline-file-stat"><span className="spin" aria-hidden="true" /></span>
@@ -316,6 +316,14 @@ const TimelineFileRow = memo(function TimelineFileRow({ tool }: { tool: Timeline
 function fileNameOf(target: string): string {
   const parts = target.split(/[\\/]/);
   return parts[parts.length - 1] || target;
+}
+
+/** 文件行动词：读取/查看/编辑/写入（原型 C 的文件行语言）。 */
+function fileVerbLabel(name: string, verb: string): string {
+  if (verb === "write") return "写入";
+  if (verb === "edit") return "编辑";
+  if (verb === "read") return name.toLowerCase().includes("view") ? "查看" : "读取";
+  return "处理";
 }
 
 function ActivityIcon({ kind }: { kind: TimelineToolGroupKind }) {

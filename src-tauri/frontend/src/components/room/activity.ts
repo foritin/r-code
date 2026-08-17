@@ -546,7 +546,7 @@ function appendChildReasoning(
   const reasoningEvent: ActivitySubagentEvent = {
     id: `${child.id}:${at}:${child.events.length}`,
     kind: "reasoning",
-    label: "模型思考",
+    label: "思考过程",
     detail: text.slice(0, 12_000),
     at,
   };

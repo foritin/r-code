@@ -1698,8 +1698,8 @@ export function Composer({
             >
               {goalSaving || sending
                 ? <span className="send-loading-spinner" aria-hidden="true" />
-                : <IconSend width={15} height={15} />}
-              <span className="sr-only">{goalSaving || sending ? "执行中" : task?.goal_active ? "更新并执行目标" : "执行目标"}</span>
+                : <IconSend width={14} height={14} />}
+              <span className="send-label">{goalSaving || sending ? "执行中" : task?.goal_active ? "更新目标" : "执行目标"}</span>
             </button>
           ) : (
             <div className="running-send-actions" aria-label={running ? "运行中消息操作" : "消息发送操作"}>
@@ -1732,11 +1732,11 @@ export function Composer({
                   aria-busy={abort.busy || undefined}
                   title={abort.busy ? "正在停止当前运行" : "停止当前运行"}
                 >
-                  {abort.busy
-                    ? <span className="send-loading-spinner" aria-hidden="true" />
-                    : <IconStop width={22} height={22} />}
-                  <span className="sr-only">{abort.busy ? "停止中" : "停止"}</span>
-                </button>
+                {abort.busy
+                  ? <span className="send-loading-spinner" aria-hidden="true" />
+                  : <IconStop width={13} height={13} className="send-stop-icon" />}
+                <span className="send-label">{abort.busy ? "停止中" : "中断"}</span>
+              </button>
               ) : (
                 <button
                   className={`send composer-primary-button running-send-button mode-${sendMode}`}
@@ -1750,8 +1750,8 @@ export function Composer({
                   aria-label={running ? `${agentSendModeLabel(sendMode)}消息` : "发送消息"}
                   title={attachmentBlockedReason ?? `${agentSendModeTitle(sendMode, running)}（Enter）`}
                 >
-                  <IconSend width={15} height={15} />
-                  <span className="sr-only">发送</span>
+                  <IconSend width={14} height={14} />
+                  <span className="send-label">发送</span>
                 </button>
               )}
             </div>
