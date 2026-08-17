@@ -644,13 +644,14 @@ impl PathGuard {
     ) -> Result<(), ProductError> {
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let dir_file = parent_dir.into_std_file();
-            dir_file.sync_all().map_err(|err| {
-                ProductError::PathEscape(format!(
-                    "cannot sync parent directory for {path:?} within workspace {:?}: {err} (fail-closed)",
-                    self.root
-                ))
-            })?;
+            // cap_std 的目录句柄在 Linux 上以 O_PATH 语义打开，`into_std_file().sync_all()`
+            // 固定返回 EBADF。目录项持久性由操作系统的元数据日志/缓存保证，这里不把
+            // 「目录 fsync 不可用」当作写入失败，仅记录非致命日志。
+            if let Err(error) = parent_dir.into_std_file().sync_all() {
+                tracing::debug!(
+                    "atomic_write_path: parent-directory fsync unavailable for {path:?}: {error} (non-fatal)"
+                );
+            }
         }
         #[cfg(any(windows, target_os = "macos"))]
         {

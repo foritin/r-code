@@ -1689,6 +1689,20 @@ fn resolve_workspace_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     } else {
         guard.root().join(requested)
     };
+    // 回滚/审核目标是已存在文件。优先 canonicalize 以消解持久化拼写与当前 root 的
+    // 差异（macOS 的 /var -> /private/var、Windows 的 8.3 短名 RUNNER~1 -> runneradmin
+    // 与 \\?\ 前缀），并在 canonical 结果上校验 containment；canonicalize 失败（路径
+    // 尚不存在）才回退到词法 strip 的类型化解析，覆盖即将创建文件的调用方。
+    if let Ok(canonical) = candidate.canonicalize() {
+        if canonical.starts_with(guard.root()) {
+            return Ok(canonical);
+        }
+        return Err(format!(
+            "absolute path {} is outside workspace root {}",
+            candidate.display(),
+            guard.root().display()
+        ));
+    }
     guard
         .resolve_path(&candidate)
         .map(|resolved| resolved.canonical().to_path_buf())
