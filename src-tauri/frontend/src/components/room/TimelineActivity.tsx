@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useEffect, useId, useMemo, useState } from "react";
 import {
   IconActivity,
   IconChevronDown,
@@ -13,6 +13,7 @@ import {
   ToolCard,
   ToolPayloadDetails,
 } from "./ToolCard";
+import { FileTypeIcon } from "./FileTypeIcon";
 import { SubagentAvatar } from "./SubagentIdentity";
 import type {
   TimelineSubagentEntry,
@@ -21,14 +22,23 @@ import type {
   TimelineToolGroupKind,
   TimelineToolItem,
 } from "./timeline-presentation";
-import { toolActivityProgress, toolActivityTitle } from "./tool-activity";
+import { toolActivityProgress, toolActivityTitle, toolDiffStat } from "./tool-activity";
+import { toolVerb } from "../../lib/format";
 
 interface ActivityGroupProps {
   item: TimelineToolGroupItem;
   dim?: string;
 }
 
-export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "" }: ActivityGroupProps) {
+/** 文件活动超过该数量时折叠尾部，避免长会话被几十个文件行淹没。 */
+const FILE_ROW_LIMIT = 6;
+
+export const TimelineToolGroup = memo(function TimelineToolGroup(props: ActivityGroupProps) {
+  if (props.item.groupKind === "file") return <TimelineFileRows {...props} />;
+  return <TimelineToolGroupBase {...props} />;
+});
+
+const TimelineToolGroupBase = memo(function TimelineToolGroupBase({ item, dim = "" }: ActivityGroupProps) {
   const hasMcpAction = item.tools.some((tool) => (
     hasMcpConfirmationPayload(tool.name, tool.outputJson)
       || hasMcpSettingsActionPayload(tool.name, tool.outputJson)
@@ -55,7 +65,6 @@ export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "
       className={`timeline-activity-event kind-${item.groupKind} state-${state}${open ? " open" : ""}${dim}`}
       data-t={item.t}
     >
-      <TimelineTraceAnchor label={title} />
       <button
         type="button"
         className="timeline-activity-toggle ring-inset"
@@ -129,7 +138,7 @@ export function TimelineContextEvent({
   const generatedId = useId().replace(/:/g, "");
   const detailId = `timeline-context-${generatedId}`;
   const hasDetails = Boolean(detail?.trim());
-  const isReasoning = label === "模型思考" || label === "Codex 思考摘要";
+  const isReasoning = label === "思考过程" || label === "Codex 思考摘要";
 
   if (collapsible && hasDetails) {
     const preview = detail?.replace(/\s+/g, " ").trim() ?? "";
@@ -138,7 +147,6 @@ export function TimelineContextEvent({
         className={`timeline-context-event is-collapsible${isReasoning ? " is-reasoning" : ""}${open ? " open" : ""}${dim}`}
         data-t={t}
       >
-        <TimelineTraceAnchor label={label} />
         <button
           type="button"
           className="timeline-context-toggle ring-inset"
@@ -167,7 +175,6 @@ export function TimelineContextEvent({
 
   return (
     <div className={`timeline-context-event${dim}`} data-t={t} title={detail ?? undefined}>
-      <TimelineTraceAnchor label={label} />
       <span className="timeline-activity-icon" aria-hidden="true"><IconActivity width={14} height={14} /></span>
       <span>{label}</span>
       {detail && <small>{detail}</small>}
@@ -189,7 +196,6 @@ export function TimelineSubagentGroup({
   const status = subagentGroupStatus(item.agents);
   return (
     <div className={`timeline-subagent-event${dim}`} data-t={item.t} aria-label="子代理运行">
-      <TimelineTraceAnchor label="子代理运行" />
       <div className="timeline-subagent-chips">
         {item.agents.map((agent, index) => {
           const inspectable = Boolean(agent.runId && onInspectSubagent);
@@ -222,36 +228,102 @@ export function TimelineSubagentGroup({
   );
 }
 
-function TimelineTraceAnchor({ label }: { label: string }) {
-  const jumpToEvent = (event: ReactMouseEvent<HTMLButtonElement>) => {
-    const target = event.currentTarget.parentElement;
-    if (!(target instanceof HTMLElement)) return;
-    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-    target.scrollIntoView({
-      behavior: reducedMotion ? "auto" : "smooth",
-      block: "center",
-      inline: "nearest",
-    });
-    target.classList.remove("is-trace-target");
-    // Restart the arrival cue when the same anchor is selected repeatedly without changing layout.
-    void target.offsetWidth;
-    target.classList.add("is-trace-target");
-    if (reducedMotion) {
-      window.requestAnimationFrame(() => target.classList.remove("is-trace-target"));
-    } else {
-      target.addEventListener("animationend", () => target.classList.remove("is-trace-target"), { once: true });
-    }
-  };
-
+/**
+ * 文件活动：每个文件独立成行（类型图标 + 文件名 + 行内 +N −N），
+ * 不再折叠成「已编辑 N 个文件」——行内差异即时可见是这个界面的核心承诺。
+ * 超过 FILE_ROW_LIMIT 个文件时折叠尾部，按需展开。
+ */
+function TimelineFileRows({ item, dim = "" }: ActivityGroupProps) {
+  const [showAll, setShowAll] = useState(false);
+  const tools = item.tools;
+  const visible = showAll ? tools : tools.slice(0, FILE_ROW_LIMIT);
+  const hidden = tools.length - visible.length;
+  const state = groupState(tools);
   return (
-    <button
-      type="button"
-      className="timeline-trace-anchor"
-      aria-label={`定位到${label}`}
-      title={`定位到${label}`}
-      onClick={jumpToEvent}
-    />
+    <div className={`timeline-file-event state-${state}${dim}`} data-t={item.t}>
+      {visible.map((tool) => (
+        <TimelineFileRow key={tool.id} tool={tool} />
+      ))}
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="timeline-file-more"
+          aria-expanded={showAll}
+          onClick={() => setShowAll(true)}
+        >
+          还有 {hidden} 个文件，显示全部
+        </button>
+      )}
+    </div>
   );
+}
+
+const TimelineFileRow = memo(function TimelineFileRow({ tool }: { tool: TimelineToolItem }) {
+  const [open, setOpen] = useState(false);
+  const hasPayload = Boolean(tool.inputJson?.trim() || tool.outputJson?.trim());
+  const verb = toolVerb(tool.name);
+  const diff = useMemo(() => toolDiffStat(tool.inputJson, verb), [tool.inputJson, verb]);
+  const target = tool.target || tool.name;
+  const summaryVisible = tool.summary && tool.summary !== "done" ? tool.summary : "";
+  return (
+    <>
+      <button
+        type="button"
+        className="timeline-file-row ring-inset"
+        aria-expanded={hasPayload ? open : undefined}
+        disabled={!hasPayload}
+        title={target}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="timeline-file-icon" aria-hidden="true">
+          <FileTypeIcon path={target} />
+        </span>
+        <span className="timeline-file-verb">{fileVerbLabel(tool.name, verb)}</span>
+        <span className="timeline-file-name">{fileNameOf(target)}</span>
+        {tool.state === "active" ? (
+          <span className="timeline-file-stat"><span className="spin" aria-hidden="true" /></span>
+        ) : tool.state === "fail" ? (
+          <span className="timeline-file-stat state-fail">✗ {summaryVisible || "失败"}</span>
+        ) : diff ? (
+          <span className="timeline-file-stat">
+            <span className="plus">+{diff.plus}</span> <span className="minus">−{diff.minus}</span>
+          </span>
+        ) : (
+          <span className="timeline-file-stat">{summaryVisible}</span>
+        )}
+        {hasPayload && (
+          <span className="timeline-activity-chevron" aria-hidden="true">
+            {open ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="timeline-activity-details">
+          <div className="timeline-activity-single-detail">
+            <ToolPayloadDetails
+              toolName={tool.name}
+              inputJson={tool.inputJson}
+              outputJson={tool.outputJson}
+              state={tool.state}
+            />
+          </div>
+        </div>
+      )}
+    </>
+  );
+});
+
+function fileNameOf(target: string): string {
+  const parts = target.split(/[\\/]/);
+  return parts[parts.length - 1] || target;
+}
+
+/** 文件行动词：读取/查看/编辑/写入（原型 C 的文件行语言）。 */
+function fileVerbLabel(name: string, verb: string): string {
+  if (verb === "write") return "写入";
+  if (verb === "edit") return "编辑";
+  if (verb === "read") return name.toLowerCase().includes("view") ? "查看" : "读取";
+  return "处理";
 }
 
 function ActivityIcon({ kind }: { kind: TimelineToolGroupKind }) {

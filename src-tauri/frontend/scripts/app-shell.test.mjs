@@ -1486,20 +1486,20 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
     acrossTool = applyAgentEvent(acrossTool, { type: "reasoning", text: "边界", delta: true }, 4, nid);
 
     const child = buildLiveEntries([
-      { id: "child-r1", kind: "reasoning", label: "模型思考", detail: "检查", at: 1 },
-      { id: "child-r2", kind: "reasoning", label: "模型思考", detail: "边界", at: 2 },
+      { id: "child-r1", kind: "reasoning", label: "思考过程", detail: "检查", at: 1 },
+      { id: "child-r2", kind: "reasoning", label: "思考过程", detail: "边界", at: 2 },
     ], "running");
     return { history, live, acrossTool, child };
   });
 
   assert.deepEqual(
     contract.history.map((item) => [item.kind, item.label, item.detail, item.collapsible]),
-    [["context", "模型思考", "先检查历史上下文", true]],
+    [["context", "思考过程", "先检查历史上下文", true]],
   );
   assert.deepEqual(
     contract.live.map((item) => [item.kind, item.label ?? null, item.detail ?? item.text, item.streaming ?? null]),
     [
-      ["context", "模型思考", "先检查依赖关系", null],
+      ["context", "思考过程", "先检查依赖关系", null],
       ["agent", null, "最终回答", true],
     ],
   );
@@ -1508,7 +1508,7 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
     ["检查边界"],
   );
   assert.deepEqual(
-    contract.acrossTool.filter((item) => item.kind === "context" && item.label === "模型思考")
+    contract.acrossTool.filter((item) => item.kind === "context" && item.label === "思考过程")
       .map((item) => item.detail),
     ["先检查", "再核对边界"],
   );
@@ -1669,7 +1669,7 @@ test("a successful turn archives its process behind the duration while keeping t
     useAppStore.getState().openRoom(taskId);
   });
 
-  const toggle = page.getByRole("button", { name: "耗时 1分 13秒" });
+  const toggle = page.getByRole("button", { name: "已处理 1 步 · 耗时 1m 13s" });
   await toggle.waitFor({ state: "visible" });
   assert.equal(await toggle.getAttribute("aria-expanded"), "false");
   assert.equal(await page.locator(".timeline-process-body").count(), 0, "the completed process should not remain mounted by default");
@@ -1680,44 +1680,7 @@ test("a successful turn archives its process behind the duration while keeping t
   assert.equal(await toggle.getAttribute("aria-expanded"), "true");
   await page.locator(".timeline-process-body").waitFor({ state: "visible" });
   await page.getByText("我先核对相关实现，再执行定向修改。", { exact: true }).waitFor({ state: "visible" });
-  await page.locator(".timeline-process-body .timeline-activity-event").waitFor({ state: "visible" });
-
-  await page.evaluate(() => {
-    window.__timelineScrollCalls = [];
-    window.__timelineOriginalScrollIntoView = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function scrollIntoView(options) {
-      window.__timelineScrollCalls.push({
-        options,
-        className: this instanceof HTMLElement ? this.className : "",
-      });
-    };
-  });
-  const traceAnchor = page.locator(".timeline-process-body .timeline-trace-anchor").first();
-  assert.match(await traceAnchor.getAttribute("aria-label"), /^定位到/);
-  const anchorBox = await traceAnchor.boundingBox();
-  assert.ok(anchorBox && Math.abs(anchorBox.width - 20) < 0.5 && Math.abs(anchorBox.height - 20) < 0.5,
-    `the trace anchor must keep a precise, non-obstructive hit target: ${JSON.stringify(anchorBox)}`);
-  const restingColor = await traceAnchor.evaluate((element) => getComputedStyle(element).color);
-  await traceAnchor.hover();
-  const hoverColor = await traceAnchor.evaluate((element) => getComputedStyle(element).color);
-  assert.notEqual(hoverColor, restingColor, "hover must visibly distinguish an interactive trace node");
-  await traceAnchor.focus();
-  await page.keyboard.press("Enter");
-  assert.equal(await traceAnchor.evaluate((element) => document.activeElement === element), true,
-    "the trace anchor must remain keyboard focused after navigation");
-  assert.equal(await traceAnchor.locator("xpath=..").evaluate((element) => element.classList.contains("is-trace-target")), true,
-    "selecting a trace node should visibly acknowledge the target activity");
-  const scrollCall = await page.evaluate(() => window.__timelineScrollCalls.at(-1));
-  assert.deepEqual(scrollCall.options, { behavior: "smooth", block: "center", inline: "nearest" });
-  assert.match(scrollCall.className, /timeline-(?:activity|context|subagent)-event/);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await traceAnchor.click();
-  assert.equal(await page.evaluate(() => window.__timelineScrollCalls.at(-1).options.behavior), "auto",
-    "reduced motion must make trace navigation immediate");
-  await page.evaluate(() => {
-    Element.prototype.scrollIntoView = window.__timelineOriginalScrollIntoView;
-    delete window.__timelineOriginalScrollIntoView;
-  });
+  await page.locator(".timeline-process-body .timeline-file-row").waitFor({ state: "visible" });
 
   await toggle.click();
   assert.equal(await toggle.getAttribute("aria-expanded"), "false");

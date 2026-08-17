@@ -1160,7 +1160,7 @@ function SubagentReasoningEvent({
     >
       <summary>
         <span className="subagent-runtime-log-icon"><IconActivity width={13} height={13} /></span>
-        <span>模型思考</span>
+        <span>思考过程</span>
         <small title={preview}>{preview}</small>
         <IconChevronDown width={13} height={13} />
       </summary>

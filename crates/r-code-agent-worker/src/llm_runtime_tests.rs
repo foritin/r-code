@@ -1560,7 +1560,7 @@ async fn weighted_candidate_route_is_deterministic_and_executes_the_selected_slo
                 SubagentAccessMode::ReadOnly,
                 Some(format!("call-{expected_index}")),
                 routing_reason,
-            )
+                        DelegationInitiator::Runtime,)
             .await
             .unwrap();
     }
@@ -1684,7 +1684,7 @@ async fn native_candidate_uses_its_slot_request_profile_without_root_provider_le
             SubagentAccessMode::ReadOnly,
             None,
             "slot profile fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     supervisor.collect(None).await.unwrap();
@@ -1838,7 +1838,7 @@ async fn native_child_loop_compacts_before_the_provider_window_overflows() {
             SubagentAccessMode::FullAccess,
             None,
             "child compaction fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     let collected = supervisor.collect(None).await.unwrap();
@@ -1939,7 +1939,7 @@ async fn external_candidate_events_are_allowlisted_and_cannot_forge_control_even
             SubagentAccessMode::ReadOnly,
             None,
             "external event filter fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     supervisor.collect(None).await.unwrap();
@@ -2151,7 +2151,7 @@ async fn disabled_cross_engine_switch_blocks_external_candidate_pool_routes_and_
             SubagentAccessMode::ReadOnly,
             None,
             "direct stale route fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("外部 Agent 子代理协作已关闭"));
@@ -4714,7 +4714,7 @@ async fn codex_backend_forwards_scope_access_and_aliases_consistently() {
                 access,
                 Some(format!("call-{}", id.as_str())),
                 "fixture route".to_string(),
-            )
+                        DelegationInitiator::Runtime,)
             .await
             .unwrap();
         let queued: serde_json::Value = serde_json::from_str(&queued.content).unwrap();
@@ -5549,7 +5549,7 @@ async fn child_completion_race_peer_mail_is_removed_after_exactly_one_provider_r
             SubagentAccessMode::ReadOnly,
             Some("completion-race-delegate".to_string()),
             "completion race fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     for _ in 0..200 {
@@ -5609,7 +5609,7 @@ async fn native_child_can_delegate_and_collect_a_grandchild_in_the_same_root_tre
             SubagentAccessMode::ReadOnly,
             Some("delegate-level-one".to_string()),
             "nested delegation fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     assert!(started.content.contains("level-one-run"));
@@ -5771,7 +5771,7 @@ async fn native_child_empty_final_after_tools_recovers_with_one_tool_free_summar
             SubagentAccessMode::FullAccess,
             None,
             "empty final recovery fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -5831,7 +5831,7 @@ async fn native_child_empty_final_recovery_failure_is_terminal_after_one_attempt
             SubagentAccessMode::FullAccess,
             None,
             "empty final recovery failure fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -5944,7 +5944,7 @@ async fn native_child_hosted_tools_without_answer_get_one_summary_recovery() {
             SubagentAccessMode::FullAccess,
             None,
             "hosted tool recovery fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -6008,7 +6008,7 @@ async fn native_api_candidate_uses_the_shared_tree_and_can_delegate_a_grandchild
             SubagentAccessMode::ReadOnly,
             None,
             "native candidate nested fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -6045,7 +6045,7 @@ async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
                 SubagentAccessMode::ReadOnly,
                 Some(format!("delegate-{parent_id}")),
                 "full-parallel permit stress fixture".to_string(),
-            )
+                        DelegationInitiator::Runtime,)
             .await
             .unwrap();
     }
@@ -6099,7 +6099,7 @@ async fn cancelling_a_middle_node_recursively_stops_descendants_but_not_siblings
                 SubagentAccessMode::ReadOnly,
                 None,
                 "recursive cancellation fixture".to_string(),
-            )
+                        DelegationInitiator::Runtime,)
             .await
             .unwrap();
     }
@@ -6120,7 +6120,7 @@ async fn cancelling_a_middle_node_recursively_stops_descendants_but_not_siblings
             SubagentAccessMode::ReadOnly,
             None,
             "recursive cancellation fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap();
     let grandchild = nested
@@ -6174,7 +6174,7 @@ async fn spawn_rechecks_parent_cancellation_after_waiting_for_children_lock() {
         SubagentAccessMode::ReadOnly,
         None,
         "late registration race fixture".to_string(),
-    );
+                DelegationInitiator::Runtime,);
     tokio::pin!(spawn);
 
     {
@@ -6415,7 +6415,7 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
                 SubagentAccessMode::ReadOnly,
                 None,
                 "lifetime budget fixture".to_string(),
-            )
+                        DelegationInitiator::Runtime,)
             .await
             .unwrap();
         supervisor.collect(Some(vec![run_id])).await.unwrap();
@@ -6430,7 +6430,7 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
             SubagentAccessMode::ReadOnly,
             None,
             "lifetime budget fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap_err();
     assert!(error.to_string().contains(&format!(
@@ -6450,7 +6450,7 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
             SubagentAccessMode::ReadOnly,
             None,
             "depth fixture".to_string(),
-        )
+                    DelegationInitiator::Runtime,)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("最大深度为 2"));
@@ -6749,7 +6749,7 @@ async fn abort_one_cancels_a_queued_child_while_it_is_waiting_for_an_activity_pe
                 SubagentAccessMode::ReadOnly,
                 None,
                 "queued permit cancellation fixture".to_string(),
-            )
+                        DelegationInitiator::Runtime,)
             .await
             .unwrap();
     }
@@ -8232,4 +8232,247 @@ fn custom_agent_prompts_are_layered_without_replacing_safety_prompt() {
     );
     assert!(child.contains("read-only delegated subagent"));
     assert!(child.contains("CHILD CUSTOM RELATIONSHIP"));
+}
+
+// ---- plan_subagents：并行子代理批次的确认回路 ----
+
+struct LenientCodexRunner {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl CodexSubagentRunner for LenientCodexRunner {
+    async fn run(
+        &self,
+        request: CodexSubagentRequest,
+    ) -> Result<CodexSubagentOutcome, ProductError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CodexSubagentOutcome::Completed(format!(
+            "结论：{}",
+            request.goal
+        )))
+    }
+}
+
+fn plan_gate_tool_host(
+    directory: &TempDir,
+    runner: Arc<LenientCodexRunner>,
+) -> SessionToolHost {
+    let workspace_scope = WorkspaceScope {
+        guard: PathGuard::new(directory.path().to_path_buf()).unwrap(),
+        access_mode: ProjectAccessMode::RequestApproval,
+    };
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = Arc::new(SubagentSupervisor::new(
+        Arc::new(MockProvider::new("mock")),
+        test_gateway(),
+        None,
+        event_tx,
+        "task-1".to_string(),
+        "parent-run".to_string(),
+        "mock-model".to_string(),
+        512,
+        None,
+        InferenceOptions::default(),
+        Arc::new(AtomicBool::new(false)),
+        Some(workspace_scope.clone()),
+        Some(runner),
+        Arc::new(AtomicBool::new(true)),
+        OrchestrationPolicy::default(),
+        AgentPromptPolicy::default(),
+    ));
+    SessionToolHost {
+        gateway: test_gateway(),
+        external_tools: None,
+        task_id: "task-1".to_string(),
+        run_id: "parent-run".to_string(),
+        abort: Arc::new(AtomicBool::new(false)),
+        workspace_scope: Some(workspace_scope),
+        policy: ToolPolicy::Main,
+        caller: "agent".to_string(),
+        delegation: Some(supervisor),
+        delegation_disabled: Arc::new(AtomicBool::new(false)),
+        suspension_gate: Arc::new(AtomicBool::new(false)),
+        continuation_gate: Arc::new(AtomicBool::new(false)),
+    }
+}
+
+async fn delegate_via_host(
+    tool_host: &SessionToolHost,
+    goal: &str,
+) -> agent_error::Result<ToolCallOutcome> {
+    tool_host
+        .call_inner(
+            Some(&format!("call-{goal}")),
+            "delegate_task",
+            serde_json::json!({
+                "agent": "codex",
+                "goal": goal,
+                "access": "read_only"
+            }),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
+    let directory = TempDir::new().unwrap();
+    let runner = Arc::new(LenientCodexRunner {
+        calls: AtomicUsize::new(0),
+    });
+    let tool_host = plan_gate_tool_host(&directory, runner.clone());
+
+    let plan_spec = tool_host
+        .tool_specs()
+        .into_iter()
+        .find(|tool| tool.name == "plan_subagents")
+        .expect("delegation enabled so plan_subagents must be present");
+    assert!(plan_spec.input_schema["properties"]["confirm"]["default"] == false);
+
+    // 首个子代理免计划直接派生。
+    let first = delegate_via_host(&tool_host, "先摸清现状").await.unwrap();
+    assert!(!first.is_error);
+    let first_payload: serde_json::Value = serde_json::from_str(&first.content).unwrap();
+    assert!(first_payload["subagent_id"].as_str().is_some());
+
+    // 未确认计划前，第二个 delegate_task 被拦下并引导调用 plan_subagents。
+    let blocked = delegate_via_host(&tool_host, "再做点别的")
+        .await
+        .unwrap_err();
+    assert!(blocked.to_string().contains("plan_subagents"));
+
+    // 分析段：不锁定名额，返回数量与警告。
+    let analysis = tool_host
+        .call_inner(
+            Some("plan-analysis"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "再做点别的", "agent": "codex"},
+                    {"goal": "顺带验证结论", "agent": "codex"}
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!analysis.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&analysis.content).unwrap();
+    assert_eq!(payload["status"], "needs_confirmation");
+    assert_eq!(payload["planned_entries"], 2);
+    assert_eq!(payload["existing_children"], 1);
+    assert_eq!(payload["allowed_total_after_confirm"], 3);
+    // 分析段之后门仍然关闭。
+    let still_blocked = delegate_via_host(&tool_host, "再做点别的").await.unwrap_err();
+    assert!(still_blocked.to_string().contains("plan_subagents"));
+
+    // 确认段：锁定 1（已有）+ 2（计划）= 3 个总数。
+    let confirmed = tool_host
+        .call_inner(
+            Some("plan-confirm"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "再做点别的", "agent": "codex", "label": "补充调查"},
+                    {"goal": "顺带验证结论", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!confirmed.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
+    assert_eq!(payload["status"], "confirmed");
+    assert_eq!(payload["allowed_total"], 3);
+    assert_eq!(payload["revision"], 1);
+
+    // 计划内的两个新子代理放行。
+    assert!(!delegate_via_host(&tool_host, "再做点别的").await.unwrap().is_error);
+    assert!(
+        !delegate_via_host(&tool_host, "顺带验证结论")
+            .await
+            .unwrap()
+            .is_error
+    );
+    // 超出计划被拒，并提示修订计划。
+    let exceeded = delegate_via_host(&tool_host, "计划外增量")
+        .await
+        .unwrap_err();
+    assert!(exceeded.to_string().contains("修订后的计划"));
+    // 收口后统计：只有 1 个免计划 + 2 个计划内子代理真正执行。
+    tool_host
+        .call_inner(Some("plan-collect"), "collect_subagents", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(runner.calls.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn plan_subagents_validates_entries_and_run_cap() {
+    let directory = TempDir::new().unwrap();
+    let tool_host = plan_gate_tool_host(
+        &directory,
+        Arc::new(LenientCodexRunner {
+            calls: AtomicUsize::new(0),
+        }),
+    );
+
+    let empty_entries = tool_host
+        .call_inner(
+            Some("plan-empty"),
+            "plan_subagents",
+            serde_json::json!({"entries": []}),
+        )
+        .await
+        .unwrap();
+    assert!(empty_entries.is_error);
+
+    let blank_goal = tool_host
+        .call_inner(
+            Some("plan-blank"),
+            "plan_subagents",
+            serde_json::json!({"entries": [{"goal": "   "}]}),
+        )
+        .await
+        .unwrap();
+    assert!(blank_goal.is_error);
+
+    // 超过单次运行上限（12）的确认计划被拒。
+    let over_cap_entries: Vec<serde_json::Value> = (0..13)
+        .map(|index| serde_json::json!({"goal": format!("方向 {index}")}))
+        .collect();
+    let over_cap = tool_host
+        .call_inner(
+            Some("plan-over-cap"),
+            "plan_subagents",
+            serde_json::json!({"entries": over_cap_entries, "confirm": true}),
+        )
+        .await
+        .unwrap();
+    assert!(over_cap.is_error);
+    assert!(over_cap.content.contains("上限"));
+
+    // 重复 goal / 未知槽位在分析段产生警告但不阻断。
+    let analysis = tool_host
+        .call_inner(
+            Some("plan-warn"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "slot:missing"},
+                    {"goal": "调研 A", "agent": "auto"}
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!analysis.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&analysis.content).unwrap();
+    let warnings = payload["warnings"].as_array().unwrap();
+    assert!(warnings
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("未知或未就绪的槽位")));
+    assert!(warnings
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("完全相同")));
 }

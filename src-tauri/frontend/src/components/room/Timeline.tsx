@@ -187,11 +187,8 @@ export function runStreamRetriesLabel(value: string | null): string | null {
   }
 }
 
-function runDurationLabel(startedAt: string, endedAt: string | null, now: number): string {
-  const start = Date.parse(startedAt);
-  const end = endedAt ? Date.parse(endedAt) : now;
-  if (Number.isNaN(start) || Number.isNaN(end)) return "";
-  const seconds = Math.max(0, Math.floor((end - start) / 1000));
+/** 紧凑时长（原型 C）：5s / 1m 42s / 1h 02m。 */
+function compactDurationLabel(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
@@ -200,13 +197,23 @@ function runDurationLabel(startedAt: string, endedAt: string | null, now: number
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
+function runDurationLabel(startedAt: string, endedAt: string | null, now: number): string {
+  const start = Date.parse(startedAt);
+  const end = endedAt ? Date.parse(endedAt) : now;
+  if (Number.isNaN(start) || Number.isNaN(end)) return "";
+  return compactDurationLabel(Math.max(0, Math.floor((end - start) / 1000)));
+}
+
 const ARCHIVABLE_RUN_STATES = new Set<TimelineRunItem["state"]>([
   "finished",
   "accepted",
   "answered",
 ]);
 
-function completedProcessDurationLabel(runs: readonly TimelineRunItem[]): string | null {
+function completedProcessDurationLabel(
+  runs: readonly TimelineRunItem[],
+  steps: number,
+): string | null {
   if (runs.length === 0) return null;
   let startedAt = Number.POSITIVE_INFINITY;
   let endedAt = Number.NEGATIVE_INFINITY;
@@ -219,20 +226,9 @@ function completedProcessDurationLabel(runs: readonly TimelineRunItem[]): string
     endedAt = Math.max(endedAt, end);
   }
 
-  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
-  if (seconds < 60) return `耗时 ${seconds}秒`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) {
-    return remainingSeconds > 0
-      ? `耗时 ${minutes}分 ${remainingSeconds}秒`
-      : `耗时 ${minutes}分`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0
-    ? `耗时 ${hours}小时 ${String(remainingMinutes).padStart(2, "0")}分`
-    : `耗时 ${hours}小时`;
+  const duration = compactDurationLabel(Math.max(0, Math.floor((endedAt - startedAt) / 1000)));
+  // 原型 C 的完成轮摘要条：已处理 N 步 · 耗时 3m 12s。
+  return steps > 0 ? `已处理 ${steps} 步 · 耗时 ${duration}` : `耗时 ${duration}`;
 }
 
 /**
@@ -917,7 +913,12 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           ? turn.items.findIndex((item, index) => index > lastActivity && item.kind === "agent")
           : -1;
         const finalResponse = finalResponseIndex >= 0 ? turn.items[finalResponseIndex] : null;
-        const processDuration = completedProcessDurationLabel(turn.runs);
+        const processSteps = turn.items.reduce((count, item) => {
+          if (item.kind === "tool_group") return count + item.tools.length;
+          if (item.kind === "subagent_group") return count + item.agents.length;
+          return count;
+        }, 0);
+        const processDuration = completedProcessDurationLabel(turn.runs, processSteps);
         const canArchiveProcess = Boolean(
           turn.hasActivity
           && finalResponse?.kind === "agent"
