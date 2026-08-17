@@ -58,6 +58,37 @@ export function toolActivityProgress(states: readonly ToolActivityState[]): stri
   return states.length > 1 ? `${states.length} 项完成` : "完成";
 }
 
+export interface ToolDiffStat {
+  plus: number;
+  minus: number;
+}
+
+/**
+ * 从编辑 / 写入工具的输入载荷估算行级差异，用于文件行的行内 +N −N。
+ * edit 载荷是 old_string / new_string 成对替换；write 载荷只有整份新内容，
+ * 删除行数未知，按 0 展示。解析失败或字段缺失返回 null，调用方回退到摘要。
+ */
+export function toolDiffStat(inputJson: string | null | undefined, verb: string): ToolDiffStat | null {
+  if (!inputJson || (verb !== "edit" && verb !== "write")) return null;
+  try {
+    const value = JSON.parse(inputJson) as Record<string, unknown>;
+    const lineCount = (candidate: unknown): number | null => {
+      if (typeof candidate !== "string") return null;
+      return candidate === "" ? 0 : candidate.split("\n").length;
+    };
+    if (verb === "edit") {
+      const plus = lineCount(value.new_string ?? value.newText);
+      const minus = lineCount(value.old_string ?? value.oldText);
+      if (plus === null && minus === null) return null;
+      return { plus: plus ?? 0, minus: minus ?? 0 };
+    }
+    const plus = lineCount(value.content ?? value.contents ?? value.text);
+    return plus === null ? null : { plus, minus: 0 };
+  } catch {
+    return null;
+  }
+}
+
 function compactActivityTarget(value: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   return normalized.length > 72 ? `${normalized.slice(0, 71)}…` : normalized;

@@ -756,27 +756,6 @@
   border-left: 0;
 }
 
-#app.r-code-signature .tcard::before,
-#app.r-code-signature .run-disclosure::before {
-  content: "";
-  position: absolute;
-  top: 13px;
-  left: -20px;
-  width: 6px;
-  height: 6px;
-  border: 1px solid #625b50;
-  border-radius: 2px;
-  background: var(--bg-app);
-  transform: rotate(45deg);
-}
-
-#app.r-code-signature .tcard.active::before,
-#app.r-code-signature .run-disclosure.active::before {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--signature-accent-faint);
-}
-
 #app.r-code-signature .tcard-head,
 #app.r-code-signature .run-row {
   min-height: 32px;
@@ -812,32 +791,6 @@
 #app.r-code-signature .timeline-turn-trace,
 #app.r-code-signature .timeline-process-disclosure {
   max-width: 930px;
-}
-
-#app.r-code-signature .timeline-turn-trace.has-activity {
-  padding-left: 28px;
-}
-
-#app.r-code-signature .timeline-turn-trace.has-activity::before {
-  left: 7px;
-  background: linear-gradient(180deg, rgba(244, 116, 43, 0.48), #aaa29a 18%, #c9c1b8 84%, rgba(244, 116, 43, 0.1));
-}
-
-:root[data-theme="obsidian"] #app.r-code-signature .timeline-turn-trace.has-activity::before {
-  background: linear-gradient(180deg, rgba(244, 116, 43, 0.48), #35342f 18%, #292925 84%, rgba(244, 116, 43, 0.12));
-}
-
-#app.r-code-signature .timeline-activity-event::before,
-#app.r-code-signature .timeline-context-event::before,
-#app.r-code-signature .timeline-subagent-event::before {
-  border-color: color-mix(in srgb, var(--fg) 30%, transparent);
-  background: var(--bg-app);
-}
-
-#app.r-code-signature .timeline-activity-event.state-active::before {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--signature-accent-faint);
 }
 
 #app.r-code-signature .timeline-activity-toggle {
@@ -957,29 +910,34 @@
   border-color: var(--signature-divider);
 }
 
+/* Composer 居中悬浮：不再通栏贴底，改为限定宽度、带投影的浮层卡 */
 #app.r-code-signature .composer {
-  padding: 0 24px 12px;
-  border-top: 1px solid var(--signature-divider);
-  background: var(--bg-panel);
+  padding: 10px 24px 16px;
+  border-top: 0;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--bg-app) 42%);
 }
 
 #app.r-code-signature .scene-room .comp-box {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  max-width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 2px 12px 6px;
+  border: 1px solid var(--signature-panel-edge);
+  border-radius: 16px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card), 0 16px 36px rgba(0, 0, 0, 0.2);
 }
 
 #app.r-code-signature .scene-room .comp-box:focus-within {
-  border: 0;
-  box-shadow: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--signature-panel-edge));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent),
+    var(--shadow-card);
 }
 
 #app.r-code-signature .scene-room .comp-box textarea {
   display: block;
-  min-height: 76px;
-  padding: 14px 2px 10px;
+  min-height: 48px;
+  padding: 10px 2px 6px;
   color: var(--fg);
   font-size: 14px;
   line-height: 1.6;
@@ -987,7 +945,7 @@
 
 #app.r-code-signature .scene-room .comp-meta {
   margin-top: 0;
-  padding: 7px 0 0;
+  padding: 6px 0 0;
   border-top: 0;
 }
 
@@ -1013,8 +971,9 @@
 }
 
 #app.r-code-signature .scene-room .composer-queue-stack {
-  width:min(100%, 33.333%);
-  margin:0;
+  width: auto;
+  max-width: min(760px, 100%);
+  margin: 0 auto 8px;
   border-color: var(--signature-panel-edge);
   border-radius: 12px;
   background: var(--signature-control);

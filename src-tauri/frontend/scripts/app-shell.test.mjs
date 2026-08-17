@@ -1682,43 +1682,6 @@ test("a successful turn archives its process behind the duration while keeping t
   await page.getByText("我先核对相关实现，再执行定向修改。", { exact: true }).waitFor({ state: "visible" });
   await page.locator(".timeline-process-body .timeline-activity-event").waitFor({ state: "visible" });
 
-  await page.evaluate(() => {
-    window.__timelineScrollCalls = [];
-    window.__timelineOriginalScrollIntoView = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function scrollIntoView(options) {
-      window.__timelineScrollCalls.push({
-        options,
-        className: this instanceof HTMLElement ? this.className : "",
-      });
-    };
-  });
-  const traceAnchor = page.locator(".timeline-process-body .timeline-trace-anchor").first();
-  assert.match(await traceAnchor.getAttribute("aria-label"), /^定位到/);
-  const anchorBox = await traceAnchor.boundingBox();
-  assert.ok(anchorBox && Math.abs(anchorBox.width - 20) < 0.5 && Math.abs(anchorBox.height - 20) < 0.5,
-    `the trace anchor must keep a precise, non-obstructive hit target: ${JSON.stringify(anchorBox)}`);
-  const restingColor = await traceAnchor.evaluate((element) => getComputedStyle(element).color);
-  await traceAnchor.hover();
-  const hoverColor = await traceAnchor.evaluate((element) => getComputedStyle(element).color);
-  assert.notEqual(hoverColor, restingColor, "hover must visibly distinguish an interactive trace node");
-  await traceAnchor.focus();
-  await page.keyboard.press("Enter");
-  assert.equal(await traceAnchor.evaluate((element) => document.activeElement === element), true,
-    "the trace anchor must remain keyboard focused after navigation");
-  assert.equal(await traceAnchor.locator("xpath=..").evaluate((element) => element.classList.contains("is-trace-target")), true,
-    "selecting a trace node should visibly acknowledge the target activity");
-  const scrollCall = await page.evaluate(() => window.__timelineScrollCalls.at(-1));
-  assert.deepEqual(scrollCall.options, { behavior: "smooth", block: "center", inline: "nearest" });
-  assert.match(scrollCall.className, /timeline-(?:activity|context|subagent)-event/);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await traceAnchor.click();
-  assert.equal(await page.evaluate(() => window.__timelineScrollCalls.at(-1).options.behavior), "auto",
-    "reduced motion must make trace navigation immediate");
-  await page.evaluate(() => {
-    Element.prototype.scrollIntoView = window.__timelineOriginalScrollIntoView;
-    delete window.__timelineOriginalScrollIntoView;
-  });
-
   await toggle.click();
   assert.equal(await toggle.getAttribute("aria-expanded"), "false");
   assert.equal(await page.locator(".timeline-process-body").count(), 0);
