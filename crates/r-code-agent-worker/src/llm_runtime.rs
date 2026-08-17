@@ -210,6 +210,9 @@ impl Default for DelegationLimits {
 // Preserve the current single-level supervisor behavior until T6 replaces it with a root tree.
 const MAX_PARALLEL_SUBAGENTS: usize = MAX_ACTIVE_DESCENDANTS;
 const MAX_SUBAGENTS_PER_RUN: usize = MAX_DESCENDANTS_PER_TREE;
+/// scope.goal 的有界摘要长度：完整任务提示词由宿主写入子代理自己的会话记录，
+/// 事件 scope 只携带可直接展示的摘要，避免每个事件重复放大长提示词。
+const SUBAGENT_SCOPE_GOAL_CHARS: usize = 400;
 /// H2：父取消 → per-child abort 桥接的轮询间隔。child 的工具执行与 Gateway
 /// 审批轮询只检查 per-child abort，桥接保证父取消在百毫秒内传导到进行中的
 /// 工具调用与审批等待，杜绝“取消后批准仍执行”的幽灵窗口。
@@ -1105,7 +1108,10 @@ read the returned analysis (count, role-slot distribution, duplicate-role warnin
 `confirm=true` to lock the batch; `delegate_task` beyond the locked batch is rejected until you submit and \
 confirm a revised plan. Do not pad the plan with entries that restate the same direction — several same-role \
 subagents confuse the user; prefer fewer, broader subagents, and let a blocked subagent delegate its own child \
-(up to depth 2) instead of pre-spawning extras. Subagents default to `access='read_only'`. \
+(up to depth 2) instead of pre-spawning extras. Duplicate goals are hard-rejected: plan confirmation fails with \
+`needs_revision` while any two entries share the same goal, and `delegate_task` is rejected when its goal \
+matches a still-running child — wait for that child via `collect_subagents` or fold the direction into one \
+subagent instead of retrying the same goal. Subagents default to `access='read_only'`. \
 Use `access='full_access'` only when the user conversation or your explicit parent plan delegates \
 workspace edits or command execution to that child. Continue any independent parent work after \
 delegating. Call `collect_subagents` only when you are ready to synthesize; it waits for unfinished \
@@ -5869,6 +5875,8 @@ confirm=true before delegating beyond the first subagent."
 One entry per genuinely distinct direction (goal, optional agent/label). The first call returns a \
 plan analysis — count, role-slot distribution, duplicate-role warnings. Re-call with confirm=true \
 to lock the batch: delegate_task is then accepted up to the locked total and rejected beyond it. \
+Confirmation is rejected with needs_revision while any two entries share the same goal or a goal \
+duplicates a still-running subagent — merge or rewrite those entries and confirm again. \
 Submit and confirm a new plan whenever the batch needs to change. A single subagent does not need \
 this plan; delegate it directly."
                 .to_string(),
@@ -6273,6 +6281,9 @@ struct SubagentHandle {
     abort: Arc<AtomicBool>,
     nested_supervisor: Option<Arc<SubagentSupervisor>>,
     result_rx: watch::Receiver<Option<SubagentResult>>,
+    /// 任务目标的去重键；仍在运行（result 未写入）的子代理用它拦截
+    /// 同 goal 的重复 delegate_task。
+    goal_key: String,
     /// 真实 child task 的句柄。最后一个持有者被 drop 时会同步 abort，避免
     /// `JoinHandle` 的默认 detach 语义留下仍在运行的 agent loop。
     join: Arc<std::sync::Mutex<Option<AbortOnDropJoinHandle>>>,
@@ -6369,6 +6380,7 @@ impl SubagentSupervisor {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         };
         Self {
             provider,
@@ -6856,6 +6868,75 @@ delegate_task 的 agent 枚举",
             });
         }
 
+        // 确认阀门：批内完全相同的 goal 直接拒绝锁定（重复方向必须先收敛），
+        // 与仍在运行的子代理相同的 goal 同样拒绝——这两类是"多名同角色子代理"
+        // 观感的主要来源。只提示不阻断的软警告无法实际纠正模型行为，这里必须
+        // 硬性退回修订。
+        let mut duplicate_goals: Vec<String> = Vec::new();
+        {
+            let mut seen = HashSet::new();
+            for (goal, _, _) in &entries {
+                if !seen.insert(normalized_goal_key(goal)) {
+                    let display = first_line(goal).to_string();
+                    if !duplicate_goals.contains(&display) {
+                        duplicate_goals.push(display);
+                    }
+                }
+            }
+        }
+        let mut active_conflicts: Vec<String> = Vec::new();
+        {
+            let children = self.children.lock().await;
+            for (goal, _, _) in &entries {
+                let key = normalized_goal_key(goal);
+                if children
+                    .iter()
+                    .filter(|(_, handle)| handle.result_rx.borrow().is_none())
+                    .any(|(_, handle)| handle.goal_key == key)
+                {
+                    active_conflicts.push(first_line(goal).to_string());
+                }
+            }
+        }
+        if !duplicate_goals.is_empty() || !active_conflicts.is_empty() {
+            let mut rejection_warnings = warnings.clone();
+            if !duplicate_goals.is_empty() {
+                rejection_warnings.push(format!(
+                    "以下 goal 在计划内重复，必须合并为一条后再确认：{}",
+                    duplicate_goals.join("；")
+                ));
+            }
+            if !active_conflicts.is_empty() {
+                rejection_warnings.push(format!(
+                    "以下 goal 与仍在运行的子代理完全相同，已被拒绝：{}。请等待其结果\
+（collect_subagents）或改写成不同的方向",
+                    active_conflicts.join("；")
+                ));
+            }
+            tracing::info!(
+                task_id = %self.task_id,
+                parent_run_id = %self.parent_run_id,
+                duplicate_goals = duplicate_goals.len(),
+                active_conflicts = active_conflicts.len(),
+                "子代理派生计划确认被拒绝：存在重复任务目标"
+            );
+            return Ok(ToolCallOutcome {
+                content: serde_json::json!({
+                    "status": "needs_revision",
+                    "planned_entries": planned,
+                    "existing_children": existing_children,
+                    "entries": entry_reports,
+                    "warnings": rejection_warnings,
+                    "guidance": "The batch was NOT locked. Merge duplicate goals into one entry \
+                and rewrite goals that duplicate a still-running subagent, then call plan_subagents \
+                again with confirm=true.",
+                })
+                .to_string(),
+                is_error: false,
+                metadata: None,
+            });
+        }
+
         let entry_digest = entries
             .iter()
             .map(|(goal, _, label)| match label {
@@ -7304,6 +7385,7 @@ delegate_task 的 agent 枚举",
             // M7：审计需要区分"全权 FullAccess"与"审批模式 FullAccess"。
             require_approval,
             routing_reason: Some(routing_reason.clone()),
+            goal: Some(scope_goal_digest(&goal)),
         };
         let abort = Arc::new(AtomicBool::new(false));
         let native_runtime = match backend {
@@ -7370,6 +7452,33 @@ delegate_task 的 agent 枚举",
                     "重复的子代理运行 ID：{run_id}"
                 )));
             }
+            // 同目标去重阀门：模型把同一任务目标重复派给并行子代理是最常见的
+            // 滥用形态（多名同角色子代理互相覆盖）。仍在运行的子代理已持有该
+            // goal 时直接拒绝，引导等待结果或提交真正不同的方向。
+            if initiator == DelegationInitiator::Model {
+                let goal_key = normalized_goal_key(&goal);
+                if let Some((existing_id, existing_label)) = children
+                    .iter()
+                    .filter(|(_, handle)| handle.result_rx.borrow().is_none())
+                    .find(|(_, handle)| handle.goal_key == goal_key)
+                    .map(|(id, handle)| {
+                        (
+                            id.clone(),
+                            handle
+                                .scope
+                                .agent_label
+                                .clone()
+                                .unwrap_or_else(|| "子代理".to_string()),
+                        )
+                    })
+                {
+                    return Err(ProductError::Other(format!(
+                        "任务目标与仍在运行的子代理『{existing_label}』（ID {existing_id}）完全\
+相同，已拒绝重复派生。请先 collect_subagents 等待其结果，再决定是否需要新方向；如确需\
+并行补充，请在计划里提交不同的 goal。",
+                    )));
+                }
+            }
             if self
                 .descendants_created
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
@@ -7408,6 +7517,7 @@ delegate_task 的 agent 枚举",
                     abort: abort.clone(),
                     nested_supervisor: nested_supervisor.clone(),
                     result_rx,
+                    goal_key: normalized_goal_key(&goal),
                     join: join_slot.clone(),
                 },
             );
@@ -9059,6 +9169,22 @@ fn short_summary(value: &str, max_chars: usize) -> String {
         .take(max_chars.saturating_sub(1))
         .collect::<String>();
     format!("{clipped}…")
+}
+
+/// scope.goal 摘要：子代理的完整任务提示词保存在其独立会话记录里，这里只做
+/// 有界、可展示的版本，随每个 scoped 事件携带。
+fn scope_goal_digest(goal: &str) -> String {
+    short_summary(goal, SUBAGENT_SCOPE_GOAL_CHARS)
+}
+
+/// 派生去重键：小写并剔除全部空白。同一任务目标的大小写/空白排版差异视为
+/// 相同 goal，用于计划确认与 delegate_task 的同目标去重阀门。
+fn normalized_goal_key(goal: &str) -> String {
+    goal.trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect()
 }
 
 #[cfg(test)]

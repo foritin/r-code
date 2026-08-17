@@ -66,6 +66,8 @@ export interface ActivitySubagent {
   /** null 兼容旧的一层快照；树深度永远由前端安全推导，不信任外部 depth。 */
   parentRunId: string | null;
   label: string;
+  /** 主代理下发的任务提示词（scope.goal 有界摘要）；详情“任务”卡片展示。 */
+  goal: string | null;
   runtimeKind: AgentRun["runtime_kind"];
   model: string | null;
   accessMode: SubagentAccessMode;
@@ -242,6 +244,7 @@ function applyScopedEvent(
     id: scope.run_id,
     parentRunId: safeIdentifier(scope.parent_run_id) ?? prior?.parentRunId ?? null,
     label: scope.agent_label?.trim() || prior?.label || "子代理",
+    goal: safeChildGoal(scope.goal) ?? prior?.goal ?? null,
     runtimeKind: scope.runtime_kind ?? prior?.runtimeKind ?? "native",
     model: scope.model?.trim() || prior?.model || null,
     accessMode,
@@ -386,6 +389,12 @@ function safeChildDetail(value: string | undefined): string | null {
 function safeIdentifier(value: string | undefined): string | null {
   if (!value) return null;
   return value.trim().slice(0, 160) || null;
+}
+
+/** scope.goal 摘要：后端已截断到 400 字符，这里只压空白并保留可展示长度。 */
+function safeChildGoal(value: string | undefined): string | null {
+  if (!value) return null;
+  return value.trim().replace(/\s+/g, " ").slice(0, 400) || null;
 }
 
 function appendChildPeerMessage(
@@ -644,6 +653,7 @@ function mergePersistedSubagents(
       id: run.id,
       parentRunId: run.parent_run_id?.trim() || prior?.parentRunId || null,
       label: run.agent_label?.trim() || "子代理",
+      goal: prior?.goal ?? null,
       runtimeKind: run.runtime_kind,
       model: run.model || null,
       accessMode,

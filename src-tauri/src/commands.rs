@@ -4872,6 +4872,49 @@ fn subagent_storage_id(parent_storage_id: &str, subagent_id: &str) -> String {
     format!("{parent_storage_id}--subagent-{subagent_id}")
 }
 
+/// 子代理任务提示词全文落盘上限：任务 goal 是模型输入而非用户长文，
+/// 超长时截断保护 JSONL，正常派生目标远小于该值。
+const SUBAGENT_GOAL_PERSIST_CHARS: usize = 8_000;
+
+/// 子代理的任务提示词全文：优先读 delegate_task 审计输入里的 goal，
+/// 外部路径合成锚点没有 goal 输入时回退 scope.goal 有界摘要。
+fn subagent_goal_text(db: &Database, scope: &AgentEventScope) -> Option<String> {
+    if let Some(call_id) = scope.delegated_by_tool_call_id.as_deref() {
+        let input_json = db
+            .conn()
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT input_json FROM tool_calls WHERE id = ?1",
+                    rusqlite::params![call_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            });
+        let goal = input_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .and_then(|value| {
+                value
+                    .get("goal")
+                    .and_then(|goal| goal.as_str())
+                    .map(str::to_string)
+            });
+        if let Some(goal) = goal {
+            let trimmed = goal.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed.chars().take(SUBAGENT_GOAL_PERSIST_CHARS).collect());
+            }
+        }
+    }
+    scope
+        .goal
+        .as_deref()
+        .map(str::trim)
+        .filter(|goal| !goal.is_empty())
+        .map(|goal| goal.chars().take(SUBAGENT_GOAL_PERSIST_CHARS).collect())
+}
+
 /// 与内置网关工具风险分级保持一致；内部编排工具不接触工作区，按 R0 记录。
 fn observed_tool_risk(tool_name: &str) -> RiskLevel {
     // F11：观察侧风险估算，尽量与 Gateway 实际判定一致（bash/edit/mcp 写类
@@ -5159,6 +5202,7 @@ fn ensure_subagent_run(
                     "external_call_id": external_call_id,
                     // F11：委派 assignment 审计——标签（goal 的有界摘要）与有效权限档位。
                     "label": scope.agent_label,
+                    "goal": scope.goal,
                     "access_mode": scope.access_mode,
                     // M7：FullAccess + require_approval = 审批模式（effective access）。
                     "require_approval": scope.require_approval,
@@ -5488,6 +5532,16 @@ async fn persist_runtime_event(
                 }
             };
             if created {
+                // 主代理下发的任务提示词是子代理会话的第一条记录：详情视图的
+                // “任务”卡片与转录回放从这里取全文（scope.goal 只是有界摘要）。
+                if let Some(goal) = subagent_goal_text(db, scope) {
+                    let _ = session_store
+                        .append(
+                            &event_storage_id,
+                            SessionEvent::Message(Message::user_text(goal)),
+                        )
+                        .await;
+                }
                 let _ = TaskEventStore::new(db).append_for_branch(
                     task_id,
                     branch_id,
@@ -16852,6 +16906,7 @@ fn external_agent_scope(run: &AgentRun) -> AgentEventScope {
         access_mode: run.access_mode,
         require_approval: run.require_approval,
         routing_reason: run.routing_reason.clone(),
+        goal: None,
     }
 }
 
@@ -23460,6 +23515,7 @@ input.on('line', (line) => {
             access_mode: SubagentAccessMode::FullAccess,
             require_approval: true,
             routing_reason: Some("测试需审批检查".to_string()),
+            goal: None,
         };
         let event = AgentEvent::Scoped {
             scope: scope.clone(),
@@ -23818,6 +23874,7 @@ input.on('line', (line) => {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         };
         persist_native_usage_event(
             &state.db,
@@ -23903,6 +23960,7 @@ input.on('line', (line) => {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         };
         persist_native_stream_replay_event(
             &state.db,
@@ -24025,6 +24083,7 @@ input.on('line', (line) => {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: Some("生命周期回归测试".to_string()),
+            goal: None,
         };
         let mut pending_text = PendingRuntimeText::default();
 
@@ -24102,6 +24161,7 @@ input.on('line', (line) => {
                 access_mode: SubagentAccessMode::ReadOnly,
                 require_approval: false,
                 routing_reason: Some("测试显式委派 Codex".to_string()),
+                goal: None,
             },
             event: Box::new(AgentEvent::SubagentLifecycle {
                 state: SubagentState::Queued,
@@ -24128,6 +24188,88 @@ input.on('line', (line) => {
         assert_eq!(child.runtime_kind, AgentRunRuntimeKind::CodexExec);
         assert_eq!(child.model, "codex-cli");
         assert_eq!(child.agent_label.as_deref(), Some("Codex CLI · 检查边界"));
+    }
+
+    #[tokio::test]
+    async fn subagent_lifecycle_persists_task_prompt_as_first_user_message() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "edit").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        // 原生路径：delegate_task 的审计输入保存了 goal 全文。
+        let delegation_call = ToolCall::new(
+            &parent.id,
+            &task.id,
+            "delegate_task",
+            serde_json::json!({
+                "goal": "摸清主交互页 UI 现状，并汇报可用的设计 token。",
+                "agent": "r_code",
+                "access": "read_only"
+            })
+            .to_string(),
+            r_code_core::dto::RiskLevel::R0,
+        );
+        ToolCallRepository::new(&state.db)
+            .create_if_absent(&delegation_call)
+            .unwrap();
+
+        let scope = AgentEventScope {
+            run_id: "native-child".to_string(),
+            agent_id: "native-child".to_string(),
+            parent_run_id: Some(parent.id.clone()),
+            agent_kind: AgentKind::Subagent,
+            agent_label: Some("探索 · R-Code 子代理".to_string()),
+            delegated_by_tool_call_id: Some(delegation_call.id.clone()),
+            runtime_kind: AgentRunRuntimeKind::Native,
+            model: Some("test-model".to_string()),
+            access_mode: SubagentAccessMode::ReadOnly,
+            require_approval: false,
+            routing_reason: None,
+            goal: Some("摸清主交互页 UI 现状…（有界摘要）".to_string()),
+        };
+        let event = AgentEvent::Scoped {
+            scope,
+            event: Box::new(AgentEvent::SubagentLifecycle {
+                state: SubagentState::Queued,
+                detail: Some("已加入 R-Code 子代理队列".to_string()),
+            }),
+        };
+        persist_runtime_event(
+            &state.db,
+            &state.session_store,
+            &state.sessions_dir,
+            &task.id,
+            &branch.id,
+            &parent.id,
+            &branch.storage_id,
+            &event,
+            &mut PendingRuntimeText::default(),
+        )
+        .await;
+
+        let page = subagent_session_message_page(
+            &state,
+            &task.id,
+            "native-child",
+            SubagentSessionMessagePageRequest {
+                limit: Some(10),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let task_message = page
+            .messages
+            .iter()
+            .find(|message| message.kind == "message" && message.role.as_deref() == Some("user"))
+            .expect("task prompt must be persisted as the first user message");
+        assert_eq!(
+            task_message.text.as_deref(),
+            Some("摸清主交互页 UI 现状，并汇报可用的设计 token。")
+        );
     }
 
     #[tokio::test]
@@ -26744,6 +26886,7 @@ kind = "codex_cli"
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         };
         let event = |scope: AgentEventScope, sender: &str| AgentEvent::Scoped {
             scope,
@@ -29846,6 +29989,7 @@ command = "r-code-host"
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         };
         let scoped = |event| AgentEvent::Scoped {
             scope: scope.clone(),

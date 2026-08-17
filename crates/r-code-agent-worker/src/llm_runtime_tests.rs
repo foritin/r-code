@@ -1306,6 +1306,7 @@ fn runtime_contract_request(slot: &FrozenSubagentSlot) -> SubagentCandidateReque
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         },
         caller: "runtime-contract-test".to_string(),
         access_mode: SubagentAccessMode::ReadOnly,
@@ -4126,6 +4127,7 @@ async fn disabled_reasoning_visibility_filters_reasoning_but_keeps_answers() {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         },
         event: Box::new(AgentEvent::Reasoning {
             text: "also hidden".into(),
@@ -5273,6 +5275,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -5444,6 +5447,7 @@ async fn root_peer_mail_is_injected_once_without_entering_canonical_history() {
                 access_mode: SubagentAccessMode::ReadOnly,
                 require_approval: false,
                 routing_reason: None,
+                goal: None,
             },
             true,
         )
@@ -6250,6 +6254,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -6281,6 +6286,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -6310,6 +6316,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         abort: grandchild_abort.clone(),
         nested_supervisor: None,
         result_rx: grandchild_result_rx,
+        goal_key: String::new(),
         join: Arc::new(StdMutex::new(Some(AbortOnDropJoinHandle::new(
             grandchild_abort,
             grandchild_join,
@@ -6342,6 +6349,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         abort: parent_abort.clone(),
         nested_supervisor: Some(nested),
         result_rx: parent_result_rx,
+        goal_key: String::new(),
         join: Arc::new(StdMutex::new(Some(AbortOnDropJoinHandle::new(
             parent_abort,
             parent_join,
@@ -8274,7 +8282,10 @@ impl CodexSubagentRunner for LenientCodexRunner {
     }
 }
 
-fn plan_gate_tool_host(directory: &TempDir, runner: Arc<LenientCodexRunner>) -> SessionToolHost {
+fn plan_gate_tool_host(
+    directory: &TempDir,
+    runner: Arc<dyn ExternalAgentRunner>,
+) -> SessionToolHost {
     let workspace_scope = WorkspaceScope {
         guard: PathGuard::new(directory.path().to_path_buf()).unwrap(),
         access_mode: ProjectAccessMode::RequestApproval,
@@ -8503,6 +8514,142 @@ async fn plan_subagents_validates_entries_and_run_cap() {
     assert!(warnings
         .iter()
         .any(|warning| warning.as_str().unwrap().contains("完全相同")));
+}
+
+/// 保持运行中的外部子代理 runner：进入执行后挂起，直到测试显式放行。
+struct HeldCodexRunner {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl CodexSubagentRunner for HeldCodexRunner {
+    async fn run(
+        &self,
+        _request: CodexSubagentRequest,
+    ) -> Result<CodexSubagentOutcome, ProductError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(CodexSubagentOutcome::Completed("已完成".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn plan_subagents_confirm_rejects_duplicate_goals() {
+    let directory = TempDir::new().unwrap();
+    let tool_host = plan_gate_tool_host(
+        &directory,
+        Arc::new(LenientCodexRunner {
+            calls: AtomicUsize::new(0),
+        }),
+    );
+
+    // 确认段：批内 goal 完全相同（大小写/空白差异归一后）被硬性退回，不锁定名额。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-dup"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "codex"},
+                    {"goal": "调研  a ", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!rejected.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&rejected.content).unwrap();
+    assert_eq!(payload["status"], "needs_revision");
+    assert!(payload["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("合并为一条")));
+
+    // 修订为不同方向后确认成功。
+    let confirmed = tool_host
+        .call_inner(
+            Some("plan-dup-fixed"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "codex"},
+                    {"goal": "验证 B", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
+    assert_eq!(payload["status"], "confirmed");
+}
+
+#[tokio::test]
+async fn delegate_task_rejects_goal_of_running_child() {
+    let directory = TempDir::new().unwrap();
+    let runner = Arc::new(HeldCodexRunner {
+        started: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    });
+    let tool_host = plan_gate_tool_host(&directory, runner.clone());
+
+    // 免计划派生第一个子代理，并保持运行中。
+    let first = delegate_via_host(&tool_host, "保持运行的目标").await.unwrap();
+    assert!(!first.is_error);
+    runner.started.notified().await;
+
+    // 与运行中子代理完全相同的 goal（含大小写/空白差异）被拒绝重复派生。
+    let dup = delegate_via_host(&tool_host, "保持运行的目标")
+        .await
+        .unwrap_err();
+    assert!(dup.to_string().contains("完全相同"));
+    let dup_case = delegate_via_host(&tool_host, "保持运行的  目标")
+        .await
+        .unwrap_err();
+    assert!(dup_case.to_string().contains("完全相同"));
+
+    // 不同 goal 仍走既有计划门（保持原有行为）。
+    let blocked = delegate_via_host(&tool_host, "全新方向")
+        .await
+        .unwrap_err();
+    assert!(blocked.to_string().contains("plan_subagents"));
+
+    // 确认包含与运行中子代理相同 goal 的计划同样被退回修订。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-conflict"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "保持运行的目标", "agent": "codex"},
+                    {"goal": "另一个方向", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&rejected.content).unwrap();
+    assert_eq!(payload["status"], "needs_revision");
+    assert!(payload["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("仍在运行")));
+
+    // 放行并收口，避免悬挂任务。
+    runner.release.notify_one();
+    tool_host
+        .call_inner(
+            Some("plan-collect"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------

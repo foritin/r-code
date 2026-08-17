@@ -705,6 +705,21 @@
 }
 
 .timeline-subagent-event { margin:var(--sp-5) 0 var(--sp-6); }
+/* 子智能体事件行（原型 C+）：藏青名称 + 任务提示词，展开显示状态芯片 */
+.timeline-subagent-toggle {
+  display:flex; align-items:center; gap:var(--sp-3);
+  width:100%; min-height:30px; padding:var(--sp-1) 0; border:0; border-radius:var(--radius-xs);
+  background:transparent; color:var(--fg-muted); cursor:pointer;
+  font:var(--text-meta) var(--font-ui); text-align:left;
+}
+.timeline-subagent-toggle:hover,
+.timeline-subagent-toggle:focus-visible { color:var(--fg); background:var(--bg-panel); }
+.timeline-subagent-title { color:var(--fg-muted); font-weight:500; white-space:nowrap; }
+.timeline-subagent-name { color:var(--subagent-run, var(--accent-2)); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:40%; }
+.timeline-subagent-goal { flex:1; min-width:0; overflow:hidden; color:var(--fg-faint); text-overflow:ellipsis; white-space:nowrap; }
+.timeline-subagent-state { color:var(--fg-faint); font:var(--text-meta) var(--font-mono); white-space:nowrap; margin-left:auto; }
+.timeline-subagent-state.is-active { color:var(--subagent-run, var(--accent)); }
+.timeline-subagent-details { margin:var(--sp-2) 0 0 29px; }
 .timeline-subagent-chips { display:flex; align-items:center; flex-wrap:wrap; gap:var(--sp-2); min-height:30px; }
 .timeline-subagent-chip {
   display:inline-flex; align-items:center; gap:var(--sp-2); max-width:min(260px,100%); min-height:28px; padding:var(--sp-1) var(--sp-3);
@@ -722,7 +737,6 @@
 .timeline-subagent-chip.status-queued .timeline-subagent-avatar { animation:pulse 1.5s infinite; }
 .timeline-subagent-chip.status-failed,
 .timeline-subagent-chip.status-cancelled { border-color:var(--edge-danger); }
-.timeline-subagent-summary { color:var(--fg-faint); font:var(--text-meta) var(--font-mono); white-space:nowrap; }
 .timeline-final-response { margin-top:var(--sp-6); padding-top:var(--sp-5); border-top:1px solid var(--border); }
 .timeline-run-changes {
   width:min(100%,calc(var(--measure) + 7rem)); margin:var(--sp-5) 0 0; overflow:hidden;
@@ -1773,6 +1787,13 @@
 .subagent-session-meta b { color:var(--fg-muted); font-weight:var(--weight-strong); }
 .subagent-session-meta .subagent-routing-reason { flex:1 1 100%; }
 .subagent-session-meta .subagent-tree-anomaly { flex:1 1 100%; color:var(--warning); }
+
+/* 任务卡：主代理下发给此子代理的提示词全文（原型 C+ 的 .ag-d 任务区） */
+.subagent-session-task { margin:0 0 14px; padding:10px 13px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-panel); }
+.subagent-session-task header { display:flex; align-items:center; gap:7px; margin-bottom:6px; color:var(--fg-muted); font:600 10px var(--font-display); letter-spacing:.05em; }
+.subagent-session-task-icon { display:grid; place-items:center; width:16px; height:16px; color:var(--subagent-run, var(--accent-2)); }
+.subagent-session-task p { margin:0; color:var(--fg-muted); font-size:12.5px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
+
 .subagent-session-placeholder { color:var(--fg-faint); font-size:var(--text-sm); }
 .subagent-load-earlier {
   display:flex; min-width:126px; min-height:30px; align-items:center; justify-content:center; gap:7px; margin:0 auto 18px; padding:5px 13px;
@@ -1822,6 +1843,9 @@
 .subagent-reasoning-detail .md > :last-child { margin-bottom:0; }
 .subagent-transcript-message { color:var(--fg); }
 .subagent-transcript-message.is-error { color:var(--danger); }
+.subagent-transcript-message.is-task { padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-panel); color:var(--fg-muted); }
+.subagent-transcript-message.is-task .subagent-transcript-speaker { color:var(--subagent-run, var(--accent-2)); }
+.subagent-transcript-task-icon { display:grid; place-items:center; width:15px; height:15px; }
 .subagent-transcript-speaker { display:flex; align-items:center; gap:7px; margin-bottom:9px; color:var(--fg-muted); font:600 10px var(--font-display); letter-spacing:.04em; }
 .subagent-transcript-message .md { color:inherit; font-size:13px; line-height:1.68; }
 .subagent-transcript-message .md > :first-child { margin-top:0; }

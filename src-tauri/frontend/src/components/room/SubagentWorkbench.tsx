@@ -22,6 +22,7 @@ import {
   IconSearch,
   IconSidebar,
   IconStop,
+  IconSubagent,
   IconTerminal,
 } from "../icons";
 import { Markdown } from "./Markdown";
@@ -65,7 +66,8 @@ interface SessionMessageEntry {
   id: string;
   kind: "message";
   text: string;
-  tone: "normal" | "danger";
+  /** task = 主代理下发的任务提示词（user 角色）；详情顶部任务卡与转录共用。 */
+  tone: "normal" | "danger" | "task";
 }
 
 interface SessionReasoningEntry {
@@ -904,6 +906,14 @@ function SubagentInspector({
     () => mergeSessionEntries(persistedEntries, liveEntries),
     [liveEntries, persistedEntries],
   );
+  // 任务提示词：优先 scope.goal（live），否则取转录里第一条任务消息全文。
+  const taskPrompt = useMemo(() => {
+    if (child.goal?.trim()) return child.goal.trim();
+    const taskEntry = entries.find(
+      (entry): entry is SessionMessageEntry => entry.kind === "message" && entry.tone === "task",
+    );
+    return taskEntry?.text ?? null;
+  }, [child.goal, entries]);
   const { runtimeEntries, transcriptEntries, transcriptBlocks, failedToolCount } = useMemo(() => {
     const runtime = entries.filter((entry): entry is SessionStatusEntry => entry.kind === "status");
     const transcript = entries.filter(
@@ -971,6 +981,17 @@ function SubagentInspector({
 
         {expanded && (
           <div className="subagent-session-body" id={`subagent-session-${child.id}`}>
+            {taskPrompt && (
+              <section className="subagent-session-task" aria-label="主代理下发的任务提示词">
+                <header>
+                  <span className="subagent-session-task-icon" aria-hidden="true">
+                    <IconSubagent width={13} height={13} />
+                  </span>
+                  <span>任务 · 来自主代理</span>
+                </header>
+                <p>{taskPrompt}</p>
+              </section>
+            )}
             <div className="subagent-session-meta" aria-label="子智能体编排信息">
               <span><b>深度</b>{treeNode?.depth ?? 1}</span>
               <span><b>槽位</b>{subagentSlotLabel(child).replace(/^槽位\s*/, "")}</span>
@@ -1091,6 +1112,16 @@ const SubagentTranscript = memo(function SubagentTranscript({
           taskId={taskId}
           workspacePath={workspacePath}
         />
+      ) : entry.tone === "task" ? (
+        <article className="subagent-transcript-message is-task" key={entry.id}>
+          <div className="subagent-transcript-speaker">
+            <span className="subagent-transcript-task-icon" aria-hidden="true">
+              <IconSubagent width={13} height={13} />
+            </span>
+            <span>主代理下发的任务</span>
+          </div>
+          <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
+        </article>
       ) : (
         <article className={`subagent-transcript-message${entry.tone === "danger" ? " is-error" : ""}`} key={entry.id}>
           <div className="subagent-transcript-speaker">
@@ -1272,6 +1303,7 @@ export function mergeSubagents(current: readonly ActivitySubagent[], runs: reado
       id: run.id,
       parentRunId: run.parent_run_id?.trim() || null,
       label: run.agent_label?.trim() || "子智能体",
+      goal: null,
       runtimeKind: run.runtime_kind,
       model: run.model || null,
       accessMode,
@@ -1437,6 +1469,17 @@ function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntr
           tone: "danger",
         });
       }
+      continue;
+    }
+    if (message.kind === "message" && message.role === "user") {
+      // 主代理下发的任务提示词（或后续追问）作为任务消息展示，不再整体丢弃。
+      const text = visibleText(message.text);
+      if (text) appendMessageEntry(entries, {
+        id,
+        kind: "message",
+        text,
+        tone: "task",
+      });
       continue;
     }
     if (message.kind === "message" && message.role === "assistant") {

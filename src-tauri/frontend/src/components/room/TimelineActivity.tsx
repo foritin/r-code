@@ -5,6 +5,7 @@ import {
   IconChevronRight,
   IconFile,
   IconSearch,
+  IconSubagent,
   IconTerminal,
 } from "../icons";
 import {
@@ -193,37 +194,67 @@ export function TimelineSubagentGroup({
   onInspectSubagent?: (runId: string) => void;
   dim?: string;
 }) {
+  const [open, setOpen] = useState(true);
+  const generatedId = useId().replace(/:/g, "");
+  const detailId = `timeline-subagent-${generatedId}`;
   const status = subagentGroupStatus(item.agents);
+  const primary = item.agents[0] ?? null;
+  const primaryName = primary
+    ? primary.label + (item.agents.length > 1 ? ` 等 ${item.agents.length} 个` : "")
+    : "";
+  const primaryGoal = item.agents.length === 1 ? primary?.goal ?? null : null;
   return (
-    <div className={`timeline-subagent-event${dim}`} data-t={item.t} aria-label="子代理运行">
-      <div className="timeline-subagent-chips">
-        {item.agents.map((agent, index) => {
-          const inspectable = Boolean(agent.runId && onInspectSubagent);
-          const selected = Boolean(agent.runId && selectedSubagentId === agent.runId);
-          return (
-            <button
-              key={agent.id}
-              type="button"
-              className={`timeline-subagent-chip status-${agent.status}${selected ? " selected" : ""}`}
-              disabled={!inspectable}
-              aria-pressed={inspectable ? selected : undefined}
-              aria-label={`${agent.label}，${subagentStatusLabel(agent.status)}`}
-              title={[agent.summary, agent.model].filter(Boolean).join(" · ") || undefined}
-              onClick={() => agent.runId && onInspectSubagent?.(agent.runId)}
-            >
-              <SubagentAvatar
-                index={index}
-                identity={agent.id}
-                runtimeKind={agent.runtimeKind}
-                size="xs"
-                className="timeline-subagent-avatar"
-              />
-              <span>{agent.label}</span>
-            </button>
-          );
-        })}
-        <span className="timeline-subagent-summary">{status}</span>
-      </div>
+    <div className={`timeline-subagent-event${open ? " open" : ""}${dim}`} data-t={item.t} aria-label="子代理运行">
+      <button
+        type="button"
+        className="timeline-subagent-toggle ring-inset"
+        aria-expanded={open}
+        aria-controls={detailId}
+        title={primaryGoal ?? undefined}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="timeline-activity-icon" aria-hidden="true">
+          <IconSubagent width={14} height={14} />
+        </span>
+        <span className="timeline-subagent-title">子智能体</span>
+        {primaryName && <span className="timeline-subagent-name">{primaryName}</span>}
+        {primaryGoal && <span className="timeline-subagent-goal">· {primaryGoal}</span>}
+        <span className="timeline-subagent-state">{status}</span>
+        <span className="timeline-activity-chevron" aria-hidden="true">
+          {open ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+        </span>
+      </button>
+      {open && (
+        <div className="timeline-subagent-details" id={detailId}>
+          <div className="timeline-subagent-chips">
+            {item.agents.map((agent, index) => {
+              const inspectable = Boolean(agent.runId && onInspectSubagent);
+              const selected = Boolean(agent.runId && selectedSubagentId === agent.runId);
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  className={`timeline-subagent-chip status-${agent.status}${selected ? " selected" : ""}`}
+                  disabled={!inspectable}
+                  aria-pressed={inspectable ? selected : undefined}
+                  aria-label={`${agent.label}，${subagentStatusLabel(agent.status)}`}
+                  title={[agent.goal, agent.summary, agent.model].filter(Boolean).join(" · ") || undefined}
+                  onClick={() => agent.runId && onInspectSubagent?.(agent.runId)}
+                >
+                  <SubagentAvatar
+                    index={index}
+                    identity={agent.id}
+                    runtimeKind={agent.runtimeKind}
+                    size="xs"
+                    className="timeline-subagent-avatar"
+                  />
+                  <span>{agent.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

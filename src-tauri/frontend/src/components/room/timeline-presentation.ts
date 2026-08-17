@@ -37,6 +37,8 @@ export interface TimelineSubagentEntry {
   id: string;
   runId: string | null;
   label: string;
+  /** 主代理下发的任务提示词（delegate_task 的 goal）；运行记录缺失时回退解析工具输入。 */
+  goal: string | null;
   summary: string | null;
   model: string | null;
   runtimeKind: TimelineRunItem["runtimeKind"];
@@ -396,6 +398,7 @@ function subagentEntries(
         id: `subagent-entry-${run.runId}`,
         runId: run.runId,
         label: run.agentLabel?.trim() || runtimeFallbackLabel(run.runtimeKind),
+        goal: delegatedGoal(delegateTools, run.delegatedByToolCallId),
         summary: run.agentSummary,
         model: run.model || null,
         runtimeKind: run.runtimeKind,
@@ -404,6 +407,17 @@ function subagentEntries(
   }
 
   return delegateTools.map((tool, index) => placeholderSubagent(tool, index));
+}
+
+/** 从 delegate_task 工具输入解析该子代理的任务提示词（goal）。 */
+function delegatedGoal(
+  delegateTools: readonly TimelineToolItem[],
+  delegatedByToolCallId: string | null
+): string | null {
+  if (!delegatedByToolCallId) return null;
+  const tool = delegateTools.find((item) => item.callId === delegatedByToolCallId);
+  if (!tool) return null;
+  return firstString(parseRecord(tool.inputJson), ["goal", "task", "prompt"]);
 }
 
 function placeholderSubagent(tool: TimelineToolItem, index: number): TimelineSubagentEntry {
@@ -420,6 +434,7 @@ function placeholderSubagent(tool: TimelineToolItem, index: number): TimelineSub
     id: `subagent-placeholder-${tool.callId ?? tool.id}-${index}`,
     runId: null,
     label,
+    goal,
     summary: goal,
     model: firstString(output, ["model"]) ?? null,
     runtimeKind,

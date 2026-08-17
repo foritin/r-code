@@ -26,6 +26,8 @@
   --signature-sidebar-section: #817b72;
   --signature-sidebar-project: #d8d4cc;
   --signature-composer-shadow: 0 -10px 34px rgba(0, 0, 0, 0.12), 0 10px 24px rgba(0, 0, 0, 0.16);
+  /* 子智能体运行色（原型 C 的藏青）：时间线事件行、状态芯片与目录状态环共用。 */
+  --subagent-run: #6fc7d8;
 }
 
 :root[data-theme="obsidian"] {
@@ -916,8 +918,8 @@
 #app.r-code-signature .subagent-list-row .subagent-spinner {
   width: 15px;
   height: 15px;
-  border-color: rgba(111, 199, 216, 0.24);
-  border-top-color: #6fc7d8;
+  border-color: color-mix(in srgb, var(--subagent-run) 24%, transparent);
+  border-top-color: var(--subagent-run);
 }
 #app.r-code-signature .subagent-list-row .subagent-complete-mark {
   width: 18px;
@@ -963,7 +965,15 @@
 /* 时间线子代理芯片（原型 C+）：运行中以藏青描边呼应目录状态环 */
 #app.r-code-signature .timeline-subagent-chip.status-running,
 #app.r-code-signature .timeline-subagent-chip.status-queued {
-  border-color: rgba(111, 199, 216, 0.38);
+  border-color: color-mix(in srgb, var(--subagent-run) 38%, transparent);
+}
+
+/* 时间线子智能体事件行（原型 C+）：名称与运行态用藏青 */
+#app.r-code-signature .timeline-subagent-name {
+  color: var(--subagent-run);
+}
+#app.r-code-signature .timeline-subagent-state.is-active {
+  color: var(--subagent-run);
 }
 
 /* 房间头（原型 C+）：项目名与状态以 inset chip 呈现，对齐原型头部 */
