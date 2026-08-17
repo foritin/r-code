@@ -599,6 +599,8 @@ enum ProbeOutcome {
 
 #[derive(Debug, Clone)]
 enum ProbeRunError {
+    /// Only constructed on Windows, where Defender maps ERROR_VIRUS_INFECTED to it.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Blocked(String),
     Failed(String),
 }

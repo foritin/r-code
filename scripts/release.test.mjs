@@ -832,8 +832,13 @@ test("CI authenticates every private agent-contracts checkout and covers Linux",
   );
   assert.match(
     workflow,
-    /name: Test and build Windows frontend[\s\S]*npm test[\s\S]*npm run build/,
-    "the required Windows CI leg must run companion browser contracts and the TypeScript build",
+    /name: Build frontend[\s\S]*npm run build/,
+    "every CI platform must build the frontend so the custom-protocol host crate can embed frontendDist",
+  );
+  assert.match(
+    workflow,
+    /name: Test Windows frontend[\s\S]*npm test/,
+    "the required Windows CI leg must run companion browser contracts",
   );
   assert.match(
     workflow,

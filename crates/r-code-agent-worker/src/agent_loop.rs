@@ -1505,7 +1505,7 @@ mod tests {
         let retry = edit_call("edit-2", "    Undo,\n    Undo,");
         let mut guard = EditRetryGuard::default();
         guard.observe(&failed, &stale_outcome("old_string_not_found"));
-        let (read, outcome) = successful_read_call("read-1", "src\\memory.rs");
+        let (read, outcome) = successful_read_call("read-1", "src/memory.rs");
         guard.observe(&read, &outcome);
 
         assert!(guard.before_call(&retry).is_none());

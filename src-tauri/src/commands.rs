@@ -1706,7 +1706,6 @@ async fn rollback_target(
     requested_path: &str,
 ) -> Result<(String, PathBuf), String> {
     let physical_path = resolve_workspace_path(root, requested_path)?;
-    let guard = PathGuard::new(root.to_path_buf()).map_err(err_str)?;
     for baseline in service.list_baselines(task_id).await.map_err(err_str)? {
         let stored = PathBuf::from(&baseline.path);
         let candidate = if stored.is_absolute() {
@@ -1714,10 +1713,15 @@ async fn rollback_target(
         } else {
             root.join(stored)
         };
-        if let Ok(resolved) = guard.resolve_path(&candidate) {
-            if resolved.canonical() == physical_path {
-                return Ok((baseline.path, physical_path));
-            }
+        // 基线按调用方当时的拼写持久化（Windows 的 8.3 短名或 junction 父目录会原样
+        // 保留），词法 strip 会因拼写差异漏匹配同一物理文件。canonicalize 后与已经过
+        // PathGuard 校验的 physical_path 做恒等比较，等价于旧的 canonicalize-first 语义；
+        // 只有完全相等才复用基线键，containment 由 physical_path 传递保证。
+        if candidate
+            .canonicalize()
+            .is_ok_and(|canonical| canonical == physical_path)
+        {
+            return Ok((baseline.path, physical_path));
         }
     }
     Ok((physical_path.display().to_string(), physical_path))
@@ -6106,7 +6110,7 @@ async fn apply_native_ocr(
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (sessions_dir, task_id);
-        return Err("当前平台不提供系统 OCR；请改用支持图片的模型".to_string());
+        Err("当前平台不提供系统 OCR；请改用支持图片的模型".to_string())
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -13337,7 +13341,9 @@ const SUBAGENT_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const SUBAGENT_PROVIDER_PROBE_MAX_BATCH: usize = 64;
 const SUBAGENT_HEALTH_SUCCESS_TTL_MINUTES: i64 = 30;
 const SUBAGENT_HEALTH_FAILURE_TTL_MINUTES: i64 = 5;
+#[cfg(windows)]
 const MAX_CODEX_TRUST_TREE_ENTRIES: usize = 512;
+#[cfg(windows)]
 const MAX_CODEX_ADDITIONAL_BINARIES: usize = 32;
 
 struct SubagentCatalogContext {
