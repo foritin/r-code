@@ -238,6 +238,8 @@ test("completion toast waits for the matching detail snapshot before announcing"
     }));
 
     // Publish the matching detail on a later turn, as the real task/detail pollers do.
+    // 延迟留足余量：慢速 CI runner 上「evaluate 返回 → waitForTimeout(60) → 二次检查」
+    // 的 wall-clock 可能超过 120ms，导致 matching detail 提前发布、early 检查误判。
     window.setTimeout(() => {
       useTasksStore.setState((current) => ({
         details: {
@@ -255,7 +257,7 @@ test("completion toast waits for the matching detail snapshot before announcing"
           },
         },
       }));
-    }, 120);
+    }, 500);
     return id;
   });
 
