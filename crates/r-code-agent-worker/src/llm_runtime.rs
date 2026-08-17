@@ -4988,7 +4988,7 @@ fn user_visible_tool_error(error: &ProductError) -> String {
 fn hide_windows_verbatim_prefixes(text: &str) -> String {
     #[cfg(not(windows))]
     {
-        return text.to_string();
+        text.to_string()
     }
     #[cfg(windows)]
     {
@@ -7687,7 +7687,9 @@ Synthesize their results before finishing.\n{}",
                             &scope,
                             AgentEvent::Activity {
                                 phase: AgentActivityPhase::Requesting,
-                                detail: Some("模型未生成最终总结，正在进行一次无工具恢复…".to_string()),
+                                detail: Some(
+                                    "模型未生成最终总结，正在进行一次无工具恢复…".to_string(),
+                                ),
                             },
                         );
                         continue;

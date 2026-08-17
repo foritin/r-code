@@ -26410,9 +26410,7 @@ kind = "codex_cli"
         // 跨模块常量关系守卫：探测批量上限必须大于槽位上限，任一常量被单独调整
         // 时编译期即失败，防止本测试前提静默失效。
         const {
-            assert!(
-                SUBAGENT_PROVIDER_PROBE_MAX_BATCH > agent_config::MAX_SUBAGENT_PROVIDER_SLOTS
-            );
+            assert!(SUBAGENT_PROVIDER_PROBE_MAX_BATCH > agent_config::MAX_SUBAGENT_PROVIDER_SLOTS);
         }
         let mut requests = (0..5)
             .map(|index| SubagentProviderProbeRequest {
