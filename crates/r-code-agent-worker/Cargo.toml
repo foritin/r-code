@@ -13,6 +13,10 @@ description = "R-Code Agent Worker：Agent Runtime、agent loop、事件流"
 agent-contract = { workspace = true }
 agent-error = { workspace = true }
 agent-llm = { workspace = true }
+# 1.3（docs/harness-migration.md §1.3）：request/header 快照需要直接读写会话
+# JSONL（SessionStore 的追加锁按进程内路径归一，支持多写方）。阶段 0.2 摘除的
+# 是「零引用死依赖」；此处带真实调用方回归，与该结论不冲突。
+agent-store = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }
@@ -34,6 +38,9 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# 1.3：RequestHeader 契约字段固定为 sha256 十六进制（跨工具链可对账，
+# jq + sha256sum 即可复算），不用仓内既有的 fnv/blake3 指纹。
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

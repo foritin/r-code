@@ -10827,6 +10827,8 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
             // 运行时恢复专用的快照不应成为 UI 时间线里的第二份消息记录。
             SessionEvent::HistorySnapshot { .. } => {}
             SessionEvent::ModelProjection { .. } => {}
+            // RequestHeader 只是派发自检快照，不进入可见消息投影。
+            SessionEvent::RequestHeader { .. } => {}
             SessionEvent::System { event, data } => {
                 if event == ATTACHMENT_IMAGE_EVENT {
                     attach_image_previews(&mut out, &data);

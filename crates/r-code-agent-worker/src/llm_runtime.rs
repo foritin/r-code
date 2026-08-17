@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex as SyncMutex, OnceLock, RwLock};
 
 use agent_contract::{
     CompletionRequest, ContentBlock, HostedToolSpec, InferenceOptions, LlmProvider, Message, Role,
-    Session, SessionMeta, ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
+    Session, SessionEvent, SessionMeta, ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
@@ -34,6 +34,7 @@ use r_code_gateway::{
     PathBinding, ToolExecutionDirective, ToolGateway, ToolOutcomeMetadata,
 };
 use r_code_mcp::{ExternalToolHost, ExternalToolRisk};
+use sha2::{Digest, Sha256};
 use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
@@ -1635,6 +1636,16 @@ pub struct LlmAgentRuntime {
     cross_engine_delegation_enabled: Arc<AtomicBool>,
     orchestration: OrchestrationPolicy,
     agent_prompts: AgentPromptPolicy,
+    /// 1.3：可选的会话 JSONL 写入方。None（默认，宿主未接线时）完全不落盘，
+    /// 行为与接入前一致；Some 时 run 循环每轮派发前追加
+    /// `SessionEvent::RequestHeader` 并做重建自检。agent-store 的追加锁按
+    /// 进程内文件路径归一，天然支持与宿主写方并存（接线时仍需收敛单写方策略，
+    /// 见 docs/harness-migration.md 阶段 1.3 与本文 `with_request_journal`）。
+    /// `SessionStore` 非 Clone，包 Arc 以便随 RunLoopCtx 分享。
+    request_journal: Option<Arc<agent_store::SessionStore>>,
+    /// 1.3 自检观测计数（headers / mismatches）。自检只记录不阻断，计数供
+    /// 宿主接线与单测断言「追加了几枚、误报了几次」，不参与任何控制流。
+    request_self_check: Arc<RequestSelfCheckCounters>,
 }
 
 struct SessionState {
@@ -1735,7 +1746,35 @@ impl LlmAgentRuntime {
             cross_engine_delegation_enabled: Arc::new(AtomicBool::new(true)),
             orchestration: OrchestrationPolicy::default(),
             agent_prompts: AgentPromptPolicy::default(),
+            request_journal: None,
+            request_self_check: Arc::new(RequestSelfCheckCounters::default()),
         }
+    }
+
+    /// 附加 1.3 的请求信封日志（会话 JSONL 写入方）。
+    ///
+    /// 为什么是可选接线而不是构造参数：宿主（src-tauri）目前是 JSONL 的唯一
+    /// 写方（AgentEvent → SessionEvent 映射 + run 收尾 HistorySnapshot），
+    /// 运行时侧直接追加属于新增写方。本方法让接线决定权留给宿主组合根：
+    /// 未调用时零行为变化；调用后 run 循环按 1.3 追加 RequestHeader 并自检。
+    /// 启用前必须确认与宿主写方的内容分工（RequestHeader 只由本方法的使用方
+    /// 写入，避免同一事件双写）。
+    pub fn with_request_journal(mut self, store: agent_store::SessionStore) -> Self {
+        self.request_journal = Some(Arc::new(store));
+        self
+    }
+
+    /// 1.3 自检观测计数：(追加的 RequestHeader 数, 重建自检不一致数)。
+    ///
+    /// 不一致计数只增不减且不影响运行（只记录不阻断，风险表首期策略）；
+    /// 长期观察零误报后再考虑升级为阻断并清零观察。
+    pub fn request_self_check_counters(&self) -> (usize, usize) {
+        (
+            self.request_self_check
+                .headers_appended
+                .load(Ordering::Relaxed),
+            self.request_self_check.mismatches.load(Ordering::Relaxed),
+        )
     }
 
     /// Attach the desktop host's Codex CLI bridge.
@@ -1933,6 +1972,7 @@ impl AgentRuntime for LlmAgentRuntime {
             memory_context,
             name_allocator,
             continuation_required,
+            goal_journal_copy,
         ) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions
@@ -1940,6 +1980,9 @@ impl AgentRuntime for LlmAgentRuntime {
                 .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
             let disable_delegation = delegation_directive_for_text(&message.text_content())
                 == DelegationDirective::Disabled;
+            // 1.3：journal 落盘用的 goal 副本。message 随后会被 move 进
+            // model_projection（存在投影时），借用检查器不允许之后再引用。
+            let goal_journal_copy = message.clone();
             session.messages.push(message.clone());
             if let Some(projection) = session.model_projection.as_mut() {
                 projection.push(message);
@@ -1958,6 +2001,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 session.next_memory_context.take(),
                 session.name_allocator.clone(),
                 task_context_requires_continuation(session.task_context.as_deref()),
+                goal_journal_copy,
             )
         };
         let run_id_text = run_id.to_string();
@@ -2004,6 +2048,45 @@ impl AgentRuntime for LlmAgentRuntime {
         let suspension_gate = Arc::new(AtomicBool::new(false));
         let continuation_gate = Arc::new(AtomicBool::new(continuation_required));
 
+        // 1.3：journal 模式下，goal 消息与元数据行须在 run_loop 派发前落盘，
+        // 否则首轮重建自检必报「消息数不一致」。Meta 只在会话文件尚不存在时
+        // 补写（load 报 SessionNotFound 即判定缺失）；goal 消息随后追加，
+        // 与内存侧 session.messages.push 同序。
+        if let Some(journal) = self.request_journal.as_ref() {
+            match journal.load(session_id).await {
+                Err(agent_error::Error::SessionNotFound(_)) => {
+                    // load 要求首行为 Meta；文件不存在时先补一行（meta.id 与
+                    // 文件名不必一致，load 不校验）。
+                    let meta = SessionMeta::new(model.as_str(), self.provider.name());
+                    if let Err(error) = journal.append(session_id, SessionEvent::Meta(meta)).await {
+                        tracing::warn!(
+                            session_id,
+                            error = %error,
+                            "1.3 request journal bootstrap meta append failed"
+                        );
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        session_id,
+                        error = %error,
+                        "1.3 request journal bootstrap probe failed"
+                    );
+                }
+            }
+            if let Err(error) = journal
+                .append(session_id, SessionEvent::Message(goal_journal_copy))
+                .await
+            {
+                tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "1.3 request journal goal message append failed"
+                );
+            }
+        }
+
         tokio::spawn(run_loop(RunLoopCtx {
             sessions: self.sessions.clone(),
             event_tx: self.event_tx.clone(),
@@ -2029,6 +2112,8 @@ impl AgentRuntime for LlmAgentRuntime {
             orchestration: self.orchestration,
             agent_prompts: self.agent_prompts.clone(),
             memory_context,
+            request_journal: self.request_journal.clone(),
+            request_self_check: self.request_self_check.clone(),
         }));
 
         Ok(run_id_text)
@@ -2359,6 +2444,10 @@ struct RunLoopCtx {
     orchestration: OrchestrationPolicy,
     agent_prompts: AgentPromptPolicy,
     memory_context: Option<String>,
+    /// 1.3：请求信封日志（None = 未接线，跳过全部落盘与自检）。
+    request_journal: Option<Arc<agent_store::SessionStore>>,
+    /// 1.3 自检观测计数（与 runtime 共享，供外部断言）。
+    request_self_check: Arc<RequestSelfCheckCounters>,
 }
 
 // ---------------------------------------------------------------------------
@@ -3022,6 +3111,193 @@ fn capture_run_prefix_shape(system: &str, tools: &[ToolSpec], rewrite_version: u
     capture(system, tools, u64::from(rewrite_version), 0)
 }
 
+// ---------------------------------------------------------------------------
+// 1.3（docs/harness-migration.md §1.3）：request/header 快照 + 派发前重建自检。
+//
+// 每轮派发前对 system + tools + 规范化消息列表算 SHA-256，作为
+// `SessionEvent::RequestHeader` 追加进会话 JSONL；随后用
+// `SessionStore::load` 的投影重算哈希与本次派发值比对。判等决策（已定，勿改）：
+// serde_json::Value 规范化序列化后**字节级**哈希——serde_json 默认无
+// preserve_order，Object 键按字典序输出，字节稳定（PRD A12），跨进程可复算；
+// 语义级（字段白名单）留到真实误报出现再考虑。
+//
+// 本节全部为纯函数（无 IO、无 tracing），自检的旁路日志与落盘接线在 run_loop
+// 捕获点（`capture_run_prefix_shape` 同处），便于单测三场景直测判定逻辑。
+// ---------------------------------------------------------------------------
+
+/// 1.3 自检观测计数（跨 run 累计；只记录，绝不参与控制流）。
+#[derive(Debug, Default)]
+struct RequestSelfCheckCounters {
+    headers_appended: AtomicUsize,
+    mismatches: AtomicUsize,
+}
+
+/// 尾部注入清单标签：登记进 `RequestHeader.excluded_tails`，重建自检时排除。
+///
+/// 标签只描述「这一轮尾部追加了哪类不落盘的 user 消息」（本地时钟 / task_context /
+/// plan mode 策略等，见 P0-A），不承载内容；内容每轮变化（时钟），若不排除会
+/// 让自检永久误报。
+const TAIL_LABEL_PEER_MESSAGES: &str = "peer_messages";
+const TAIL_LABEL_LOCAL_CLOCK: &str = "local_clock";
+const TAIL_LABEL_TASK_CONTEXT: &str = "task_context";
+const TAIL_LABEL_PLAN_MODE: &str = "plan_mode";
+const TAIL_LABEL_TOOL_PROGRESS_CHECKPOINT: &str = "tool_progress_checkpoint";
+const TAIL_LABEL_DELEGATION_HINT: &str = "delegation_hint";
+const TAIL_LABEL_WEB_FALLBACK_PROMPT: &str = "web_fallback_prompt";
+const TAIL_LABEL_FINAL_SUMMARY_RECOVERY: &str = "final_summary_recovery";
+const TAIL_LABEL_CHEAP_EXPLORATION: &str = "cheap_exploration";
+const TAIL_LABEL_FULL_FINALIZATION: &str = "full_finalization";
+
+/// 派发请求信封指纹（1.3 运行时半）。
+///
+/// 与 `cache_shape::PrefixShape`（FNV-64、缓存归因）用途不同：这里面向
+/// 「JSONL 投影能否重建本次派发」的审计判等，契约固定 SHA-256 十六进制，
+/// 便于用 jq + sha256sum 在 JSONL 旁独立复核。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequestEnvelope {
+    system_sha256: String,
+    tools_sha256: String,
+    /// 规范化消息列表（去除头部 memory 注入与已登记尾部注入）的指纹。
+    messages_sha256: String,
+    /// 规范化消息条数（差异标注「消息数」段用）。
+    normalized_message_count: usize,
+}
+
+/// 重建自检的差异描述（纯数据，tracing 只是旁路展示）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequestRebuildMismatch {
+    /// 消息数差异段：派发侧规范化条数 vs 投影重建条数。
+    dispatch_message_count: usize,
+    rebuilt_message_count: usize,
+    dispatch_messages_sha256: String,
+    rebuilt_messages_sha256: String,
+    /// system/tools 差异段：与上一枚 RequestHeader 的指纹相比是否变化。
+    /// 仅作标注上下文，**不触发**不一致——JSONL 不保存 system/tools 全文，
+    /// 重建侧无法独立得出这两段；且 tools 合法地逐轮可变（summary_only 轮清空
+    /// 工具），若作为触发条件会造成系统性误报。
+    system_changed_since_last: bool,
+    tools_changed_since_last: bool,
+}
+
+/// SHA-256 十六进制指纹（64 个小写字符）。
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// serde_json 规范化字节流的 SHA-256。
+///
+/// 先 `to_value` 再 `to_vec` 而不是直接序列化原类型：`Value` 化会统一走
+/// BTreeMap 的字典序键输出，即使上游结构体字段顺序调整，哈希也不漂移。
+fn canonical_value_sha256(value: &serde_json::Value) -> String {
+    // 序列化失败（Value 本身不会失败）时退回空串指纹；空串不是合法 SHA-256
+    // 长度，校验侧天然判不一致，不会静默放行。
+    serde_json::to_vec(value)
+        .map(|bytes| sha256_hex(&bytes))
+        .unwrap_or_default()
+}
+
+/// 计算派发请求信封指纹。
+///
+/// `normalized_messages` 必须已经过 [`normalized_dispatch_messages`] 处理
+/// （去除 memory 头与尾部注入），否则与 JSONL 投影口径不一致。
+fn fingerprint_request_envelope(
+    system: &str,
+    tools: &[ToolSpec],
+    normalized_messages: &[Message],
+) -> RequestEnvelope {
+    // 各段独立哈希而不是整体一个哈希：差异标注需要区分「system 变 / tools 变 /
+    // 消息变」三段，整体哈希只能告诉你「变了」。
+    let system_json = serde_json::to_value(system).unwrap_or(serde_json::Value::Null);
+    let tools_json = serde_json::to_value(tools).unwrap_or(serde_json::Value::Null);
+    let messages_json =
+        serde_json::to_value(normalized_messages).unwrap_or(serde_json::Value::Null);
+    RequestEnvelope {
+        system_sha256: canonical_value_sha256(&system_json),
+        tools_sha256: canonical_value_sha256(&tools_json),
+        messages_sha256: canonical_value_sha256(&messages_json),
+        normalized_message_count: normalized_messages.len(),
+    }
+}
+
+/// 规范化派发消息：去掉头部 memory 注入与已登记的尾部注入。
+///
+/// 为什么两头都要去：memory 头注入与尾部注入同样「只进请求、不落会话历史」
+/// （P0-A：注入消息迭代结束即移除），JSONL 投影里永不存在它们；不去除会让
+/// 自检每轮都误报消息数不一致。返回参与哈希的切片视图，不复制消息。
+fn normalized_dispatch_messages(
+    request_messages: &[Message],
+    has_memory_head: bool,
+    tail_count: usize,
+) -> &[Message] {
+    let start = usize::from(has_memory_head).min(request_messages.len());
+    // 防御性 saturating：tail_count 大于剩余长度（不应发生）时切到空表，
+    // 让自检报「消息数不一致」而不是 panic。
+    let end = request_messages.len().saturating_sub(tail_count).max(start);
+    &request_messages[start..end]
+}
+
+/// 派发原因判定。
+///
+/// - `initial`：本次 run 的首轮派发（跨进程重启的 resume 判定需要读 JSONL 里
+///   上一枚 RequestHeader，留待后续给 store 增加原始事件读取 API 后接入）；
+/// - `resume`：恢复类重放——同一历史在异常/护栏后再次派发。agent_loop 内部的
+///   流级冻结重放（StreamReplay）发生在单次迭代调用里，本层不可见；这里用
+///   llm_runtime 可见的 attempt 概念近似（summary 恢复、hosted web 回退、
+///   紧急上下文恢复后的再派发）；
+/// - `change`：其余常规轮（追加了新消息/新工具结果）。
+fn request_header_reason(is_initial: bool, is_recovery_redispatch: bool) -> &'static str {
+    if is_initial {
+        "initial"
+    } else if is_recovery_redispatch {
+        "resume"
+    } else {
+        "change"
+    }
+}
+
+/// 重建自检（纯函数核心）。
+///
+/// 用 `SessionStore::load` 投影给出的消息列表重算指纹，与本次派发值比对；
+/// 只有消息段（条数或哈希）不一致才返回 [`RequestRebuildMismatch`]；差异描述
+/// 附带 system/tools 相对上一枚 RequestHeader 的漂移标注（见结构体注释，仅
+/// 上下文，不作为触发条件）。首期策略是**只记录不阻断**
+/// （docs/harness-migration.md 风险表：自检器先跑一周观察误报，确认零误报再
+/// 升级为阻断——升级点即调用方把 Err 变为终止条件）。
+fn verify_request_rebuild(
+    dispatch: &RequestEnvelope,
+    rebuilt_messages: &[Message],
+    previous: Option<&RequestEnvelope>,
+) -> Result<(), RequestRebuildMismatch> {
+    let rebuilt_hash = serde_json::to_value(rebuilt_messages)
+        .map(|value| canonical_value_sha256(&value))
+        .unwrap_or_default();
+    let system_changed_since_last = previous
+        .map(|previous| previous.system_sha256 != dispatch.system_sha256)
+        .unwrap_or(false);
+    let tools_changed_since_last = previous
+        .map(|previous| previous.tools_sha256 != dispatch.tools_sha256)
+        .unwrap_or(false);
+    if rebuilt_hash == dispatch.messages_sha256
+        && rebuilt_messages.len() == dispatch.normalized_message_count
+    {
+        return Ok(());
+    }
+    Err(RequestRebuildMismatch {
+        dispatch_message_count: dispatch.normalized_message_count,
+        rebuilt_message_count: rebuilt_messages.len(),
+        dispatch_messages_sha256: dispatch.messages_sha256.clone(),
+        rebuilt_messages_sha256: rebuilt_hash,
+        system_changed_since_last,
+        tools_changed_since_last,
+    })
+}
+
 fn task_context_requires_continuation(context: Option<&str>) -> bool {
     context
         .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
@@ -3259,6 +3535,15 @@ async fn run_loop(ctx: RunLoopCtx) {
     // 缓存变化时按归因（system/tools/rewrite 等）记录日志（PRD §5 P2-H）。
     let mut prev_prefix_shape = PrefixShape::empty();
 
+    // 1.3：上一轮派发信封指纹（None = 本次 run 尚未派发过）。既用于 reason
+    // 判定（首轮 initial），也用于差异标注（system/tools 相对上一枚
+    // RequestHeader 是否变化）。
+    let mut prev_request_envelope: Option<RequestEnvelope> = None;
+    // 1.3：一次性「恢复类再派发」标记。attempt 类布尔（web 回退 / 紧急上下文
+    // 恢复）是锁存的，直接用会把后续正常轮也误标为 resume；只在触发恢复的
+    // continue 前置位、派发时消费。
+    let mut recovery_redispatch_pending = false;
+
     loop {
         if ctx.abort.load(Ordering::Relaxed) {
             break;
@@ -3277,19 +3562,30 @@ async fn run_loop(ctx: RunLoopCtx) {
 
         // 在 session 锁内同时取走 steer 与工作集。后续的结束判断也在同一把锁内
         // 检查队列，确保 steer 不会落在“检查为空”和“标记完成”之间而丢失。
-        let (mut canonical_messages, mut model_projection, applied_steers, mode, task_context) = {
+        let (
+            mut canonical_messages,
+            mut model_projection,
+            applied_steers,
+            mode,
+            task_context,
+            steer_journal_events,
+        ) = {
             let mut sessions = ctx.sessions.lock().await;
             let Some(session) = sessions.get_mut(&ctx.session_id) else {
                 terminal_err = Some(format!("session lost: {}", ctx.session_id));
                 break;
             };
             let mut applied_steers = 0usize;
+            // 1.3：steer 引导会进入会话历史（与尾部注入不同），journal 模式下
+            // 需同步为 Message 事件，否则下一轮自检报「消息数不一致」。
+            let mut steer_journal_events = Vec::new();
             while let Some(text) = session.steer_queue.pop_front() {
                 let guidance = Message::user_text(format_live_guidance(&text));
                 session.messages.push(guidance.clone());
                 if let Some(projection) = session.model_projection.as_mut() {
-                    projection.push(guidance);
+                    projection.push(guidance.clone());
                 }
+                steer_journal_events.push(SessionEvent::Message(guidance));
                 applied_steers += 1;
             }
             (
@@ -3298,8 +3594,22 @@ async fn run_loop(ctx: RunLoopCtx) {
                 applied_steers,
                 session.mode,
                 session.task_context.clone(),
+                steer_journal_events,
             )
         };
+        // 1.3：journal 同步放在锁外追加，避免持有 session 锁做磁盘 IO。
+        if let (Some(journal), 1..) = (ctx.request_journal.as_ref(), steer_journal_events.len()) {
+            if let Err(error) = journal
+                .append_batch(&ctx.session_id, &steer_journal_events)
+                .await
+            {
+                tracing::warn!(
+                    session_id = %ctx.session_id,
+                    error = %error,
+                    "1.3 request journal steer sync failed"
+                );
+            }
+        }
         let mut messages = model_projection
             .clone()
             .unwrap_or_else(|| canonical_messages.clone());
@@ -3318,10 +3628,29 @@ async fn run_loop(ctx: RunLoopCtx) {
                 repaired_tool_results = repaired,
                 "repaired canonical tool protocol before model projection"
             );
-            let mut sessions = ctx.sessions.lock().await;
-            if let Some(session) = sessions.get_mut(&ctx.session_id) {
-                session.messages = canonical_messages.clone();
-                session.model_projection = None;
+            {
+                let mut sessions = ctx.sessions.lock().await;
+                if let Some(session) = sessions.get_mut(&ctx.session_id) {
+                    session.messages = canonical_messages.clone();
+                    session.model_projection = None;
+                }
+            }
+            // 1.3：修复改写了 canonical 工作集（合成 ToolResult / 补配对），
+            // journal 模式下必须用 HistorySnapshot 重新锚定——增量 Message 事件
+            // 无法表达「替换既有前缀」。load 侧 HistorySnapshot 的语义正是
+            // 「替换前缀并清除旧投影」，与本处内存语义一致。
+            // （session 锁已释放，不在持锁状态下做磁盘 IO。）
+            if let Some(journal) = ctx.request_journal.as_ref() {
+                let snapshot = SessionEvent::HistorySnapshot {
+                    messages: canonical_messages.clone(),
+                };
+                if let Err(error) = journal.append(&ctx.session_id, snapshot).await {
+                    tracing::warn!(
+                        session_id = %ctx.session_id,
+                        error = %error,
+                        "1.3 request journal repair snapshot failed"
+                    );
+                }
             }
         }
         if applied_steers > 0 {
@@ -3440,6 +3769,21 @@ async fn run_loop(ctx: RunLoopCtx) {
                         model_projection = Some(messages.clone());
                         compactor.record_compaction();
                         bump_rewrite_version(&ctx).await;
+                        // 1.3：压缩安装了新投影，journal 同步 ModelProjection 事件，
+                        // 让 load() 重建出与派发侧一致的投影（后续 Message 事件
+                        // 在 load 里同时进 canonical 与投影，无需额外处理）。
+                        if let Some(journal) = ctx.request_journal.as_ref() {
+                            let projection = SessionEvent::ModelProjection {
+                                messages: Some(messages.clone()),
+                            };
+                            if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                                tracing::warn!(
+                                    session_id = %ctx.session_id,
+                                    error = %error,
+                                    "1.3 request journal projection sync failed"
+                                );
+                            }
+                        }
                     } else if !ctx.abort.load(Ordering::Relaxed) {
                         compactor.consecutive_compactions = COMPACT_DEBOUNCE_LIMIT;
                         tracing::warn!(
@@ -3493,6 +3837,19 @@ async fn run_loop(ctx: RunLoopCtx) {
                     model_projection = Some(messages.clone());
                     compactor.record_compaction();
                     bump_rewrite_version(&ctx).await;
+                    // 1.3：同上——强制折叠/裁剪安装投影后同步 ModelProjection 事件。
+                    if let Some(journal) = ctx.request_journal.as_ref() {
+                        let projection = SessionEvent::ModelProjection {
+                            messages: Some(messages.clone()),
+                        };
+                        if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                            tracing::warn!(
+                                session_id = %ctx.session_id,
+                                error = %error,
+                                "1.3 request journal projection sync failed"
+                            );
+                        }
+                    }
                 }
                 if ctx.abort.load(Ordering::Relaxed) {
                     break;
@@ -3507,12 +3864,21 @@ async fn run_loop(ctx: RunLoopCtx) {
         // 一律作为**尾部 user 消息**注入；memory 作为头部独立消息。注入消息只进入
         // 发送副本（本次迭代的 messages），迭代结束后立即移除、不写入会话历史——
         // 因此逐轮变化只影响请求尾部追加，不伤已发送前缀（PRD §4 原则 1）。
+        //
+        // 1.3：tail_labels 与 tail_injections 同序同长，登记进 RequestHeader 的
+        // excluded_tails——这些消息不落盘，重建自检必须按登记排除，否则每轮
+        // 都因「多出 N 条」误报。
         let mut tail_injections: Vec<Message> = Vec::new();
+        let mut tail_labels: Vec<&'static str> = Vec::new();
         if let Some(peer_messages) = pending_peer_injection.take() {
             tail_injections.push(peer_messages);
+            tail_labels.push(TAIL_LABEL_PEER_MESSAGES);
         }
         match ctx.supervisor.take_peer_message_injection() {
-            Ok(Some(peer_messages)) => tail_injections.push(peer_messages),
+            Ok(Some(peer_messages)) => {
+                tail_injections.push(peer_messages);
+                tail_labels.push(TAIL_LABEL_PEER_MESSAGES);
+            }
             Ok(None) => {}
             Err(error) => {
                 terminal_err = Some(format!("无法读取 Agent mailbox：{error}"));
@@ -3522,12 +3888,16 @@ async fn run_loop(ctx: RunLoopCtx) {
         tail_injections.push(Message::user_text(build_local_clock_user_message(
             Local::now().fixed_offset(),
         )));
+        tail_labels.push(TAIL_LABEL_LOCAL_CLOCK);
         if let Some(task_context) = task_context.as_deref() {
             tail_injections.push(build_task_context_message(task_context));
+            tail_labels.push(TAIL_LABEL_TASK_CONTEXT);
         }
         tail_injections.push(build_plan_mode_message(policy == ToolPolicy::Plan));
+        tail_labels.push(TAIL_LABEL_PLAN_MODE);
         if let Some(checkpoint) = build_tool_progress_checkpoint_message(tool_iterations) {
             tail_injections.push(checkpoint);
+            tail_labels.push(TAIL_LABEL_TOOL_PROGRESS_CHECKPOINT);
         }
         if let Some(hint) = build_delegation_hint_message(
             delegation_allowed,
@@ -3537,16 +3907,21 @@ async fn run_loop(ctx: RunLoopCtx) {
             ctx.workspace_scope.is_some(),
         ) {
             tail_injections.push(hint);
+            tail_labels.push(TAIL_LABEL_DELEGATION_HINT);
         }
         if !summary_only && hosted_web_fallback_attempted {
             tail_injections.push(Message::user_text(DEEPSEEK_LOCAL_WEB_FALLBACK_PROMPT));
+            tail_labels.push(TAIL_LABEL_WEB_FALLBACK_PROMPT);
         }
         if summary_only {
             tail_injections.push(Message::user_text(FINAL_SUMMARY_RECOVERY_PROMPT));
+            tail_labels.push(TAIL_LABEL_FINAL_SUMMARY_RECOVERY);
         } else if governor_request_mode == DeepSeekGovernorRequestMode::CheapExploration {
             tail_injections.push(Message::user_text(DEEPSEEK_CHEAP_EXPLORATION_PROMPT));
+            tail_labels.push(TAIL_LABEL_CHEAP_EXPLORATION);
         } else if governor_request_mode == DeepSeekGovernorRequestMode::FullFinalization {
             tail_injections.push(Message::user_text(DEEPSEEK_FULL_FINALIZATION_PROMPT));
+            tail_labels.push(TAIL_LABEL_FULL_FINALIZATION);
         }
         let mut request_messages = Vec::with_capacity(
             messages.len() + tail_injections.len() + usize::from(memory_message.is_some()),
@@ -3609,6 +3984,81 @@ async fn run_loop(ctx: RunLoopCtx) {
         }
         prev_prefix_shape = prefix_shape;
 
+        // ---- 1.3：request/header 快照 + 派发前重建自检（复用 P2-H 捕获点）。
+        // 未接线 journal 时整段跳过（零开销、零行为变化）。 --
+        if let Some(journal) = ctx.request_journal.as_ref() {
+            // 规范化：去掉头部 memory 注入与已登记尾部注入，剩下的才是
+            // JSONL 投影应当能重建的工作集。tail_injections 已被 extend 进
+            // request_messages（moved），条数取同序同长的登记清单。
+            let normalized = normalized_dispatch_messages(
+                &request_messages,
+                memory_message.is_some(),
+                tail_labels.len(),
+            );
+            let envelope = fingerprint_request_envelope(&system_prompt, &tools, normalized);
+            // resume 判定：恢复类再派发（护栏总结 / hosted web 回退 / 紧急上下文
+            // 恢复之后的重发）。agent_loop 内部的流级冻结重放对本层不可见
+            //（StreamReplay 事件在单次迭代内发生），以其可见的 attempt 概念近似。
+            let is_recovery_redispatch =
+                summary_only || std::mem::take(&mut recovery_redispatch_pending);
+            let reason =
+                request_header_reason(prev_request_envelope.is_none(), is_recovery_redispatch);
+            let header = SessionEvent::RequestHeader {
+                system_sha256: envelope.system_sha256.clone(),
+                tools_sha256: envelope.tools_sha256.clone(),
+                messages_sha256: envelope.messages_sha256.clone(),
+                reason: reason.to_string(),
+                excluded_tails: tail_labels.iter().map(|label| label.to_string()).collect(),
+            };
+            match journal.append(&ctx.session_id, header).await {
+                Ok(()) => {
+                    ctx.request_self_check
+                        .headers_appended
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                Err(error) => tracing::warn!(
+                    session_id = %ctx.session_id,
+                    error = %error,
+                    "1.3 request header append failed"
+                ),
+            }
+            // 重建自检：读回 JSONL 投影重算哈希与本次派发值比对。首期
+            // **只记录不阻断**（风险表：先跑一周观察误报；确认零误报后把此处
+            // 升级为终止条件即可，纯函数签名已返回差异描述）。
+            match journal.load(&ctx.session_id).await {
+                Ok(reloaded) => {
+                    let rebuilt = reloaded
+                        .model_projection
+                        .clone()
+                        .unwrap_or(reloaded.messages);
+                    if let Err(mismatch) =
+                        verify_request_rebuild(&envelope, &rebuilt, prev_request_envelope.as_ref())
+                    {
+                        ctx.request_self_check
+                            .mismatches
+                            .fetch_add(1, Ordering::Relaxed);
+                        tracing::error!(
+                            session_id = %ctx.session_id,
+                            mismatch.dispatch_message_count,
+                            mismatch.rebuilt_message_count,
+                            mismatch.dispatch_messages_sha256,
+                            mismatch.rebuilt_messages_sha256,
+                            mismatch.system_changed_since_last,
+                            mismatch.tools_changed_since_last,
+                            reason,
+                            "1.3 request rebuild self-check mismatch (log-only; upgrade to blocking after soak)"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    session_id = %ctx.session_id,
+                    error = %error,
+                    "1.3 request journal reload for self-check failed"
+                ),
+            }
+            prev_request_envelope = Some(envelope);
+        }
+
         let evidence_tool_host = DeepSeekEvidenceToolHost { inner: &tool_host };
         let iteration_tool_host: &dyn ToolHost =
             if governor_request_mode == DeepSeekGovernorRequestMode::CheapExploration {
@@ -3647,6 +4097,26 @@ async fn run_loop(ctx: RunLoopCtx) {
                 messages.extend(outcome.appended_messages.iter().cloned());
                 if model_projection.is_some() {
                     model_projection = Some(messages.clone());
+                }
+                // 1.3：journal 模式下把本轮追加的协议消息同步为 Message 事件，
+                // 让 load() 投影与下一轮派发的工作集保持逐字节一致（自检的前提）。
+                // Message 事件在 load 里同时进 canonical 与活动投影，与上方
+                // 内存侧 extend + projection.clone 的语义一一对应。
+                if let Some(journal) = ctx.request_journal.as_ref() {
+                    let events = outcome
+                        .appended_messages
+                        .iter()
+                        .map(|message| SessionEvent::Message(message.clone()))
+                        .collect::<Vec<_>>();
+                    if !events.is_empty() {
+                        if let Err(error) = journal.append_batch(&ctx.session_id, &events).await {
+                            tracing::warn!(
+                                session_id = %ctx.session_id,
+                                error = %error,
+                                "1.3 request journal message sync failed"
+                            );
+                        }
+                    }
                 }
                 // P2-G：用上一轮真实 usage 校准 tokPerChar（失败轮不校准，
                 // 保持旧值继续保守估算）。
@@ -3693,6 +4163,9 @@ async fn run_loop(ctx: RunLoopCtx) {
                 let hosted_summary_recovery =
                     outcome.requires_final_summary_recovery && !hosted_web_fallback_required;
                 let mut forced_continuation = false;
+                // 1.3：session 锁内产生、待锁外落盘的 Message 事件
+                //（continuation 等进入会话历史的注入）。
+                let mut pending_journal_messages: Vec<SessionEvent> = Vec::new();
                 let should_continue = {
                     let mut sessions = ctx.sessions.lock().await;
                     let Some(session) = sessions.get_mut(&ctx.session_id) else {
@@ -3750,6 +4223,9 @@ async fn run_loop(ctx: RunLoopCtx) {
                             "[system] The current Plan still has an active feature. This run may not finish yet. Continue implementing only the active feature, verify its acceptance criteria, and call plan_item_update with completed or blocked before giving a final answer.",
                         );
                         session.messages.push(continuation.clone());
+                        // 1.3：continuation 进入会话历史，journal 待锁外补同步
+                        //（不在 session 锁内做磁盘 IO）。
+                        pending_journal_messages.push(SessionEvent::Message(continuation.clone()));
                         if let Some(projection) = session.model_projection.as_mut() {
                             projection.push(continuation);
                         }
@@ -3766,6 +4242,21 @@ async fn run_loop(ctx: RunLoopCtx) {
                 if suspended_for_user {
                     break;
                 }
+                // 1.3：锁外补落盘 session 锁内收集的 Message 事件。
+                if let (Some(journal), 1..) =
+                    (ctx.request_journal.as_ref(), pending_journal_messages.len())
+                {
+                    if let Err(error) = journal
+                        .append_batch(&ctx.session_id, &pending_journal_messages)
+                        .await
+                    {
+                        tracing::warn!(
+                            session_id = %ctx.session_id,
+                            error = %error,
+                            "1.3 request journal continuation sync failed"
+                        );
+                    }
+                }
                 // 护栏刚触发：本轮已经同步了会话历史，直接进入下一次无工具总结请求。
                 if guard_trip.is_some() && summary_recovery_pending {
                     continue;
@@ -3773,6 +4264,8 @@ async fn run_loop(ctx: RunLoopCtx) {
 
                 if hosted_web_fallback_required {
                     hosted_web_fallback_attempted = true;
+                    // 1.3：下一次派发是本地联网工具回退重试（resume）。
+                    recovery_redispatch_pending = true;
                     disable_hosted_web_tools(&mut active_hosted_tools);
                     tracing::warn!(
                         session_id = %ctx.session_id,
@@ -3830,19 +4323,39 @@ async fn run_loop(ctx: RunLoopCtx) {
                         );
                         ctx.supervisor.wait_for_all().await;
                         if let Ok(collected) = ctx.supervisor.collect(None).await {
-                            let mut sessions = ctx.sessions.lock().await;
-                            if let Some(session) = sessions.get_mut(&ctx.session_id) {
-                                let collected_message = Message::user_text(format!(
-                                    "[system] Delegated subagents have completed. \
+                            // 1.3：收集消息进入会话历史，锁内先登记、锁外落盘。
+                            let mut collected_journal_events = Vec::new();
+                            {
+                                let mut sessions = ctx.sessions.lock().await;
+                                if let Some(session) = sessions.get_mut(&ctx.session_id) {
+                                    let collected_message = Message::user_text(format!(
+                                        "[system] Delegated subagents have completed. \
 Their findings are provided below; you do not need to call collect_subagents. \
 Please summarize and present these results.\n\n{}",
-                                    collected.content
-                                ));
-                                session.messages.push(collected_message.clone());
-                                if let Some(projection) = session.model_projection.as_mut() {
-                                    projection.push(collected_message);
+                                        collected.content
+                                    ));
+                                    session.messages.push(collected_message.clone());
+                                    collected_journal_events
+                                        .push(SessionEvent::Message(collected_message.clone()));
+                                    if let Some(projection) = session.model_projection.as_mut() {
+                                        projection.push(collected_message);
+                                    }
+                                    session.accepting_steer = true;
                                 }
-                                session.accepting_steer = true;
+                            }
+                            if let (Some(journal), 1..) =
+                                (ctx.request_journal.as_ref(), collected_journal_events.len())
+                            {
+                                if let Err(error) = journal
+                                    .append_batch(&ctx.session_id, &collected_journal_events)
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        session_id = %ctx.session_id,
+                                        error = %error,
+                                        "1.3 request journal collected sync failed"
+                                    );
+                                }
                             }
                             continue;
                         }
@@ -3887,23 +4400,45 @@ Please summarize and present these results.\n\n{}",
                                     );
                                 }
                                 Ok(QualityReviewResult::Revise(findings)) => {
-                                    let mut sessions = ctx.sessions.lock().await;
-                                    if let Some(session) = sessions.get_mut(&ctx.session_id) {
-                                        let review_message = Message::user_text(format!(
-                                            "[system] Quality review round {quality_rounds} found issues in the visible draft. \
+                                    // 1.3：复核意见进入会话历史，锁内登记、锁外落盘。
+                                    let mut revise_journal_events = Vec::new();
+                                    {
+                                        let mut sessions = ctx.sessions.lock().await;
+                                        if let Some(session) = sessions.get_mut(&ctx.session_id) {
+                                            let review_message = Message::user_text(format!(
+                                                "[system] Quality review round {quality_rounds} found issues in the visible draft. \
 Address the concrete findings below, re-check any relevant workspace evidence, and then provide a corrected final answer. \
 Do not mention private reasoning.\n\n{}",
-                                            short_summary(
-                                                &findings,
-                                                MAX_QUALITY_REVIEW_FINDINGS_CHARS,
-                                            )
-                                        ));
-                                        session.messages.push(review_message.clone());
-                                        if let Some(projection) = session.model_projection.as_mut()
-                                        {
-                                            projection.push(review_message);
+                                                short_summary(
+                                                    &findings,
+                                                    MAX_QUALITY_REVIEW_FINDINGS_CHARS,
+                                                )
+                                            ));
+                                            session.messages.push(review_message.clone());
+                                            revise_journal_events.push(SessionEvent::Message(
+                                                review_message.clone(),
+                                            ));
+                                            if let Some(projection) =
+                                                session.model_projection.as_mut()
+                                            {
+                                                projection.push(review_message);
+                                            }
+                                            session.accepting_steer = true;
                                         }
-                                        session.accepting_steer = true;
+                                    }
+                                    if let (Some(journal), 1..) =
+                                        (ctx.request_journal.as_ref(), revise_journal_events.len())
+                                    {
+                                        if let Err(error) = journal
+                                            .append_batch(&ctx.session_id, &revise_journal_events)
+                                            .await
+                                        {
+                                            tracing::warn!(
+                                                session_id = %ctx.session_id,
+                                                error = %error,
+                                                "1.3 request journal review sync failed"
+                                            );
+                                        }
                                     }
                                     continue;
                                 }
@@ -3979,6 +4514,8 @@ Do not mention private reasoning.\n\n{}",
                     && !ctx.abort.load(Ordering::Relaxed)
                 {
                     hosted_web_fallback_attempted = true;
+                    // 1.3：下一次派发是本地联网工具回退重试（resume）。
+                    recovery_redispatch_pending = true;
                     disable_hosted_web_tools(&mut active_hosted_tools);
                     emit_activity(
                         &ctx.event_tx,
@@ -3994,6 +4531,8 @@ Do not mention private reasoning.\n\n{}",
                     && !ctx.suspension_gate.load(Ordering::SeqCst)
                 {
                     emergency_context_recovery_attempted = true;
+                    // 1.3：下一次派发是紧急上下文压缩后的重试（resume）。
+                    recovery_redispatch_pending = true;
                     if let Some(compacted) = force_compaction_or_trim(
                         ctx.provider.clone(),
                         &ctx.model,
@@ -4008,9 +4547,26 @@ Do not mention private reasoning.\n\n{}",
                     {
                         compactor.record_compaction();
                         bump_rewrite_version(&ctx).await;
-                        let mut sessions = ctx.sessions.lock().await;
-                        if let Some(session) = sessions.get_mut(&ctx.session_id) {
-                            session.model_projection = Some(compacted);
+                        {
+                            let mut sessions = ctx.sessions.lock().await;
+                            if let Some(session) = sessions.get_mut(&ctx.session_id) {
+                                session.model_projection = Some(compacted.clone());
+                            }
+                        }
+                        // 1.3：紧急恢复安装了新投影，同步 ModelProjection 事件，
+                        // 否则下一轮按投影派发而 load() 重建出 canonical，必误报。
+                        // （session 锁已释放，不在持锁状态下做磁盘 IO。）
+                        if let Some(journal) = ctx.request_journal.as_ref() {
+                            let projection = SessionEvent::ModelProjection {
+                                messages: Some(compacted),
+                            };
+                            if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                                tracing::warn!(
+                                    session_id = %ctx.session_id,
+                                    error = %error,
+                                    "1.3 request journal projection sync failed"
+                                );
+                            }
                         }
                         emit_activity(
                             &ctx.event_tx,
@@ -4591,10 +5147,13 @@ impl SessionToolHost {
         self.gateway.owns_tool(name)
             || matches!(
                 name,
-                "delegate_task" | "plan_subagents" | "collect_subagents" | "list_agents"
+                "delegate_task"
+                    | "plan_subagents"
+                    | "collect_subagents"
+                    | "list_agents"
                     | "send_agent_message"
             )
-        }
+    }
 
     fn tool_allowed(&self, name: &str) -> bool {
         if matches!(name, "mcp_create_draft" | "mcp_save_draft")
@@ -4774,7 +5333,10 @@ impl SessionToolHost {
         if delegation_disabled
             && matches!(
                 name,
-                "delegate_task" | "plan_subagents" | "collect_subagents" | "list_agents"
+                "delegate_task"
+                    | "plan_subagents"
+                    | "collect_subagents"
+                    | "list_agents"
                     | "send_agent_message"
             )
         {
@@ -6140,7 +6702,10 @@ delegate_task"
                     .to_string(),
             ));
         }
-        let confirm = args.get("confirm").and_then(|value| value.as_bool()).unwrap_or(false);
+        let confirm = args
+            .get("confirm")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
         let existing_children = self.children.lock().await.len();
         let planned = entries.len();
         let allowed_total = existing_children + planned;
@@ -6177,10 +6742,9 @@ delegate_task"
                         .find(|slot| slot.descriptor.slot_id == slot_id)
                     {
                         Some(slot) => {
-                            let role = self.name_allocator.role_label(
-                                language,
-                                slot.descriptor.role_key.as_deref(),
-                            );
+                            let role = self
+                                .name_allocator
+                                .role_label(language, slot.descriptor.role_key.as_deref());
                             match explicit_role_counts
                                 .iter_mut()
                                 .find(|(seen, _)| seen == &role)
@@ -6268,8 +6832,8 @@ delegate_task 的 agent 枚举",
                 "entries": entry_reports,
                 "warnings": warnings,
                 "guidance": "Revise the entries as needed, then call plan_subagents again with \
-confirm=true to lock the batch. delegate_task beyond the locked total is rejected until a revised \
-plan is confirmed.",
+            confirm=true to lock the batch. delegate_task beyond the locked total is rejected until a revised \
+            plan is confirmed.",
             });
             if !pool_slots.is_empty() {
                 payload["candidate_pool"] = serde_json::json!({
@@ -6326,7 +6890,7 @@ plan is confirmed.",
             "allowed_total": allowed_total,
             "entries": entry_digest,
             "next": "Now call delegate_task once per planned entry; spawns beyond allowed_total \
-are rejected until a revised plan is confirmed.",
+        are rejected until a revised plan is confirmed.",
         });
         Ok(ToolCallOutcome {
             content: payload.to_string(),
