@@ -180,6 +180,9 @@ impl ReplayService {
                     })
                 }
 
+                // RequestHeader 是派发自检快照，回放不可见。
+                SessionEvent::RequestHeader { .. } => None,
+
                 SessionEvent::Message(msg) => {
                     // Recap: 只包含首条和末条消息
                     if depth == ReplayDepth::Recap {

@@ -789,6 +789,8 @@ export interface AgentEventScope {
   /** M7：FullAccess + require_approval = 审批模式（inherit 自非全权父运行）。 */
   require_approval?: boolean;
   routing_reason?: string;
+  /** 主代理下发给此子代理的任务提示词（goal 的有界摘要）；主运行为空。 */
+  goal?: string;
 }
 
 export type AgentEvent =

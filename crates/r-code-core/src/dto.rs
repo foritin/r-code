@@ -1631,6 +1631,10 @@ pub struct AgentEventScope {
     /// 为什么选择此子智能体执行器。仅记录策略结论，不记录思维链。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_reason: Option<String>,
+    /// 主代理下发给此子代理的任务提示词（goal 的有界摘要）。主运行 scope 恒为
+    /// `None`；旧事件缺省为空，前端按无任务提示处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
 }
 
 /// 子代理的可观察生命周期状态。

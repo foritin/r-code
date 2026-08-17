@@ -26,6 +26,8 @@
   --signature-sidebar-section: #817b72;
   --signature-sidebar-project: #d8d4cc;
   --signature-composer-shadow: 0 -10px 34px rgba(0, 0, 0, 0.12), 0 10px 24px rgba(0, 0, 0, 0.16);
+  /* 子智能体运行色（原型 C 的藏青）：时间线事件行、状态芯片与目录状态环共用。 */
+  --subagent-run: #6fc7d8;
 }
 
 :root[data-theme="obsidian"] {
@@ -774,7 +776,7 @@
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 
-#app.r-code-signature .plan-card,
+#app.r-code-signature .todo-card,
 #app.r-code-signature .tcard.open,
 #app.r-code-signature .run-disclosure:has(.run-detail) {
   border-color: var(--signature-panel-edge);
@@ -848,6 +850,38 @@
   background: transparent;
 }
 
+/* ===== 霓虹闪烁与余辉（执行中文字，原型 C+）=====
+   明亮的白光伴随瞬间高强度曝光（0%/44% 两次闪烁），
+   随后光晕迅速衰减、只留轻微暖橙余辉；reduced-motion 由 base.css 全停。 */
+#app.r-code-signature .run-disclosure.run-summary.active .run-name,
+#app.r-code-signature .run-disclosure.run-summary.active .run-duration,
+#app.r-code-signature .tcard.active .tcard-head .verb {
+  animation: signature-neon-flash 2.9s ease-in-out infinite;
+}
+
+@keyframes signature-neon-flash {
+  0% { color: #fff; text-shadow: 0 0 3px rgba(255, 255, 255, 0.95), 0 0 16px rgba(255, 240, 222, 0.9), 0 0 44px rgba(244, 116, 43, 0.7); }
+  7% { color: #fff; text-shadow: 0 0 2px rgba(255, 255, 255, 0.7), 0 0 9px rgba(255, 222, 188, 0.5), 0 0 22px rgba(244, 116, 43, 0.38); }
+  16% { color: var(--fg); text-shadow: 0 0 7px rgba(255, 228, 202, 0.26), 0 0 18px rgba(244, 116, 43, 0.16); }
+  44% { color: #fff; text-shadow: 0 0 2px rgba(255, 255, 255, 0.55), 0 0 10px rgba(255, 216, 182, 0.4), 0 0 26px rgba(244, 116, 43, 0.3); }
+  58% { color: var(--fg); text-shadow: 0 0 8px rgba(255, 228, 202, 0.18), 0 0 20px rgba(244, 116, 43, 0.1); }
+  100% { color: var(--fg-muted); text-shadow: 0 0 10px rgba(244, 116, 43, 0.07); }
+}
+
+/* 流式光标：白→暖橙渐变 + 光晕余辉（原型 C+ 的 caret） */
+#app.r-code-signature .agent .caret {
+  width: 7px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #fff, #ffb37e);
+  box-shadow: 0 0 8px rgba(255, 220, 190, 0.8), 0 0 22px rgba(244, 116, 43, 0.5);
+  animation: signature-neon-caret 1.15s ease-in-out infinite;
+}
+
+@keyframes signature-neon-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
 #app.r-code-signature .subagent-panel {
   margin-inline: 16px;
   border-top: 1px solid var(--border);
@@ -880,6 +914,24 @@
   border-radius: 6px 6px 2px 6px;
 }
 
+/* 子智能体目录（原型 C+）：运行中的状态环用藏青，与时间线子代理高亮同色 */
+#app.r-code-signature .subagent-list-row .subagent-spinner {
+  width: 15px;
+  height: 15px;
+  border-color: color-mix(in srgb, var(--subagent-run) 24%, transparent);
+  border-top-color: var(--subagent-run);
+}
+#app.r-code-signature .subagent-list-row .subagent-complete-mark {
+  width: 18px;
+  height: 18px;
+  border-color: rgba(105, 199, 152, 0.55);
+}
+#app.r-code-signature .subagent-list-row .subagent-incomplete-mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+
 #app.r-code-signature .subagent-list-row.status-running,
 #app.r-code-signature .subagent-list-row.status-queued,
 #app.r-code-signature .subagent-list-row.status-waiting_permission {
@@ -908,6 +960,34 @@
 #app.r-code-signature .subagent-tool-group,
 #app.r-code-signature .subagent-transcript-tool {
   border-color: var(--signature-divider);
+}
+
+/* 时间线子代理芯片（原型 C+）：运行中以藏青描边呼应目录状态环 */
+#app.r-code-signature .timeline-subagent-chip.status-running,
+#app.r-code-signature .timeline-subagent-chip.status-queued {
+  border-color: color-mix(in srgb, var(--subagent-run) 38%, transparent);
+}
+
+/* 时间线子智能体事件行（原型 C+）：名称与运行态用藏青 */
+#app.r-code-signature .timeline-subagent-name {
+  color: var(--subagent-run);
+}
+#app.r-code-signature .timeline-subagent-state.is-active {
+  color: var(--subagent-run);
+}
+
+/* 房间头（原型 C+）：项目名与状态以 inset chip 呈现，对齐原型头部 */
+#app.r-code-signature .room-scopebar { gap: 6px; }
+
+#app.r-code-signature .room-scopebar > span:first-of-type {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-inset);
+  font-size: var(--text-meta); color: var(--fg-muted);
+}
+
+#app.r-code-signature .room-scope-state {
+  display: inline-flex; align-items: center; height: 22px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-inset);
 }
 
 /* Composer 居中悬浮：不再通栏贴底，改为限定宽度、带投影的浮层卡 */

@@ -1306,6 +1306,7 @@ fn runtime_contract_request(slot: &FrozenSubagentSlot) -> SubagentCandidateReque
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         },
         caller: "runtime-contract-test".to_string(),
         access_mode: SubagentAccessMode::ReadOnly,
@@ -1560,7 +1561,8 @@ async fn weighted_candidate_route_is_deterministic_and_executes_the_selected_slo
                 SubagentAccessMode::ReadOnly,
                 Some(format!("call-{expected_index}")),
                 routing_reason,
-                        DelegationInitiator::Runtime,)
+                DelegationInitiator::Runtime,
+            )
             .await
             .unwrap();
     }
@@ -1684,7 +1686,8 @@ async fn native_candidate_uses_its_slot_request_profile_without_root_provider_le
             SubagentAccessMode::ReadOnly,
             None,
             "slot profile fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     supervisor.collect(None).await.unwrap();
@@ -1838,7 +1841,8 @@ async fn native_child_loop_compacts_before_the_provider_window_overflows() {
             SubagentAccessMode::FullAccess,
             None,
             "child compaction fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     let collected = supervisor.collect(None).await.unwrap();
@@ -1939,7 +1943,8 @@ async fn external_candidate_events_are_allowlisted_and_cannot_forge_control_even
             SubagentAccessMode::ReadOnly,
             None,
             "external event filter fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     supervisor.collect(None).await.unwrap();
@@ -2151,7 +2156,8 @@ async fn disabled_cross_engine_switch_blocks_external_candidate_pool_routes_and_
             SubagentAccessMode::ReadOnly,
             None,
             "direct stale route fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("外部 Agent 子代理协作已关闭"));
@@ -4121,6 +4127,7 @@ async fn disabled_reasoning_visibility_filters_reasoning_but_keeps_answers() {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         },
         event: Box::new(AgentEvent::Reasoning {
             text: "also hidden".into(),
@@ -4714,7 +4721,8 @@ async fn codex_backend_forwards_scope_access_and_aliases_consistently() {
                 access,
                 Some(format!("call-{}", id.as_str())),
                 "fixture route".to_string(),
-                        DelegationInitiator::Runtime,)
+                DelegationInitiator::Runtime,
+            )
             .await
             .unwrap();
         let queued: serde_json::Value = serde_json::from_str(&queued.content).unwrap();
@@ -5267,6 +5275,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -5438,6 +5447,7 @@ async fn root_peer_mail_is_injected_once_without_entering_canonical_history() {
                 access_mode: SubagentAccessMode::ReadOnly,
                 require_approval: false,
                 routing_reason: None,
+                goal: None,
             },
             true,
         )
@@ -5549,7 +5559,8 @@ async fn child_completion_race_peer_mail_is_removed_after_exactly_one_provider_r
             SubagentAccessMode::ReadOnly,
             Some("completion-race-delegate".to_string()),
             "completion race fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     for _ in 0..200 {
@@ -5609,7 +5620,8 @@ async fn native_child_can_delegate_and_collect_a_grandchild_in_the_same_root_tre
             SubagentAccessMode::ReadOnly,
             Some("delegate-level-one".to_string()),
             "nested delegation fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     assert!(started.content.contains("level-one-run"));
@@ -5771,7 +5783,8 @@ async fn native_child_empty_final_after_tools_recovers_with_one_tool_free_summar
             SubagentAccessMode::FullAccess,
             None,
             "empty final recovery fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -5831,7 +5844,8 @@ async fn native_child_empty_final_recovery_failure_is_terminal_after_one_attempt
             SubagentAccessMode::FullAccess,
             None,
             "empty final recovery failure fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -5944,7 +5958,8 @@ async fn native_child_hosted_tools_without_answer_get_one_summary_recovery() {
             SubagentAccessMode::FullAccess,
             None,
             "hosted tool recovery fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -6008,7 +6023,8 @@ async fn native_api_candidate_uses_the_shared_tree_and_can_delegate_a_grandchild
             SubagentAccessMode::ReadOnly,
             None,
             "native candidate nested fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     let collected = tokio::time::timeout(
@@ -6045,7 +6061,8 @@ async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
                 SubagentAccessMode::ReadOnly,
                 Some(format!("delegate-{parent_id}")),
                 "full-parallel permit stress fixture".to_string(),
-                        DelegationInitiator::Runtime,)
+                DelegationInitiator::Runtime,
+            )
             .await
             .unwrap();
     }
@@ -6099,7 +6116,8 @@ async fn cancelling_a_middle_node_recursively_stops_descendants_but_not_siblings
                 SubagentAccessMode::ReadOnly,
                 None,
                 "recursive cancellation fixture".to_string(),
-                        DelegationInitiator::Runtime,)
+                DelegationInitiator::Runtime,
+            )
             .await
             .unwrap();
     }
@@ -6120,7 +6138,8 @@ async fn cancelling_a_middle_node_recursively_stops_descendants_but_not_siblings
             SubagentAccessMode::ReadOnly,
             None,
             "recursive cancellation fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap();
     let grandchild = nested
@@ -6174,7 +6193,8 @@ async fn spawn_rechecks_parent_cancellation_after_waiting_for_children_lock() {
         SubagentAccessMode::ReadOnly,
         None,
         "late registration race fixture".to_string(),
-                DelegationInitiator::Runtime,);
+        DelegationInitiator::Runtime,
+    );
     tokio::pin!(spawn);
 
     {
@@ -6234,6 +6254,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -6265,6 +6286,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -6294,6 +6316,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         abort: grandchild_abort.clone(),
         nested_supervisor: None,
         result_rx: grandchild_result_rx,
+        goal_key: String::new(),
         join: Arc::new(StdMutex::new(Some(AbortOnDropJoinHandle::new(
             grandchild_abort,
             grandchild_join,
@@ -6326,6 +6349,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         abort: parent_abort.clone(),
         nested_supervisor: Some(nested),
         result_rx: parent_result_rx,
+        goal_key: String::new(),
         join: Arc::new(StdMutex::new(Some(AbortOnDropJoinHandle::new(
             parent_abort,
             parent_join,
@@ -6415,7 +6439,8 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
                 SubagentAccessMode::ReadOnly,
                 None,
                 "lifetime budget fixture".to_string(),
-                        DelegationInitiator::Runtime,)
+                DelegationInitiator::Runtime,
+            )
             .await
             .unwrap();
         supervisor.collect(Some(vec![run_id])).await.unwrap();
@@ -6430,7 +6455,8 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
             SubagentAccessMode::ReadOnly,
             None,
             "lifetime budget fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains(&format!(
@@ -6450,7 +6476,8 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
             SubagentAccessMode::ReadOnly,
             None,
             "depth fixture".to_string(),
-                    DelegationInitiator::Runtime,)
+            DelegationInitiator::Runtime,
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("最大深度为 2"));
@@ -6749,7 +6776,8 @@ async fn abort_one_cancels_a_queued_child_while_it_is_waiting_for_an_activity_pe
                 SubagentAccessMode::ReadOnly,
                 None,
                 "queued permit cancellation fixture".to_string(),
-                        DelegationInitiator::Runtime,)
+                DelegationInitiator::Runtime,
+            )
             .await
             .unwrap();
     }
@@ -8256,7 +8284,7 @@ impl CodexSubagentRunner for LenientCodexRunner {
 
 fn plan_gate_tool_host(
     directory: &TempDir,
-    runner: Arc<LenientCodexRunner>,
+    runner: Arc<dyn ExternalAgentRunner>,
 ) -> SessionToolHost {
     let workspace_scope = WorkspaceScope {
         guard: PathGuard::new(directory.path().to_path_buf()).unwrap(),
@@ -8362,7 +8390,9 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
     assert_eq!(payload["existing_children"], 1);
     assert_eq!(payload["allowed_total_after_confirm"], 3);
     // 分析段之后门仍然关闭。
-    let still_blocked = delegate_via_host(&tool_host, "再做点别的").await.unwrap_err();
+    let still_blocked = delegate_via_host(&tool_host, "再做点别的")
+        .await
+        .unwrap_err();
     assert!(still_blocked.to_string().contains("plan_subagents"));
 
     // 确认段：锁定 1（已有）+ 2（计划）= 3 个总数。
@@ -8387,7 +8417,12 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
     assert_eq!(payload["revision"], 1);
 
     // 计划内的两个新子代理放行。
-    assert!(!delegate_via_host(&tool_host, "再做点别的").await.unwrap().is_error);
+    assert!(
+        !delegate_via_host(&tool_host, "再做点别的")
+            .await
+            .unwrap()
+            .is_error
+    );
     assert!(
         !delegate_via_host(&tool_host, "顺带验证结论")
             .await
@@ -8401,7 +8436,11 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
     assert!(exceeded.to_string().contains("修订后的计划"));
     // 收口后统计：只有 1 个免计划 + 2 个计划内子代理真正执行。
     tool_host
-        .call_inner(Some("plan-collect"), "collect_subagents", serde_json::json!({}))
+        .call_inner(
+            Some("plan-collect"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
         .await
         .unwrap();
     assert_eq!(runner.calls.load(Ordering::Relaxed), 3);
@@ -8475,4 +8514,445 @@ async fn plan_subagents_validates_entries_and_run_cap() {
     assert!(warnings
         .iter()
         .any(|warning| warning.as_str().unwrap().contains("完全相同")));
+}
+
+/// 保持运行中的外部子代理 runner：进入执行后挂起，直到测试显式放行。
+struct HeldCodexRunner {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl CodexSubagentRunner for HeldCodexRunner {
+    async fn run(
+        &self,
+        _request: CodexSubagentRequest,
+    ) -> Result<CodexSubagentOutcome, ProductError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(CodexSubagentOutcome::Completed("已完成".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn plan_subagents_confirm_rejects_duplicate_goals() {
+    let directory = TempDir::new().unwrap();
+    let tool_host = plan_gate_tool_host(
+        &directory,
+        Arc::new(LenientCodexRunner {
+            calls: AtomicUsize::new(0),
+        }),
+    );
+
+    // 确认段：批内 goal 完全相同（大小写/空白差异归一后）被硬性退回，不锁定名额。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-dup"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "codex"},
+                    {"goal": "调研  a ", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!rejected.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&rejected.content).unwrap();
+    assert_eq!(payload["status"], "needs_revision");
+    assert!(payload["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("合并为一条")));
+
+    // 修订为不同方向后确认成功。
+    let confirmed = tool_host
+        .call_inner(
+            Some("plan-dup-fixed"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "codex"},
+                    {"goal": "验证 B", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
+    assert_eq!(payload["status"], "confirmed");
+}
+
+#[tokio::test]
+async fn delegate_task_rejects_goal_of_running_child() {
+    let directory = TempDir::new().unwrap();
+    let runner = Arc::new(HeldCodexRunner {
+        started: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    });
+    let tool_host = plan_gate_tool_host(&directory, runner.clone());
+
+    // 免计划派生第一个子代理，并保持运行中。
+    let first = delegate_via_host(&tool_host, "保持运行的目标").await.unwrap();
+    assert!(!first.is_error);
+    runner.started.notified().await;
+
+    // 与运行中子代理完全相同的 goal（含大小写/空白差异）被拒绝重复派生。
+    let dup = delegate_via_host(&tool_host, "保持运行的目标")
+        .await
+        .unwrap_err();
+    assert!(dup.to_string().contains("完全相同"));
+    let dup_case = delegate_via_host(&tool_host, "保持运行的  目标")
+        .await
+        .unwrap_err();
+    assert!(dup_case.to_string().contains("完全相同"));
+
+    // 不同 goal 仍走既有计划门（保持原有行为）。
+    let blocked = delegate_via_host(&tool_host, "全新方向")
+        .await
+        .unwrap_err();
+    assert!(blocked.to_string().contains("plan_subagents"));
+
+    // 确认包含与运行中子代理相同 goal 的计划同样被退回修订。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-conflict"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "保持运行的目标", "agent": "codex"},
+                    {"goal": "另一个方向", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&rejected.content).unwrap();
+    assert_eq!(payload["status"], "needs_revision");
+    assert!(payload["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("仍在运行")));
+
+    // 放行并收口，避免悬挂任务。
+    runner.release.notify_one();
+    tool_host
+        .call_inner(
+            Some("plan-collect"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 1.3（docs/harness-migration.md §1.3）：request/header 快照 + 派发前重建自检。
+// 三场景：a 正常轮追加且自检通过；b 篡改触发不一致但不阻断；c 尾部注入登记
+// 后不误报。纯函数直测判定逻辑，journal 集成测试走完整 run 循环。
+// ---------------------------------------------------------------------------
+
+/// 等待 run 收尾（轮询 is_running，与既有测试同一手法）。
+async fn wait_until_finished(rt: &LlmAgentRuntime) {
+    for _ in 0..300 {
+        if !rt.is_running() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("run did not finish in time");
+}
+
+#[test]
+fn request_envelope_fingerprint_is_stable_and_segment_sensitive() {
+    // 判等决策：serde_json 规范化字节级 SHA-256。同输入必须同指纹（跨调用稳定），
+    // 三段（system/tools/messages）必须独立可归因。
+    let goal = Message::user_text("goal");
+    let tools = vec![ToolSpec {
+        name: "read_file".to_string(),
+        description: "read".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+        source: ToolSource::Builtin,
+        requires_confirmation: false,
+    }];
+    let base = fingerprint_request_envelope("system-a", &tools, std::slice::from_ref(&goal));
+    let same = fingerprint_request_envelope("system-a", &tools, std::slice::from_ref(&goal));
+    assert_eq!(base, same);
+    assert_eq!(base.normalized_message_count, 1);
+    assert_eq!(base.system_sha256.len(), 64);
+    assert_eq!(base.tools_sha256.len(), 64);
+    assert_eq!(base.messages_sha256.len(), 64);
+    // 三段独立：只动 system 时其余两段不动。
+    let system_changed =
+        fingerprint_request_envelope("system-b", &tools, std::slice::from_ref(&goal));
+    assert_ne!(base.system_sha256, system_changed.system_sha256);
+    assert_eq!(base.tools_sha256, system_changed.tools_sha256);
+    assert_eq!(base.messages_sha256, system_changed.messages_sha256);
+    // 消息变化只动 messages 段。
+    let longer = [goal.clone(), Message::assistant_text("answer")];
+    let messages_changed = fingerprint_request_envelope("system-a", &tools, &longer);
+    assert_eq!(base.system_sha256, messages_changed.system_sha256);
+    assert_eq!(base.tools_sha256, messages_changed.tools_sha256);
+    assert_ne!(base.messages_sha256, messages_changed.messages_sha256);
+    assert_eq!(messages_changed.normalized_message_count, 2);
+}
+
+#[test]
+fn request_header_reason_covers_initial_resume_change() {
+    assert_eq!(request_header_reason(true, false), "initial");
+    // initial 优先：首轮即便带恢复语义也归 initial（会话的第一枚信封）。
+    assert_eq!(request_header_reason(true, true), "initial");
+    assert_eq!(request_header_reason(false, true), "resume");
+    assert_eq!(request_header_reason(false, false), "change");
+}
+
+#[test]
+fn request_rebuild_verification_passes_on_identical_projection() {
+    // 场景 a（纯函数半）：投影重建与派发一致 -> Ok。
+    let working_set = [
+        Message::user_text("goal"),
+        Message::assistant_text("answer"),
+    ];
+    let dispatch = fingerprint_request_envelope("system", &[], &working_set);
+    let rebuilt = working_set.clone();
+    assert!(verify_request_rebuild(&dispatch, &rebuilt, None).is_ok());
+    // system/tools 相对上一枚的漂移只是标注上下文，不触发不一致。
+    let previous = RequestEnvelope {
+        system_sha256: "old-system".to_string(),
+        tools_sha256: dispatch.tools_sha256.clone(),
+        messages_sha256: dispatch.messages_sha256.clone(),
+        normalized_message_count: dispatch.normalized_message_count,
+    };
+    assert!(verify_request_rebuild(&dispatch, &rebuilt, Some(&previous)).is_ok());
+}
+
+#[test]
+fn request_rebuild_verification_flags_tampered_memory() {
+    // 场景 b（纯函数半）：内存消息被篡改后，投影重建哈希必然对不上 ->
+    // Err 且差异描述带消息数与双端哈希、附 system/tools 漂移标注。
+    let working_set = [
+        Message::user_text("goal"),
+        Message::assistant_text("answer"),
+    ];
+    let dispatch = fingerprint_request_envelope("system", &[], &working_set);
+    let mut tampered = working_set.clone();
+    tampered[1] = Message::assistant_text("tampered answer");
+    let previous = RequestEnvelope {
+        system_sha256: "old-system".to_string(),
+        tools_sha256: "old-tools".to_string(),
+        messages_sha256: dispatch.messages_sha256.clone(),
+        normalized_message_count: dispatch.normalized_message_count,
+    };
+    let mismatch = verify_request_rebuild(&dispatch, &tampered, Some(&previous))
+        .expect_err("tampered rebuild must mismatch");
+    assert_eq!(mismatch.dispatch_message_count, 2);
+    assert_eq!(
+        mismatch.rebuilt_message_count, 2,
+        "条数相同但内容漂移也要报"
+    );
+    assert_ne!(
+        mismatch.dispatch_messages_sha256,
+        mismatch.rebuilt_messages_sha256
+    );
+    assert!(mismatch.system_changed_since_last);
+    assert!(mismatch.tools_changed_since_last);
+    // 消息条数漂移同样触发。
+    let shorter = [working_set[0].clone()];
+    assert!(verify_request_rebuild(&dispatch, &shorter, None).is_err());
+}
+
+#[test]
+fn tail_injection_registration_prevents_false_mismatch() {
+    // 场景 c（纯函数半）：memory 头 + 尾部注入（本地时钟 / plan mode）登记后，
+    // 规范化视图与投影一致 -> Ok；未登记（不排除）则必然误报。
+    let request_messages = [
+        Message::user_text("memory head"),
+        Message::user_text("goal"),
+        Message::user_text("local clock 2026-08-17"),
+        Message::user_text("plan mode"),
+    ];
+    let projection = [Message::user_text("goal")];
+    // 登记：头部 memory 1 条 + 尾部注入 2 条。
+    let normalized = normalized_dispatch_messages(&request_messages, true, 2);
+    let dispatch = fingerprint_request_envelope("system", &[], normalized);
+    assert_eq!(dispatch.normalized_message_count, 1);
+    assert!(verify_request_rebuild(&dispatch, &projection, None).is_ok());
+    // 未登记：全量 4 条参与哈希，投影只有 1 条 -> 误报（差异段：消息数）。
+    let unregistered = normalized_dispatch_messages(&request_messages, false, 0);
+    let mismatched = fingerprint_request_envelope("system", &[], unregistered);
+    let mismatch = verify_request_rebuild(&mismatched, &projection, None)
+        .expect_err("unregistered tails must produce a mismatch");
+    assert_eq!(mismatch.dispatch_message_count, 4);
+    assert_eq!(mismatch.rebuilt_message_count, 1);
+    // 防御性边界：尾部条数超过剩余长度时不 panic，切到空表报不一致。
+    let degenerate = normalized_dispatch_messages(&request_messages, true, 99);
+    assert!(degenerate.is_empty());
+}
+
+#[tokio::test]
+async fn request_header_journal_records_turns_and_self_check_passes() {
+    // 场景 a + c（集成半）：正常工具轮 run，每轮派发前追加 RequestHeader，
+    // 自检全程零误报（尾部时钟每轮变化也不误报），reason 序列 initial -> change。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("rh-1"));
+    provider.push_text_turn("final answer", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal = agent_store::SessionStore::new(journal_dir.path().to_path_buf());
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(journal);
+    let session = rt.create_session(input()).await.unwrap();
+    rt.start_run(&session.meta.id, "inspect then answer")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let (headers, mismatches) = rt.request_self_check_counters();
+    assert_eq!(headers, 2, "两轮派发应各追加一枚 RequestHeader");
+    assert_eq!(mismatches, 0, "正常轮自检必须零误报");
+    let events = rt.poll_events().await.unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
+    )));
+
+    // JSONL 侧：request_header 行可被 jq/正则抽取，reason 序列合理，
+    // excluded_tails 登记了本地时钟与 plan mode。
+    let jsonl = tokio::fs::read_to_string(
+        journal_dir
+            .path()
+            .join(format!("{}.jsonl", session.meta.id)),
+    )
+    .await
+    .unwrap();
+    let headers: Vec<serde_json::Value> = jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("request_header").is_some())
+        .collect();
+    assert_eq!(headers.len(), 2);
+    assert_eq!(headers[0]["request_header"]["reason"], "initial");
+    assert_eq!(headers[1]["request_header"]["reason"], "change");
+    let excluded = headers[0]["request_header"]["excluded_tails"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(excluded.iter().any(|tail| tail == "local_clock"));
+    assert!(excluded.iter().any(|tail| tail == "plan_mode"));
+
+    // 消费侧 no-op：全新 store 句柄 load 该 JSONL，RequestHeader 不进投影，
+    // canonical 首条仍是 goal。
+    let reader = agent_store::SessionStore::new(journal_dir.path().to_path_buf());
+    let reloaded = reader.load(&session.meta.id).await.unwrap();
+    assert!(reloaded.messages.len() >= 2);
+    assert_eq!(reloaded.messages[0].text_content(), "inspect then answer");
+}
+
+#[tokio::test]
+async fn request_header_self_check_mismatch_is_logged_but_never_blocks() {
+    // 场景 b（集成半）：预置一条运行时不知道的「幽灵」Message 事件，每轮
+    // 自检都应报不一致（计数 > 0），但 run 不被阻断，正常收尾 ReviewReady。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("rh-block-1"));
+    provider.push_text_turn("still finishing", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal = agent_store::SessionStore::new(journal_dir.path().to_path_buf());
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ));
+    let session = rt.create_session(input()).await.unwrap();
+    // 篡改持久化侧：先补 Meta 行（load 的硬前提），再追加运行时工作集之外的
+    // Message（等价于投影多出一条），自检比对派发（内存）与重建（JSONL）时
+    // 必然发现消息数不一致。
+    journal
+        .append(
+            &session.meta.id,
+            SessionEvent::Meta(SessionMeta::new("mock-model", "mock")),
+        )
+        .await
+        .unwrap();
+    journal
+        .append(
+            &session.meta.id,
+            SessionEvent::Message(Message::user_text("[phantom] not in runtime memory")),
+        )
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "must not be blocked")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let (headers, mismatches) = rt.request_self_check_counters();
+    assert_eq!(headers, 2);
+    assert!(mismatches >= 2, "每轮都应发现不一致，实际 {mismatches}");
+    let events = rt.poll_events().await.unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Message { text, .. } if text.contains("still finishing")
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
+    )));
+}
+
+#[tokio::test]
+async fn request_header_covers_memory_head_and_task_context_without_false_mismatch() {
+    // 场景 c（集成半补充）：memory 头部注入 + task_context 尾部注入同时在场，
+    // 规范化排除后自检零误报。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ));
+    let session = rt.create_session(input()).await.unwrap();
+    rt.set_next_memory_context(&session.meta.id, Some("frozen memory blob".to_string()))
+        .await
+        .unwrap();
+    rt.update_task_context(
+        &session.meta.id,
+        TaskMode::Ask,
+        Some("trusted task context".to_string()),
+    )
+    .await
+    .unwrap();
+    rt.start_run(&session.meta.id, "with head and tail injections")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let (headers, mismatches) = rt.request_self_check_counters();
+    assert_eq!(headers, 1);
+    assert_eq!(mismatches, 0, "memory 头与 task_context 尾登记后不得误报");
 }

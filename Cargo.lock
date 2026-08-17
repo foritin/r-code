@@ -3511,7 +3511,6 @@ dependencies = [
 name = "r-code-agent-worker"
 version = "0.9.1"
 dependencies = [
- "agent-compaction",
  "agent-contract",
  "agent-error",
  "agent-llm",
@@ -3525,6 +3524,7 @@ dependencies = [
  "r-code-mcp",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
