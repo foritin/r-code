@@ -3511,11 +3511,9 @@ dependencies = [
 name = "r-code-agent-worker"
 version = "0.9.1"
 dependencies = [
- "agent-compaction",
  "agent-contract",
  "agent-error",
  "agent-llm",
- "agent-store",
  "async-trait",
  "blake3",
  "chrono",

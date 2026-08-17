@@ -1866,7 +1866,7 @@ fn build_new_task(
         Some(value) => AgentEngine::try_from_str(value)
             .ok_or_else(|| "主 Agent 只支持 r_code 或 codex".to_string())?,
         None => match config.orchestration.default_agent_engine {
-            agent_config::MainAgentEngine::RCode => AgentEngine::RCode,
+            agent_config::MainAgentEngine::Native => AgentEngine::RCode,
             agent_config::MainAgentEngine::Codex => AgentEngine::Codex,
         },
     };
@@ -4734,7 +4734,7 @@ async fn ensure_real_runtime(
         },
         quality_reviewer: match config.orchestration.quality_reviewer {
             agent_config::QualityReviewer::Auto => RuntimeQualityReviewer::Auto,
-            agent_config::QualityReviewer::RCode => RuntimeQualityReviewer::RCode,
+            agent_config::QualityReviewer::Native => RuntimeQualityReviewer::RCode,
             agent_config::QualityReviewer::Codex => RuntimeQualityReviewer::Codex,
         },
         max_review_rounds: config.orchestration.max_review_rounds,

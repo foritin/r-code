@@ -13,8 +13,6 @@ description = "R-Code Agent Worker：Agent Runtime、agent loop、事件流"
 agent-contract = { workspace = true }
 agent-error = { workspace = true }
 agent-llm = { workspace = true }
-agent-store = { workspace = true }
-agent-compaction = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }
