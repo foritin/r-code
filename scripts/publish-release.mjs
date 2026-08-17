@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 
-import { isPreReleaseVersion, parseReleaseTag } from "./release.mjs";
+import { parseReleaseTag } from "./release.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE_RELEASE_SECRETS = ["PAT_TOKEN", "TAURI_SIGNING_PRIVATE_KEY"];
@@ -25,7 +25,6 @@ const APPLE_SIGNING_SECRETS = [
   "APPLE_TEAM_ID",
 ];
 const UNSIGNED_STABLE_WARNING_MARKER = "RCODE_UNSIGNED_STABLE_WARNING";
-const CHANGELOG_PATH = join(ROOT, "CHANGELOG.md");
 
 class ReleaseError extends Error {}
 
@@ -677,8 +676,9 @@ function requireNewTag(tag) {
 
 async function publish(options) {
   const tagInfo = parseReleaseTag(options.tag);
-  const preRelease = tagInfo.unsignedPrerelease
-    || isPreReleaseVersion(readFileSync(CHANGELOG_PATH, "utf8"), tagInfo.version);
+  // 发布通道完全由 tag 决定：vX.Y.Z 一律是 stable 并标记为 Latest；
+  // 只有显式 -unsigned.N 才作为 prerelease（不进入 Latest / 稳定更新通道）。
+  const preRelease = tagInfo.unsignedPrerelease;
   requireCleanMain();
 
   const gh = resolveGitHubCli();

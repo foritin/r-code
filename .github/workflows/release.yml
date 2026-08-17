@@ -64,17 +64,13 @@ jobs:
       - name: Verify tag, versions and changelog
         run: node scripts/release.mjs check "$RELEASE_TAG"
 
-      - name: Detect pre-release marker
+      - name: Detect prerelease tag
         id: release-type
         shell: bash
         run: |
-          version="${RELEASE_TAG#v}"
-          version="${version%%-unsigned.*}"
-          if [[ "$RELEASE_TAG" == *-unsigned.* ]] || node --input-type=module -e '
-            import fs from "node:fs";
-            import { isPreReleaseVersion } from "./scripts/release.mjs";
-            process.exit(isPreReleaseVersion(fs.readFileSync("CHANGELOG.md", "utf8"), process.argv[1]) ? 0 : 1);
-          ' "$version"; then
+          # 发布通道完全由 tag 决定：vX.Y.Z 一律是 stable 并标记为 Latest；
+          # 只有显式 -unsigned.N 才作为 prerelease（不进入 Latest / 稳定更新通道）。
+          if [[ "$RELEASE_TAG" == *-unsigned.* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
