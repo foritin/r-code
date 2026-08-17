@@ -6,6 +6,12 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-17
+
+> **预上线版本（Pre-release）**
+>
+> 0.9.1 是 R-Code 1.0 正式上线前的候选版本，用于验证 DeepSeek V4 推理协议连续性、子代理候选池与跨平台凭据。它不会标记为 GitHub Latest，也不会进入稳定版自动更新通道；升级前建议备份应用数据。
+
 ### Added
 
 - 火山方舟 Coding Plan（Anthropic/OpenAI 两个口）与 Agent Plan、Kimi For Coding 增加按「厂商 + 模型族」实测冻结的方言适配：thinking 词表与发送形状、temperature 策略、推理强度档位、流式 usage、上下文/输出能力与 User-Agent 均按真实接口行为发送；Ark 模型列表同步时过滤 `Shutdown/Retiring` 条目，前端为 Ark 各套餐口与 Kimi Coding 暴露正确的思考/推理强度入口。
@@ -269,5 +275,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.3.1]: https://github.com/foritin/r-code/releases/tag/v0.3.1
 [0.3.2]: https://github.com/foritin/r-code/releases/tag/v0.3.2
 [0.3.3]: https://github.com/foritin/r-code/releases/tag/v0.3.3
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.9.0...HEAD
 [0.9.0]: https://github.com/foritin/r-code/releases/tag/v0.9.0
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/foritin/r-code/releases/tag/v0.9.1
