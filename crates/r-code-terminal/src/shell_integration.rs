@@ -361,9 +361,14 @@ mod tests {
 
     #[test]
     fn zsh_preserves_user_zdotdir() {
+        // 进程级环境变量是共享状态：与本 crate 其他改环境变量的测试互斥。
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // 临时设置 ZDOTDIR
         let original = std::env::var("ZDOTDIR").ok();
-        // SAFETY: 单线程测试，环境变量修改是安全的
+        // SAFETY: 持有 ENV_LOCK，与本进程内其他环境变量测试互斥。
         std::env::set_var("ZDOTDIR", "/custom/user/zdotdir");
 
         let config = ShellIntegrationConfig {
