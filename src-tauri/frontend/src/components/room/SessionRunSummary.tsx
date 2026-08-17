@@ -28,6 +28,13 @@ interface Props {
 
 type OpenPanel = "steps" | "changes" | null;
 
+// Escape 关闭 popover 后把焦点还给触发按钮。无头/节流环境下 rAF 回调可能晚于
+// 组件 unmount 清理执行，追加一个 0ms timeout 兜底，保证焦点恢复最终发生。
+function refocusAfterPopoverClose(anchor: React.RefObject<HTMLButtonElement | null>) {
+  requestAnimationFrame(() => anchor.current?.focus());
+  window.setTimeout(() => anchor.current?.focus(), 0);
+}
+
 function stepStateLabel(state: SessionSummaryStepState): string {
   switch (state) {
     case "completed": return "已完成";
@@ -81,8 +88,7 @@ export function SessionRunSummary({
   }, [files.length, openPanel, steps.length]);
 
   const dismiss = useCallback(() => setOpenPanel(null), []);
-  const currentStep = currentStepNumber(steps);
-  const completedSteps = steps.filter((step) => step.state === "completed").length;
+  const currentStep = currentStepNumber(steps);  const completedSteps = steps.filter((step) => step.state === "completed").length;
   const hasStatusAnchor = running && (Boolean(activityLabel?.trim()) || activeSubagents > 0);
 
   if (steps.length === 0 && files.length === 0 && !hasStatusAnchor) return null;
@@ -172,7 +178,7 @@ export function SessionRunSummary({
             event.preventDefault();
             event.stopPropagation();
             setOpenPanel(null);
-            requestAnimationFrame(() => stepsAnchor.current?.focus());
+            refocusAfterPopoverClose(stepsAnchor);
           }}
         >
           <header className="session-summary-popover-head">
@@ -219,7 +225,7 @@ export function SessionRunSummary({
             event.preventDefault();
             event.stopPropagation();
             setOpenPanel(null);
-            requestAnimationFrame(() => changesAnchor.current?.focus());
+            refocusAfterPopoverClose(changesAnchor);
           }}
         >
           <header className="session-summary-popover-head">
