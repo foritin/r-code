@@ -35,15 +35,15 @@
 修改母版后，在仓库根目录执行以下命令同步全部发布文件：
 
 ```powershell
-.\scripts\generate-app-icons.ps1
+.\scripts\manual\generate-app-icons.ps1
 ```
 
-脚本会先通过 Tauri 生成完整大图，再调用 `scripts/render-small-app-icons.mjs` 覆盖像素对齐的小尺寸帧，最后同步应用、Windows 安装/卸载程序、品牌安装器和 macOS 图标。Windows `icon.ico` 固定包含 16、20、24、32、40、48、64、96、128、256 像素帧，以覆盖常见显示缩放档位。
+脚本会先通过 Tauri 生成完整大图，再调用 `scripts/manual/render-small-app-icons.mjs` 覆盖像素对齐的小尺寸帧，最后同步应用、Windows 安装/卸载程序、品牌安装器和 macOS 图标。Windows `icon.ico` 固定包含 16、20、24、32、40、48、64、96、128、256 像素帧，以覆盖常见显示缩放档位。
 
 只调整 Windows / Linux 小图、不需要重写 macOS `icns` 时，可使用 `-WindowsOnly`：
 
 ```powershell
-.\scripts\generate-app-icons.ps1 -WindowsOnly
+.\scripts\manual\generate-app-icons.ps1 -WindowsOnly
 ```
 
 ## 替换与验证

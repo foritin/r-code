@@ -206,7 +206,7 @@ test("macOS packaging keeps native window chrome and app/dmg targets", () => {
 });
 
 test("macOS local builder supports explicit ad-hoc and notarized modes", () => {
-  const script = fs.readFileSync(path.join(repoRoot, "scripts", "build-macos.sh"), "utf8");
+  const script = fs.readFileSync(path.join(repoRoot, "scripts", "manual", "package-macos.sh"), "utf8");
 
   assert.match(script, /aarch64-apple-darwin/);
   assert.match(script, /APPLE_SIGNING_IDENTITY/);

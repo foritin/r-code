@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="obsidian">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>R-Code 主交互页重设计 · 原型 C（Signature 风格）</title>
+<style>
+/* ===== R-Code Signature tokens（取自 styles/signature.css · obsidian） ===== */
+:root{
+  --font-ui:"Segoe UI Variable Text","Microsoft YaHei UI","PingFang SC",sans-serif;
+  --font-display:Bahnschrift,"Segoe UI Variable Display","Microsoft YaHei UI",sans-serif;
+  --font-mono:"Cascadia Code","SFMono-Regular",Consolas,monospace;
+  --bg-app:#10110f; --bg-sidebar:#1c1918; --bg-panel:#151614; --bg-card:#1b1c19;
+  --bg-chip:#25241f; --bg-inset:#0b0c0a; --bg-hover:#20211e; --bg-active:#29261f;
+  --border:#2b2b27; --border-strong:#4b463d;
+  --fg:#f1efe9; --fg-muted:#a49f95; --fg-faint:#817b72;
+  --accent:#f4742b; --accent-2:#c49a61; --accent-fg:#17100b;
+  --warning:#e5a15b; --success:#69c798; --danger:#df6b62;
+  --signature-divider:#32312c; --signature-panel-edge:#37362f;
+  --signature-elevated:#171815; --signature-control:#23231f;
+  --signature-chrome-fg:#aaa49b; --signature-sidebar-muted:#aaa59c;
+  --signature-sidebar-section:#817b72; --signature-sidebar-project:#d8d4cc;
+  --signature-accent-faint:rgba(244,116,43,.07); --signature-accent-soft:rgba(244,116,43,.14);
+  --shadow-card:0 1px 2px rgba(0,0,0,.22),0 10px 28px rgba(0,0,0,.17);
+  --dur:160ms; --ease:cubic-bezier(.2,.7,.3,1);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg-sidebar);color:var(--fg);font:13px/1.6 var(--font-ui);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+::selection{background:rgba(244,116,43,.3)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:rgba(241,239,233,.1);border-radius:5px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative;
+  background-image:
+    radial-gradient(210px 172px at 240px 36px, rgba(255,139,72,.16) 0%, rgba(216,67,33,.06) 34%, transparent 74%),
+    radial-gradient(112% 72% at 18% 112%, rgba(176,53,34,.11) 0%, rgba(176,53,34,.05) 34%, transparent 72%),
+    radial-gradient(82% 58% at -14% 28%, rgba(244,116,43,.055) 0%, transparent 73%);
+}
+
+/* ===== 顶栏 ===== */
+.topbar{height:36px;flex:none;display:flex;align-items:center;gap:3px;padding:0 4px 0 12px;user-select:none;position:relative;z-index:5}
+.tb-btn{height:27px;min-width:27px;padding:0 7px;border-radius:4px;color:var(--signature-chrome-fg);display:inline-flex;align-items:center;justify-content:center;gap:4px;font:500 11px/1 var(--font-display);letter-spacing:.055em}
+.tb-btn:hover{background:var(--signature-accent-faint);color:var(--fg)}
+.tb-btn:disabled{opacity:.34}
+.tb-sep{width:1px;height:15px;background:rgba(241,239,233,.07);margin:0 7px}
+.tb-spacer{flex:1}
+.tb-bell{position:relative}
+.tb-bell .bdg{position:absolute;top:-3px;right:-4px;min-width:13px;height:13px;padding:0 3px;border-radius:7px;background:var(--accent);color:var(--accent-fg);font:700 9px/13px var(--font-ui);text-align:center}
+.win-ctl{height:27px;width:38px;border-radius:4px;color:var(--signature-chrome-fg);display:inline-flex;align-items:center;justify-content:center}
+.win-ctl:hover{background:rgba(241,239,233,.08)}
+.win-ctl.close:hover{background:var(--danger);color:#fff}
+
+/* ===== 主体：侧栏 + 圆角工作区 ===== */
+.body{flex:1;display:flex;min-height:0;position:relative;z-index:1}
+.rail{width:246px;flex:none;display:flex;flex-direction:column;overflow:hidden;padding:2px 10px 10px;transition:width var(--dur) var(--ease)}
+.rail.closed{width:56px}
+.rail.closed .rail-brand{font-size:0;justify-content:center;padding-inline:0}
+.rail.closed .rail-brand .search{display:none}
+.rail.closed .nav-item,.rail.closed .rail-new{justify-content:center;padding:0}
+.rail.closed .nav-item{font-size:0;gap:0}
+.rail.closed .nav-item .cnt,.rail.closed .rail-label,.rail.closed .proj-head,.rail.closed .task{display:none}
+.rail.closed .rail-new{font-size:0}
+.main{flex:1;min-width:0;display:flex;position:relative;isolation:isolate;overflow:hidden;
+  border-top:1px solid var(--signature-divider);border-left:1px solid var(--signature-divider);
+  border-radius:26px 0 0 0;background:var(--bg-app);box-shadow:-18px -18px 46px rgba(0,0,0,.12)}
+.main::before{content:"";position:absolute;top:-1px;left:32px;width:62px;height:1px;background:linear-gradient(90deg,rgba(244,116,43,.76),rgba(244,116,43,0));z-index:40;pointer-events:none}
+.main::after{content:"";position:absolute;top:32px;left:-1px;width:1px;height:48px;background:linear-gradient(180deg,rgba(244,116,43,.62),rgba(244,116,43,0));z-index:40;pointer-events:none}
+
+/* ---- 侧栏 ---- */
+.rail-brand{display:flex;align-items:center;gap:10px;padding:8px 8px 10px;font:620 14px var(--font-display);letter-spacing:.02em}
+.rail-brand .mark{width:27px;height:27px;border-radius:9px 9px 3px 9px;background:var(--accent);box-shadow:0 0 0 1px rgba(255,154,91,.24),0 8px 22px rgba(116,45,13,.24);color:#1b110a;font:720 13px/1 var(--font-display);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.rail-brand .search{margin-left:auto;color:var(--signature-chrome-fg);width:26px;height:26px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center}
+.rail-brand .search:hover{background:var(--signature-accent-faint);color:var(--fg)}
+.rail-new{display:flex;align-items:center;gap:7px;height:32px;padding:0 10px;margin:2px 0 8px;border-radius:5px;color:var(--fg);font:560 12.5px var(--font-display);letter-spacing:.03em;text-align:left}
+.rail-new:hover{background:rgba(241,239,233,.05)}
+.rail-nav{display:flex;flex-direction:column;gap:2px;padding-bottom:12px;border-bottom:1px solid rgba(241,239,233,.07)}
+.nav-item{display:flex;align-items:center;gap:9px;min-height:34px;padding:0 10px;border-radius:3px 9px 9px 3px;color:var(--signature-sidebar-muted);font-size:12.5px;text-align:left;position:relative}
+.nav-item:hover{background:rgba(241,239,233,.03);color:var(--fg)}
+.nav-item.active{background:linear-gradient(90deg,rgba(244,116,43,.14),rgba(244,116,43,.025) 62%,transparent);box-shadow:inset 2px 0 0 var(--accent);color:var(--fg)}
+.nav-item.active svg{color:#ff9b5d}
+.nav-item svg{width:14px;height:14px;flex:none}
+.nav-item .cnt{margin-left:auto;font-size:10.5px;color:var(--accent);background:var(--signature-accent-soft);border-radius:8px;padding:0 6px;height:16px;line-height:16px}
+.rail-label{display:flex;align-items:center;gap:6px;min-height:30px;padding:0 10px;color:var(--signature-sidebar-section);font:600 10px/1 var(--font-display);letter-spacing:.13em}
+.rail-label .live-n{margin-left:auto;color:var(--accent);font:500 10px var(--font-ui);letter-spacing:.02em}
+.rail-label .plus{color:var(--signature-sidebar-section);width:18px;height:18px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:12px}
+.rail-label .plus:hover{color:var(--fg);background:rgba(241,239,233,.06)}
+.proj-head{display:flex;align-items:center;gap:7px;height:28px;padding:0 10px;border-radius:5px;color:var(--signature-sidebar-project);font:560 12px var(--font-display);letter-spacing:.02em}
+.proj-head svg{width:13px;height:13px;color:var(--fg-faint)}
+.proj-head .n{margin-left:auto;font-size:10px;color:var(--success);background:rgba(105,199,152,.12);border-radius:7px;padding:0 5px;height:15px;line-height:15px;font-family:var(--font-ui)}
+.proj-head .chev-r{color:var(--fg-faint);font-size:11px;margin-left:2px}
+.task{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 10px 0 22px;border-radius:3px 8px 8px 3px;color:var(--signature-sidebar-muted);font-size:12px;text-align:left}
+.task:hover{background:rgba(241,239,233,.03)}
+.task.active{background:linear-gradient(90deg,rgba(244,116,43,.115),rgba(244,116,43,.02) 70%,transparent);box-shadow:inset 2px 0 0 var(--accent);color:var(--fg)}
+.task .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task .time{margin-left:auto;color:var(--fg-faint);font-size:10.5px;font-variant-numeric:tabular-nums;flex:none}
+.task .ring{width:8px;height:8px;flex:none;border-radius:50%;border:1.5px solid var(--border-strong);border-top-color:var(--fg-muted);animation:rot .8s linear infinite}
+.rail-foot{margin-top:auto;border-top:1px solid rgba(241,239,233,.07);padding-top:8px}
+
+/* ===== 会话列 ===== */
+.convo{flex:1;display:flex;flex-direction:column;min-width:0}
+.room-head{flex:none;min-height:48px;display:flex;align-items:center;gap:10px;padding:0 14px 0 18px;border-bottom:1px solid rgba(241,239,233,.07);background:var(--bg-panel)}
+.room-head>svg{color:#7f7b73;flex:none}
+.rh-title{line-height:1.25}
+.rh-title strong{font:620 13.5px var(--font-display);letter-spacing:.015em;display:block}
+.rh-title small{display:block;font-size:10.5px;color:var(--fg-faint);margin-top:1px}
+.rh-title small.warn{color:var(--warning)}
+.rh-actions{margin-left:auto;display:flex;gap:2px}
+.rh-icon{width:28px;height:28px;border-radius:5px;color:var(--signature-chrome-fg);display:inline-flex;align-items:center;justify-content:center}
+.rh-icon:hover{background:var(--signature-accent-faint);color:var(--fg)}
+.rh-icon[aria-pressed="true"]{color:#ffac73}
+
+.thread{flex:1;overflow-y:auto;min-height:0;scrollbar-gutter:stable}
+.col{max-width:930px;margin:0 auto;padding:24px 28px 32px}
+.turn+.turn{margin-top:34px}
+
+/* 用户消息：右对齐气泡（signature 现状） */
+.you{max-width:min(74%,620px);margin:0 0 26px auto;padding:11px 16px 12px;border-radius:10px 10px 3px 10px;background:rgba(32,33,30,.76);font-size:14px;line-height:1.65}
+.you p{margin:0}
+.you .attach-chip{margin-bottom:8px}
+.attach-chip{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 9px 0 6px;border-radius:7px;background:var(--bg-inset);border:1px solid var(--border);font-size:11.5px;color:var(--fg-muted)}
+.attach-chip .rm{color:var(--fg-faint);width:15px;height:15px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:9px}
+.attach-chip .rm:hover{color:var(--danger);background:rgba(223,107,98,.14)}
+
+/* 轮次状态行（.ms：橙色短划线 + 细分隔线） */
+.ms{display:flex;align-items:center;gap:8px;margin:2px 0 15px;font:500 12px var(--font-display);letter-spacing:.05em;color:var(--fg-muted);font-variant-numeric:tabular-nums}
+.ms::before{content:"";width:18px;height:1px;flex:none;background:linear-gradient(90deg,var(--accent),rgba(244,116,43,.06))}
+.ms::after{content:"";flex:1;height:1px;background:var(--border)}
+.ms .chev-s{color:var(--fg-faint)}
+.ms.stopped{color:var(--fg-faint)}
+.ms.stopped::before{background:var(--border-strong)}
+
+/* Agent 正文 */
+.agent{max-width:930px;margin:0 0 13px;color:var(--fg);font-size:14px;line-height:1.72}
+.agent p{margin:0 0 8px}
+.agent code{font-family:var(--font-mono);font-size:12px;background:rgba(241,239,233,.08);border-radius:5px;padding:1px 5px}
+
+/* ---- 活动流：类型图标行（无菱形、无轨道线） ---- */
+.activity{display:flex;flex-direction:column;gap:1px}
+.ev{display:flex;align-items:center;gap:10px;width:100%;min-height:32px;padding:4px 6px;margin:0 -6px;border-radius:4px;color:var(--fg-muted);font-size:12.5px;text-align:left}
+button.ev:hover{background:rgba(241,239,233,.05)}
+.ev .ic{width:18px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--fg-faint)}
+.ev .ic svg{width:14px;height:14px}
+.ev .k{color:var(--fg);font-weight:500;flex:none}
+.ev .name{color:var(--accent-2);font-weight:550;flex:none}
+.ev .name.sub{color:#6fc7d8}
+.ev .m{color:var(--fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ev .m.dim{color:var(--fg-faint)}
+.ev .chev{margin-left:auto;flex:none;color:var(--fg-faint)}
+.ev .chev svg{width:11px;height:11px;display:block;transition:transform var(--dur) var(--ease)}
+.ev[aria-expanded="true"] .chev svg{transform:rotate(90deg)}
+.ev-detail{display:grid;grid-template-rows:0fr;transition:grid-template-rows 200ms var(--ease)}
+.ev-detail.open{grid-template-rows:1fr}
+.ev-detail>.inner{overflow:hidden;min-height:0}
+.ev-body{margin:4px 0 8px 28px;border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--signature-elevated);padding:10px 13px;font-size:12.5px;color:var(--fg-muted)}
+.ev-body p{margin:0 0 4px}
+.ev-body .mono{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-faint)}
+
+/* 文件行：彩色类型图标 + 行内 +− */
+.fx{width:15px;height:15px;display:inline-block;flex:none}
+.fx svg{width:100%;height:100%;display:block}
+.ev .verb{color:var(--fg-muted);flex:none}
+.ev .fname{color:var(--fg);flex:none;max-width:56%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.diff{flex:none;font-size:12px;font-variant-numeric:tabular-nums}
+.diff .plus{color:var(--success)} .diff .minus{color:var(--danger)}
+.diff-line{display:flex;gap:8px;font-family:var(--font-mono);font-size:11.5px;padding:1.5px 0}
+.diff-line .sign{width:10px;flex:none;text-align:right}
+.diff-line.add{color:var(--success)} .diff-line.del{color:var(--danger)}
+.diff-line .ln{color:var(--fg-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 子代理芯片（signature 现状：彩点胶囊） */
+.sub-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:2px 0 4px}
+.sub-chip{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 12px;border-radius:5px 5px 2px 5px;background:var(--bg-card);border:1px solid var(--signature-panel-edge);font-size:12px;color:var(--fg)}
+.sub-chip:hover{border-color:var(--border-strong)}
+.sub-chip .dot{width:7px;height:7px;border-radius:50%;flex:none}
+.sub-chip .st{font-size:11px;color:var(--fg-faint)}
+.sub-status{color:var(--fg-faint);font-size:11.5px}
+
+/* 计划卡（signature 现状：抬升卡） */
+.plan-card{margin:6px 0;border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--signature-elevated);padding:11px 14px 8px}
+.plan-head{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);font-weight:550}
+.plan-head svg{width:14px;height:14px;color:var(--fg-faint)}
+.plan-head .n{margin-left:auto;font-size:11px;color:var(--fg-faint);font-variant-numeric:tabular-nums}
+.plan-steps{list-style:none;margin:6px 0 0;padding:0}
+.plan-steps li{display:flex;align-items:center;gap:8px;padding:2.5px 0;font-size:12.5px;color:var(--fg-faint)}
+.plan-steps li .pi{width:13px;flex:none;text-align:center;font-size:9.5px}
+.plan-steps li.done{color:var(--fg-muted)} .plan-steps li.done .pi{color:var(--success)}
+.plan-steps li.cur{color:var(--fg)} .plan-steps li.cur .pi{color:var(--accent)}
+
+/* 权限卡（signature 现状：居中卡 + 盾图标 + 橙色主按钮） */
+.perm-card{max-width:640px;margin:8px 0;border:1px solid var(--signature-panel-edge);border-radius:12px 12px 4px 12px;background:var(--bg-card);box-shadow:var(--shadow-card);padding:12px 16px 11px}
+.perm-top{display:flex;gap:12px}
+.perm-shield{width:34px;height:34px;flex:none;border-radius:9px 9px 3px 9px;background:var(--bg-chip);border:1px solid var(--signature-panel-edge);display:inline-flex;align-items:center;justify-content:center;color:var(--warning)}
+.perm-shield svg{width:16px;height:16px}
+.perm-kicker{font-size:11px;color:var(--fg-faint)}
+.perm-title{font:620 14px var(--font-display);letter-spacing:.015em;margin:1px 0 4px}
+.perm-desc{font-size:12px;color:var(--fg-muted);margin:0}
+.perm-cmd{display:flex;align-items:center;gap:8px;margin:9px 0;background:var(--bg-inset);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font-family:var(--font-mono);font-size:12px;color:var(--fg)}
+.perm-cmd svg{width:13px;height:13px;color:var(--fg-faint);flex:none}
+.perm-cmd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.perm-actions{display:flex;justify-content:flex-end;gap:8px}
+.btn{height:31px;padding:0 13px;border-radius:8px;font-size:12px;font-weight:550;border:1px solid var(--border-strong);color:var(--fg-muted);display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:var(--bg-hover);color:var(--fg)}
+.btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-fg);font-weight:650}
+.btn.primary:hover{background:#ff8642}
+.perm-resolved{display:flex;align-items:center;gap:10px;min-height:32px;padding:4px 6px;margin:0 -6px;color:var(--fg-faint);font-size:12.5px}
+.perm-resolved .r-ico{width:18px;flex:none;text-align:center}
+.perm-resolved.ok .r-ico{color:var(--success)} .perm-resolved.no .r-ico{color:var(--danger)}
+
+/* 已完成轮次摘要条 */
+.done-bar{display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:2px 0;color:var(--fg-faint);font:500 12px var(--font-display);letter-spacing:.05em;text-align:left;font-variant-numeric:tabular-nums}
+.done-bar:hover{color:var(--fg-muted)}
+.done-bar .chev-s{margin-left:2px}
+.done-bar::after{content:"";flex:1;height:1px;background:var(--border);margin-left:8px}
+.run-meta{margin:0 0 10px;border:1px solid rgba(241,239,233,.08);border-radius:10px 10px 4px 10px;padding:10px 13px;font-size:11.5px;color:var(--fg-faint);display:grid;gap:3px}
+.run-meta b{color:var(--fg-muted);font-weight:500}
+
+/* 等待 / 进行行 */
+.spinner{width:13px;height:13px;border-radius:50%;border:2px solid rgba(241,239,233,.14);border-top-color:var(--fg-muted);animation:rot 1s linear infinite}
+
+/* ===== Composer：居中悬浮卡（改动点） ===== */
+.composer-zone{flex:none;padding:10px 24px 18px;background:linear-gradient(to bottom,rgba(16,17,15,0),var(--bg-app) 40%)}
+.cz-col{max-width:760px;margin:0 auto}
+.queue{margin:0 0 8px}
+.queue-head{font-size:10.5px;color:var(--fg-faint);padding:0 6px 4px}
+.q-item{display:flex;align-items:center;gap:8px;background:var(--signature-control);border:1px solid var(--signature-panel-edge);border-radius:10px;padding:6px 10px;margin-bottom:5px;font-size:12px}
+.q-mode{flex:none;font-size:10px;color:var(--accent);border:1px solid rgba(244,116,43,.35);border-radius:6px;padding:0 6px;height:16px;line-height:15px}
+.q-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg-muted)}
+.q-del{margin-left:auto;flex:none;color:var(--fg-faint);width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center}
+.q-del:hover{background:rgba(223,107,98,.14);color:var(--danger)}
+
+.composer{background:var(--bg-card);border:1px solid var(--signature-panel-edge);border-radius:16px;padding:6px 12px 9px;box-shadow:var(--shadow-card),0 14px 34px rgba(0,0,0,.2)}
+.composer:focus-within{border-color:color-mix(in srgb,var(--accent) 55%,var(--signature-panel-edge));box-shadow:0 0 0 3px rgba(244,116,43,.11),var(--shadow-card)}
+.composer .chip-row{display:flex;flex-wrap:wrap;gap:6px;padding:4px 2px 0}
+.composer textarea{display:block;width:100%;min-height:52px;max-height:170px;resize:none;border:none;outline:none;background:transparent;color:var(--fg);font:14px/1.6 var(--font-ui);padding:10px 2px 8px}
+.composer textarea::placeholder{color:var(--fg-faint)}
+.comp-meta{display:flex;align-items:center;gap:4px;padding-top:5px}
+.comp-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.pill{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:8px;font-size:12px;color:var(--fg-muted);white-space:nowrap;border:1px solid transparent}
+.pill:hover{background:var(--bg-hover);color:var(--fg)}
+.pill svg{width:13px;height:13px;flex:none}
+.pill .chev{width:10px;height:10px;color:var(--fg-faint)}
+.pill.icon{width:30px;padding:0;justify-content:center}
+.pill .eng{color:#ffa268;font-family:var(--font-display);letter-spacing:.03em}
+.pill.dim{color:var(--fg-faint)}
+.send{height:32px;min-width:66px;padding:0 13px;border-radius:9px;background:var(--accent);color:var(--accent-fg);font-size:12.5px;font-weight:650;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:background 140ms}
+.send:hover{background:#ff8642}
+.send.stop{background:var(--signature-control);color:var(--fg-muted);border:1px solid var(--signature-panel-edge)}
+.send.stop:hover{color:var(--fg);border-color:var(--border-strong)}
+.send.stop .sq{color:var(--danger)}
+.comp-hints{display:flex;align-items:center;gap:14px;padding:7px 4px 0;font-size:10.5px;color:var(--fg-faint)}
+.comp-hints b{font-weight:500;color:var(--fg-muted);font-family:var(--font-mono);font-size:10px;margin-left:3px}
+
+/* ===== 菜单 ===== */
+.anchor{position:relative}
+.menu{position:absolute;z-index:60;min-width:220px;background:color-mix(in srgb,var(--bg-panel) 97%,transparent);border:1px solid var(--border-strong);border-radius:10px 4px 10px 4px;box-shadow:0 8px 24px rgba(0,0,0,.34),0 24px 70px rgba(0,0,0,.46);padding:5px;display:none}
+.menu.open{display:block}
+.menu.up{bottom:calc(100% + 8px);left:0}
+.menu.up.right{left:auto;right:0}
+.menu.down{top:calc(100% + 5px);left:0}
+.menu-head{padding:7px 10px 5px;font-size:10.5px;color:var(--fg-faint)}
+.mi{display:flex;align-items:flex-start;gap:8px;width:100%;min-height:30px;padding:6px 9px;border-radius:5px 2px 5px 2px;text-align:left;color:var(--fg-muted);font-size:12px}
+.mi:hover{background:rgba(241,239,233,.05);color:var(--fg)}
+.mi .mi-check{width:13px;flex:none;color:var(--accent);font-size:11px;padding-top:2px;visibility:hidden}
+.mi[aria-checked="true"] .mi-check{visibility:visible}
+.mi-body{display:flex;flex-direction:column;gap:1px;min-width:0}
+.mi-title{font-size:12.5px}
+.mi-hint{font-size:11px;color:var(--fg-faint);line-height:1.45}
+.mi .kbd{margin-left:auto;font-size:10.5px;color:var(--fg-faint);font-family:var(--font-mono)}
+.menu-group{padding:6px 10px 2px;font-size:10.5px;color:var(--fg-faint)}
+.menu-group:not(:first-child){border-top:1px solid var(--border);margin-top:4px;padding-top:8px}
+.cur-badge{font-size:9.5px;color:var(--accent);border:1px solid rgba(244,116,43,.4);border-radius:6px;padding:0 5px;margin-left:6px;height:14px;line-height:13px}
+
+/* ===== 工作台（现状复刻） ===== */
+.workbench{width:422px;flex:none;border-left:1px solid var(--signature-divider);display:flex;flex-direction:column;min-height:0;background:var(--bg-app)}
+.workbench[hidden]{display:none}
+.wb-head{flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid rgba(241,239,233,.07);background:var(--bg-panel);min-height:48px}
+.wb-tab{height:30px;padding:0 11px;font:560 12px var(--font-display);letter-spacing:.035em;color:var(--fg);border-bottom:2px solid var(--accent);display:inline-flex;align-items:center;gap:7px}
+.wb-tab svg{width:13px;height:13px;color:#ffac73}
+.wb-x{color:var(--fg-faint);width:20px;height:20px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center}
+.wb-x:hover{background:rgba(241,239,233,.06);color:var(--fg)}
+.wb-add{width:26px;height:26px;border-radius:5px;background:var(--signature-control);color:var(--fg-muted);display:inline-flex;align-items:center;justify-content:center;margin-left:4px}
+.wb-add:hover{color:var(--fg)}
+.wb-live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border:1px solid rgba(244,116,43,.45);border-radius:5px 9px 5px 9px;color:var(--accent);font-size:11px}
+.wb-live .d{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:blink 1.6s infinite}
+.wb-body{flex:1;overflow-y:auto;padding:14px 14px 20px}
+.wb-card{border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--bg-card);padding:12px 14px;margin-bottom:10px}
+.wb-card .r1{display:flex;align-items:baseline;gap:9px}
+.wb-card .state{color:var(--accent);font:600 11px var(--font-display);letter-spacing:.05em}
+.wb-card .state.warn{color:var(--warning)}
+.wb-card h4{margin:0;font:620 13px var(--font-display);letter-spacing:.02em}
+.wb-card .t-right{margin-left:auto;color:var(--fg-faint);font-size:10.5px;font-variant-numeric:tabular-nums}
+.wb-card .sub{margin:5px 0 0;font-size:12px;color:var(--fg-muted)}
+.wb-card .meta{margin:7px 0 0;font-size:11px;color:var(--fg-faint)}
+.wb-sumcard{display:flex;align-items:center;gap:10px;border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--bg-card);padding:11px 13px;margin-bottom:10px;text-align:left;width:100%}
+.wb-sumcard:hover{border-color:var(--border-strong)}
+.wb-sumcard .sqs{display:flex;gap:4px}
+.wb-sumcard .sq{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.wb-sumcard .sq.g{background:rgba(105,199,152,.14);color:var(--success)}
+.wb-sumcard .sq.o{background:rgba(244,116,43,.14);color:var(--accent)}
+.wb-sumcard .t1{font-size:12px;color:var(--fg)}
+.wb-sumcard .t2{font-size:10.5px;color:var(--fg-faint)}
+.wb-sumcard>svg{margin-left:auto;color:var(--fg-faint);flex:none}
+.wb-cur{border-left:2px solid var(--accent);padding:2px 0 2px 11px;margin:2px 0 14px;font-size:12px;color:var(--fg-muted)}
+.wb-cur b{color:var(--accent);font-weight:550}
+.wb-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px}
+.wb-stat{border:1px solid var(--signature-panel-edge);border-radius:8px;padding:8px 11px;background:var(--bg-card)}
+.wb-stat .l{font-size:10.5px;color:var(--fg-faint)}
+.wb-stat .v{font-size:13px;color:var(--fg);margin-top:2px;font-variant-numeric:tabular-nums}
+.wb-stat .v.warn{color:var(--warning)}
+.wb-sec{display:flex;align-items:baseline;font-size:11px;color:var(--fg-faint);margin:4px 2px 7px}
+.wb-sec .r{margin-left:auto;color:var(--fg-faint);font-size:10px}
+.audit{display:flex;flex-direction:column}
+.audit-row{display:flex;align-items:center;gap:9px;padding:6px 2px;font-size:12px;border-bottom:1px solid rgba(241,239,233,.05)}
+.audit-row:last-child{border-bottom:0}
+.audit-row .kind{flex:none;width:34px;font-size:10.5px;text-align:center;border-radius:5px;height:18px;line-height:18px}
+.kind.cmd{color:var(--accent-2);background:rgba(196,154,97,.1)}
+.kind.sub{color:#6fc7d8;background:rgba(111,199,216,.09)}
+.kind.file{color:#7fa7e0;background:rgba(127,167,224,.09)}
+.kind.edit{color:var(--accent);background:rgba(244,116,43,.1)}
+.audit-row .tx{color:var(--fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:11px}
+.audit-row .rst{margin-left:auto;flex:none;font-size:10.5px;color:var(--fg-faint);font-variant-numeric:tabular-nums}
+.audit-row .rst.ok{color:var(--success)}
+.audit-row .rst.run{color:var(--accent)}
+.audit-row .rst.wait{color:var(--warning)}
+
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(8px);background:var(--bg-card);border:1px solid var(--border-strong);color:var(--fg-muted);font-size:12px;padding:8px 16px;border-radius:9px;box-shadow:0 10px 30px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity var(--dur),transform var(--dur);z-index:99}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.proto-tag{position:fixed;right:12px;bottom:9px;font-size:10px;color:var(--fg-faint);z-index:50;pointer-events:none}
+
+@keyframes rot{to{transform:rotate(360deg)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <button class="tb-btn" id="railToggle" aria-label="切换侧边栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9.5 4v16"/></svg></button>
+    <button class="tb-btn" aria-label="后退" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button class="tb-btn" aria-label="前进" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M9 5l7 7-7 7"/></svg></button>
+    <span class="tb-sep"></span>
+    <div class="anchor">
+      <button class="tb-btn" data-menu-btn="m-file" aria-haspopup="menu" aria-expanded="false">文件</button>
+      <div class="menu down" data-menu="m-file" role="menu" aria-label="文件">
+        <button class="mi" data-toast="原型中未接入：新建任务"><span class="mi-body"><span class="mi-title">新建任务</span></span><span class="kbd">Ctrl N</span></button>
+        <button class="mi" data-toast="原型中未接入：打开项目"><span class="mi-body"><span class="mi-title">打开项目…</span></span></button>
+        <button class="mi" data-toast="原型中未接入：查找"><span class="mi-body"><span class="mi-title">查找</span></span><span class="kbd">Ctrl F</span></button>
+      </div>
+    </div>
+    <div class="anchor">
+      <button class="tb-btn" data-menu-btn="m-edit" aria-haspopup="menu" aria-expanded="false">编辑</button>
+      <div class="menu down" data-menu="m-edit" role="menu" aria-label="编辑">
+        <button class="mi" data-toast="原型中未接入：撤销"><span class="mi-body"><span class="mi-title">撤销</span></span><span class="kbd">Ctrl Z</span></button>
+        <button class="mi" data-toast="原型中未接入：重做"><span class="mi-body"><span class="mi-title">重做</span></span><span class="kbd">Ctrl Y</span></button>
+      </div>
+    </div>
+    <div class="anchor">
+      <button class="tb-btn" data-menu-btn="m-view" aria-haspopup="menu" aria-expanded="false">视图</button>
+      <div class="menu down" data-menu="m-view" role="menu" aria-label="视图">
+        <button class="mi" id="miToggleRail"><span class="mi-body"><span class="mi-title">切换侧边栏</span></span></button>
+        <button class="mi" id="miToggleWb"><span class="mi-body"><span class="mi-title">切换工作台</span></span></button>
+      </div>
+    </div>
+    <div class="anchor">
+      <button class="tb-btn" data-menu-btn="m-help" aria-haspopup="menu" aria-expanded="false">帮助</button>
+      <div class="menu down" data-menu="m-help" role="menu" aria-label="帮助">
+        <button class="mi" data-toast="原型中未接入：快捷键"><span class="mi-body"><span class="mi-title">快捷键</span></span></button>
+        <button class="mi" data-toast="原型中未接入：子代理配置"><span class="mi-body"><span class="mi-title">子代理配置</span></span></button>
+        <button class="mi" data-toast="原型中未接入：诊断与支持"><span class="mi-body"><span class="mi-title">诊断与支持</span></span></button>
+      </div>
+    </div>
+    <span class="tb-spacer"></span>
+    <div class="anchor">
+      <button class="tb-btn tb-bell" data-menu-btn="m-bell" aria-haspopup="menu" aria-expanded="false" aria-label="通知中心">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span class="bdg">2</span>
+      </button>
+      <div class="menu down" data-menu="m-bell" role="menu" aria-label="通知" style="min-width:250px;left:auto;right:0">
+        <div class="menu-head">通知 <button style="float:right;font-size:10.5px;color:var(--accent)" data-toast="已全部标记为已读">全部已读</button></div>
+        <button class="mi" data-toast="打开待处理"><span class="mi-body"><span class="mi-title">发布 v0.9.2 检查单 需要复核</span><span class="mi-hint">10 分钟前 · 待处理</span></span></button>
+        <button class="mi" data-toast="打开会话"><span class="mi-body"><span class="mi-title">子代理 Plan 已完成</span><span class="mi-hint">主交互页重设计 · 32 分钟前</span></span></button>
+      </div>
+    </div>
+    <span class="tb-sep"></span>
+    <button class="win-ctl" aria-label="最小化" data-toast="窗口控制由系统提供（原型中不可用）"><svg width="11" height="11" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    <button class="win-ctl" aria-label="最大化" data-toast="窗口控制由系统提供（原型中不可用）"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="1.5" width="9" height="9" rx="1"/></svg></button>
+    <button class="win-ctl close" aria-label="关闭" data-toast="窗口控制由系统提供（原型中不可用）"><svg width="11" height="11" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.2"/></svg></button>
+  </header>
+
+  <div class="body">
+    <!-- 侧栏 -->
+    <nav class="rail" aria-label="会话导航">
+      <div class="rail-brand"><span class="mark">R</span>R-Code
+        <button class="search" aria-label="搜索" data-toast="原型中未接入：全局搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
+      </div>
+      <button class="rail-new" data-toast="原型演示：新对话入口"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M12 5v14M5 12h14"/></svg>新对话</button>
+      <div class="rail-nav">
+        <button class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4V6Z"/></svg>对话</button>
+        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>待处理<span class="cnt">2</span></button>
+        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 14l4-9 4 12 4-8 4 5"/></svg>活动</button>
+        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M4 9h16"/></svg>项目文件</button>
+      </div>
+      <div class="rail-label">项目<span class="live-n">3 运行中</span><button class="plus" aria-label="添加项目" data-toast="原型中未接入：添加项目">＋</button></div>
+      <div style="flex:1;overflow-y:auto">
+        <div class="proj-head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>r-code<span class="n">1</span><span class="chev-r">›</span></div>
+        <button class="task"><span class="t">优化 Rust 编译性能</span><span class="time">4m</span></button>
+        <button class="task"><span class="t">统一错误处理规范</span><span class="time">8m</span></button>
+        <button class="task active"><span class="ring"></span><span class="t">主交互页重设计</span><span class="time">2m</span></button>
+        <button class="task"><span class="t">更新依赖并修复告警</span><span class="time">26m</span></button>
+        <div class="proj-head" style="margin-top:6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>api-server<span class="chev-r" style="margin-left:auto">›</span></div>
+        <button class="task"><span class="t">添加请求限流中间件</span><span class="time">6m</span></button>
+      </div>
+      <div class="rail-foot">
+        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.07-.4.1-.8.1-1.2Z"/></svg>设置</button>
+      </div>
+    </nav>
+
+    <!-- 主工作区（圆角 + 橙色角标） -->
+    <div class="main">
+      <main class="convo">
+        <header class="room-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+          <div class="rh-title"><strong>主交互页重设计</strong><small id="rhState">正在执行</small></div>
+          <div class="rh-actions">
+            <button class="rh-icon" aria-label="搜索会话" data-toast="原型中未接入：会话内搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
+            <button class="rh-icon" id="wbToggle" aria-pressed="true" aria-label="切换工作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14.5 4v16"/></svg></button>
+          </div>
+        </header>
+
+        <section class="thread" id="thread">
+          <div class="col" id="threadCol">
+
+            <!-- 已完成轮次 -->
+            <div class="turn">
+              <div class="you"><p>主交互页参考这张截图重新设计，先出个原型我看看。</p></div>
+              <button class="done-bar" data-expand aria-expanded="false">已处理 8 步 · 耗时 3m 12s<span class="chev-s">⌄</span></button>
+              <div class="ev-detail"><div class="inner">
+                <div class="run-meta">
+                  <span>模型 <b>Kimi · kimi-k3</b> · 引擎 <b>R-Code</b></span>
+                  <span>开始 <b>14:21:02</b> · 结束 <b>14:24:14</b> · 重试 <b>0</b> 次</span>
+                  <span>用量 输入 <b>16.8k</b> · 输出 <b>4.1k</b> · 命中缓存 <b>10.2k (61%)</b> tokens</span>
+                </div>
+              </div></div>
+              <div class="agent">
+                <p>已按参考图出了一版原型：活动流改成图标单行、思考与技能可折叠、底部控件收进一条工具行。</p>
+                <p>但整体套用参考图的冷色蓝调，偏离了产品现有的 Signature 暖色体系，需要重做。</p>
+              </div>
+            </div>
+
+            <!-- 进行中轮次 -->
+            <div class="turn" id="activeTurn">
+              <div class="you">
+                <span class="attach-chip"><span class="fx"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg></span>参考图-交互页.png</span>
+                <p>在我原来的风格上重新设计：不要菱形提示条，文件要有鲜明的类型图标，修改文件即时在行内显示 +−；对话框不要占满，居中悬浮。</p>
+              </div>
+
+              <div class="ms" id="runStatus">正在处理 <span id="runTimer">1m 42s</span></div>
+
+              <div class="activity">
+                <!-- 思考 -->
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="10" r="4.5"/><circle cx="16" cy="15" r="3"/></svg></span>
+                  <span class="k">思考过程</span><span class="m dim">持续了几秒</span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body">
+                  <p>先核对 <span class="mono">signature.css</span> 的真实 token 与 <span class="mono">room.css</span> 的结构，确认菱形标记（<span class="mono">tcard::before</span> 旋转方块）的出现位置，再决定替换图标。</p>
+                </div></div></div>
+
+                <div class="agent"><p>我先读取 Signature 样式与房间页组件，确认现有 token、结构和菱形标记的位置。</p></div>
+
+                <!-- 技能 -->
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3.5l2 5.2 5.5.6-4.1 3.8 1.2 5.4L12 15.8l-4.6 2.7 1.2-5.4-4.1-3.8 5.5-.6Z"/></svg></span>
+                  <span class="k">已运行技能</span><span class="name">huashu-design</span>
+                  <span class="m dim">为 R-Code 主交互页（Agent 对话工作台）设计高保真 HTML 原型，参…</span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body">
+                  <p>为 R-Code 主交互页（Agent 对话工作台）设计高保真 HTML 原型：沿用 Signature 暖色体系，去除菱形标记，文件行带类型图标与行内差异，对话框居中悬浮。</p>
+                </div></div></div>
+
+                <!-- 子智能体 -->
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="12" r="2.2"/><path d="M7.8 7.2l8.4 3.9M7.8 16.8l8.4-3.9"/></svg></span>
+                  <span class="k">子智能体</span><span class="name sub">Explore</span>
+                  <span class="m dim">· 摸清主交互页 UI 现状</span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body">
+                  <div class="sub-chips">
+                    <button class="sub-chip" data-toast="原型演示：打开子代理详情"><span class="dot" style="background:#6fc7d8"></span>Explore<span class="st">已完成 · 2 文件 · 38s</span></button>
+                    <span class="sub-status">1 已完成</span>
+                  </div>
+                </div></div></div>
+
+                <!-- 探索 -->
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></span>
+                  <span class="k">探索</span><span class="m dim">· 2 文件</span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body" style="padding-top:6px;padding-bottom:6px">
+                  <div class="diff-line"><span class="fx"><svg viewBox="0 0 24 24"><path d="M6 2.5h7.5L18 7v14.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1Z" fill="#c49a61"/><path d="M13.5 2.5V7H18Z" fill="rgba(0,0,0,.28)"/></svg></span><span class="ln">src-tauri/frontend/src/styles/signature.css</span></div>
+                  <div class="diff-line"><span class="fx"><svg viewBox="0 0 24 24"><path d="M6 2.5h7.5L18 7v14.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1Z" fill="#b48ae0"/><path d="M13.5 2.5V7H18Z" fill="rgba(0,0,0,.28)"/></svg></span><span class="ln">src-tauri/frontend/src/styles/scenes/room.css</span></div>
+                </div></div></div>
+
+                <!-- 读取 / 查看（文件行，彩色图标） -->
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><span class="fx"><svg viewBox="0 0 24 24"><path d="M6 2.5h7.5L18 7v14.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1Z" fill="#b48ae0"/><path d="M13.5 2.5V7H18Z" fill="rgba(0,0,0,.28)"/></svg></span></span>
+                  <span class="verb">读取</span><span class="fname">styles/scenes/room.css</span><span class="m dim">· 2400 行</span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body"><p>定位到 <span class="mono">.tcard::before</span> / <span class="mono">.run-disclosure::before</span>：6px 旋转方块（菱形），active 时填充橙色并发光。</p></div></div></div>
+
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><span class="fx"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg></span></span>
+                  <span class="verb">查看</span><span class="fname">docs/ui/dark/24-event-running.png</span><span class="m dim">· 参考截图</span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body"><p>确认 Signature 现状：暖黑底、橙色主色、活动行为灰色图标 + 右侧箭头。</p></div></div></div>
+
+                <!-- 编辑：行内 +− 即时显示 -->
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><span class="fx"><svg viewBox="0 0 24 24"><path d="M6 2.5h7.5L18 7v14.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1Z" fill="#e08a5a"/><path d="M13.5 2.5V7H18Z" fill="rgba(0,0,0,.28)"/></svg></span></span>
+                  <span class="verb">编辑</span><span class="fname">docs/prototypes/room-redesign-c.html</span>
+                  <span class="diff"><span class="plus">+412</span> <span class="minus">−0</span></span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body">
+                  <div class="diff-line add"><span class="sign">+</span><span class="ln">.ev .fname / .diff —— 文件行内差异即时显示</span></div>
+                  <div class="diff-line add"><span class="sign">+</span><span class="ln">.composer —— 居中悬浮卡，宽 min(760px, 100%)</span></div>
+                  <div class="diff-line del"><span class="sign">−</span><span class="ln">.tcard::before 菱形标记（移除，替换为类型图标）</span></div>
+                </div></div></div>
+
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><span class="fx"><svg viewBox="0 0 24 24"><path d="M6 2.5h7.5L18 7v14.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1Z" fill="#c49a61"/><path d="M13.5 2.5V7H18Z" fill="rgba(0,0,0,.28)"/></svg></span></span>
+                  <span class="verb">编辑</span><span class="fname">docs/prototypes/notes.md</span>
+                  <span class="diff"><span class="plus">+24</span> <span class="minus">−6</span></span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body"><p>记录设计决策：菱形移除、文件图标色板、悬浮对话框宽度与阴影。</p></div></div></div>
+
+                <div class="agent"><p>菱形标记与轨道线已移除，文件行改为类型图标 + 行内差异；对话框改为居中浮层。接下来跑一次浏览器验证。</p></div>
+
+                <!-- 计划：安静折叠行 -->
+                <button class="ev" data-expand aria-expanded="false">
+                  <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg></span>
+                  <span class="k">计划</span><span class="m dim">· 4 步 · 已完成 2</span>
+                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <div class="ev-detail"><div class="inner"><div class="ev-body">
+                  <ol class="plan-steps" style="margin-top:2px">
+                    <li class="done"><span class="pi">✓</span>读取 Signature 样式与现有组件</li>
+                    <li class="done"><span class="pi">✓</span>按现有风格重写原型</li>
+                    <li class="cur"><span class="pi">●</span>浏览器验证与截图</li>
+                    <li><span class="pi">○</span>交付说明</li>
+                  </ol>
+                </div></div></div>
+
+                <!-- 权限卡（signature 现状样式） -->
+                <div class="perm-card" id="permCard" role="group" aria-label="权限批准请求">
+                  <div class="perm-top">
+                    <span class="perm-shield"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l7 3v6c0 4.4-3 7.4-7 8.5-4-1.1-7-4.1-7-8.5V6Z"/><path d="M12 9.5v3.5"/><circle cx="12" cy="15.8" r=".7" fill="currentColor"/></svg></span>
+                    <div>
+                      <div class="perm-kicker">需要你的许可</div>
+                      <div class="perm-title">允许执行原型验证命令？</div>
+                      <p class="perm-desc">影响范围：读取工作区，并向 docs/prototypes/screenshots/ 写入截图。</p>
+                    </div>
+                  </div>
+                  <div class="perm-cmd"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M7.5 10l3 2.2-3 2.3M12.5 14.8h4"/></svg><span>python scripts/verify.py docs/prototypes/room-redesign-c.html</span></div>
+                  <div class="perm-actions">
+                    <button class="btn" id="permDeny">拒绝</button>
+                    <button class="btn" id="permAlways">始终允许此命令</button>
+                    <button class="btn primary" id="permAllow">允许一次</button>
+                  </div>
+                </div>
+
+                <!-- 等待 / 进行行 -->
+                <div id="trailAct">
+                  <div class="ev" id="waitRow" style="cursor:default">
+                    <span class="ic" style="color:var(--warning)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9.5 6v12M14.5 6v12"/></svg></span>
+                    <span class="m" style="color:var(--warning)">等待批准后继续 · 已等待 <span id="waitTimer">12s</span></span>
+                  </div>
+                  <div class="ev" id="spinRow" hidden style="cursor:default">
+                    <span class="ic"><span class="spinner"></span></span>
+                    <span class="m dim" id="spinText">正在执行 verify.py…</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Composer：居中悬浮 -->
+        <section class="composer-zone">
+          <div class="cz-col">
+            <div class="queue" id="queueBox" hidden>
+              <div class="queue-head">待发送队列 · 越靠上越先执行</div>
+              <div id="queueList"></div>
+            </div>
+            <div class="composer">
+              <div class="chip-row" id="chipRow">
+                <span class="attach-chip"><span class="fx"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg></span>参考图-交互页.png<button class="rm" aria-label="移除附件">✕</button></span>
+              </div>
+              <textarea id="composerInput" rows="2" placeholder="正在处理，可继续补充要求…（输入 @ 引用文件）" aria-label="消息输入框"></textarea>
+              <div class="comp-meta">
+                <div class="anchor">
+                  <button class="pill icon" data-menu-btn="add" aria-label="添加附件或目标" aria-haspopup="menu" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M12 5v14M5 12h14"/></svg>
+                  </button>
+                  <div class="menu up" data-menu="add" role="menu" aria-label="添加" style="min-width:180px">
+                    <button class="mi" data-toast="原型中未接入：添加附件"><span class="mi-body"><span class="mi-title">添加附件</span><span class="mi-hint">图片、文件或工作区路径</span></span></button>
+                    <button class="mi" data-toast="原型中未接入：添加目标"><span class="mi-body"><span class="mi-title">添加目标</span><span class="mi-hint">为本轮运行设定验收目标</span></span></button>
+                  </div>
+                </div>
+                <div class="anchor">
+                  <button class="pill" data-menu-btn="engine" aria-haspopup="menu" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" fill="currentColor" style="color:var(--accent)"><path d="M12 3.5l2 5.2 5.5.6-4.1 3.8 1.2 5.4L12 15.8l-4.6 2.7 1.2-5.4-4.1-3.8 5.5-.6Z"/></svg>
+                    <span class="eng" id="enginePillTxt">R-Code</span><span>主 Agent</span>
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
+                  <div class="menu up" data-menu="engine" role="menu" aria-label="主 Agent 引擎" style="min-width:200px">
+                    <div class="menu-head">主 Agent 引擎</div>
+                    <button class="mi" role="menuitemradio" aria-checked="true" data-set="engine" data-value="R-Code"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">R-Code</span><span class="mi-hint">内置运行时，完整工具与技能支持</span></span></button>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="engine" data-value="Codex CLI"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">Codex CLI</span><span class="mi-hint">接入本机 Codex 命令行</span></span></button>
+                  </div>
+                </div>
+                <div class="anchor">
+                  <button class="pill" data-menu-btn="model" aria-haspopup="menu" aria-expanded="false">
+                    <span id="modelPillTxt">Kimi kimi-k3 · 最大 · 适中</span>
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
+                  <div class="menu up" data-menu="model" role="menu" aria-label="模型" style="min-width:270px">
+                    <div class="menu-head">模型</div>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="model" data-value="服务默认模型"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">使用服务默认模型</span></span></button>
+                    <div class="menu-group">Kimi For Coding · 订阅</div>
+                    <button class="mi" role="menuitemradio" aria-checked="true" data-set="model" data-value="Kimi kimi-k3"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">kimi-k3<span class="cur-badge">当前使用</span></span></span></button>
+                    <div class="menu-group">DeepSeek</div>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="model" data-value="DeepSeek deepseek-v4-pro"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">deepseek-v4-pro</span></span></button>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="model" data-value="DeepSeek deepseek-v4-flash"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">deepseek-v4-flash</span></span></button>
+                    <div class="menu-group">智谱 GLM</div>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="model" data-value="智谱 glm-5.2"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">glm-5.2</span></span></button>
+                    <div class="menu-group">推理强度</div>
+                    <button class="mi" role="menuitemradio" aria-checked="true" data-set="effort" data-value="最大"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">最大</span></span></button>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="effort" data-value="高"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">高</span></span></button>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="effort" data-value="中等"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">中等</span></span></button>
+                  </div>
+                </div>
+                <div class="anchor">
+                  <button class="pill" data-menu-btn="perm" aria-haspopup="menu" aria-expanded="false">
+                    权限：<span id="permPillTxt">完全访问权限</span>
+                    <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
+                  <div class="menu up" data-menu="perm" role="menu" aria-label="权限模式" style="min-width:280px">
+                    <div class="menu-head">应如何批准 Agent 操作？</div>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="perm" data-value="请求审批"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">请求审批</span><span class="mi-hint">编辑文件、使用互联网或执行命令前始终询问。</span></span></button>
+                    <button class="mi" role="menuitemradio" aria-checked="false" data-set="perm" data-value="替我审批"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">替我审批</span><span class="mi-hint">自动批准低风险操作，仅在检测到中高风险时询问。</span></span></button>
+                    <button class="mi" role="menuitemradio" aria-checked="true" data-set="perm" data-value="完全访问权限"><span class="mi-check">✓</span><span class="mi-body"><span class="mi-title">完全访问权限</span><span class="mi-hint">自动批准工作区内的低、中、高风险操作。</span></span></button>
+                  </div>
+                </div>
+                <div class="comp-right">
+                  <button class="send stop" id="composeAct" aria-label="停止当前运行"><span class="sq">■</span>中断</button>
+                </div>
+              </div>
+              <div class="comp-hints" id="compHints">
+                <span>引导<b>Enter</b></span><span>排队<b>Alt+Enter</b></span><span>队列 <b id="queueCnt">0</b></span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- 工作台（现状复刻） -->
+      <aside class="workbench" id="wb" aria-label="任务工作台">
+        <div class="wb-head">
+          <span class="wb-tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 14l4-9 4 12 4-8 4 5"/></svg>运行与子代理</span>
+          <button class="wb-x" aria-label="关闭标签" data-toast="原型演示：关闭标签">✕</button>
+          <button class="wb-add" aria-label="新建标签" data-toast="原型演示：新建工作台标签">＋</button>
+          <span class="wb-live"><span class="d"></span>Live · 1 子代理</span>
+        </div>
+        <div class="wb-body">
+          <div class="wb-card">
+            <div class="r1"><span class="state" id="wbState">运行中</span><h4>主交互页重设计</h4><span class="t-right" id="wbElapsed">26m</span></div>
+            <p class="sub">按 Signature 风格重做主交互页原型：去菱形、文件行内差异、悬浮对话框。</p>
+            <p class="meta">模型 · kimi-k3 · 推理 最大 · 权限 <span id="wbPerm">完全访问权限</span></p>
+          </div>
+          <button class="wb-sumcard" data-toast="原型演示：打开子代理面板">
+            <span class="sqs"><span class="sq g">✓</span><span class="sq o">＋</span></span>
+            <span><span class="t1">1 已完成 · 0 运行中</span><br><span class="t2">查看各自的运行过程</span></span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+          <div class="wb-cur"><b>● 当前运行</b>　<span id="wbCur">等待权限批准</span></div>
+          <div class="wb-stats">
+            <div class="wb-stat"><div class="l">变更文件</div><div class="v">2</div></div>
+            <div class="wb-stat"><div class="l">验证</div><div class="v" id="wbVerify">未运行</div></div>
+            <div class="wb-stat"><div class="l">待批权限</div><div class="v warn" id="wbPending">1</div></div>
+          </div>
+          <div class="wb-sec">运行审计<span class="r">工具 · 目标 · 结果</span></div>
+          <div class="audit">
+            <div class="audit-row"><span class="kind cmd">命令</span><span class="tx">rg --files src-tauri/frontend/src</span><span class="rst ok">✓ 完成 00:00:41</span></div>
+            <div class="audit-row"><span class="kind sub">子代理</span><span class="tx">Explore · 摸清主交互页 UI 现状</span><span class="rst ok">✓ 完成 00:00:38</span></div>
+            <div class="audit-row"><span class="kind file">文件</span><span class="tx">读取 styles/scenes/room.css</span><span class="rst">00:00:12</span></div>
+            <div class="audit-row"><span class="kind edit">编辑</span><span class="tx">docs/prototypes/room-redesign-c.html</span><span class="rst ok">✓ 完成</span></div>
+            <div class="audit-row"><span class="kind edit">编辑</span><span class="tx">docs/prototypes/notes.md</span><span class="rst ok">✓ 完成</span></div>
+            <div class="audit-row" id="auditCmd"><span class="kind cmd">命令</span><span class="tx">python scripts/verify.py room-redesign-c.html</span><span class="rst wait">待批准</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+<div class="proto-tag">原型 C · 演示数据 · 未接入真实运行时</div>
+
+<script>
+(function(){
+  const $=(s,el=document)=>el.querySelector(s);
+  const $$=(s,el=document)=>[...el.querySelectorAll(s)];
+
+  const toastEl=$('#toast'); let toastTimer=null;
+  function toast(msg){
+    toastEl.textContent=msg; toastEl.classList.add('show');
+    clearTimeout(toastTimer); toastTimer=setTimeout(()=>toastEl.classList.remove('show'),1800);
+  }
+  $$('[data-toast]').forEach(el=>el.addEventListener('click',()=>{closeMenus();toast(el.dataset.toast);}));
+
+  function closeMenus(){
+    $$('.menu.open').forEach(m=>m.classList.remove('open'));
+    $$('[data-menu-btn]').forEach(b=>b.setAttribute('aria-expanded','false'));
+  }
+  $$('[data-menu-btn]').forEach(btn=>{
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      const menu=$(`.menu[data-menu="${btn.dataset.menuBtn}"]`);
+      const willOpen=!menu.classList.contains('open');
+      closeMenus();
+      if(willOpen){menu.classList.add('open');btn.setAttribute('aria-expanded','true');}
+    });
+  });
+  document.addEventListener('click',e=>{ if(!e.target.closest('.menu')&&!e.target.closest('[data-menu-btn]')) closeMenus(); });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeMenus(); });
+
+  /* 选择型菜单 */
+  function markChecked(set,value){
+    $$(`[data-set="${set}"]`).forEach(el=>el.setAttribute('aria-checked',String(el.dataset.value===value)));
+  }
+  let modelName='Kimi kimi-k3', effort='最大';
+  function renderModel(){ $('#modelPillTxt').textContent=`${modelName} · ${effort} · 适中`; }
+  const setters={
+    perm(v){ $('#permPillTxt').textContent=v; $('#wbPerm').textContent=v; toast('权限模式：'+v); },
+    engine(v){ $('#enginePillTxt').textContent=v; toast('主 Agent 引擎：'+v); },
+    model(v){ modelName=v; renderModel(); },
+    effort(v){ effort=v; renderModel; renderModel(); }
+  };
+  $$('[data-set]').forEach(el=>el.addEventListener('click',()=>{
+    const {set,value}=el.dataset;
+    markChecked(set,value);
+    setters[set]&&setters[set](value);
+    closeMenus();
+  }));
+
+  /* 折叠行 */
+  $$('[data-expand]').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const detail=btn.nextElementSibling;
+      const open=!detail.classList.contains('open');
+      detail.classList.toggle('open',open);
+      btn.setAttribute('aria-expanded',String(open));
+    });
+  });
+
+  /* 附件移除 */
+  $$('.attach-chip .rm').forEach(btn=>btn.addEventListener('click',()=>{
+    btn.closest('.attach-chip').remove();
+    if(!$('#chipRow').children.length) $('#chipRow').style.display='none';
+  }));
+
+  /* 侧栏 / 工作台 */
+  $('#railToggle').addEventListener('click',()=>{ document.querySelector('.rail').classList.toggle('closed'); });
+  $('#miToggleRail').addEventListener('click',()=>{ document.querySelector('.rail').classList.toggle('closed'); closeMenus(); });
+  function toggleWb(force){
+    const wb=$('#wb');
+    const show=force!==undefined?force:wb.hidden;
+    wb.hidden=!show;
+    $('#wbToggle').setAttribute('aria-pressed',String(show));
+  }
+  $('#wbToggle').addEventListener('click',()=>toggleWb());
+  $('#miToggleWb').addEventListener('click',()=>{toggleWb();closeMenus();});
+
+  /* 计时（R-Code 真实格式：5s / 1m 42s / 1h 02m） */
+  const fmt=s=>{const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;
+    return h>0?`${h}h ${String(m).padStart(2,'0')}m`:m>0?`${m}m ${String(ss).padStart(2,'0')}s`:`${ss}s`;};
+  let run={running:true,start:Date.now()-102000,timerEl:$('#runTimer'),statusEl:$('#runStatus'),trailEl:$('#trailAct'),interval:null};
+  function tick(){ if(run.timerEl) run.timerEl.textContent=fmt(Math.floor((Date.now()-run.start)/1000)); }
+  function startTimer(){ clearInterval(run.interval); run.interval=setInterval(tick,1000); tick(); }
+  startTimer();
+  let waitS=12;
+  const waitInterval=setInterval(()=>{ if(!$('#waitRow').hidden){waitS++;$('#waitTimer').textContent=fmt(waitS);} },1000);
+
+  /* 权限批准 */
+  function resolvePerm(mode){
+    clearInterval(waitInterval);
+    const row=document.createElement('div');
+    row.className='perm-resolved '+(mode==='deny'?'no':'ok');
+    row.innerHTML=`<span class="r-ico">${mode==='deny'?'✕':'✓'}</span><span>${
+      mode==='allow'?'已允许执行 verify.py（仅本次）':
+      mode==='always'?'已始终允许该验证命令':'已拒绝执行验证命令，Agent 将跳过该步骤'}</span>`;
+    $('#permCard').replaceWith(row);
+    $('#waitRow').hidden=true; $('#spinRow').hidden=false;
+    $('#wbPending').textContent='0'; $('#wbPending').classList.remove('warn');
+    const auditCmd=$('#auditCmd');
+    if(mode==='deny'){
+      $('#spinText').textContent='已跳过验证命令，继续后续步骤…';
+      $('#wbCur').textContent='已跳过验证命令';
+      auditCmd.querySelector('.rst').className='rst'; auditCmd.querySelector('.rst').textContent='已跳过';
+    }else{
+      $('#spinText').textContent='正在执行 verify.py…';
+      $('#wbCur').textContent='正在执行原型验证';
+      $('#wbVerify').textContent='运行中';
+      $('#rhState').textContent='正在执行'; $('#rhState').classList.remove('warn');
+      auditCmd.querySelector('.rst').className='rst run'; auditCmd.querySelector('.rst').textContent='运行中 00:00:03';
+      if(mode==='always') toast('已加入始终允许：该验证命令');
+    }
+  }
+  $('#permAllow').addEventListener('click',()=>resolvePerm('allow'));
+  $('#permAlways').addEventListener('click',()=>resolvePerm('always'));
+  $('#permDeny').addEventListener('click',()=>resolvePerm('deny'));
+
+  /* 停止 / 发送 */
+  const input=$('#composerInput');
+  const thread=$('#thread'), threadCol=$('#threadCol');
+  const queueBox=$('#queueBox'), queueList=$('#queueList');
+  const composeAct=$('#composeAct');
+
+  function setRunningUI(running){
+    composeAct.classList.toggle('stop',running);
+    composeAct.innerHTML=running?'<span class="sq">■</span>中断':'↑ 发送';
+    composeAct.setAttribute('aria-label',running?'停止当前运行':'发送');
+    $('#compHints').style.visibility=running?'visible':'hidden';
+  }
+  function stopRun(){
+    if(!run.running) return;
+    run.running=false;
+    clearInterval(run.interval);
+    if(run.statusEl){
+      run.statusEl.classList.add('stopped');
+      run.statusEl.textContent=`已停止 · 本轮共 ${fmt(Math.floor((Date.now()-run.start)/1000))}`;
+    }
+    if(run.trailEl) run.trailEl.hidden=true;
+    $('#rhState').textContent='会话就绪';
+    setRunningUI(false);
+    toast('已停止当前运行');
+  }
+  function autoGrow(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,170)+'px'; }
+  input.addEventListener('input',autoGrow);
+
+  function enqueue(text){
+    const item=document.createElement('div');
+    item.className='q-item';
+    item.innerHTML=`<span class="q-mode">排队</span><span class="q-text"></span><button class="q-del" aria-label="删除队列消息">✕</button>`;
+    item.querySelector('.q-text').textContent=text;
+    item.querySelector('.q-del').addEventListener('click',()=>{
+      item.remove();
+      $('#queueCnt').textContent=queueList.children.length;
+      if(!queueList.children.length) queueBox.hidden=true;
+    });
+    queueList.appendChild(item);
+    queueBox.hidden=false;
+    $('#queueCnt').textContent=queueList.children.length;
+  }
+
+  function sendIdle(text){
+    const turn=document.createElement('div');
+    turn.className='turn';
+    turn.innerHTML=`
+      <div class="you"><p style="margin:0"></p></div>
+      <div class="ms">正在处理 <span class="rt">1s</span></div>
+      <div class="activity"><div class="ev" style="cursor:default">
+        <span class="ic"><span class="spinner"></span></span><span class="m dim">正在思考…</span>
+      </div></div>`;
+    turn.querySelector('.you p').textContent=text;
+    threadCol.appendChild(turn);
+    run={running:true,start:Date.now(),timerEl:turn.querySelector('.rt'),statusEl:turn.querySelector('.ms'),trailEl:turn.querySelector('.activity'),interval:run.interval};
+    startTimer();
+    $('#rhState').textContent='正在执行';
+    setRunningUI(true);
+    requestAnimationFrame(()=>{ thread.scrollTop=thread.scrollHeight; });
+  }
+
+  function handleSend(){
+    const text=input.value.trim();
+    if(run.running){
+      if(!text){ stopRun(); return; }
+      enqueue(text);
+    }else{
+      if(!text){ toast('先输入内容'); return; }
+      sendIdle(text);
+    }
+    input.value=''; autoGrow(); input.focus();
+  }
+  composeAct.addEventListener('click',handleSend);
+  input.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); handleSend(); }
+  });
+
+  /* 初始视口：状态行对齐消息流顶部 */
+  const anchor=$('#runStatus');
+  thread.scrollTop=anchor.getBoundingClientRect().top-thread.getBoundingClientRect().top+thread.scrollTop-14;
+})();
+</script>
+</body>
+</html>

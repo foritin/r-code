@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { renderIconPng, renderSmallIcon } from "./render-small-app-icons.mjs";
+import { renderIconPng, renderSmallIcon } from "./manual/render-small-app-icons.mjs";
 
 const repoRoot = new URL("../", import.meta.url);
 

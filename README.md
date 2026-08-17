@@ -134,13 +134,13 @@ powershell -ExecutionPolicy Bypass -File ./scripts/build-branded-installer.ps1
 cargo tauri build --bundles nsis,msi
 
 # macOS ad-hoc Apple Silicon app/dmg
-bash ./scripts/build-macos.sh
+bash ./scripts/manual/package-macos.sh
 
 # Intel macOS package
-bash ./scripts/build-macos.sh --target x86_64-apple-darwin
+bash ./scripts/manual/package-macos.sh --target x86_64-apple-darwin
 
 # Signed/notarized macOS distribution
-bash ./scripts/build-macos.sh --signed
+bash ./scripts/manual/package-macos.sh --signed
 
 # Linux
 cargo tauri build --bundles appimage,deb

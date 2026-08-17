@@ -97,7 +97,7 @@ function Write-PngIco {
 function Invoke-SmallIconRenderer {
     param([string]$OutputDirectory)
 
-    $renderer = Join-Path $repoRoot "scripts\render-small-app-icons.mjs"
+    $renderer = Join-Path $repoRoot "scripts\manual\render-small-app-icons.mjs"
     & $node.Source $renderer --output $OutputDirectory --sizes "16,20,24,32"
     if ($LASTEXITCODE -ne 0) {
         throw "small icon renderer failed with exit code $LASTEXITCODE"

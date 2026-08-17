@@ -73,7 +73,7 @@ macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release work
 
 完整配置时，release workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证。缺少任一 Apple Secret 时，只将 macOS 构建降级为 ad-hoc 签名，不会阻断其他平台或稳定版发布；Release 标题和正文会公开警告该平台未完成 Developer ID 签名与公证。证书和密码不得提交到仓库。
 
-本机测试可以运行 `bash ./scripts/build-macos.sh` 生成 ad-hoc 签名包；这种包只用于开发验证，不能替代 Developer ID。正式本地候选包需先把 Developer ID 导入 Keychain，并设置 `APPLE_SIGNING_IDENTITY` 及 Apple ID 三个 notarization 变量，再运行 `bash ./scripts/build-macos.sh --signed`。脚本也支持 App Store Connect API key 方式，具体变量见 `--help`。
+本机测试可以运行 `bash ./scripts/manual/package-macos.sh` 生成 ad-hoc 签名包；这种包只用于开发验证，不能替代 Developer ID。正式本地候选包需先把 Developer ID 导入 Keychain，并设置 `APPLE_SIGNING_IDENTITY` 及 Apple ID 三个 notarization 变量，再运行 `bash ./scripts/manual/package-macos.sh --signed`。脚本也支持 App Store Connect API key 方式，具体变量见 `--help`。
 
 Windows Authenticode 已接入 Release workflow。要生成平台信任的 Windows 安装包，仓库需要配置：
 
@@ -197,7 +197,7 @@ Pop-Location
 
 # macOS：本机 ad-hoc 候选包；正式候选包追加 --signed
 # Intel 本地包可追加 --target x86_64-apple-darwin
-bash ./scripts/build-macos.sh
+bash ./scripts/manual/package-macos.sh
 ```
 
 至少在目标平台做一次安装包 smoke test：安装、启动、创建纯聊天任务、打开工作区、触发一次审批、执行只读工具、验证 updater 检查不会报签名/manifest 错误。`0.3.x` 还必须覆盖 Codex 同树委派（不新增 session）、RequestApproval 下的 Bash 审批、逐个取消 child、公开 reasoning summary、文件链接右侧跳行、约 1 秒计时刷新，以及重启后的三态权限恢复。缺少外部 Provider 或 Codex 账号时，应在可用环境完成这组联网验收；本机至少验证能力不可用时会隐藏动态工具且主任务继续。
@@ -349,6 +349,6 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 | `.github/release.yml` | GitHub 自动 Release Notes 分类 |
 | `scripts/release.mjs` | 版本同步、CHANGELOG 盖章和 tag 一致性校验 |
 | `scripts/publish-release.mjs` | 发布前置闸门、tag 推送、Actions 等待与 Release 资产验收 |
-| `scripts/build-macos.sh` | macOS app/dmg 本地构建、签名与公证验收 |
+| `scripts/manual/package-macos.sh` | macOS app/dmg 本地构建、签名与公证验收 |
 | `src-tauri/tauri.conf.json` | Bundle、updater endpoint 和公钥 |
 | `CHANGELOG.md` | 用户可见版本历史 |
