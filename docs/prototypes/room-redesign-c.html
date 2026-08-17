@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>R-Code 主交互页重设计 · 原型 C（Signature 风格）</title>
+<title>R-Code 主交互页重设计 · 完整交互 Demo（Signature 风格）</title>
 <style>
 /* ===== R-Code Signature tokens（取自 styles/signature.css · obsidian） ===== */
 :root{
@@ -16,6 +16,7 @@
   --fg:#f1efe9; --fg-muted:#a49f95; --fg-faint:#817b72;
   --accent:#f4742b; --accent-2:#c49a61; --accent-fg:#17100b;
   --warning:#e5a15b; --success:#69c798; --danger:#df6b62;
+  --cyan:#6fc7d8;
   --signature-divider:#32312c; --signature-panel-edge:#37362f;
   --signature-elevated:#171815; --signature-control:#23231f;
   --signature-chrome-fg:#aaa49b; --signature-sidebar-muted:#aaa59c;
@@ -63,8 +64,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 .rail.closed .rail-brand .search{display:none}
 .rail.closed .nav-item,.rail.closed .rail-new{justify-content:center;padding:0}
 .rail.closed .nav-item{font-size:0;gap:0}
-.rail.closed .nav-item .cnt,.rail.closed .rail-label,.rail.closed .proj-head,.rail.closed .task{display:none}
+.rail.closed .nav-item .cnt,.rail.closed .nav-item .kbd,.rail.closed .rail-label,.rail.closed .seg,.rail.closed .proj,.rail.closed .task,.rail.closed .rail-label-s{display:none}
 .rail.closed .rail-new{font-size:0}
+.rail.closed .u-card .u-txt,.rail.closed .u-card .u-acts{display:none}
 .main{flex:1;min-width:0;display:flex;position:relative;isolation:isolate;overflow:hidden;
   border-top:1px solid var(--signature-divider);border-left:1px solid var(--signature-divider);
   border-radius:26px 0 0 0;background:var(--bg-app);box-shadow:-18px -18px 46px rgba(0,0,0,.12)}
@@ -78,6 +80,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 .rail-brand .search:hover{background:var(--signature-accent-faint);color:var(--fg)}
 .rail-new{display:flex;align-items:center;gap:7px;height:32px;padding:0 10px;margin:2px 0 8px;border-radius:5px;color:var(--fg);font:560 12.5px var(--font-display);letter-spacing:.03em;text-align:left}
 .rail-new:hover{background:rgba(241,239,233,.05)}
+.rail-new .kbd,.nav-item .kbd{margin-left:auto;font:500 10px var(--font-mono);color:var(--fg-faint)}
 .rail-nav{display:flex;flex-direction:column;gap:2px;padding-bottom:12px;border-bottom:1px solid rgba(241,239,233,.07)}
 .nav-item{display:flex;align-items:center;gap:9px;min-height:34px;padding:0 10px;border-radius:3px 9px 9px 3px;color:var(--signature-sidebar-muted);font-size:12.5px;text-align:left;position:relative}
 .nav-item:hover{background:rgba(241,239,233,.03);color:var(--fg)}
@@ -85,31 +88,60 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 .nav-item.active svg{color:#ff9b5d}
 .nav-item svg{width:14px;height:14px;flex:none}
 .nav-item .cnt{margin-left:auto;font-size:10.5px;color:var(--accent);background:var(--signature-accent-soft);border-radius:8px;padding:0 6px;height:16px;line-height:16px}
+
+/* 分组 / 项目 分段开关 */
+.seg{display:flex;margin:10px 2px 6px;padding:2px;border:1px solid var(--border);border-radius:8px;background:var(--bg-inset)}
+.seg-btn{flex:1;height:23px;border-radius:6px;font-size:11px;color:var(--fg-faint);letter-spacing:.04em}
+.seg-btn:hover{color:var(--fg-muted)}
+.seg-btn.active{background:var(--bg-chip);color:var(--fg)}
+
 .rail-label{display:flex;align-items:center;gap:6px;min-height:30px;padding:0 10px;color:var(--signature-sidebar-section);font:600 10px/1 var(--font-display);letter-spacing:.13em}
 .rail-label .live-n{margin-left:auto;color:var(--accent);font:500 10px var(--font-ui);letter-spacing:.02em}
 .rail-label .plus{color:var(--signature-sidebar-section);width:18px;height:18px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:12px}
 .rail-label .plus:hover{color:var(--fg);background:rgba(241,239,233,.06)}
-.proj-head{display:flex;align-items:center;gap:7px;height:28px;padding:0 10px;border-radius:5px;color:var(--signature-sidebar-project);font:560 12px var(--font-display);letter-spacing:.02em}
-.proj-head svg{width:13px;height:13px;color:var(--fg-faint)}
+.rail-label-s{display:flex;align-items:center;min-height:26px;padding:0 10px;color:var(--signature-sidebar-section);font:600 10px/1 var(--font-display);letter-spacing:.13em}
+
+.proj-head{display:flex;align-items:center;gap:7px;width:100%;height:28px;padding:0 10px;border-radius:5px;color:var(--signature-sidebar-project);font:560 12px var(--font-display);letter-spacing:.02em;text-align:left}
+.proj-head:hover{background:rgba(241,239,233,.03)}
+.proj-head svg{width:13px;height:13px;color:var(--fg-faint);flex:none}
 .proj-head .n{margin-left:auto;font-size:10px;color:var(--success);background:rgba(105,199,152,.12);border-radius:7px;padding:0 5px;height:15px;line-height:15px;font-family:var(--font-ui)}
-.proj-head .chev-r{color:var(--fg-faint);font-size:11px;margin-left:2px}
+.proj-head .chev-r{color:var(--fg-faint);font-size:11px;margin-left:2px;flex:none;transition:transform var(--dur) var(--ease)}
+.proj:not(.collapsed) .proj-head .chev-r{transform:rotate(90deg)}
+.proj.collapsed .proj-tasks{display:none}
 .task{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 10px 0 22px;border-radius:3px 8px 8px 3px;color:var(--signature-sidebar-muted);font-size:12px;text-align:left}
 .task:hover{background:rgba(241,239,233,.03)}
 .task.active{background:linear-gradient(90deg,rgba(244,116,43,.115),rgba(244,116,43,.02) 70%,transparent);box-shadow:inset 2px 0 0 var(--accent);color:var(--fg)}
 .task .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .task .time{margin-left:auto;color:var(--fg-faint);font-size:10.5px;font-variant-numeric:tabular-nums;flex:none}
 .task .ring{width:8px;height:8px;flex:none;border-radius:50%;border:1.5px solid var(--border-strong);border-top-color:var(--fg-muted);animation:rot .8s linear infinite}
+.task .pin{width:11px;height:11px;flex:none;color:var(--fg-faint)}
 .rail-foot{margin-top:auto;border-top:1px solid rgba(241,239,233,.07);padding-top:8px}
+
+/* 用户卡 */
+.u-card{display:flex;align-items:center;gap:9px;width:100%;min-height:40px;padding:6px 8px;border-radius:8px;text-align:left}
+.u-card:hover{background:rgba(241,239,233,.04)}
+.u-av{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#8a5a34,#c49a61);color:#fff;font:600 11px/1 var(--font-ui);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.u-txt{display:flex;align-items:center;gap:5px;min-width:0}
+.u-txt .un{font-size:12px;color:var(--fg);white-space:nowrap}
+.u-txt .pro{font-size:9px;color:var(--accent-2);border:1px solid rgba(196,154,97,.45);border-radius:5px;padding:0 4px;height:13px;line-height:12px}
+.u-acts{margin-left:auto;display:flex;gap:2px}
+.u-acts button{width:24px;height:24px;border-radius:5px;color:var(--fg-faint);display:inline-flex;align-items:center;justify-content:center}
+.u-acts button:hover{background:rgba(241,239,233,.06);color:var(--fg)}
+.u-acts svg{width:13px;height:13px}
 
 /* ===== 会话列 ===== */
 .convo{flex:1;display:flex;flex-direction:column;min-width:0}
 .room-head{flex:none;min-height:48px;display:flex;align-items:center;gap:10px;padding:0 14px 0 18px;border-bottom:1px solid rgba(241,239,233,.07);background:var(--bg-panel)}
 .room-head>svg{color:#7f7b73;flex:none}
-.rh-title{line-height:1.25}
-.rh-title strong{font:620 13.5px var(--font-display);letter-spacing:.015em;display:block}
+.rh-title{line-height:1.25;min-width:0}
+.rh-title strong{font:620 13.5px var(--font-display);letter-spacing:.015em;display:block;white-space:nowrap}
 .rh-title small{display:block;font-size:10.5px;color:var(--fg-faint);margin-top:1px}
 .rh-title small.warn{color:var(--warning)}
-.rh-actions{margin-left:auto;display:flex;gap:2px}
+.rh-chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-inset);font-size:10.5px;color:var(--fg-muted);flex:none}
+.rh-chip:hover{border-color:var(--border-strong);color:var(--fg)}
+.rh-chip svg{width:11px;height:11px}
+.rh-chip.mono{font-family:var(--font-mono);font-size:10px}
+.rh-actions{margin-left:auto;display:flex;gap:2px;flex:none}
 .rh-icon{width:28px;height:28px;border-radius:5px;color:var(--signature-chrome-fg);display:inline-flex;align-items:center;justify-content:center}
 .rh-icon:hover{background:var(--signature-accent-faint);color:var(--fg)}
 .rh-icon[aria-pressed="true"]{color:#ffac73}
@@ -121,7 +153,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 /* 用户消息：右对齐气泡（signature 现状） */
 .you{max-width:min(74%,620px);margin:0 0 26px auto;padding:11px 16px 12px;border-radius:10px 10px 3px 10px;background:rgba(32,33,30,.76);font-size:14px;line-height:1.65}
 .you p{margin:0}
-.you .attach-chip{margin-bottom:8px}
+.you .attach-chip{margin-bottom:8px;margin-right:6px}
 .attach-chip{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 9px 0 6px;border-radius:7px;background:var(--bg-inset);border:1px solid var(--border);font-size:11.5px;color:var(--fg-muted)}
 .attach-chip .rm{color:var(--fg-faint);width:15px;height:15px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:9px}
 .attach-chip .rm:hover{color:var(--danger);background:rgba(223,107,98,.14)}
@@ -130,9 +162,26 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-r
 .ms{display:flex;align-items:center;gap:8px;margin:2px 0 15px;font:500 12px var(--font-display);letter-spacing:.05em;color:var(--fg-muted);font-variant-numeric:tabular-nums}
 .ms::before{content:"";width:18px;height:1px;flex:none;background:linear-gradient(90deg,var(--accent),rgba(244,116,43,.06))}
 .ms::after{content:"";flex:1;height:1px;background:var(--border)}
-.ms .chev-s{color:var(--fg-faint)}
 .ms.stopped{color:var(--fg-faint)}
 .ms.stopped::before{background:var(--border-strong)}
+
+/* ===== 霓虹闪烁与余辉（执行中文字效果） =====
+   明亮的白光伴随瞬间高强度曝光（0%/44% 两次闪烁），
+   随后光晕迅速衰减，只留下轻微的暖橙余辉。 */
+.neon{animation:neon-flash 2.9s ease-in-out infinite}
+@keyframes neon-flash{
+  0%{color:#fff;text-shadow:0 0 3px rgba(255,255,255,.95),0 0 16px rgba(255,240,222,.9),0 0 44px rgba(244,116,43,.7)}
+  7%{color:#fff;text-shadow:0 0 2px rgba(255,255,255,.7),0 0 9px rgba(255,222,188,.5),0 0 22px rgba(244,116,43,.38)}
+  16%{color:var(--fg);text-shadow:0 0 7px rgba(255,228,202,.26),0 0 18px rgba(244,116,43,.16)}
+  44%{color:#fff;text-shadow:0 0 2px rgba(255,255,255,.55),0 0 10px rgba(255,216,182,.4),0 0 26px rgba(244,116,43,.3)}
+  58%{color:var(--fg);text-shadow:0 0 8px rgba(255,228,202,.18),0 0 20px rgba(244,116,43,.1)}
+  100%{color:var(--fg-muted);text-shadow:0 0 10px rgba(244,116,43,.07)}
+}
+.caret{display:inline-block;width:7px;height:1em;margin-left:4px;vertical-align:-.15em;border-radius:2px;
+  background:linear-gradient(180deg,#fff,#ffb37e);
+  box-shadow:0 0 8px rgba(255,220,190,.8),0 0 22px rgba(244,116,43,.5);
+  animation:caret-pulse 1.15s ease-in-out infinite}
+@keyframes caret-pulse{0%,100%{opacity:1}50%{opacity:.25}}
 
 /* Agent 正文 */
 .agent{max-width:930px;margin:0 0 13px;color:var(--fg);font-size:14px;line-height:1.72}
@@ -147,7 +196,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 .ev .ic svg{width:14px;height:14px}
 .ev .k{color:var(--fg);font-weight:500;flex:none}
 .ev .name{color:var(--accent-2);font-weight:550;flex:none}
-.ev .name.sub{color:#6fc7d8}
+.ev .name.sub{color:var(--cyan)}
 .ev .m{color:var(--fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .ev .m.dim{color:var(--fg-faint)}
 .ev .chev{margin-left:auto;flex:none;color:var(--fg-faint)}
@@ -175,21 +224,29 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 /* 子代理芯片（signature 现状：彩点胶囊） */
 .sub-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:2px 0 4px}
 .sub-chip{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 12px;border-radius:5px 5px 2px 5px;background:var(--bg-card);border:1px solid var(--signature-panel-edge);font-size:12px;color:var(--fg)}
-.sub-chip:hover{border-color:var(--border-strong)}
+.sub-chip:hover{border-color:var(--cyan)}
 .sub-chip .dot{width:7px;height:7px;border-radius:50%;flex:none}
 .sub-chip .st{font-size:11px;color:var(--fg-faint)}
 .sub-status{color:var(--fg-faint);font-size:11.5px}
 
-/* 计划卡（signature 现状：抬升卡） */
-.plan-card{margin:6px 0;border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--signature-elevated);padding:11px 14px 8px}
-.plan-head{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);font-weight:550}
-.plan-head svg{width:14px;height:14px;color:var(--fg-faint)}
-.plan-head .n{margin-left:auto;font-size:11px;color:var(--fg-faint);font-variant-numeric:tabular-nums}
-.plan-steps{list-style:none;margin:6px 0 0;padding:0}
-.plan-steps li{display:flex;align-items:center;gap:8px;padding:2.5px 0;font-size:12.5px;color:var(--fg-faint)}
-.plan-steps li .pi{width:13px;flex:none;text-align:center;font-size:9.5px}
-.plan-steps li.done{color:var(--fg-muted)} .plan-steps li.done .pi{color:var(--success)}
-.plan-steps li.cur{color:var(--fg)} .plan-steps li.cur .pi{color:var(--accent)}
+/* 待办卡（TodoWrite 风格：计数 + ✓/→/○ 状态） */
+.todo-card{margin:6px 0;border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--signature-elevated)}
+.todo-head{display:flex;align-items:center;gap:10px;width:100%;min-height:38px;padding:6px 12px;text-align:left;color:var(--fg-muted);font-size:12.5px}
+.todo-head:hover{background:rgba(241,239,233,.03)}
+.todo-head .ic{width:18px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--fg-faint)}
+.todo-head .ic svg{width:14px;height:14px}
+.todo-head .k{color:var(--fg);font-weight:550;flex:none}
+.todo-head .m{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.todo-head .todo-n{margin-left:auto;flex:none;font-size:11px;color:var(--fg-faint);font-variant-numeric:tabular-nums}
+.todo-head .chev{flex:none;color:var(--fg-faint);width:22px;height:22px;border-radius:50%;border:1px solid var(--signature-panel-edge);display:inline-flex;align-items:center;justify-content:center}
+.todo-head .chev svg{width:11px;height:11px;display:block;transition:transform var(--dur) var(--ease)}
+.todo-head[aria-expanded="true"] .chev svg{transform:rotate(180deg)}
+.todo-card .ev-detail>.inner{border-top:1px solid rgba(241,239,233,.06)}
+.todo-list{list-style:none;margin:0;padding:8px 14px 10px;display:grid;gap:2px}
+.todo-list li{display:flex;align-items:center;gap:9px;padding:3px 0;font-size:12.5px;color:var(--fg-faint)}
+.todo-list .pi{width:15px;flex:none;text-align:center;font-size:11px}
+.todo-list li.done{color:var(--fg-muted)} .todo-list li.done .pi{color:var(--success)}
+.todo-list li.cur{color:var(--fg)} .todo-list li.cur .pi{color:var(--accent)}
 
 /* 权限卡（signature 现状：居中卡 + 盾图标 + 橙色主按钮） */
 .perm-card{max-width:640px;margin:8px 0;border:1px solid var(--signature-panel-edge);border-radius:12px 12px 4px 12px;background:var(--bg-card);box-shadow:var(--shadow-card);padding:12px 16px 11px}
@@ -222,7 +279,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 /* 等待 / 进行行 */
 .spinner{width:13px;height:13px;border-radius:50%;border:2px solid rgba(241,239,233,.14);border-top-color:var(--fg-muted);animation:rot 1s linear infinite}
 
-/* ===== Composer：居中悬浮卡（改动点） ===== */
+/* ===== Composer：居中悬浮卡 ===== */
 .composer-zone{flex:none;padding:10px 24px 18px;background:linear-gradient(to bottom,rgba(16,17,15,0),var(--bg-app) 40%)}
 .cz-col{max-width:760px;margin:0 auto}
 .queue{margin:0 0 8px}
@@ -246,7 +303,6 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 .pill .chev{width:10px;height:10px;color:var(--fg-faint)}
 .pill.icon{width:30px;padding:0;justify-content:center}
 .pill .eng{color:#ffa268;font-family:var(--font-display);letter-spacing:.03em}
-.pill.dim{color:var(--fg-faint)}
 .send{height:32px;min-width:66px;padding:0 13px;border-radius:9px;background:var(--accent);color:var(--accent-fg);font-size:12.5px;font-weight:650;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:background 140ms}
 .send:hover{background:#ff8642}
 .send.stop{background:var(--signature-control);color:var(--fg-muted);border:1px solid var(--signature-panel-edge)}
@@ -275,23 +331,30 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 .menu-group:not(:first-child){border-top:1px solid var(--border);margin-top:4px;padding-top:8px}
 .cur-badge{font-size:9.5px;color:var(--accent);border:1px solid rgba(244,116,43,.4);border-radius:6px;padding:0 5px;margin-left:6px;height:14px;line-height:13px}
 
-/* ===== 工作台（现状复刻） ===== */
+/* ===== 工作台 / 子智能体目录 ===== */
 .workbench{width:422px;flex:none;border-left:1px solid var(--signature-divider);display:flex;flex-direction:column;min-height:0;background:var(--bg-app)}
 .workbench[hidden]{display:none}
-.wb-head{flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid rgba(241,239,233,.07);background:var(--bg-panel);min-height:48px}
-.wb-tab{height:30px;padding:0 11px;font:560 12px var(--font-display);letter-spacing:.035em;color:var(--fg);border-bottom:2px solid var(--accent);display:inline-flex;align-items:center;gap:7px}
-.wb-tab svg{width:13px;height:13px;color:#ffac73}
+.wb-head{flex:none;display:flex;align-items:center;gap:3px;padding:0 10px;border-bottom:1px solid rgba(241,239,233,.07);background:var(--bg-panel);min-height:48px}
+.wb-chev{width:22px;height:22px;border-radius:5px;color:var(--fg-faint);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.wb-chev:hover{background:rgba(241,239,233,.06);color:var(--fg)}
+.wb-chev svg{width:12px;height:12px}
+.wb-tabs{display:flex;gap:2px}
+.wb-tab{height:30px;padding:0 10px;font:560 12px var(--font-display);letter-spacing:.035em;color:var(--fg-faint);border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:7px}
+.wb-tab:hover{color:var(--fg-muted)}
+.wb-tab.active{color:var(--fg);border-bottom-color:var(--accent)}
+.wb-tab svg{width:13px;height:13px}
+.wb-tab.active svg{color:#ffac73}
 .wb-x{color:var(--fg-faint);width:20px;height:20px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center}
 .wb-x:hover{background:rgba(241,239,233,.06);color:var(--fg)}
-.wb-add{width:26px;height:26px;border-radius:5px;background:var(--signature-control);color:var(--fg-muted);display:inline-flex;align-items:center;justify-content:center;margin-left:4px}
+.wb-add{width:26px;height:26px;border-radius:5px;background:var(--signature-control);color:var(--fg-muted);display:inline-flex;align-items:center;justify-content:center;margin-left:2px}
 .wb-add:hover{color:var(--fg)}
-.wb-live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border:1px solid rgba(244,116,43,.45);border-radius:5px 9px 5px 9px;color:var(--accent);font-size:11px}
+.wb-live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border:1px solid rgba(244,116,43,.45);border-radius:5px 9px 5px 9px;color:var(--accent);font-size:11px;flex:none}
 .wb-live .d{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:blink 1.6s infinite}
-.wb-body{flex:1;overflow-y:auto;padding:14px 14px 20px}
+.wb-body{flex:1;overflow-y:auto;padding:14px 14px 20px;min-height:0}
+#wbPaneAgents{display:flex;flex-direction:column}
 .wb-card{border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--bg-card);padding:12px 14px;margin-bottom:10px}
 .wb-card .r1{display:flex;align-items:baseline;gap:9px}
 .wb-card .state{color:var(--accent);font:600 11px var(--font-display);letter-spacing:.05em}
-.wb-card .state.warn{color:var(--warning)}
 .wb-card h4{margin:0;font:620 13px var(--font-display);letter-spacing:.02em}
 .wb-card .t-right{margin-left:auto;color:var(--fg-faint);font-size:10.5px;font-variant-numeric:tabular-nums}
 .wb-card .sub{margin:5px 0 0;font-size:12px;color:var(--fg-muted)}
@@ -308,18 +371,20 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 .wb-cur{border-left:2px solid var(--accent);padding:2px 0 2px 11px;margin:2px 0 14px;font-size:12px;color:var(--fg-muted)}
 .wb-cur b{color:var(--accent);font-weight:550}
 .wb-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px}
-.wb-stat{border:1px solid var(--signature-panel-edge);border-radius:8px;padding:8px 11px;background:var(--bg-card)}
+.wb-stat{border:1px solid var(--signature-panel-edge);border-radius:8px;padding:8px 11px;background:var(--bg-card);text-align:left;width:100%}
+.wb-stat:hover{border-color:var(--border-strong)}
 .wb-stat .l{font-size:10.5px;color:var(--fg-faint)}
 .wb-stat .v{font-size:13px;color:var(--fg);margin-top:2px;font-variant-numeric:tabular-nums}
 .wb-stat .v.warn{color:var(--warning)}
 .wb-sec{display:flex;align-items:baseline;font-size:11px;color:var(--fg-faint);margin:4px 2px 7px}
 .wb-sec .r{margin-left:auto;color:var(--fg-faint);font-size:10px}
 .audit{display:flex;flex-direction:column}
-.audit-row{display:flex;align-items:center;gap:9px;padding:6px 2px;font-size:12px;border-bottom:1px solid rgba(241,239,233,.05)}
+.audit-row{display:flex;align-items:center;gap:9px;width:100%;padding:6px 2px;font-size:12px;border-bottom:1px solid rgba(241,239,233,.05);text-align:left;border-radius:4px}
 .audit-row:last-child{border-bottom:0}
+button.audit-row:hover{background:rgba(241,239,233,.04)}
 .audit-row .kind{flex:none;width:34px;font-size:10.5px;text-align:center;border-radius:5px;height:18px;line-height:18px}
 .kind.cmd{color:var(--accent-2);background:rgba(196,154,97,.1)}
-.kind.sub{color:#6fc7d8;background:rgba(111,199,216,.09)}
+.kind.sub{color:var(--cyan);background:rgba(111,199,216,.09)}
 .kind.file{color:#7fa7e0;background:rgba(127,167,224,.09)}
 .kind.edit{color:var(--accent);background:rgba(244,116,43,.1)}
 .audit-row .tx{color:var(--fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:11px}
@@ -327,6 +392,52 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 .audit-row .rst.ok{color:var(--success)}
 .audit-row .rst.run{color:var(--accent)}
 .audit-row .rst.wait{color:var(--warning)}
+
+/* 子智能体目录：分组 + 状态图标 + 相对时间 + 摘要预览 */
+.ag-sec{display:flex;align-items:baseline;gap:7px;margin:8px 2px 5px;font:600 10.5px var(--font-display);letter-spacing:.1em;color:var(--signature-sidebar-section)}
+.ag-sec .cnt{font:500 10.5px var(--font-ui);color:var(--fg-faint);letter-spacing:0}
+.ag-row{display:flex;gap:10px;width:100%;padding:9px 10px;margin-bottom:2px;border-radius:8px;border:1px solid transparent;text-align:left;align-items:flex-start}
+.ag-row:hover{background:rgba(241,239,233,.04)}
+.ag-row.sel{border-color:var(--signature-panel-edge);background:var(--bg-card)}
+.ag-ic{width:18px;height:18px;flex:none;margin-top:1px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center}
+.ag-ic.done{border:1.5px solid rgba(105,199,152,.55);color:var(--success)}
+.ag-ic.done svg{width:10px;height:10px}
+.ag-ic.run .ring{width:12px;height:12px;border-radius:50%;border:2px solid rgba(111,199,216,.22);border-top-color:var(--cyan);animation:rot .9s linear infinite}
+.ag-main{min-width:0;flex:1;display:grid;gap:2px}
+.ag-line1{display:flex;align-items:baseline;gap:8px}
+.ag-line1 b{font-size:12.5px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ag-time{margin-left:auto;flex:none;font-size:10.5px;color:var(--fg-faint);font-variant-numeric:tabular-nums}
+.ag-line2{display:flex;gap:7px;font-size:11px;min-width:0}
+.ag-state{flex:none;color:var(--fg-faint)}
+.ag-state.run{color:var(--cyan)}
+.ag-preview{color:var(--fg-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ag-empty{padding:8px 2px;font-size:11.5px;color:var(--fg-faint)}
+
+/* 子代理详情视图 */
+#agentDetail{flex:1;display:flex;flex-direction:column;min-height:0}
+.ag-back{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;height:26px;padding:0 9px;margin:0 0 10px;border-radius:6px;color:var(--fg-faint);font-size:11.5px}
+.ag-back:hover{background:rgba(241,239,233,.05);color:var(--fg)}
+.ag-back svg{width:11px;height:11px}
+.ag-d-head{display:flex;align-items:center;gap:9px;margin-bottom:4px;flex-wrap:wrap}
+.ag-d-head h4{margin:0;font:620 13.5px var(--font-display);letter-spacing:.015em}
+.ag-d-chip{font-size:10px;border-radius:6px;padding:0 7px;height:17px;line-height:16px}
+.ag-d-chip.run{color:var(--cyan);border:1px solid rgba(111,199,216,.4)}
+.ag-d-chip.done{color:var(--success);border:1px solid rgba(105,199,152,.4)}
+.ag-d-meta{font-size:10.5px;color:var(--fg-faint);margin-bottom:10px}
+.ag-tr{display:flex;flex-direction:column;gap:1px;border:1px solid var(--signature-panel-edge);border-radius:10px 10px 4px 10px;background:var(--signature-elevated);padding:6px;margin-bottom:10px}
+.ag-tr .row{display:flex;align-items:center;gap:9px;min-height:28px;padding:3px 6px;font-size:12px;color:var(--fg-muted);border-radius:4px}
+.ag-tr .row .ic{width:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--fg-faint)}
+.ag-tr .row .ic svg{width:13px;height:13px}
+.ag-tr .row.dim{color:var(--fg-faint)}
+.ag-tr .row .m{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ag-tr .row .verb{color:var(--fg-muted);flex:none}
+.ag-tr .row .fname{color:var(--fg);flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ag-tr .row.txt{display:block;padding:7px 9px;font-size:12.5px;line-height:1.6;color:var(--fg-muted);white-space:normal}
+.ag-ask{display:flex;gap:6px;margin-top:auto;padding-top:8px}
+.ag-ask input{flex:1;min-width:0;height:32px;padding:0 11px;border-radius:9px;border:1px solid var(--signature-panel-edge);background:var(--bg-inset);color:var(--fg);font:inherit;font-size:12px;outline:none}
+.ag-ask input:focus{border-color:color-mix(in srgb,var(--cyan) 60%,var(--signature-panel-edge))}
+.ag-ask input::placeholder{color:var(--fg-faint)}
+.ag-ask .btn{height:32px}
 
 .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(8px);background:var(--bg-card);border:1px solid var(--border-strong);color:var(--fg-muted);font-size:12px;padding:8px 16px;border-radius:9px;box-shadow:0 10px 30px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity var(--dur),transform var(--dur);z-index:99}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -343,13 +454,13 @@ button.ev:hover{background:rgba(241,239,233,.05)}
   <!-- 顶栏 -->
   <header class="topbar">
     <button class="tb-btn" id="railToggle" aria-label="切换侧边栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9.5 4v16"/></svg></button>
-    <button class="tb-btn" aria-label="后退" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M15 5l-7 7 7 7"/></svg></button>
-    <button class="tb-btn" aria-label="前进" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M9 5l7 7-7 7"/></svg></button>
+    <button class="tb-btn" aria-label="后退" data-toast="原型中未接入：导航历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button class="tb-btn" aria-label="前进" data-toast="原型中未接入：导航历史"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M9 5l7 7-7 7"/></svg></button>
     <span class="tb-sep"></span>
     <div class="anchor">
       <button class="tb-btn" data-menu-btn="m-file" aria-haspopup="menu" aria-expanded="false">文件</button>
       <div class="menu down" data-menu="m-file" role="menu" aria-label="文件">
-        <button class="mi" data-toast="原型中未接入：新建任务"><span class="mi-body"><span class="mi-title">新建任务</span></span><span class="kbd">Ctrl N</span></button>
+        <button class="mi" id="miNewChat"><span class="mi-body"><span class="mi-title">新建任务</span></span><span class="kbd">Ctrl N</span></button>
         <button class="mi" data-toast="原型中未接入：打开项目"><span class="mi-body"><span class="mi-title">打开项目…</span></span></button>
         <button class="mi" data-toast="原型中未接入：查找"><span class="mi-body"><span class="mi-title">查找</span></span><span class="kbd">Ctrl F</span></button>
       </div>
@@ -382,7 +493,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span class="bdg">2</span>
       </button>
       <div class="menu down" data-menu="m-bell" role="menu" aria-label="通知" style="min-width:250px;left:auto;right:0">
-        <div class="menu-head">通知 <button style="float:right;font-size:10.5px;color:var(--accent)" data-toast="已全部标记为已读">全部已读</button></div>
+        <div class="menu-head">通知 <button id="bellReadAll" style="float:right;font-size:10.5px;color:var(--accent)">全部已读</button></div>
         <button class="mi" data-toast="打开待处理"><span class="mi-body"><span class="mi-title">发布 v0.9.2 检查单 需要复核</span><span class="mi-hint">10 分钟前 · 待处理</span></span></button>
         <button class="mi" data-toast="打开会话"><span class="mi-body"><span class="mi-title">子代理 Plan 已完成</span><span class="mi-hint">主交互页重设计 · 32 分钟前</span></span></button>
       </div>
@@ -399,25 +510,61 @@ button.ev:hover{background:rgba(241,239,233,.05)}
       <div class="rail-brand"><span class="mark">R</span>R-Code
         <button class="search" aria-label="搜索" data-toast="原型中未接入：全局搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
       </div>
-      <button class="rail-new" data-toast="原型演示：新对话入口"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M12 5v14M5 12h14"/></svg>新对话</button>
+      <button class="rail-new" id="railNew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><path d="M12 5v14M5 12h14"/></svg>新对话<span class="kbd">Ctrl N</span></button>
       <div class="rail-nav">
-        <button class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4V6Z"/></svg>对话</button>
-        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>待处理<span class="cnt">2</span></button>
-        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 14l4-9 4 12 4-8 4 5"/></svg>活动</button>
-        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M4 9h16"/></svg>项目文件</button>
+        <button class="nav-item active" data-nav="对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4V6Z"/></svg>对话</button>
+        <button class="nav-item" data-nav="搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>搜索<span class="kbd">Ctrl K</span></button>
+        <button class="nav-item" data-nav="待处理"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>待处理<span class="cnt">2</span></button>
+        <button class="nav-item" data-nav="自动化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 2 4.5 13.5H11L9.5 22 19 9.5h-6.5Z"/></svg>自动化</button>
+        <button class="nav-item" data-nav="技能"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3.5l2 5.2 5.5.6-4.1 3.8 1.2 5.4L12 15.8l-4.6 2.7 1.2-5.4-4.1-3.8 5.5-.6Z"/></svg>技能</button>
       </div>
-      <div class="rail-label">项目<span class="live-n">3 运行中</span><button class="plus" aria-label="添加项目" data-toast="原型中未接入：添加项目">＋</button></div>
-      <div style="flex:1;overflow-y:auto">
-        <div class="proj-head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>r-code<span class="n">1</span><span class="chev-r">›</span></div>
-        <button class="task"><span class="t">优化 Rust 编译性能</span><span class="time">4m</span></button>
-        <button class="task"><span class="t">统一错误处理规范</span><span class="time">8m</span></button>
-        <button class="task active"><span class="ring"></span><span class="t">主交互页重设计</span><span class="time">2m</span></button>
-        <button class="task"><span class="t">更新依赖并修复告警</span><span class="time">26m</span></button>
-        <div class="proj-head" style="margin-top:6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>api-server<span class="chev-r" style="margin-left:auto">›</span></div>
-        <button class="task"><span class="t">添加请求限流中间件</span><span class="time">6m</span></button>
+
+      <div class="seg" role="tablist" aria-label="侧栏分组方式">
+        <button class="seg-btn" data-seg="group" role="tab" aria-selected="false">分组</button>
+        <button class="seg-btn active" data-seg="proj" role="tab" aria-selected="true">项目</button>
       </div>
+
+      <div style="flex:1;overflow-y:auto;min-height:0">
+        <!-- 项目视图 -->
+        <div id="projView">
+          <div class="rail-label">项目<span class="live-n">3 运行中</span><button class="plus" aria-label="添加项目" data-toast="原型中未接入：添加项目">＋</button></div>
+          <div class="proj">
+            <button class="proj-head" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>r-code<span class="n">1</span><span class="chev-r">›</span></button>
+            <div class="proj-tasks">
+              <button class="task active"><span class="ring"></span><span class="t">主交互页重设计</span><span class="time">刚刚</span></button>
+              <button class="task"><svg class="pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 4h6l1 6 3 3v2h-5v6h-4v-6H5v-2l3-3Z"/></svg><span class="t">优化 Rust 编译性能</span><span class="time">1小时</span></button>
+              <button class="task"><span class="t">统一错误处理规范</span><span class="time">3小时</span></button>
+              <button class="task"><span class="t">更新依赖并修复告警</span><span class="time">7小时</span></button>
+            </div>
+          </div>
+          <div class="proj">
+            <button class="proj-head" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>api-server<span class="chev-r" style="margin-left:auto">›</span></button>
+            <div class="proj-tasks">
+              <button class="task"><span class="t">添加请求限流中间件</span><span class="time">2天</span></button>
+            </div>
+          </div>
+        </div>
+        <!-- 分组视图（按时间） -->
+        <div id="groupView" hidden>
+          <div class="rail-label-s" style="margin-top:2px">今天</div>
+          <button class="task active"><span class="ring"></span><span class="t">主交互页重设计</span><span class="time">刚刚</span></button>
+          <button class="task"><span class="t">统一错误处理规范</span><span class="time">3小时</span></button>
+          <button class="task"><span class="t">更新依赖并修复告警</span><span class="time">7小时</span></button>
+          <div class="rail-label-s" style="margin-top:10px">本周</div>
+          <button class="task"><svg class="pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 4h6l1 6 3 3v2h-5v6h-4v-6H5v-2l3-3Z"/></svg><span class="t">优化 Rust 编译性能</span><span class="time">1天</span></button>
+          <button class="task"><span class="t">添加请求限流中间件</span><span class="time">2天</span></button>
+        </div>
+      </div>
+
       <div class="rail-foot">
-        <button class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.07-.4.1-.8.1-1.2Z"/></svg>设置</button>
+        <button class="u-card" data-toast="原型中未接入：账户与订阅">
+          <span class="u-av">天</span>
+          <span class="u-txt"><span class="un">天青</span><span class="pro">Pro</span></span>
+          <span class="u-acts">
+            <button aria-label="主题" data-toast="原型中未接入：主题切换"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg></button>
+            <button aria-label="设置" data-toast="原型中未接入：设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.07-.4.1-.8.1-1.2Z"/></svg></button>
+          </span>
+        </button>
       </div>
     </nav>
 
@@ -426,10 +573,21 @@ button.ev:hover{background:rgba(241,239,233,.05)}
       <main class="convo">
         <header class="room-head">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
-          <div class="rh-title"><strong>主交互页重设计</strong><small id="rhState">正在执行</small></div>
+          <div class="rh-title"><strong id="rhTitleTxt">主交互页重设计</strong><small id="rhState">正在执行</small></div>
+          <button class="rh-chip" data-toast="项目：r-code（演示）">r-code</button>
+          <button class="rh-chip mono" data-toast="分支 feat/room-interaction-redesign · 已同步（演示）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 8.2v7.6M18 10.2c0 4-4.5 5-8 5.4"/></svg>feat/room-inter…</button>
           <div class="rh-actions">
             <button class="rh-icon" aria-label="搜索会话" data-toast="原型中未接入：会话内搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
             <button class="rh-icon" id="wbToggle" aria-pressed="true" aria-label="切换工作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14.5 4v16"/></svg></button>
+            <div class="anchor">
+              <button class="rh-icon" data-menu-btn="m-room" aria-haspopup="menu" aria-expanded="false" aria-label="更多操作"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+              <div class="menu down" data-menu="m-room" role="menu" aria-label="会话操作" style="min-width:190px;left:auto;right:0">
+                <button class="mi" data-toast="原型中未接入：重命名任务"><span class="mi-body"><span class="mi-title">重命名任务</span></span></button>
+                <button class="mi" data-toast="原型中未接入：复制会话链接"><span class="mi-body"><span class="mi-title">复制会话链接</span></span></button>
+                <button class="mi" data-toast="原型中未接入：导出会话 Markdown"><span class="mi-body"><span class="mi-title">导出会话 Markdown</span></span></button>
+                <button class="mi" data-toast="原型中未接入：归档任务"><span class="mi-body"><span class="mi-title">归档任务</span></span></button>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -460,7 +618,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
                 <p>在我原来的风格上重新设计：不要菱形提示条，文件要有鲜明的类型图标，修改文件即时在行内显示 +−；对话框不要占满，居中悬浮。</p>
               </div>
 
-              <div class="ms" id="runStatus">正在处理 <span id="runTimer">1m 42s</span></div>
+              <div class="ms" id="runStatus"><span class="neon">正在处理 <span id="runTimer">1m 42s</span></span></div>
 
               <div class="activity">
                 <!-- 思考 -->
@@ -486,7 +644,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
                   <p>为 R-Code 主交互页（Agent 对话工作台）设计高保真 HTML 原型：沿用 Signature 暖色体系，去除菱形标记，文件行带类型图标与行内差异，对话框居中悬浮。</p>
                 </div></div></div>
 
-                <!-- 子智能体 -->
+                <!-- 子智能体（藏青色高亮 · 点击芯片可跳转目录详情） -->
                 <button class="ev" data-expand aria-expanded="false">
                   <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="12" r="2.2"/><path d="M7.8 7.2l8.4 3.9M7.8 16.8l8.4-3.9"/></svg></span>
                   <span class="k">子智能体</span><span class="name sub">Explore</span>
@@ -495,8 +653,9 @@ button.ev:hover{background:rgba(241,239,233,.05)}
                 </button>
                 <div class="ev-detail"><div class="inner"><div class="ev-body">
                   <div class="sub-chips">
-                    <button class="sub-chip" data-toast="原型演示：打开子代理详情"><span class="dot" style="background:#6fc7d8"></span>Explore<span class="st">已完成 · 2 文件 · 38s</span></button>
-                    <span class="sub-status">1 已完成</span>
+                    <button class="sub-chip" data-open-agent="explore-ui"><span class="dot" style="background:var(--cyan)"></span>Explore<span class="st">已完成 · 2 文件 · 38s</span></button>
+                    <button class="sub-chip" data-open-agent="run-verify"><span class="dot" style="background:var(--cyan)"></span>校验<span class="st">运行中 · 41s</span></button>
+                    <span class="sub-status">1 运行中 · 1 已完成</span>
                   </div>
                 </div></div></div>
 
@@ -549,20 +708,25 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 
                 <div class="agent"><p>菱形标记与轨道线已移除，文件行改为类型图标 + 行内差异；对话框改为居中浮层。接下来跑一次浏览器验证。</p></div>
 
-                <!-- 计划：安静折叠行 -->
-                <button class="ev" data-expand aria-expanded="false">
-                  <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg></span>
-                  <span class="k">计划</span><span class="m dim">· 4 步 · 已完成 2</span>
-                  <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
-                </button>
-                <div class="ev-detail"><div class="inner"><div class="ev-body">
-                  <ol class="plan-steps" style="margin-top:2px">
-                    <li class="done"><span class="pi">✓</span>读取 Signature 样式与现有组件</li>
-                    <li class="done"><span class="pi">✓</span>按现有风格重写原型</li>
-                    <li class="cur"><span class="pi">●</span>浏览器验证与截图</li>
-                    <li><span class="pi">○</span>交付说明</li>
-                  </ol>
-                </div></div></div>
+                <!-- 待办（TodoWrite 风格卡片） -->
+                <div class="todo-card">
+                  <button class="todo-head" data-expand aria-expanded="false">
+                    <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 5.5l1 1 2-2M4 11.5l1 1 2-2M4 17.5l1 1 2-2"/></svg></span>
+                    <span class="k">待办</span>
+                    <span class="m">Playwright 浏览器验证与视觉走查</span>
+                    <span class="todo-n">2/5</span>
+                    <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span>
+                  </button>
+                  <div class="ev-detail"><div class="inner">
+                    <ol class="todo-list">
+                      <li class="done"><span class="pi">✓</span>摸清现状：R-Code 主交互页真实元素与设计 token</li>
+                      <li class="done"><span class="pi">✓</span>按现有风格重写原型 C</li>
+                      <li class="cur"><span class="pi">→</span>Playwright 浏览器验证（console / 溢出 / 截图）</li>
+                      <li><span class="pi">○</span>视觉走查截图并迭代细节</li>
+                      <li><span class="pi">○</span>交付说明与变更清单</li>
+                    </ol>
+                  </div></div>
+                </div>
 
                 <!-- 权限卡（signature 现状样式） -->
                 <div class="perm-card" id="permCard" role="group" aria-label="权限批准请求">
@@ -590,7 +754,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
                   </div>
                   <div class="ev" id="spinRow" hidden style="cursor:default">
                     <span class="ic"><span class="spinner"></span></span>
-                    <span class="m dim" id="spinText">正在执行 verify.py…</span>
+                    <span class="m neon" id="spinText">正在执行 verify.py…</span>
                   </div>
                 </div>
               </div>
@@ -608,6 +772,8 @@ button.ev:hover{background:rgba(241,239,233,.05)}
             <div class="composer">
               <div class="chip-row" id="chipRow">
                 <span class="attach-chip"><span class="fx"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg></span>参考图-交互页.png<button class="rm" aria-label="移除附件">✕</button></span>
+                <span class="attach-chip"><span class="fx"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg></span>image-1.png<button class="rm" aria-label="移除附件">✕</button></span>
+                <span class="attach-chip"><span class="fx"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg></span>image-2.png<button class="rm" aria-label="移除附件">✕</button></span>
               </div>
               <textarea id="composerInput" rows="2" placeholder="正在处理，可继续补充要求…（输入 @ 引用文件）" aria-label="消息输入框"></textarea>
               <div class="comp-meta">
@@ -616,7 +782,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M12 5v14M5 12h14"/></svg>
                   </button>
                   <div class="menu up" data-menu="add" role="menu" aria-label="添加" style="min-width:180px">
-                    <button class="mi" data-toast="原型中未接入：添加附件"><span class="mi-body"><span class="mi-title">添加附件</span><span class="mi-hint">图片、文件或工作区路径</span></span></button>
+                    <button class="mi" id="miAddAttach"><span class="mi-body"><span class="mi-title">添加附件</span><span class="mi-hint">图片、文件或工作区路径</span></span></button>
                     <button class="mi" data-toast="原型中未接入：添加目标"><span class="mi-body"><span class="mi-title">添加目标</span><span class="mi-hint">为本轮运行设定验收目标</span></span></button>
                   </div>
                 </div>
@@ -677,39 +843,87 @@ button.ev:hover{background:rgba(241,239,233,.05)}
         </section>
       </main>
 
-      <!-- 工作台（现状复刻） -->
+      <!-- 工作台：运行 / 子智能体目录 -->
       <aside class="workbench" id="wb" aria-label="任务工作台">
         <div class="wb-head">
-          <span class="wb-tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 14l4-9 4 12 4-8 4 5"/></svg>运行与子代理</span>
-          <button class="wb-x" aria-label="关闭标签" data-toast="原型演示：关闭标签">✕</button>
-          <button class="wb-add" aria-label="新建标签" data-toast="原型演示：新建工作台标签">＋</button>
-          <span class="wb-live"><span class="d"></span>Live · 1 子代理</span>
+          <button class="wb-chev" id="wbCollapse" aria-label="收起面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>
+          <div class="wb-tabs" role="tablist">
+            <button class="wb-tab" id="tabRun" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 14l4-9 4 12 4-8 4 5"/></svg>运行</button>
+            <button class="wb-tab active" id="tabAgents" role="tab" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="12" r="2.2"/><path d="M7.8 7.2l8.4 3.9M7.8 16.8l8.4-3.9"/></svg>子智能体目录</button>
+          </div>
+          <span class="wb-live"><span class="d"></span>Live · 1 运行中</span>
+          <button class="wb-x" id="wbCloseX" aria-label="关闭面板">✕</button>
+          <button class="wb-add" id="wbAdd" aria-label="新建子代理">＋</button>
         </div>
-        <div class="wb-body">
+
+        <!-- 运行面板 -->
+        <div class="wb-body" id="wbPaneRun" hidden>
           <div class="wb-card">
             <div class="r1"><span class="state" id="wbState">运行中</span><h4>主交互页重设计</h4><span class="t-right" id="wbElapsed">26m</span></div>
             <p class="sub">按 Signature 风格重做主交互页原型：去菱形、文件行内差异、悬浮对话框。</p>
             <p class="meta">模型 · kimi-k3 · 推理 最大 · 权限 <span id="wbPerm">完全访问权限</span></p>
           </div>
-          <button class="wb-sumcard" data-toast="原型演示：打开子代理面板">
+          <button class="wb-sumcard" id="wbSumAgents">
             <span class="sqs"><span class="sq g">✓</span><span class="sq o">＋</span></span>
-            <span><span class="t1">1 已完成 · 0 运行中</span><br><span class="t2">查看各自的运行过程</span></span>
+            <span><span class="t1">1 已完成 · 1 运行中</span><br><span class="t2">查看各自的运行过程</span></span>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M9 6l6 6-6 6"/></svg>
           </button>
           <div class="wb-cur"><b>● 当前运行</b>　<span id="wbCur">等待权限批准</span></div>
           <div class="wb-stats">
-            <div class="wb-stat"><div class="l">变更文件</div><div class="v">2</div></div>
-            <div class="wb-stat"><div class="l">验证</div><div class="v" id="wbVerify">未运行</div></div>
-            <div class="wb-stat"><div class="l">待批权限</div><div class="v warn" id="wbPending">1</div></div>
+            <button class="wb-stat" data-toast="变更文件明细（演示）：room-redesign-c.html · notes.md"><div class="l">变更文件</div><div class="v">2</div></button>
+            <button class="wb-stat" data-toast="验证记录（演示）：等待 verify.py 批准"><div class="l">验证</div><div class="v" id="wbVerify">未运行</div></button>
+            <button class="wb-stat" data-toast="待批权限（演示）：verify.py 原型验证命令"><div class="l">待批权限</div><div class="v warn" id="wbPending">1</div></button>
           </div>
           <div class="wb-sec">运行审计<span class="r">工具 · 目标 · 结果</span></div>
           <div class="audit">
-            <div class="audit-row"><span class="kind cmd">命令</span><span class="tx">rg --files src-tauri/frontend/src</span><span class="rst ok">✓ 完成 00:00:41</span></div>
-            <div class="audit-row"><span class="kind sub">子代理</span><span class="tx">Explore · 摸清主交互页 UI 现状</span><span class="rst ok">✓ 完成 00:00:38</span></div>
-            <div class="audit-row"><span class="kind file">文件</span><span class="tx">读取 styles/scenes/room.css</span><span class="rst">00:00:12</span></div>
-            <div class="audit-row"><span class="kind edit">编辑</span><span class="tx">docs/prototypes/room-redesign-c.html</span><span class="rst ok">✓ 完成</span></div>
-            <div class="audit-row"><span class="kind edit">编辑</span><span class="tx">docs/prototypes/notes.md</span><span class="rst ok">✓ 完成</span></div>
-            <div class="audit-row" id="auditCmd"><span class="kind cmd">命令</span><span class="tx">python scripts/verify.py room-redesign-c.html</span><span class="rst wait">待批准</span></div>
+            <button class="audit-row" data-toast="审计明细（演示）：rg --files src-tauri/frontend/src"><span class="kind cmd">命令</span><span class="tx">rg --files src-tauri/frontend/src</span><span class="rst ok">✓ 完成 00:00:41</span></button>
+            <button class="audit-row" data-open-agent="explore-ui"><span class="kind sub">子代理</span><span class="tx">Explore · 摸清主交互页 UI 现状</span><span class="rst ok">✓ 完成 00:00:38</span></button>
+            <button class="audit-row" data-toast="审计明细（演示）：读取 styles/scenes/room.css"><span class="kind file">文件</span><span class="tx">读取 styles/scenes/room.css</span><span class="rst">00:00:12</span></button>
+            <button class="audit-row" data-toast="审计明细（演示）：编辑 room-redesign-c.html"><span class="kind edit">编辑</span><span class="tx">docs/prototypes/room-redesign-c.html</span><span class="rst ok">✓ 完成</span></button>
+            <button class="audit-row" data-toast="审计明细（演示）：编辑 notes.md"><span class="kind edit">编辑</span><span class="tx">docs/prototypes/notes.md</span><span class="rst ok">✓ 完成</span></button>
+            <button class="audit-row" id="auditCmd" data-toast="审计明细（演示）：verify.py 等待批准"><span class="kind cmd">命令</span><span class="tx">python scripts/verify.py room-redesign-c.html</span><span class="rst wait">待批准</span></button>
+          </div>
+        </div>
+
+        <!-- 子智能体目录面板 -->
+        <div class="wb-body" id="wbPaneAgents">
+          <!-- 目录列表 -->
+          <div id="agentsList">
+            <div class="ag-sec">正在运行<span class="cnt">· 1</span></div>
+            <button class="ag-row" data-agent="run-verify">
+              <span class="ag-ic run"><span class="ring"></span></span>
+              <span class="ag-main">
+                <span class="ag-line1"><b>验证原型并截图走查</b><span class="ag-time">刚刚</span></span>
+                <span class="ag-line2"><span class="ag-state run">运行中</span><span class="ag-preview">正在运行 verify.py，等待 1440×900 视口截图…</span></span>
+              </span>
+            </button>
+            <div class="ag-sec" style="margin-top:12px">已结束<span class="cnt">· 2</span></div>
+            <button class="ag-row" data-agent="design-thesis">
+              <span class="ag-ic done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+              <span class="ag-main">
+                <span class="ag-line1"><b>制定设计主张</b><span class="ag-time">12分钟</span></span>
+                <span class="ag-line2"><span class="ag-state">已完成</span><span class="ag-preview">结论：单方向 —— 延续 Signature 暖色体系，叠加三处交互改造…</span></span>
+              </span>
+            </button>
+            <button class="ag-row" data-agent="explore-ui">
+              <span class="ag-ic done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+              <span class="ag-main">
+                <span class="ag-line1"><b>摸清主交互页 UI 现状</b><span class="ag-time">26分钟</span></span>
+                <span class="ag-line2"><span class="ag-state">已完成</span><span class="ag-preview"># R-Code 前端主交互页探索报告：React 18 + TS，Signature 暖色…</span></span>
+              </span>
+            </button>
+          </div>
+
+          <!-- 子代理详情 -->
+          <div id="agentDetail" hidden>
+            <button class="ag-back" id="agentBack"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>子智能体目录</button>
+            <div class="ag-d-head"><h4 id="agTitle">—</h4><span class="ag-d-chip done" id="agChip">已完成</span></div>
+            <div class="ag-d-meta" id="agMeta">—</div>
+            <div class="ag-tr" id="agTranscript"></div>
+            <div class="ag-ask">
+              <input id="agAskInput" type="text" placeholder="继续追问这个子代理…" aria-label="追问子代理">
+              <button class="btn" id="agAskSend">追问</button>
+            </div>
           </div>
         </div>
       </aside>
@@ -718,7 +932,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
 </div>
 
 <div class="toast" id="toast" role="status"></div>
-<div class="proto-tag">原型 C · 演示数据 · 未接入真实运行时</div>
+<div class="proto-tag">原型 C+ · 完整交互 Demo · 演示数据 · 未接入真实运行时</div>
 
 <script>
 (function(){
@@ -748,6 +962,13 @@ button.ev:hover{background:rgba(241,239,233,.05)}
   document.addEventListener('click',e=>{ if(!e.target.closest('.menu')&&!e.target.closest('[data-menu-btn]')) closeMenus(); });
   document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeMenus(); });
 
+  /* 通知：全部已读 */
+  $('#bellReadAll').addEventListener('click',e=>{
+    e.stopPropagation(); closeMenus();
+    const bdg=$('.tb-bell .bdg'); if(bdg) bdg.remove();
+    toast('已全部标记为已读');
+  });
+
   /* 选择型菜单 */
   function markChecked(set,value){
     $$(`[data-set="${set}"]`).forEach(el=>el.setAttribute('aria-checked',String(el.dataset.value===value)));
@@ -758,7 +979,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
     perm(v){ $('#permPillTxt').textContent=v; $('#wbPerm').textContent=v; toast('权限模式：'+v); },
     engine(v){ $('#enginePillTxt').textContent=v; toast('主 Agent 引擎：'+v); },
     model(v){ modelName=v; renderModel(); },
-    effort(v){ effort=v; renderModel; renderModel(); }
+    effort(v){ effort=v; renderModel(); }
   };
   $$('[data-set]').forEach(el=>el.addEventListener('click',()=>{
     const {set,value}=el.dataset;
@@ -767,7 +988,7 @@ button.ev:hover{background:rgba(241,239,233,.05)}
     closeMenus();
   }));
 
-  /* 折叠行 */
+  /* 折叠行（活动 / 已完成摘要 / 待办卡） */
   $$('[data-expand]').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const detail=btn.nextElementSibling;
@@ -777,13 +998,61 @@ button.ev:hover{background:rgba(241,239,233,.05)}
     });
   });
 
-  /* 附件移除 */
-  $$('.attach-chip .rm').forEach(btn=>btn.addEventListener('click',()=>{
-    btn.closest('.attach-chip').remove();
-    if(!$('#chipRow').children.length) $('#chipRow').style.display='none';
+  /* 附件：移除 + 添加 */
+  const chipRow=$('#chipRow');
+  const IMG_SVG='<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg>';
+  function bindRm(btn){
+    btn.addEventListener('click',()=>{
+      btn.closest('.attach-chip').remove();
+      if(!chipRow.children.length) chipRow.style.display='none';
+    });
+  }
+  $$('.attach-chip .rm').forEach(bindRm);
+  let attachSeq=3;
+  $('#miAddAttach').addEventListener('click',()=>{
+    closeMenus();
+    const chip=document.createElement('span');
+    chip.className='attach-chip';
+    chip.innerHTML=`<span class="fx">${IMG_SVG}</span><span class="an"></span><button class="rm" aria-label="移除附件">✕</button>`;
+    chip.querySelector('.an').textContent=`image-${attachSeq++}.png`;
+    bindRm(chip.querySelector('.rm'));
+    chipRow.appendChild(chip); chipRow.style.display='';
+    toast('已添加附件（演示）');
+  });
+
+  /* 侧栏：导航切换 */
+  $$('.rail-nav .nav-item').forEach(item=>item.addEventListener('click',()=>{
+    $$('.rail-nav .nav-item').forEach(i=>i.classList.remove('active'));
+    item.classList.add('active');
+    const label=item.dataset.nav;
+    if(label==='搜索'){ toast('原型中未接入：全局搜索'); return; }
+    if(label!=='对话') toast(`原型演示：切换到「${label}」`);
   }));
 
-  /* 侧栏 / 工作台 */
+  /* 侧栏：分组 / 项目 分段开关 */
+  $$('.seg-btn').forEach(b=>b.addEventListener('click',()=>{
+    $$('.seg-btn').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-selected','false');});
+    b.classList.add('active'); b.setAttribute('aria-selected','true');
+    const group=b.dataset.seg==='group';
+    $('#projView').hidden=group; $('#groupView').hidden=!group;
+  }));
+
+  /* 侧栏：项目折叠 */
+  $$('.proj-head').forEach(h=>h.addEventListener('click',()=>{
+    const p=h.closest('.proj'); p.classList.toggle('collapsed');
+    h.setAttribute('aria-expanded',String(!p.classList.contains('collapsed')));
+  }));
+
+  /* 侧栏：任务切换 */
+  $$('.task').forEach(t=>t.addEventListener('click',()=>{
+    $$('.task').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    const name=t.querySelector('.t').textContent;
+    $('#rhTitleTxt').textContent=name;
+    toast('已打开任务：'+name+'（演示）');
+  }));
+
+  /* 侧栏 / 工作台显隐 */
   $('#railToggle').addEventListener('click',()=>{ document.querySelector('.rail').classList.toggle('closed'); });
   $('#miToggleRail').addEventListener('click',()=>{ document.querySelector('.rail').classList.toggle('closed'); closeMenus(); });
   function toggleWb(force){
@@ -794,6 +1063,88 @@ button.ev:hover{background:rgba(241,239,233,.05)}
   }
   $('#wbToggle').addEventListener('click',()=>toggleWb());
   $('#miToggleWb').addEventListener('click',()=>{toggleWb();closeMenus();});
+  $('#wbCollapse').addEventListener('click',()=>toggleWb(false));
+  $('#wbCloseX').addEventListener('click',()=>toggleWb(false));
+  $('#wbAdd').addEventListener('click',()=>toast('新建子代理：在输入框描述任务并选择子代理引擎（演示）'));
+
+  /* 工作台标签 */
+  const tabRun=$('#tabRun'), tabAgents=$('#tabAgents');
+  function wbTab(name){
+    const run=name==='run';
+    tabRun.classList.toggle('active',run); tabAgents.classList.toggle('active',!run);
+    tabRun.setAttribute('aria-selected',String(run));
+    tabAgents.setAttribute('aria-selected',String(!run));
+    $('#wbPaneRun').hidden=!run; $('#wbPaneAgents').hidden=run;
+  }
+  tabRun.addEventListener('click',()=>wbTab('run'));
+  tabAgents.addEventListener('click',()=>{wbTab('agents');showAgentList();});
+  $('#wbSumAgents').addEventListener('click',()=>{wbTab('agents');showAgentList();});
+
+  /* ===== 子智能体目录 ===== */
+  const FILE_DOC=(color)=>`<span class="fx"><svg viewBox="0 0 24 24"><path d="M6 2.5h7.5L18 7v14.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1Z" fill="${color}"/><path d="M13.5 2.5V7H18Z" fill="rgba(0,0,0,.28)"/></svg></span>`;
+  const AGENTS={
+    'run-verify':{
+      title:'验证原型并截图走查', state:'run', stateTxt:'运行中',
+      meta:'模型 kimi-k3 · 已运行 41s · 1 文件',
+      tr:`
+        <div class="row dim"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="10" r="4.5"/><circle cx="16" cy="15" r="3"/></svg></span><span class="m">思考过程 · 确认验证脚本参数与截图输出目录</span></div>
+        <div class="row"><span class="ic">${FILE_DOC('#e08a5a')}</span><span class="verb">读取</span><span class="fname">docs/prototypes/room-redesign-c.html</span></div>
+        <div class="row"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M7.5 10l3 2.2-3 2.3M12.5 14.8h4"/></svg></span><span class="m">python scripts/verify.py room-redesign-c.html</span></div>
+        <div class="row"><span class="ic"><span class="spinner"></span></span><span class="m neon">正在截取 1440×900 视口…</span><span class="caret"></span></div>`
+    },
+    'explore-ui':{
+      title:'摸清主交互页 UI 现状', state:'done', stateTxt:'已完成',
+      meta:'模型 kimi-k3 · 耗时 38s · 2 文件',
+      tr:`
+        <div class="row dim"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="10" r="4.5"/><circle cx="16" cy="15" r="3"/></svg></span><span class="m">思考过程 · 先读 token 再读结构，避免凭空猜测</span></div>
+        <div class="row"><span class="ic">${FILE_DOC('#c49a61')}</span><span class="verb">读取</span><span class="fname">styles/signature.css</span></div>
+        <div class="row"><span class="ic">${FILE_DOC('#b48ae0')}</span><span class="verb">读取</span><span class="fname">styles/scenes/room.css</span></div>
+        <div class="row"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></span><span class="m">搜索 token 引用 · 14 处</span></div>
+        <div class="row txt">结论：菱形标记集中在 .tcard::before / .run-disclosure::before 与 trace 轨道线；活动行结构简单，适合整体替换为类型图标行。</div>`
+    },
+    'design-thesis':{
+      title:'制定设计主张', state:'done', stateTxt:'已完成',
+      meta:'模型 kimi-k3 · 耗时 24s · 1 文件',
+      tr:`
+        <div class="row dim"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="10" r="4.5"/><circle cx="16" cy="15" r="3"/></svg></span><span class="m">思考过程 · 对齐参考图与 Signature 现状的差异</span></div>
+        <div class="row"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#6fbf8f"/><circle cx="9" cy="10" r="1.8" fill="rgba(0,0,0,.3)"/><path d="M5 18l4.5-4.5 3.5 3.5 2.5-2.5 3.5 3.5V18a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18Z" fill="rgba(0,0,0,.3)"/></svg></span><span class="verb">查看</span><span class="fname">docs/ui/dark 参考截图 ×4</span></div>
+        <div class="row txt">单方向：延续 Signature 暖色体系，叠加三处交互改造 —— 去菱形轨道、文件行内 +−、居中悬浮对话框。</div>`
+    }
+  };
+  function showAgentList(){
+    $('#agentsList').hidden=false; $('#agentDetail').hidden=true;
+    $$('.ag-row').forEach(r=>r.classList.remove('sel'));
+  }
+  function openAgent(id){
+    const a=AGENTS[id]; if(!a) return;
+    $('#agTitle').textContent=a.title;
+    const chip=$('#agChip'); chip.textContent=a.stateTxt; chip.className='ag-d-chip '+a.state;
+    $('#agMeta').textContent=a.meta;
+    $('#agTranscript').innerHTML=a.tr;
+    $('#agentsList').hidden=true; $('#agentDetail').hidden=false;
+    $$('.ag-row').forEach(r=>r.classList.toggle('sel',r.dataset.agent===id));
+  }
+  $$('.ag-row').forEach(r=>r.addEventListener('click',()=>openAgent(r.dataset.agent)));
+  $('#agentBack').addEventListener('click',showAgentList);
+  $$('[data-open-agent]').forEach(el=>el.addEventListener('click',()=>{
+    toggleWb(true); wbTab('agents'); openAgent(el.dataset.openAgent);
+  }));
+
+  /* 追问子代理 */
+  function agAsk(){
+    const inputEl=$('#agAskInput');
+    const v=inputEl.value.trim();
+    if(!v){ toast('先输入追问内容'); return; }
+    const row=document.createElement('div');
+    row.className='row dim';
+    row.innerHTML='<span class="ic">↳</span><span class="m"></span>';
+    row.querySelector('.m').textContent='追问已排队：'+v;
+    $('#agTranscript').appendChild(row);
+    inputEl.value='';
+    toast('已加入子代理追问队列（演示）');
+  }
+  $('#agAskSend').addEventListener('click',agAsk);
+  $('#agAskInput').addEventListener('keydown',e=>{ if(e.key==='Enter') agAsk(); });
 
   /* 计时（R-Code 真实格式：5s / 1m 42s / 1h 02m） */
   const fmt=s=>{const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;
@@ -882,9 +1233,9 @@ button.ev:hover{background:rgba(241,239,233,.05)}
     turn.className='turn';
     turn.innerHTML=`
       <div class="you"><p style="margin:0"></p></div>
-      <div class="ms">正在处理 <span class="rt">1s</span></div>
+      <div class="ms"><span class="neon">正在处理 <span class="rt">1s</span></span></div>
       <div class="activity"><div class="ev" style="cursor:default">
-        <span class="ic"><span class="spinner"></span></span><span class="m dim">正在思考…</span>
+        <span class="ic"><span class="spinner"></span></span><span class="m neon">正在思考…</span><span class="caret"></span>
       </div></div>`;
     turn.querySelector('.you p').textContent=text;
     threadCol.appendChild(turn);
@@ -911,9 +1262,31 @@ button.ev:hover{background:rgba(241,239,233,.05)}
     if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); handleSend(); }
   });
 
+  /* 新对话 */
+  function newChat(){
+    if(run.running) stopRun();
+    threadCol.innerHTML=`<div class="turn"><div class="agent" style="margin-top:28vh;text-align:center;color:var(--fg-faint)">新对话已就绪 · 输入消息开始（演示模式）</div></div>`;
+    $('#rhTitleTxt').textContent='新对话';
+    $('#rhState').textContent='会话就绪';
+    setRunningUI(false);
+    closeMenus();
+    toast('已创建新对话（演示）');
+    input.focus();
+  }
+  $('#railNew').addEventListener('click',newChat);
+  $('#miNewChat').addEventListener('click',newChat);
+
+  /* 快捷键 */
+  document.addEventListener('keydown',e=>{
+    if(e.ctrlKey&&!e.shiftKey&&e.key.toLowerCase()==='n'){ e.preventDefault(); newChat(); }
+    if(e.ctrlKey&&e.key.toLowerCase()==='k'){ e.preventDefault(); toast('原型中未接入：全局搜索'); }
+  });
+
   /* 初始视口：状态行对齐消息流顶部 */
   const anchor=$('#runStatus');
-  thread.scrollTop=anchor.getBoundingClientRect().top-thread.getBoundingClientRect().top+thread.scrollTop-14;
+  if(anchor){
+    thread.scrollTop=anchor.getBoundingClientRect().top-thread.getBoundingClientRect().top+thread.scrollTop-14;
+  }
 })();
 </script>
 </body>
