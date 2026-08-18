@@ -144,6 +144,19 @@ pub trait AgentRuntime: Send + Sync {
         Ok(())
     }
 
+    /// A3：声明本会话的审计 journal 目标 id（宿主传入 branch.storage_id）。
+    ///
+    /// runtime 内部 session_id 与宿主 canonical 文件名不同 id；未声明时 journal
+    /// 回退 session_id（保持既有测试接线行为不变）。journal 未接线时该映射惰性
+    /// 无害。必须在 start_run 前调用；默认 no-op 保持轻量 runtime 兼容。
+    async fn set_request_journal_target(
+        &mut self,
+        _session_id: &str,
+        _journal_id: String,
+    ) -> Result<(), ProductError> {
+        Ok(())
+    }
+
     /// 获取当前 run 的事件（ drain 语义：取出后清空）。
     async fn poll_events(&mut self) -> Result<Vec<AgentEvent>, ProductError>;
 }

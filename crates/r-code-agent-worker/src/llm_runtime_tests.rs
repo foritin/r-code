@@ -9079,3 +9079,60 @@ async fn request_header_covers_memory_head_and_task_context_without_false_mismat
     assert_eq!(headers, 1);
     assert_eq!(mismatches, 0, "memory 头与 task_context 尾登记后不得误报");
 }
+
+#[tokio::test]
+async fn request_journal_target_overrides_session_id_for_file_name() {
+    // A3.1：宿主声明映射后，journal 事件（Meta/goal/RequestHeader）全部落在
+    // {journal_id}.jsonl 而非 {session_id}.jsonl；未设映射的会话仍落在
+    // session_id 文件（unwrap_or 回退，既有行为不变）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ));
+    let mapped = rt.create_session(input()).await.unwrap();
+    let fallback = rt.create_session(input()).await.unwrap();
+    let storage_id = "host-branch-storage-id-001".to_string();
+    rt.set_request_journal_target(&mapped.meta.id, storage_id.clone())
+        .await
+        .unwrap();
+    rt.start_run(&mapped.meta.id, "mapped session goal")
+        .await
+        .unwrap();
+    rt.start_run(&fallback.meta.id, "fallback session goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let mapped_path = journal_dir.path().join(format!("{storage_id}.jsonl"));
+    let mapped_jsonl = tokio::fs::read_to_string(&mapped_path).await.unwrap();
+    assert!(
+        mapped_jsonl.contains("\"request_header\""),
+        "映射会话的 RequestHeader 应落在 {{storage_id}}.jsonl"
+    );
+    assert!(mapped_jsonl.contains("mapped session goal"));
+    // 孤儿文件不得出现：映射会话不落 {session_id}.jsonl。
+    let orphan = journal_dir.path().join(format!("{}.jsonl", mapped.meta.id));
+    assert!(
+        !orphan.exists(),
+        "映射会话不得再以 runtime session_id 落盘孤儿文件"
+    );
+    // 未设映射的会话维持既有行为：落在 {session_id}.jsonl。
+    let fallback_jsonl = tokio::fs::read_to_string(
+        journal_dir
+            .path()
+            .join(format!("{}.jsonl", fallback.meta.id)),
+    )
+    .await
+    .unwrap();
+    assert!(fallback_jsonl.contains("\"request_header\""));
+    assert!(fallback_jsonl.contains("fallback session goal"));
+}

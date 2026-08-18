@@ -1693,6 +1693,9 @@ struct SessionState {
     /// 编辑”：run 循环每轮请求发送前经 `capture_run_prefix_shape` 把它作为
     /// `provider_visible_version` 捕获（PRD §5 P2-G 第 5 点）。
     rewrite_version: u32,
+    /// A3：本会话 journal 落盘使用的目标 id（宿主传入 branch.storage_id）。
+    /// None 时回退 ctx.session_id（保持既有测试接线行为不变）。
+    request_journal_id: Option<String>,
 }
 
 /// 会话持有的本地文件能力边界。
@@ -1954,6 +1957,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 name_allocator: Arc::new(SubagentNameAllocator::default()),
                 active_run_id: None,
                 rewrite_version: 0,
+                request_journal_id: None,
             },
         );
         Ok(session)
@@ -2061,13 +2065,23 @@ impl AgentRuntime for LlmAgentRuntime {
         // 否则首轮重建自检必报「消息数不一致」。Meta 只在会话文件尚不存在时
         // 补写（load 报 SessionNotFound 即判定缺失）；goal 消息随后追加，
         // 与内存侧 session.messages.push 同序。
+        // A3：落盘目标 id 优先取宿主声明的映射（branch.storage_id），未声明时
+        // 回退 session_id。bootstrap 块在 spawn 之前执行，直接读映射即可。
+        let journal_target = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(session_id)
+                .and_then(|session| session.request_journal_id.clone())
+        };
         if let Some(journal) = self.request_journal.as_ref() {
-            match journal.load(session_id).await {
+            let journal_key = journal_target.as_deref().unwrap_or(session_id);
+            match journal.load(journal_key).await {
                 Err(agent_error::Error::SessionNotFound(_)) => {
                     // load 要求首行为 Meta；文件不存在时先补一行（meta.id 与
                     // 文件名不必一致，load 不校验）。
                     let meta = SessionMeta::new(model.as_str(), self.provider.name());
-                    if let Err(error) = journal.append(session_id, SessionEvent::Meta(meta)).await {
+                    if let Err(error) = journal.append(journal_key, SessionEvent::Meta(meta)).await
+                    {
                         tracing::warn!(
                             session_id,
                             error = %error,
@@ -2085,7 +2099,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 }
             }
             if let Err(error) = journal
-                .append(session_id, SessionEvent::Message(goal_journal_copy))
+                .append(journal_key, SessionEvent::Message(goal_journal_copy))
                 .await
             {
                 tracing::warn!(
@@ -2123,6 +2137,7 @@ impl AgentRuntime for LlmAgentRuntime {
             memory_context,
             request_journal: self.request_journal.clone(),
             request_self_check: self.request_self_check.clone(),
+            request_journal_id: journal_target,
         }));
 
         Ok(run_id_text)
@@ -2313,6 +2328,19 @@ impl AgentRuntime for LlmAgentRuntime {
         Ok(())
     }
 
+    async fn set_request_journal_target(
+        &mut self,
+        session_id: &str,
+        journal_id: String,
+    ) -> Result<(), ProductError> {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
+        session.request_journal_id = Some(journal_id);
+        Ok(())
+    }
+
     async fn poll_events(&mut self) -> Result<Vec<AgentEvent>, ProductError> {
         let mut event_rx = self.event_rx.lock().await;
         let mut events = Vec::new();
@@ -2457,6 +2485,16 @@ struct RunLoopCtx {
     request_journal: Option<Arc<agent_store::SessionStore>>,
     /// 1.3 自检观测计数（与 runtime 共享，供外部断言）。
     request_self_check: Arc<RequestSelfCheckCounters>,
+    /// A3：本会话 journal 落盘目标 id（宿主传入 branch.storage_id）。
+    /// None 时回退 session_id（既有测试接线行为不变）。
+    request_journal_id: Option<String>,
+}
+
+/// A3：journal 落盘键——宿主声明的目标 id 优先，未声明时回退 runtime 内部
+/// session_id（既有测试接线行为逐字节不变）。run_loop 内全部 journal 调用
+/// 经此取键，禁止再直接引用 ctx.session_id。
+fn journal_key(ctx: &RunLoopCtx) -> &str {
+    ctx.request_journal_id.as_deref().unwrap_or(&ctx.session_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -3609,7 +3647,7 @@ async fn run_loop(ctx: RunLoopCtx) {
         // 1.3：journal 同步放在锁外追加，避免持有 session 锁做磁盘 IO。
         if let (Some(journal), 1..) = (ctx.request_journal.as_ref(), steer_journal_events.len()) {
             if let Err(error) = journal
-                .append_batch(&ctx.session_id, &steer_journal_events)
+                .append_batch(journal_key(&ctx), &steer_journal_events)
                 .await
             {
                 tracing::warn!(
@@ -3653,7 +3691,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                 let snapshot = SessionEvent::HistorySnapshot {
                     messages: canonical_messages.clone(),
                 };
-                if let Err(error) = journal.append(&ctx.session_id, snapshot).await {
+                if let Err(error) = journal.append(journal_key(&ctx), snapshot).await {
                     tracing::warn!(
                         session_id = %ctx.session_id,
                         error = %error,
@@ -3785,7 +3823,8 @@ async fn run_loop(ctx: RunLoopCtx) {
                             let projection = SessionEvent::ModelProjection {
                                 messages: Some(messages.clone()),
                             };
-                            if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                            if let Err(error) = journal.append(journal_key(&ctx), projection).await
+                            {
                                 tracing::warn!(
                                     session_id = %ctx.session_id,
                                     error = %error,
@@ -3851,7 +3890,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                         let projection = SessionEvent::ModelProjection {
                             messages: Some(messages.clone()),
                         };
-                        if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                        if let Err(error) = journal.append(journal_key(&ctx), projection).await {
                             tracing::warn!(
                                 session_id = %ctx.session_id,
                                 error = %error,
@@ -4033,7 +4072,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                 },
                 max_tokens: request.max_tokens,
             };
-            match journal.append(&ctx.session_id, header).await {
+            match journal.append(journal_key(&ctx), header).await {
                 Ok(()) => {
                     ctx.request_self_check
                         .headers_appended
@@ -4048,7 +4087,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             // 重建自检：读回 JSONL 投影重算哈希与本次派发值比对。首期
             // **只记录不阻断**（风险表：先跑一周观察误报；确认零误报后把此处
             // 升级为终止条件即可，纯函数签名已返回差异描述）。
-            match journal.load(&ctx.session_id).await {
+            match journal.load(journal_key(&ctx)).await {
                 Ok(reloaded) => {
                     let rebuilt = reloaded
                         .model_projection
@@ -4133,7 +4172,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                         .map(|message| SessionEvent::Message(message.clone()))
                         .collect::<Vec<_>>();
                     if !events.is_empty() {
-                        if let Err(error) = journal.append_batch(&ctx.session_id, &events).await {
+                        if let Err(error) = journal.append_batch(journal_key(&ctx), &events).await {
                             tracing::warn!(
                                 session_id = %ctx.session_id,
                                 error = %error,
@@ -4271,7 +4310,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                     (ctx.request_journal.as_ref(), pending_journal_messages.len())
                 {
                     if let Err(error) = journal
-                        .append_batch(&ctx.session_id, &pending_journal_messages)
+                        .append_batch(journal_key(&ctx), &pending_journal_messages)
                         .await
                     {
                         tracing::warn!(
@@ -4371,7 +4410,7 @@ Please summarize and present these results.\n\n{}",
                                 (ctx.request_journal.as_ref(), collected_journal_events.len())
                             {
                                 if let Err(error) = journal
-                                    .append_batch(&ctx.session_id, &collected_journal_events)
+                                    .append_batch(journal_key(&ctx), &collected_journal_events)
                                     .await
                                 {
                                     tracing::warn!(
@@ -4454,7 +4493,7 @@ Do not mention private reasoning.\n\n{}",
                                         (ctx.request_journal.as_ref(), revise_journal_events.len())
                                     {
                                         if let Err(error) = journal
-                                            .append_batch(&ctx.session_id, &revise_journal_events)
+                                            .append_batch(journal_key(&ctx), &revise_journal_events)
                                             .await
                                         {
                                             tracing::warn!(
@@ -4584,7 +4623,8 @@ Do not mention private reasoning.\n\n{}",
                             let projection = SessionEvent::ModelProjection {
                                 messages: Some(compacted),
                             };
-                            if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                            if let Err(error) = journal.append(journal_key(&ctx), projection).await
+                            {
                                 tracing::warn!(
                                     session_id = %ctx.session_id,
                                     error = %error,
