@@ -4018,6 +4018,20 @@ async fn run_loop(ctx: RunLoopCtx) {
                 messages_sha256: envelope.messages_sha256.clone(),
                 reason: reason.to_string(),
                 excluded_tails: tail_labels.iter().map(|label| label.to_string()).collect(),
+                // A2：目录构成审计字段。tools 已是 client_tools_for_hosted_tools
+                // 处理后的最终派发目录（含 search → search_files 别名），审计
+                // 记录的是模型实际看到的名字；max_tokens 取钳制后的请求值
+                // （request 在此之后才被 move 进迭代调用）。
+                tool_names: tools.iter().map(|tool| tool.name.clone()).collect(),
+                hosted_tool_names: if summary_only {
+                    Vec::new()
+                } else {
+                    active_hosted_tools
+                        .iter()
+                        .map(hosted_tool_display_name)
+                        .collect()
+                },
+                max_tokens: request.max_tokens,
             };
             match journal.append(&ctx.session_id, header).await {
                 Ok(()) => {
@@ -5017,6 +5031,18 @@ fn client_tools_for_hosted_tools(
 
 fn has_hosted_web_search(hosted_tools: &[HostedToolSpec]) -> bool {
     hosted_tools.iter().any(HostedToolSpec::is_web_search)
+}
+
+/// A2：hosted 工具的审计名。`HostedToolSpec` 是变体枚举（WebSearch/WebFetch），
+/// 无 name 字段，用现有判定器映射，不动合同层。
+fn hosted_tool_display_name(tool: &HostedToolSpec) -> String {
+    if tool.is_web_search() {
+        "web_search".to_string()
+    } else if tool.is_web_fetch() {
+        "web_fetch".to_string()
+    } else {
+        "unknown".to_string()
+    }
 }
 
 fn disable_hosted_web_tools(hosted_tools: &mut Vec<HostedToolSpec>) {

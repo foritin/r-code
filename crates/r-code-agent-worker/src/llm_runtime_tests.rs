@@ -8889,6 +8889,9 @@ async fn request_header_journal_records_turns_and_self_check_passes() {
     provider.push_turn(failing_read_turn("rh-1"));
     provider.push_text_turn("final answer", Usage::default());
     let journal_dir = tempfile::tempdir().unwrap();
+    // 附加工作区：目录构成审计断言要求首轮 tool_names 非空——纯聊天会话的
+    // 工具目录为空表，无法验证 A2 新字段。
+    let workspace = tempfile::tempdir().unwrap();
     let journal = agent_store::SessionStore::new(journal_dir.path().to_path_buf());
     let mut rt = LlmAgentRuntime::new(
         Box::new(provider),
@@ -8898,7 +8901,13 @@ async fn request_header_journal_records_turns_and_self_check_passes() {
         None,
     )
     .with_request_journal(journal);
-    let session = rt.create_session(input()).await.unwrap();
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            ..input()
+        })
+        .await
+        .unwrap();
     rt.start_run(&session.meta.id, "inspect then answer")
         .await
         .unwrap();
@@ -8938,6 +8947,34 @@ async fn request_header_journal_records_turns_and_self_check_passes() {
         .unwrap_or_default();
     assert!(excluded.iter().any(|tail| tail == "local_clock"));
     assert!(excluded.iter().any(|tail| tail == "plan_mode"));
+
+    // A2：目录构成与输出预算字段已随每轮 header 落盘。工作区会话的主目录
+    // 非空（read_file 等）；max_tokens 是钳制后的实际派发值。
+    let first_names = headers[0]["request_header"]["tool_names"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !first_names.is_empty(),
+        "首轮 tool_names 必须登记派发目录清单"
+    );
+    assert!(first_names.iter().any(|name| name == "read_file"));
+    assert_eq!(
+        headers[1]["request_header"]["tool_names"], headers[0]["request_header"]["tool_names"],
+        "同 run 两轮目录一致（P1-C 排序冻结），清单也须逐字节一致"
+    );
+    assert_eq!(
+        headers[0]["request_header"]["hosted_tool_names"],
+        serde_json::json!([]),
+        "mock provider 无 hosted 工具，清单为空数组而非缺字段"
+    );
+    assert!(
+        headers[0]["request_header"]["max_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "max_tokens 必须记录钳制后的实际派发值"
+    );
 
     // 消费侧 no-op：全新 store 句柄 load 该 JSONL，RequestHeader 不进投影，
     // canonical 首条仍是 goal。
