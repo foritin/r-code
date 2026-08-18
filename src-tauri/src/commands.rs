@@ -4763,6 +4763,9 @@ async fn ensure_real_runtime(
             test_fail_limit: config.orchestration.run_budget.test_fail_limit,
             checkpoint_enabled: config.orchestration.run_budget.checkpoint_enabled,
         },
+        // C2：首轮锚定旋钮直接透传（worker 侧复用同一 agent-config 枚举）。
+        first_round_catalog: config.orchestration.first_round_catalog,
+        first_round_promote_on: config.orchestration.first_round_promote_on,
     };
     // 该开关是热配置：设置页在活跃运行中会直接更新同一个原子门；这里再次同步，
     // 也覆盖用户在应用外编辑配置文件后开始下一轮交互的情况。
@@ -4779,6 +4782,10 @@ async fn ensure_real_runtime(
             orchestration.quality_reviewer,
             orchestration.max_review_rounds,
             orchestration.run_budget,
+            // C2（红线级要求）：两个锚定旋钮必须入指纹，漏加会导致改配置后
+            // 旧 runtime 残留旧目录策略。
+            orchestration.first_round_catalog,
+            orchestration.first_round_promote_on,
         ),
         prompt_fingerprint.to_hex(),
     );
@@ -27300,6 +27307,263 @@ kind = "codex_cli"
         // Real runtime 但未接线 journal，计数为 (0, 0)。
         let counters_off = request_audit_counters(&state, &second.id).await.unwrap();
         assert_eq!(counters_off, Some((0, 0)));
+        SettingsService::new(state.config_dir.clone())
+            .set_provider_secret(&provider_name, "")
+            .unwrap();
+    }
+
+    /// 阶段 C 冒烟的 cargo 级等价物（完成定义第 4 条）：审计 + readonly 锚定下
+    /// 跑短任务，核对（B1 配方 1/5 的程序化等价）首轮 tool_names 恰为只读五件套、
+    /// distinct tools_sha256 == 2（bootstrap 目录 + 完整目录）；改回 full 后新会话
+    /// 目录时间线恒定（与现状一致）。
+    #[tokio::test]
+    async fn first_round_readonly_smoke_end_to_end() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let (_dir, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind anchoring smoke provider fixture");
+        let provider_addr = listener
+            .local_addr()
+            .expect("anchoring smoke provider address");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut request = Vec::with_capacity(4096);
+                    let mut chunk = [0_u8; 1024];
+                    let header_end = loop {
+                        if let Some(offset) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            break offset + 4;
+                        }
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    };
+                    let content_length = String::from_utf8_lossy(&request[..header_end])
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    while request.len() < header_end.saturating_add(content_length) {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    let body = concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"anchored\"},\"finish_reason\":null}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+        let provider_name = format!("r-code-anchor-smoke-{}", uuid::Uuid::new_v4());
+        settings_save_provider(
+            &state,
+            ProviderSettingsInput {
+                name: provider_name.clone(),
+                provider_kind: None,
+                base_url: format!("http://{provider_addr}/v1"),
+                model: "test-model".into(),
+                api_key: Some("sk-anchor-smoke".into()),
+                max_tokens: Some(2048),
+                temperature: Some(0.2),
+                protocol: None,
+                show_reasoning: None,
+                activate: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+        // 开审计 + readonly 锚定（[orchestration] 段以默认值落盘，直接替换值）。
+        let config_path = state.config_dir.join("config.toml");
+        let config_toml = std::fs::read_to_string(&config_path).unwrap();
+        assert!(config_toml.contains("request_audit = false"));
+        assert!(config_toml.contains("first_round_catalog = \"full\""));
+        std::fs::write(
+            &config_path,
+            config_toml
+                .replace("request_audit = false", "request_audit = true")
+                .replace(
+                    "first_round_catalog = \"full\"",
+                    "first_round_catalog = \"readonly\"",
+                ),
+        )
+        .unwrap();
+        state.agent.enable_real_mode();
+
+        let settle = |task_id: String| {
+            let state = &state;
+            async move {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                loop {
+                    let detail = task_detail(state, &task_id).await.unwrap();
+                    if matches!(detail.task.state, TaskState::Idle | TaskState::ReviewReady) {
+                        return;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "anchoring smoke run did not settle; state = {:?}",
+                        detail.task.state
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+        };
+
+        // 短任务：两条消息 = 两个 run。run1 首轮受限（纯文字首答，either 晋升），
+        // run2 首轮已恢复完整目录 → distinct tools_sha256 恰为 2。
+        let task = task_create(&state, Some(&workspace), "Anchoring", "g", "edit")
+            .await
+            .unwrap();
+        agent_send(&state, &task.id, "anchoring smoke goal")
+            .await
+            .unwrap();
+        settle(task.id.clone()).await;
+        agent_send(&state, &task.id, "follow up").await.unwrap();
+        settle(task.id.clone()).await;
+
+        let sidecar = state
+            .sessions_dir
+            .join("request-audit")
+            .join(format!("{}.jsonl", task.id));
+        let sidecar_jsonl = tokio::fs::read_to_string(&sidecar).await.unwrap();
+        let headers: Vec<serde_json::Value> = sidecar_jsonl
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|value| value.get("request_header").is_some())
+            .collect();
+        assert!(headers.len() >= 2, "两个 run 至少两枚 header");
+        let names = |index: usize| -> Vec<String> {
+            headers[index]["request_header"]["tool_names"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| name.as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+        let first_names = names(0);
+        // 允许清单五件套 ∩ Main 策略真实目录：load_skill 不在
+        // workspace_tool_allowed 清单（Main 目录本就不暴露），交集恰为四个
+        // 只读探索工具——过滤是 retain 语义，清单是超集，行为正确。
+        assert_eq!(
+            first_names,
+            vec![
+                "glob".to_string(),
+                "list_files".to_string(),
+                "read_file".to_string(),
+                "search".to_string(),
+            ],
+            "首轮目录 = 只读允许清单与 Main 目录的交集（按名排序，P1-C）：{first_names:?}"
+        );
+        let full_names = names(1);
+        assert!(
+            full_names.len() > first_names.len(),
+            "晋升后的完整目录应大于五件套：{full_names:?}"
+        );
+        assert!(full_names.iter().any(|name| name == "edit"));
+        // B1 配方 5 的等价断言：distinct tools_sha256 == 2。
+        let mut shas: Vec<String> = headers
+            .iter()
+            .map(|header| {
+                header["request_header"]["tools_sha256"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        shas.sort();
+        shas.dedup();
+        assert_eq!(
+            shas.len(),
+            2,
+            "distinct tools_sha256 应恰为 2（bootstrap 目录 + 完整目录）"
+        );
+
+        // 改回 full：新会话目录时间线恒定（与现状一致）。
+        let config_toml = std::fs::read_to_string(&config_path).unwrap();
+        std::fs::write(
+            &config_path,
+            config_toml.replace(
+                "first_round_catalog = \"readonly\"",
+                "first_round_catalog = \"full\"",
+            ),
+        )
+        .unwrap();
+        let control = task_create(&state, Some(&workspace), "Control", "g", "edit")
+            .await
+            .unwrap();
+        agent_send(&state, &control.id, "control goal")
+            .await
+            .unwrap();
+        settle(control.id.clone()).await;
+        agent_send(&state, &control.id, "control follow up")
+            .await
+            .unwrap();
+        settle(control.id.clone()).await;
+        let control_jsonl = tokio::fs::read_to_string(
+            state
+                .sessions_dir
+                .join("request-audit")
+                .join(format!("{}.jsonl", control.id)),
+        )
+        .await
+        .unwrap();
+        let control_headers: Vec<serde_json::Value> = control_jsonl
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|value| value.get("request_header").is_some())
+            .collect();
+        assert!(control_headers.len() >= 2);
+        let control_names = |index: usize| -> Vec<String> {
+            control_headers[index]["request_header"]["tool_names"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| name.as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+        assert_eq!(
+            control_names(0),
+            control_names(1),
+            "full（现状）下目录时间线必须恒定"
+        );
+        assert_eq!(
+            control_names(0),
+            full_names,
+            "对照组首轮即完整目录，与实验组晋升后的目录一致"
+        );
+        let mut control_shas: Vec<String> = control_headers
+            .iter()
+            .map(|header| {
+                header["request_header"]["tools_sha256"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        control_shas.sort();
+        control_shas.dedup();
+        assert_eq!(control_shas.len(), 1, "full 下 distinct 目录数恒为 1");
         SettingsService::new(state.config_dir.clone())
             .set_provider_secret(&provider_name, "")
             .unwrap();
