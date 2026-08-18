@@ -952,8 +952,7 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
       const rows = [...document.querySelectorAll(".sidebar-task-row")];
       const row = rows.find((candidate) => candidate.textContent?.includes(title));
       const dot = row?.querySelector(".task-state-dot");
-      if (!(dot instanceof HTMLElement)) throw new Error(`missing sidebar state dot: ${title}`);
-      return getComputedStyle(dot).backgroundColor;
+      return dot instanceof HTMLElement ? getComputedStyle(dot).backgroundColor : null;
     };
     return {
       warning: tokenColor("--warning"),
@@ -968,7 +967,8 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
   assert.notEqual(colors.running, colors.warning, "a live task shows a loading spinner, not the warning color");
   assert.equal(colors.waitingWhileRunning, colors.warning, "a task waiting for permission keeps the warning color");
   assert.equal(colors.reviewReady, colors.success);
-  assert.equal(colors.finished, colors.success);
+  assert.equal(colors.finished, null,
+    "an ordinary finished task stays quiet with no state marker (prototype C quiet list)");
   assert.notEqual(colors.running, colors.finished);
 
   const runningAnimation = await page.evaluate(() => {
@@ -1005,9 +1005,9 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
   await page.waitForFunction(() => document.querySelector(".sidebar-task[title*='已完成（含错误）']") != null);
   assert.match(await completedWithError.getAttribute("title"), /已完成（含错误）/);
   assert.equal(
-    await completedWithError.locator(".task-state-dot").evaluate((dot) => getComputedStyle(dot).backgroundColor),
-    colors.success,
-    "an ended session stays green even when its latest run retains an error",
+    await completedWithError.locator(".task-state-dot").count(),
+    0,
+    "an ended session stays quiet (no marker) even when its latest run retains an error",
   );
 
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();

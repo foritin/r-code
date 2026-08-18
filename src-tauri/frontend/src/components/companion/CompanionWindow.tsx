@@ -41,11 +41,17 @@ import {
   type CompanionNavigationRequest,
   type CompanionNavigationResult,
 } from "./bridge";
+import { companionCursorEventPolicy } from "./CompanionWindowController";
 
 const COLLAPSED_FULL = { width: 168, height: 196 };
 const COLLAPSED_MINI = { width: 108, height: 116 };
 const EXPANDED = { width: 420, height: 360 };
-const PULSE = { width: 420, height: 360 };
+// 追踪卡片列固定宽（CSS `.companion-pulse-stack` 的 width 与此同源）：窗口按可见内容
+// 包围盒收缩后，shrink-to-fit 会让长标题把窗口撑宽，必须用确定值对齐两侧几何。
+const PULSE_STACK_WIDTH = 264;
+const PULSE_STACK_MARGIN = 8;
+const PULSE_GAP_ABOVE_AVATAR = 18;
+const PULSE_ROW_HEIGHT = 72;
 const PULSE_ROW_STRIDE = 80;
 const MAX_PULSE_SESSIONS = 2;
 const TRACKING_FOOTER_HEIGHT = 40;
@@ -125,10 +131,19 @@ function companionFootprint(minimized: boolean, hasTracking: boolean) {
     : compact;
 }
 
-function pulseWindowSize(rows: number) {
+/** 卡片列底沿到窗口底的距离：footer + 头像高 + 头像与首张卡片的间隙。CSS 中
+ * `.companion-pulse-stack` 的 bottom（full 254px / mini 174px）与此同源。 */
+function pulseStackBottom(minimized: boolean) {
+  return TRACKING_FOOTER_HEIGHT + collapsedSize(minimized).height + PULSE_GAP_ABOVE_AVATAR;
+}
+
+/** 追踪态窗口紧贴可见内容包围盒：宽 = max(头像宽, 卡片列+侧边距)，高 = 卡片列
+ * 底沿 + 首行行高 + 其余行按行距。透明死区从「整窗 420×360」收缩到卡片与头像
+ * 包围盒之外的少量边角，其余交给原生点击穿透兜底。 */
+export function pulseWindowSize(rows: number, minimized: boolean) {
   return {
-    width: PULSE.width,
-    height: PULSE.height + Math.max(0, rows - 1) * PULSE_ROW_STRIDE,
+    width: Math.max(collapsedSize(minimized).width, PULSE_STACK_WIDTH + PULSE_STACK_MARGIN),
+    height: pulseStackBottom(minimized) + PULSE_ROW_HEIGHT + Math.max(0, rows - 1) * PULSE_ROW_STRIDE,
   };
 }
 
@@ -138,12 +153,13 @@ export function compactLayoutForNativeHeight(
   requestedRows: number,
   logicalHeight: number,
 ): CompanionCompactLayout {
-  if (!hasTracking || logicalHeight < PULSE.height - 2) {
+  const contentFloor = pulseStackBottom(minimized) + PULSE_ROW_HEIGHT;
+  if (!hasTracking || logicalHeight < contentFloor - 2) {
     return { minimized, hasTracking: false, rows: 0 };
   }
   const capacity = 1 + Math.max(
     0,
-    Math.floor((logicalHeight - PULSE.height + 2) / PULSE_ROW_STRIDE),
+    Math.floor((logicalHeight - contentFloor + 2) / PULSE_ROW_STRIDE),
   );
   return {
     minimized,
@@ -553,7 +569,9 @@ export function CompanionWindow() {
     const appWindow = getCurrentWindow();
     const hasTracking = pulseOpenRef.current;
     const compact = companionFootprint(minimized, hasTracking);
-    const nextSize = hasTracking ? pulseWindowSize(pulseRowsRef.current) : collapsedSize(minimized);
+    const nextSize = hasTracking
+      ? pulseWindowSize(pulseRowsRef.current, minimized)
+      : collapsedSize(minimized);
     const generation = beginNativeLayout();
     try {
       await appWindow.setSize(new LogicalSize(nextSize.width, nextSize.height));
@@ -810,16 +828,19 @@ export function CompanionWindow() {
       // deriving the anchor later from mutable refs would reinterpret this coordinate system.
       latestAnchor = pulseOpenRef.current
         ? avatarAnchorFromWindow(
-          { x: payload.x, y: payload.y },
-          {
-            width: PULSE.width * scale,
-            height: pulseWindowSize(pulseRowsRef.current).height * scale,
-          },
-          compact,
-          scale,
-          panelSideRef.current,
-          avatarVerticalRef.current,
-        )
+            { x: payload.x, y: payload.y },
+            (() => {
+              const pulse = pulseWindowSize(
+                pulseRowsRef.current,
+                useCompanionStore.getState().minimized,
+              );
+              return { width: pulse.width * scale, height: pulse.height * scale };
+            })(),
+            compact,
+            scale,
+            panelSideRef.current,
+            avatarVerticalRef.current,
+          )
         : { x: payload.x, y: payload.y };
       anchorPosition.current = latestAnchor;
       moveGeneration += 1;
@@ -880,7 +901,7 @@ export function CompanionWindow() {
     let disposed = false;
     const update = async () => {
       if (!enabled) {
-        await appWindow.setIgnoreCursorEvents(false).catch(() => {});
+        await companionCursorEventPolicy()?.setIgnored(false).catch(() => {});
         await appWindow.hide().catch(() => {});
         return;
       }
@@ -910,8 +931,10 @@ export function CompanionWindow() {
       }
       if (disposed) return;
       // A previously hidden Windows window can still carry WS_EX_TRANSPARENT. Restore native
-      // interactivity before showing it so the user's first click cannot fall through.
-      await appWindow.setIgnoreCursorEvents(false).catch(() => {});
+      // interactivity before showing it so the user's first click cannot fall through. This MUST
+      // go through the shared policy: a direct window call would desynchronize the click-through
+      // poller, which then keeps the transparent padding interactive around the pet.
+      await companionCursorEventPolicy()?.setIgnored(false).catch(() => {});
       if (disposed) return;
       await appWindow.show();
     };
@@ -1163,7 +1186,7 @@ export function CompanionWindow() {
       const currentSize = await appWindow.outerSize();
       const scale = await appWindow.scaleFactor();
       nativeScaleFactorRef.current = scale;
-      const target = hasTracking ? pulseWindowSize(pulseRows) : collapsedSize(minimized);
+      const target = hasTracking ? pulseWindowSize(pulseRows, minimized) : collapsedSize(minimized);
       const targetWidth = target.width * scale;
       const targetHeight = target.height * scale;
       if (

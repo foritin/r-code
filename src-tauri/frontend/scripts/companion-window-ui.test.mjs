@@ -188,6 +188,7 @@ test("native companion normalizes restored coordinates before Tauri position IPC
     const {
       compactLayoutForNativeHeight,
       integerPhysicalPosition,
+      pulseWindowSize,
     } = await import("/src/components/companion/CompanionWindow.tsx");
     return {
       normalized: integerPhysicalPosition({
@@ -200,6 +201,22 @@ test("native companion normalizes restored coordinates before Tauri position IPC
         compactLayoutForNativeHeight(false, true, 3, 520),
         compactLayoutForNativeHeight(true, true, 2, 196),
       ],
+      // 窗口按可见内容包围盒收缩后，各种行数/模式的精确请求尺寸。
+      pulseSizes: [
+        pulseWindowSize(1, false),
+        pulseWindowSize(2, false),
+        pulseWindowSize(3, false),
+        pulseWindowSize(1, true),
+        pulseWindowSize(2, true),
+      ],
+      // 收缩后的精确适配：一行 326、两行 406，mini 头像一行 246。
+      exactFitLayouts: [
+        compactLayoutForNativeHeight(false, true, 2, 326),
+        compactLayoutForNativeHeight(false, true, 2, 405),
+        compactLayoutForNativeHeight(false, true, 2, 403),
+        compactLayoutForNativeHeight(true, true, 1, 246),
+        compactLayoutForNativeHeight(true, true, 2, 243),
+      ],
     };
   });
 
@@ -210,6 +227,20 @@ test("native companion normalizes restored coordinates before Tauri position IPC
     { minimized: false, hasTracking: true, rows: 3 },
     { minimized: true, hasTracking: false, rows: 0 },
   ], "the DOM must expose only task rows that the native WebView actually accepted");
+  assert.deepEqual(result.pulseSizes, [
+    { width: 272, height: 326 },
+    { width: 272, height: 406 },
+    { width: 272, height: 486 },
+    { width: 272, height: 246 },
+    { width: 272, height: 326 },
+  ], "the tracking window must hug the visible avatar+card bounding box, not the old 420x360 slab");
+  assert.deepEqual(result.exactFitLayouts, [
+    { minimized: false, hasTracking: true, rows: 1 },
+    { minimized: false, hasTracking: true, rows: 2 },
+    { minimized: false, hasTracking: true, rows: 1 },
+    { minimized: true, hasTracking: true, rows: 1 },
+    { minimized: true, hasTracking: false, rows: 0 },
+  ], "row capacity must follow the shrunk per-mode content floor (full 326 / mini 246)");
   await page.close();
 });
 
@@ -415,6 +446,30 @@ test("Windows mixed-DPI restore and hit testing use destination physical coordin
     releaseStaleEnable();
     await Promise.all([staleEnable, disable]);
 
+    // Shared-policy state tracking: redundant writes are skipped, failures keep the stale
+    // applied value so the same request retries, and every caller observes one truth.
+    const dedupOps = [];
+    let failNextApply = false;
+    const dedupPolicy = createCursorEventPolicy(async (ignored) => {
+      if (failNextApply) {
+        failNextApply = false;
+        throw new Error("transient native failure");
+      }
+      dedupOps.push(ignored);
+    });
+    const appliedInitial = dedupPolicy.applied();
+    await dedupPolicy.setIgnored(true);
+    const appliedAfterEnable = dedupPolicy.applied();
+    await dedupPolicy.setIgnored(true);
+    const appliedAfterRedundant = dedupPolicy.applied();
+    failNextApply = true;
+    const failedWrite = await dedupPolicy.setIgnored(false)
+      .then(() => "resolved")
+      .catch(() => "rejected");
+    const appliedAfterFailure = dedupPolicy.applied();
+    await dedupPolicy.setIgnored(false);
+    const appliedAfterRetry = dedupPolicy.applied();
+
     let releaseLateListener;
     let lateCleanupCalls = 0;
     const lateRegistration = new Promise((resolve) => {
@@ -433,6 +488,13 @@ test("Windows mixed-DPI restore and hit testing use destination physical coordin
       failures,
       cursorOperations,
       nativeIgnored,
+      appliedInitial,
+      appliedAfterEnable,
+      appliedAfterRedundant,
+      failedWrite,
+      appliedAfterFailure,
+      appliedAfterRetry,
+      dedupOps,
       lateCleanupCalls,
       lateListenerRetained,
     };
@@ -444,6 +506,15 @@ test("Windows mixed-DPI restore and hit testing use destination physical coordin
   assert.deepEqual(result.failures, ["unminimize"]);
   assert.deepEqual(result.cursorOperations, [true, false]);
   assert.equal(result.nativeIgnored, false);
+  assert.equal(result.appliedInitial, null);
+  assert.equal(result.appliedAfterEnable, true);
+  assert.equal(result.appliedAfterRedundant, true);
+  assert.deepEqual(result.dedupOps, [true, false],
+    "a redundant same-value write must not reach the native window again");
+  assert.equal(result.failedWrite, "rejected");
+  assert.equal(result.appliedAfterFailure, true,
+    "a failed apply must leave the previous native state as the recorded truth");
+  assert.equal(result.appliedAfterRetry, false);
   assert.equal(result.lateListenerRetained, false);
   assert.equal(result.lateCleanupCalls, 1);
   await page.close();

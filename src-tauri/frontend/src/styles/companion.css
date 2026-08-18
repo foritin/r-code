@@ -51,6 +51,9 @@
   right: 8px;
   bottom: 254px;
   left: auto;
+  /* 固定列宽与 CompanionWindow.tsx 的 PULSE_STACK_WIDTH 同源：原生窗口按可见内容
+     包围盒收缩，shrink-to-fit 的长标题会把窗口撑宽或让几何对不上。 */
+  width: 264px;
   z-index: 10;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
@@ -141,7 +144,7 @@
 }
 
 .companion-pulse-error {
-  max-width: 360px;
+  max-width: 100%;
   margin: 6px auto 0;
   padding: 6px 10px;
   border-radius: 10px;
@@ -154,6 +157,12 @@
 .companion-window-root.is-mini.has-tracking:not(.is-expanded) .companion-avatar {
   width: 108px;
   height: 116px;
+}
+
+/* mini 头像更矮，卡片列底沿相应下移贴住头顶（40 footer + 116 头像 + 18 间隙），
+   与 pulseStackBottom(minimized) 同源。 */
+.companion-window-root.is-mini.has-tracking:not(.is-expanded) .companion-pulse-stack {
+  bottom: 174px;
 }
 
 .companion-pulse-more {

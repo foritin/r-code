@@ -93,6 +93,12 @@ pub enum ProductError {
     #[error("模型服务未返回可显示内容，请重试或检查模型线路配置")]
     EmptyAssistantResponse,
 
+    /// 模型输出在 max_tokens 处被截断且自动升档重试后仍无正文——推理耗尽了
+    /// 全部输出预算。这是配置/任务规模问题，不是线路故障，文案必须把用户
+    /// 引向调大「最大输出」而不是检查接口。
+    #[error("输出预算被推理耗尽（已自动升档重试至 {attempted}）。请在设置中调大「最大输出」或精简单轮任务")]
+    OutputBudgetExhausted { attempted: u32 },
+
     /// Git 错误
     #[error("git error: {0}")]
     GitError(String),
@@ -152,6 +158,9 @@ impl From<ProductError> for agent_error::Error {
             ProductError::EmptyAssistantResponse => {
                 Self::Other("模型服务未返回可显示内容，请重试或检查模型线路配置".to_string())
             }
+            ProductError::OutputBudgetExhausted { attempted } => Self::Other(format!(
+                "输出预算被推理耗尽（已自动升档重试至 {attempted}）。请在设置中调大「最大输出」或精简单轮任务"
+            )),
             ProductError::GitError(msg) => Self::Storage(format!("git: {msg}")),
             ProductError::IpcError(msg) => Self::Ipc(msg),
             ProductError::SecretError(msg) => Self::Other(format!("secret: {msg}")),

@@ -661,7 +661,7 @@ function ProviderSection({
   const [fields, setFields] = useState({
     base_url: "",
     model: "",
-    max_tokens: OUTPUT_DEFAULT,
+    max_tokens: "",
     temperature: "0.2",
     protocol: "openai_chat" as ProviderProtocol,
     show_reasoning: true,
@@ -707,10 +707,12 @@ function ProviderSection({
     setFields({
       base_url: preset?.base_url ?? "",
       model: preset?.model ?? "",
-      // 预设声明了单次输出上限时，直接采用厂商值并锁定，避免保存后被服务端 400
+      // 预设声明了单次输出上限时，直接采用厂商值并锁定，避免保存后被服务端 400；
+      // 未声明时留空（显示"默认"，后端用目录上限兜底）。思考模型的 reasoning 计入
+      // 输出预算，预填保守小值会让推理把预算耗尽后整轮报废。
       max_tokens: preset?.max_output_tokens != null
         ? String(preset.max_output_tokens)
-        : OUTPUT_DEFAULT,
+        : "",
       temperature: "0.2",
       // 新建同样不预选 Responses：下拉框里"看得见"不等于用户确认过。想用 Responses
       // 就自己去选一下，这条规矩对新建和编辑一视同仁。
@@ -741,10 +743,12 @@ function ProviderSection({
     setFields({
       base_url: profile?.base_url ?? preset?.base_url ?? "",
       model: profile?.model ?? preset?.model ?? "",
-      // 厂商预设声明了单次输出上限时，编辑态同样锁定为厂商值，避免历史误填继续生效。
+      // 厂商预设声明了单次输出上限时，编辑态同样锁定为厂商值，避免历史误填继续生效；
+      // 未声明的线路显示持久化值，持久化也为空时保持空（"默认"）——不能回填种子值，
+      // 否则用户只是打开设置再保存就会把 8192 落盘，"默认"永远无法存活。
       max_tokens: preset?.max_output_tokens != null
         ? String(preset.max_output_tokens)
-        : profile?.max_tokens != null ? String(profile.max_tokens) : OUTPUT_DEFAULT,
+        : profile?.max_tokens != null ? String(profile.max_tokens) : "",
       temperature: displayNumber(profile?.temperature) || "0.2",
       // 编辑已有配置时以后端算出的 effective_protocol 为准——它已经把"存过的值"
       // 和"地址被改写后的推断"都算进去了。前端再推一遍只会和后端对不上，而用户

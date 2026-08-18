@@ -163,13 +163,22 @@ interface RestorableMainWindow {
 
 interface CursorEventPolicy {
   setIgnored: (ignored: boolean) => Promise<void>;
+  /** 上一次真正下发到原生窗口的值；null 表示尚未下发过。 */
+  applied: () => boolean | null;
 }
 
 /** Native window commands cannot be cancelled once dispatched. Serialize cursor-event updates so
- * a slow stale `true` can never finish after the `false` requested while hiding the companion. */
+ * a slow stale `true` can never finish after the `false` requested while hiding the companion.
+ *
+ * The policy is the single source of truth for what the native window currently honors: it
+ * remembers the last applied value so redundant requests are skipped, and any caller (the
+ * polling controller, the view's pre-show reset) observes the same state. Bypassing it with a
+ * direct `setIgnoreCursorEvents` call desynchronizes the poller, which then believes the window
+ * is click-through while it actually swallows every click in its transparent padding. */
 export function createCursorEventPolicy(
   apply: (ignored: boolean) => Promise<void>,
 ): CursorEventPolicy {
+  let appliedState: boolean | null = null;
   let desired = false;
   let chain = Promise.resolve();
   return {
@@ -177,13 +186,33 @@ export function createCursorEventPolicy(
       desired = ignored;
       const request = chain.catch(() => {}).then(async () => {
         if (desired !== ignored) return;
+        if (appliedState === ignored) return;
         await apply(ignored);
+        appliedState = ignored;
       });
       // A rejected native command must not prevent a later recovery request from running.
       chain = request.catch(() => {});
       return request;
     },
+    applied() {
+      return appliedState;
+    },
   };
+}
+
+let sharedCursorEventPolicy: CursorEventPolicy | null = null;
+
+/** The whole companion WebView shares one cursor-event policy so every `setIgnoreCursorEvents`
+ * caller stays in sync with the native window state the poller deduplicates against. */
+export function companionCursorEventPolicy(): CursorEventPolicy | null {
+  if (!isTauriRuntime()) return null;
+  if (!sharedCursorEventPolicy) {
+    const appWindow = getCurrentWindow();
+    sharedCursorEventPolicy = createCursorEventPolicy(
+      (ignored) => appWindow.setIgnoreCursorEvents(ignored),
+    );
+  }
+  return sharedCursorEventPolicy;
 }
 
 /** Native focus policy is advisory on Windows. Once application routing succeeds, shell restore
@@ -217,17 +246,12 @@ export function prepareNativeCompanionWindow(): void {
 /** Owns native hit testing without coupling window policy to the visual CompanionWindow tree. */
 export function NativeCompanionWindowController() {
   const enabled = useCompanionStore((state) => state.enabled);
-  const cursorEventPolicy = useRef<CursorEventPolicy | null>(null);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
     const appWindow = getCurrentWindow();
-    if (!cursorEventPolicy.current) {
-      cursorEventPolicy.current = createCursorEventPolicy(
-        (ignored) => appWindow.setIgnoreCursorEvents(ignored),
-      );
-    }
-    const cursorPolicy = cursorEventPolicy.current;
+    const cursorPolicy = companionCursorEventPolicy();
+    if (!cursorPolicy) return;
     if (!enabled) {
       // Reset WS_EX_TRANSPARENT while hidden and do not keep polling cursorPosition through IPC.
       void cursorPolicy.setIgnored(false).catch(() => {});
@@ -235,7 +259,9 @@ export function NativeCompanionWindowController() {
     }
     let disposed = false;
     let clickThroughSupported = true;
-    let ignored = false;
+    // A single transient IPC hiccup must not permanently disable pass-through: the dead zone
+    // would silently revert to swallowing clicks. Only repeated failures give up (fail open).
+    let consecutiveFailures = 0;
     let pointerActive = false;
     let pointerReleaseTimer: number | null = null;
     let tickTimer: number | null = null;
@@ -258,15 +284,12 @@ export function NativeCompanionWindowController() {
     window.addEventListener("pointerup", pointerUp, { capture: true });
     window.addEventListener("pointercancel", pointerUp, { capture: true });
 
-    const updateIgnoreState = async (next: boolean) => {
-      if (!clickThroughSupported || next === ignored) return;
-      try {
-        await cursorPolicy.setIgnored(next);
-        ignored = next;
-      } catch {
-        // Wayland/compositor policy may reject click-through. Fail open so the helper remains
-        // usable instead of retrying a denied native command for the lifetime of the app.
+    const recordFailure = (error: unknown) => {
+      consecutiveFailures += 1;
+      if (consecutiveFailures < 3) return;
+      if (clickThroughSupported) {
         clickThroughSupported = false;
+        console.warn("Companion click-through disabled after repeated cursor/native failures.", error);
       }
     };
 
@@ -275,19 +298,21 @@ export function NativeCompanionWindowController() {
       tickInFlight = true;
       try {
         if (document.visibilityState === "hidden") {
-          await updateIgnoreState(false);
-          return;
-        }
-        if (!windowPosition) windowPosition = await appWindow.outerPosition();
-        if (pointerActive) {
-          await updateIgnoreState(false);
+          if (cursorPolicy.applied() !== false) await cursorPolicy.setIgnored(false);
         } else {
-          const cursor = await cursorPosition();
-          const point = physicalCursorToLogicalPoint(cursor, windowPosition, scaleFactor);
-          await updateIgnoreState(!pointHitsCompanionSurface(document, point.x, point.y));
+          if (!windowPosition) windowPosition = await appWindow.outerPosition();
+          if (pointerActive) {
+            if (cursorPolicy.applied() !== false) await cursorPolicy.setIgnored(false);
+          } else {
+            const cursor = await cursorPosition();
+            const point = physicalCursorToLogicalPoint(cursor, windowPosition, scaleFactor);
+            const next = !pointHitsCompanionSurface(document, point.x, point.y);
+            if (cursorPolicy.applied() !== next) await cursorPolicy.setIgnored(next);
+          }
         }
-      } catch {
-        clickThroughSupported = false;
+        consecutiveFailures = 0;
+      } catch (error) {
+        recordFailure(error);
       } finally {
         tickInFlight = false;
         if (!disposed && clickThroughSupported) {

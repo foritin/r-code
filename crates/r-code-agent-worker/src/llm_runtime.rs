@@ -1720,7 +1720,10 @@ impl WorkspaceScope {
 impl LlmAgentRuntime {
     /// 创建 runtime。
     ///
-    /// `max_tokens` None 时取 8192。
+    /// `max_tokens` None 时取 8192：宿主已在 `effective_max_tokens` 里用目录上限
+    /// 补齐过默认值，落到 None 说明该线路目录未声明输出上限（自定义/网关类），
+    /// 保守值避免未知小窗口模型直接 400；思考模型推理耗尽预算的场景由
+    /// agent_loop 的 MaxTokens 升档重试兜底。
     pub fn new(
         provider: Box<dyn LlmProvider>,
         model: String,
@@ -4081,6 +4084,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             Some(ctx.abort.as_ref()),
             &mut edit_retry_guard,
             ctx.event_tx.clone(),
+            window_tokens,
         )
         .await;
 
@@ -6720,7 +6724,16 @@ delegate_task"
             .unwrap_or(false);
         let existing_children = self.children.lock().await.len();
         let planned = entries.len();
-        let allowed_total = existing_children + planned;
+        // 额度与消耗必须同口径：spawns_used 按生命周期累计、不因子代理完成或
+        // 收集回退，重派计划的额度若只按活子代理数计算会低于已消耗名额，成为
+        // 一条也派不出的死计划；Runtime 发起的派生（质量复核/外部桥）不经
+        // 计划门，活子代理数可能大于 spawns_used，故取两者最大值。
+        let spawns_used = self
+            .plan_gate
+            .lock()
+            .expect("delegation plan gate lock poisoned")
+            .spawns_used;
+        let allowed_total = spawns_used.max(existing_children) + planned;
         if allowed_total > MAX_SUBAGENTS_PER_RUN {
             return Err(ProductError::Other(format!(
                 "计划将使子代理总数达到 {allowed_total}，超过单次运行上限 \
@@ -6840,6 +6853,7 @@ delegate_task 的 agent 枚举",
                 "status": "needs_confirmation",
                 "planned_entries": planned,
                 "existing_children": existing_children,
+                "spawns_used": spawns_used,
                 "allowed_total_after_confirm": allowed_total,
                 "entries": entry_reports,
                 "warnings": warnings,
@@ -6968,6 +6982,7 @@ delegate_task 的 agent 枚举",
             "revision": revision,
             "planned_entries": planned,
             "existing_children": existing_children,
+            "spawns_used": spawns_used,
             "allowed_total": allowed_total,
             "entries": entry_digest,
             "next": "Now call delegate_task once per planned entry; spawns beyond allowed_total \
@@ -8521,6 +8536,7 @@ impl SubagentExecutionContext {
                 &mut edit_retry_guard,
                 true,
                 move |event| emit_scoped(&event_tx, &event_scope, event),
+                window_tokens,
             )
             .await;
 

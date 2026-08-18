@@ -1,8 +1,12 @@
 /**
  * 文件类型图标 —— 活动流文件行的扩展名识别。
  *
- * 常见扩展名使用 vscode-icons 图标集（MIT，经 Iconify 分发，资产位于
- * src/assets/filetypes/）；未覆盖的扩展回退到按语义分色的通用文档形，
+ * 图标资产位于 src/assets/filetypes/，来自两个 MIT 图标集：
+ * vscode-icons（经 Iconify 分发）提供 logo 类图标；markdown/toml/license/
+ * rust/zip/bat/svg 这类通用图形图标改用 Material Icon Theme
+ * （material-extensions/vscode-material-icon-theme）——实心填充在暗色
+ * 主题 15px 下远比 vscode-icons 的描边/深色款清晰。c.svg 是上游深色版
+ * 本地提亮。未覆盖的扩展回退到按语义分色的通用文档形，
  * 颜色沿用 Signature 暖色深浅底下仍可分辨的中低饱和色。
  */
 import cIcon from "../../assets/filetypes/c.svg";

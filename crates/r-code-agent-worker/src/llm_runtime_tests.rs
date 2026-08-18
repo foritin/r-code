@@ -8447,6 +8447,92 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
 }
 
 #[tokio::test]
+async fn plan_subagents_redispatch_after_collect_keeps_cumulative_allowance() {
+    let directory = TempDir::new().unwrap();
+    let runner = Arc::new(LenientCodexRunner {
+        calls: AtomicUsize::new(0),
+    });
+    let tool_host = plan_gate_tool_host(&directory, runner.clone());
+
+    // 首个免计划 + 计划内 1 个 = 累计派生 2，旧额度全部用尽。
+    delegate_via_host(&tool_host, "初审方向甲").await.unwrap();
+    tool_host
+        .call_inner(
+            Some("plan-confirm-initial"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "初审方向乙", "agent": "codex"}],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    delegate_via_host(&tool_host, "初审方向乙").await.unwrap();
+
+    // 收集后 children 清空：活子代理数归零，但累计派生数保持 2。
+    tool_host
+        .call_inner(
+            Some("collect-initial"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+    // 重派计划若按活子代理数计额度只会得到 2，一条也派不出；
+    // 正确口径是累计 2 + 重派 2 = 4。
+    let confirmed = tool_host
+        .call_inner(
+            Some("plan-confirm-redispatch"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "重派方向甲", "agent": "codex", "label": "甲重派"},
+                    {"goal": "重派方向乙", "agent": "codex", "label": "乙重派"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!confirmed.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
+    assert_eq!(payload["status"], "confirmed");
+    assert_eq!(payload["existing_children"], 0);
+    assert_eq!(payload["spawns_used"], 2);
+    assert_eq!(payload["allowed_total"], 4);
+
+    // 计划内两条重派都能放行（旧实现在这里报"已超出允许的 2 个"）。
+    assert!(
+        !delegate_via_host(&tool_host, "重派方向甲")
+            .await
+            .unwrap()
+            .is_error
+    );
+    assert!(
+        !delegate_via_host(&tool_host, "重派方向乙")
+            .await
+            .unwrap()
+            .is_error
+    );
+    // 第 5 次派生超出累计额度 4，被拒并引导修订计划。
+    let exceeded = delegate_via_host(&tool_host, "计划外增量")
+        .await
+        .unwrap_err();
+    assert!(exceeded.to_string().contains("修订后的计划"));
+
+    tool_host
+        .call_inner(
+            Some("collect-redispatch"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(runner.calls.load(Ordering::Relaxed), 4);
+}
+
+#[tokio::test]
 async fn plan_subagents_validates_entries_and_run_cap() {
     let directory = TempDir::new().unwrap();
     let tool_host = plan_gate_tool_host(
@@ -8597,7 +8683,9 @@ async fn delegate_task_rejects_goal_of_running_child() {
     let tool_host = plan_gate_tool_host(&directory, runner.clone());
 
     // 免计划派生第一个子代理，并保持运行中。
-    let first = delegate_via_host(&tool_host, "保持运行的目标").await.unwrap();
+    let first = delegate_via_host(&tool_host, "保持运行的目标")
+        .await
+        .unwrap();
     assert!(!first.is_error);
     runner.started.notified().await;
 
@@ -8612,9 +8700,7 @@ async fn delegate_task_rejects_goal_of_running_child() {
     assert!(dup_case.to_string().contains("完全相同"));
 
     // 不同 goal 仍走既有计划门（保持原有行为）。
-    let blocked = delegate_via_host(&tool_host, "全新方向")
-        .await
-        .unwrap_err();
+    let blocked = delegate_via_host(&tool_host, "全新方向").await.unwrap_err();
     assert!(blocked.to_string().contains("plan_subagents"));
 
     // 确认包含与运行中子代理相同 goal 的计划同样被退回修订。

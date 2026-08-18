@@ -4880,17 +4880,14 @@ const SUBAGENT_GOAL_PERSIST_CHARS: usize = 8_000;
 /// 外部路径合成锚点没有 goal 输入时回退 scope.goal 有界摘要。
 fn subagent_goal_text(db: &Database, scope: &AgentEventScope) -> Option<String> {
     if let Some(call_id) = scope.delegated_by_tool_call_id.as_deref() {
-        let input_json = db
-            .conn()
+        let input_json = db.conn().ok().and_then(|conn| {
+            conn.query_row(
+                "SELECT input_json FROM tool_calls WHERE id = ?1",
+                rusqlite::params![call_id],
+                |row| row.get::<_, String>(0),
+            )
             .ok()
-            .and_then(|conn| {
-                conn.query_row(
-                    "SELECT input_json FROM tool_calls WHERE id = ?1",
-                    rusqlite::params![call_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .ok()
-            });
+        });
         let goal = input_json
             .as_deref()
             .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
@@ -12836,6 +12833,10 @@ fn effective_max_tokens(name: &str, provider: &agent_config::ProviderConfig) -> 
             );
             Some(limit)
         }
+        // 「默认」= 目录声明的厂商输出上限：设置页不再预填保守的 8192 种子，
+        // 思考模型的 reasoning 计入输出预算，低默认值会让推理耗尽预算后整轮报废。
+        // 请求侧还有窗口钳制（clamp_request_max_tokens），取大值不会推超上下文。
+        (None, Some(limit)) => Some(limit),
         (configured, _) => configured,
     }
 }
@@ -28109,6 +28110,34 @@ kind = "codex_cli"
             "openai",
         );
         assert_eq!(provider_max_output_tokens("custom", &lookalike), None);
+    }
+
+    #[test]
+    fn effective_max_tokens_defaults_to_catalog_limit_when_unset() {
+        // 未配置 + 目录声明上限 →「默认」取目录上限（思考模型推理计入输出预算，
+        // 不再落回保守的 8192）。
+        let deepseek = provider_cfg_with_identity(
+            "https://api.deepseek.com",
+            "deepseek-v4-pro",
+            ProviderProtocol::OpenAiChat,
+            "deepseek",
+        );
+        assert_eq!(effective_max_tokens("deepseek", &deepseek), Some(393_216));
+
+        let anthropic = provider_cfg("https://api.anthropic.com", "claude-x");
+        assert_eq!(effective_max_tokens("anthropic", &anthropic), Some(128_000));
+
+        // 目录未声明上限（自定义/网关线路）→ 保持 None，由 runtime 兜底。
+        let custom = provider_cfg("https://relay.internal.example/v1", "glm-5.3");
+        assert_eq!(effective_max_tokens("custom", &custom), None);
+
+        // 显式配置仍优先于目录默认，超限钳制行为不变。
+        let mut clamped = provider_cfg("https://api.anthropic.com", "claude-x");
+        clamped.max_tokens = Some(200_000);
+        assert_eq!(effective_max_tokens("anthropic", &clamped), Some(128_000));
+        let mut explicit = provider_cfg("https://api.anthropic.com", "claude-x");
+        explicit.max_tokens = Some(4_096);
+        assert_eq!(effective_max_tokens("anthropic", &explicit), Some(4_096));
     }
 
     #[tokio::test]
