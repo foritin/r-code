@@ -13,8 +13,11 @@ description = "R-Code Agent Worker：Agent Runtime、agent loop、事件流"
 agent-contract = { workspace = true }
 agent-error = { workspace = true }
 agent-llm = { workspace = true }
+# C2（docs/request-audit-and-anchoring.md）：OrchestrationPolicy 直接复用
+# agent-config 的 FirstRoundCatalog/FirstRoundPromoteOn 枚举，不再另造镜像枚举。
+agent-config = { workspace = true }
 # 1.3（docs/harness-migration.md §1.3）：request/header 快照需要直接读写会话
-# JSONL（SessionStore 的追加锁按进程内路径归一，支持多写方）。阶段 0.2 摘除的
+# JSONL（SessionStore 的追加锁按进程内文件路径归一，支持多写方）。阶段 0.2 摘除的
 # 是「零引用死依赖」；此处带真实调用方回归，与该结论不冲突。
 agent-store = { workspace = true }
 

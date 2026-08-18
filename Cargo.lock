@@ -3511,6 +3511,7 @@ dependencies = [
 name = "r-code-agent-worker"
 version = "0.9.1"
 dependencies = [
+ "agent-config",
  "agent-contract",
  "agent-error",
  "agent-llm",

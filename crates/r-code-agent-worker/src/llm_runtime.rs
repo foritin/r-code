@@ -522,6 +522,10 @@ pub struct OrchestrationPolicy {
     pub quality_reviewer: QualityReviewer,
     pub max_review_rounds: u8,
     pub run_budget: RunBudgetPolicy,
+    /// C2：首轮目录锚定实验旋钮。类型直接复用 agent-config 枚举（不另造镜像），
+    /// 宿主在 ensure_real_runtime 组装点透传，且必须纳入 runtime 重建指纹。
+    pub first_round_catalog: agent_config::FirstRoundCatalog,
+    pub first_round_promote_on: agent_config::FirstRoundPromoteOn,
 }
 
 /// 用户可编辑的 Agent 协作提示。它只补充角色分工，不替代工具权限、工作区范围或
@@ -584,6 +588,8 @@ impl Default for OrchestrationPolicy {
             quality_reviewer: QualityReviewer::RCode,
             max_review_rounds: 1,
             run_budget: RunBudgetPolicy::default(),
+            first_round_catalog: agent_config::FirstRoundCatalog::Full,
+            first_round_promote_on: agent_config::FirstRoundPromoteOn::Either,
         }
     }
 }
@@ -1678,6 +1684,10 @@ struct SessionState {
     /// 用户在当前运行中显式关闭委派后立即锁存；工具执行阶段再次检查，避免 steer
     /// 与同一轮 provider 工具调用之间的竞态。
     delegation_disabled: Arc<AtomicBool>,
+    /// C：首轮目录锚定是否仍待晋升。会话级粘性：跨 run 保持，避免每个 run 的
+    /// 首轮都重付一次目录变化（缓存断点预算 ≤ 1/会话）；晋升后写 false 不再
+    /// 复位。进程内存态，重启后同会话首轮重新锚定（V1 接受，C3 登记后续项）。
+    catalog_bootstrap_pending: Arc<AtomicBool>,
     /// 工作区作用域。None 即纯聊天；附加后始终通过 PathGuard 限制本地工具。
     workspace_scope: Option<WorkspaceScope>,
     /// 当前主运行所拥有的子代理监督器；仅在运行期间存在。
@@ -1951,6 +1961,11 @@ impl AgentRuntime for LlmAgentRuntime {
                 accepting_steer: false,
                 abort: Arc::new(AtomicBool::new(false)),
                 delegation_disabled: Arc::new(AtomicBool::new(false)),
+                // C2：非 Full 目录策略才武装粘性标志；Full（默认）恒 false，
+                // 现有行为零变化。
+                catalog_bootstrap_pending: Arc::new(AtomicBool::new(
+                    self.orchestration.first_round_catalog != agent_config::FirstRoundCatalog::Full,
+                )),
                 workspace_scope,
                 supervisor: None,
                 next_memory_context: None,
@@ -1980,6 +1995,7 @@ impl AgentRuntime for LlmAgentRuntime {
             inference,
             abort,
             delegation_disabled,
+            catalog_bootstrap_pending,
             workspace_scope,
             mode,
             memory_context,
@@ -2009,6 +2025,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 session.inference.clone(),
                 session.abort.clone(),
                 session.delegation_disabled.clone(),
+                session.catalog_bootstrap_pending.clone(),
                 session.workspace_scope.clone(),
                 session.mode,
                 session.next_memory_context.take(),
@@ -2128,6 +2145,7 @@ impl AgentRuntime for LlmAgentRuntime {
             inference,
             abort,
             delegation_disabled,
+            catalog_bootstrap_pending,
             workspace_scope,
             supervisor,
             suspension_gate,
@@ -2472,6 +2490,9 @@ struct RunLoopCtx {
     inference: InferenceOptions,
     abort: Arc<AtomicBool>,
     delegation_disabled: Arc<AtomicBool>,
+    /// C：首轮目录锚定粘性标志（与 SessionState 共享同一 Arc，镜像
+    /// delegation_disabled 的共享方式）。
+    catalog_bootstrap_pending: Arc<AtomicBool>,
     workspace_scope: Option<WorkspaceScope>,
     supervisor: Arc<SubagentSupervisor>,
     /// Per-run one-way gate set by a successful `suspend_for_user` tool directive.
@@ -3734,7 +3755,18 @@ async fn run_loop(ctx: RunLoopCtx) {
         let tools = if summary_only {
             Vec::new()
         } else {
-            client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools)
+            let mut specs =
+                client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools);
+            // C：首轮锚定过滤。仅主代理 Main 策略（Ask/Plan 已是受限目录，二次
+            // 过滤无意义且会与 hosted 别名逻辑纠缠）；目录裁剪是呈现层，执行边界
+            // 仍在 tool_allowed/scoped_input（红线 2）——模型即使在受限轮调用了
+            // 目录外工具（历史诱导），执行侧按既有 policy 处理。hosted 工具维持
+            // 现状随行（剥离变体登记为 C-variant-1，不在首期）。
+            if policy == ToolPolicy::Main && ctx.catalog_bootstrap_pending.load(Ordering::SeqCst) {
+                let allowlist = first_round_allowlist(ctx.orchestration.first_round_catalog);
+                specs.retain(|tool| allowlist.contains(&tool.name.as_str()));
+            }
+            specs
         };
         let tools_json_len = serde_json::to_string(&tools)
             .map(|json| json.len())
@@ -4179,6 +4211,33 @@ async fn run_loop(ctx: RunLoopCtx) {
                                 "1.3 request journal message sync failed"
                             );
                         }
+                    }
+                }
+                // C：首轮目录晋升。Either 下首轮 outcome 必然含 assistant 消息 →
+                // 晋升恒发生在第 2 轮派发前（受限窗口 = 恰好首轮）；ToolCall 下
+                // 纯文字回复则停留（对照组用途）。工具执行失败不影响晋升（只看
+                // ToolUse 是否产生，与 dsh「执行失败仍晋升」一致）；粘性标志
+                // 会话级跨 run，晋升后不再复位。
+                if ctx.catalog_bootstrap_pending.load(Ordering::SeqCst) {
+                    let promoted = match ctx.orchestration.first_round_promote_on {
+                        agent_config::FirstRoundPromoteOn::Either => outcome
+                            .appended_messages
+                            .iter()
+                            .any(|m| m.role == Role::Assistant),
+                        agent_config::FirstRoundPromoteOn::ToolCall => {
+                            outcome.appended_messages.iter().any(|m| {
+                                m.role == Role::Assistant
+                                    && m.content.iter().any(|b| b.is_tool_use())
+                            })
+                        }
+                    };
+                    if promoted {
+                        ctx.catalog_bootstrap_pending.store(false, Ordering::SeqCst);
+                        tracing::info!(
+                            session_id = %ctx.session_id,
+                            promote_on = ?ctx.orchestration.first_round_promote_on,
+                            "C first-round catalog promoted to full"
+                        );
                     }
                 }
                 // P2-G：用上一轮真实 usage 校准 tokPerChar（失败轮不校准，
@@ -5071,6 +5130,31 @@ fn client_tools_for_hosted_tools(
 
 fn has_hosted_web_search(hosted_tools: &[HostedToolSpec]) -> bool {
     hosted_tools.iter().any(HostedToolSpec::is_web_search)
+}
+
+/// C2：首轮只读探索五件套。含 search_files——hosted web search 在场时本地
+/// `search` 已被改名为 `search_files`（client_tools_for_hosted_tools），
+/// 过滤发生在改名之后，必须按模型实际看到的名字放行才能保住五件套完整。
+const FIRST_ROUND_READONLY_TOOLS: &[&str] = &[
+    "read_file",
+    "list_files",
+    "search",
+    "glob",
+    "load_skill",
+    "search_files",
+];
+/// C2：read_file + edit 最小编辑对（对标 dsh Minimal 工具对的编辑变体）。
+const FIRST_ROUND_EDITOR_PAIR_TOOLS: &[&str] = &["read_file", "edit"];
+
+/// C2：目录策略 → 允许清单。委派、MCP、bash、生命周期工具（enter_plan_mode
+/// 等）首轮一律不在目录——模型首轮只能读不能委派不能写，这是有意的
+/// （对齐 dsh 的 Minimal 身份：极少工具）。
+fn first_round_allowlist(catalog: agent_config::FirstRoundCatalog) -> &'static [&'static str] {
+    match catalog {
+        agent_config::FirstRoundCatalog::Full => &[],
+        agent_config::FirstRoundCatalog::ReadOnly => FIRST_ROUND_READONLY_TOOLS,
+        agent_config::FirstRoundCatalog::EditorPair => FIRST_ROUND_EDITOR_PAIR_TOOLS,
+    }
 }
 
 /// A2：hosted 工具的审计名。`HostedToolSpec` 是变体枚举（WebSearch/WebFetch），

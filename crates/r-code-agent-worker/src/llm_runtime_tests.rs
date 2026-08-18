@@ -9136,3 +9136,341 @@ async fn request_journal_target_overrides_session_id_for_file_name() {
     assert!(fallback_jsonl.contains("\"request_header\""));
     assert!(fallback_jsonl.contains("fallback session goal"));
 }
+
+// ---------------------------------------------------------------------------
+// C4：首轮目录锚定（docs/request-audit-and-anchoring.md 阶段 C）。观测通道
+// 复用 A 阶段的审计 journal——每轮 RequestHeader.tool_names 即「模型实际看到
+// 的目录」的权威记录。
+// ---------------------------------------------------------------------------
+
+/// 读取 journal 中全部 RequestHeader 的 tool_names（按派发顺序）。
+async fn journal_tool_names(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
+    let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
+        .await
+        .unwrap();
+    jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("request_header").is_some())
+        .map(|value| {
+            value["request_header"]["tool_names"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| name.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// 带 journal + 工作区 + 指定编排策略的 runtime。
+fn anchored_runtime(
+    provider: MockProvider,
+    journal_dir: &tempfile::TempDir,
+    catalog: agent_config::FirstRoundCatalog,
+    promote_on: agent_config::FirstRoundPromoteOn,
+) -> LlmAgentRuntime {
+    LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ))
+    .with_orchestration_policy(OrchestrationPolicy {
+        first_round_catalog: catalog,
+        first_round_promote_on: promote_on,
+        ..OrchestrationPolicy::default()
+    })
+}
+
+#[tokio::test]
+async fn first_round_catalog_full_keeps_current_tool_timeline() {
+    // C4-1（默认回归保护）：full 下两轮目录逐字节一致，行为与接入前不变。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("full-1"));
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::Full,
+        agent_config::FirstRoundPromoteOn::Either,
+    );
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "goal").await.unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(timelines[0], timelines[1], "full 下目录时间线必须恒定");
+    assert!(
+        timelines[0].iter().any(|name| name == "read_file"),
+        "完整目录应含 read_file：{:?}",
+        timelines[0]
+    );
+}
+
+#[tokio::test]
+async fn first_round_readonly_filters_first_dispatch_and_promotes_within_run() {
+    // C4-2：readonly + either。首轮目录 ⊆ 五件套（无 edit/委派/hosted）；
+    // 首轮 ToolUse（read_file，目录内）触发晋升，第二轮恢复完整目录；
+    // 同会话第二个 run 首轮即完整目录（粘性：跨 run 不重付目录变化）。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("ro-1"));
+    provider.push_text_turn("done", Usage::default());
+    provider.push_text_turn("second run", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::ReadOnly,
+        agent_config::FirstRoundPromoteOn::Either,
+    );
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "inspect then answer")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+    rt.start_run(&session.meta.id, "second run goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 3, "run1 两轮 + run2 一轮：{:?}", timelines);
+    let readonly_allowlist: Vec<&str> = timelines[0]
+        .iter()
+        .map(|name| {
+            assert!(
+                [
+                    "read_file",
+                    "list_files",
+                    "search",
+                    "glob",
+                    "load_skill",
+                    "search_files"
+                ]
+                .contains(&name.as_str()),
+                "首轮目录越界：{:?}",
+                timelines[0]
+            );
+            name.as_str()
+        })
+        .collect();
+    assert_eq!(timelines[0].len(), readonly_allowlist.len());
+    assert!(
+        !timelines[0].is_empty(),
+        "工作区会话受限首轮应保留五件套，而不是空目录"
+    );
+    assert_eq!(
+        timelines[0],
+        vec!["read_file".to_string()],
+        "test_gateway 只注册 read_file，受限首轮恰为它的子集"
+    );
+    assert!(
+        timelines[1].iter().any(|name| name == "read_file")
+            && timelines[1].len() > timelines[0].len(),
+        "第二轮应恢复完整目录：{:?}",
+        timelines[1]
+    );
+    // 粘性：第二个 run 的首轮目录与晋升后的完整目录一致。
+    assert_eq!(
+        timelines[2], timelines[1],
+        "同会话第二个 run 首轮应直接是完整目录（粘性）"
+    );
+}
+
+#[tokio::test]
+async fn first_round_readonly_promotes_on_pure_text_answer_for_next_run() {
+    // C4-3：either 的逃生舱——纯文字首答（无任何 ToolUse）也晋升，下一个 run
+    // 的首轮即完整目录，纯文字对话不会困死在受限目录。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("just text", Usage::default());
+    provider.push_text_turn("second run text", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::ReadOnly,
+        agent_config::FirstRoundPromoteOn::Either,
+    );
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "text only").await.unwrap();
+    wait_until_finished(&rt).await;
+    rt.start_run(&session.meta.id, "follow up").await.unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(
+        timelines[0],
+        vec!["read_file".to_string()],
+        "受限首轮恰为允许清单与注册目录的交集"
+    );
+    assert_ne!(
+        timelines[1], timelines[0],
+        "纯文字首答后（either）下一个 run 首轮应已晋升为完整目录"
+    );
+}
+
+#[tokio::test]
+async fn first_round_tool_call_mode_stays_restricted_until_tool_use() {
+    // C4-4：tool_call 对照组。纯文字首答不晋升——第二个 run 首轮仍受限；
+    // 出现 ToolUse 后晋升，其后的轮次与 run 恢复完整目录。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("text no tool", Usage::default());
+    provider.push_turn(failing_read_turn("tc-tool"));
+    provider.push_text_turn("after tool", Usage::default());
+    provider.push_text_turn("third run", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::ReadOnly,
+        agent_config::FirstRoundPromoteOn::ToolCall,
+    );
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "run one").await.unwrap();
+    wait_until_finished(&rt).await;
+    rt.start_run(&session.meta.id, "run two").await.unwrap();
+    wait_until_finished(&rt).await;
+    rt.start_run(&session.meta.id, "run three").await.unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(
+        timelines.len(),
+        4,
+        "run1×1 + run2×2 + run3×1：{timelines:?}"
+    );
+    assert_eq!(timelines[0], vec!["read_file".to_string()], "run1 受限");
+    assert_eq!(
+        timelines[1],
+        vec!["read_file".to_string()],
+        "纯文字未晋升，run2 首轮仍受限（tool_call 对照组语义）"
+    );
+    assert_ne!(
+        timelines[2], timelines[1],
+        "run2 第二轮（ToolUse 后）恢复完整目录"
+    );
+    assert_eq!(
+        timelines[3], timelines[2],
+        "run3 首轮保持完整目录（已晋升，粘性）"
+    );
+}
+
+#[tokio::test]
+async fn first_round_catalog_filter_does_not_touch_execution_boundary() {
+    // C4-5（红线 2）：受限轮模型仍调用目录外工具（构造历史诱导）时，调用照常
+    // 经 Gateway 执行并产生 ToolResult——目录过滤只裁剪呈现，不是执行边界。
+    let engine = Arc::new(PermissionEngine::new());
+    let mut gateway = ToolGateway::new(engine);
+    gateway.register(Box::new(r_code_gateway::ReadFileTool));
+    gateway.register(Box::new(r_code_gateway::GitStatusTool));
+    let gateway = Arc::new(gateway);
+    let provider = MockProvider::new("mock");
+    // 首轮直接调用 git_status（目录外的只读工具，避开审批流）：工作区不是 git
+    // 仓库也无妨——重点是调用被 Gateway 执行并产生 ToolResult（错误也是执行
+    // 产物），而不是因「不在目录」被拒。
+    provider.push_turn(RecordedTurn::ok(vec![
+        StreamEvent::ToolUseStart {
+            id: "edge-git-1".to_string(),
+            name: "git_status".to_string(),
+        },
+        StreamEvent::ToolUseComplete {
+            id: "edge-git-1".to_string(),
+            input: serde_json::json!({}),
+        },
+        StreamEvent::Stop {
+            reason: StopReason::ToolUse,
+        },
+    ]));
+    provider.push_text_turn("recovered", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = LlmAgentRuntime::new(Box::new(provider), "mock-model".into(), gateway, None, None)
+        .with_request_journal(agent_store::SessionStore::new(
+            journal_dir.path().to_path_buf(),
+        ))
+        .with_orchestration_policy(OrchestrationPolicy {
+            first_round_catalog: agent_config::FirstRoundCatalog::ReadOnly,
+            first_round_promote_on: agent_config::FirstRoundPromoteOn::Either,
+            ..OrchestrationPolicy::default()
+        });
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "edge goal").await.unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(
+        timelines[0],
+        vec!["read_file".to_string()],
+        "受限首轮目录不含 edit"
+    );
+    assert!(
+        timelines[1].iter().any(|name| name == "git_status"),
+        "ToolUse 后第二轮恢复完整目录（含 git_status）：{:?}",
+        timelines[1]
+    );
+    // 执行边界：目录外调用被真实执行并产生 ToolResult 事件（错误也是执行产物，
+    // 证明 dispatch 走了 Gateway 的既有 policy，而非目录过滤拦截）。
+    let events = rt.poll_events().await.unwrap();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolResult { call_id, .. } if call_id == "edge-git-1"
+        )),
+        "受限轮的目录外工具调用必须照常执行并产生 ToolResult"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
+    )));
+}
