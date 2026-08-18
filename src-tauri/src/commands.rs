@@ -14281,6 +14281,25 @@ pub async fn rtk_status(state: &CommandState) -> Result<crate::rtk::RtkStatus, S
     )
 }
 
+/// A4：读取当前任务 bridge 上 Real runtime 的请求审计自检计数。
+///
+/// 返回 `Some((headers_appended, mismatches))`；bridge 不存在或不是 Real
+/// runtime（Mock / 尚未 ensure）时返回 `None`。只读、无敏感内容，不进设置
+/// UI——soak 期间用 devtools/日志消费，UI 化另议。
+pub async fn request_audit_counters(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<Option<(usize, usize)>, String> {
+    let Some(bridge) = state.agent.existing_bridge_for(task_id).await else {
+        return Ok(None);
+    };
+    let bridge = bridge.lock().await;
+    Ok(match &bridge.kind {
+        AgentRuntimeKind::Real(runtime) => Some(runtime.request_self_check_counters()),
+        AgentRuntimeKind::Mock(_) => None,
+    })
+}
+
 /// Enable or disable R-Code's RTK policy. Detailed failures stay in diagnostics; the WebView gets
 /// a structured `code` so it can render actionable guidance for the known "security software
 /// blocked the unsigned binary" case without parsing diagnostic prose.
@@ -27081,6 +27100,206 @@ kind = "codex_cli"
         .await
         .unwrap();
         assert!(matches!(bridge.kind, AgentRuntimeKind::Real(_)));
+        SettingsService::new(state.config_dir.clone())
+            .set_provider_secret(&provider_name, "")
+            .unwrap();
+    }
+
+    /// 阶段 A 冒烟的 cargo 级等价物（docs/request-audit-and-anchoring.md 完成定义
+    /// 第 3 条）：开启 diagnostics.request_audit 后跑一条真实 run（本地 SSE
+    /// provider），验证 sidecar 落在 sessions/request-audit/{storage_id}.jsonl、
+    /// 首行 reason=="initial"、canonical 文件零污染、自检计数 (N, 0)；关闭开关后
+    /// 新任务不再产生审计文件。
+    #[tokio::test]
+    async fn request_audit_sidecar_smoke_end_to_end() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let (_dir, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+
+        // 本地 OpenAI 兼容 SSE provider：读完整个请求后立即回一条文本轮
+        //（模式取自 gated provider fixture，去掉闸门）。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind audit smoke provider fixture");
+        let provider_addr = listener.local_addr().expect("audit smoke provider address");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut request = Vec::with_capacity(4096);
+                    let mut chunk = [0_u8; 1024];
+                    let header_end = loop {
+                        if let Some(offset) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            break offset + 4;
+                        }
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    };
+                    let content_length = String::from_utf8_lossy(&request[..header_end])
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    while request.len() < header_end.saturating_add(content_length) {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    let body = concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"audit smoke done\"},\"finish_reason\":null}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+        let provider_name = format!("r-code-audit-smoke-{}", uuid::Uuid::new_v4());
+        settings_save_provider(
+            &state,
+            ProviderSettingsInput {
+                name: provider_name.clone(),
+                provider_kind: None,
+                base_url: format!("http://{provider_addr}/v1"),
+                model: "test-model".into(),
+                api_key: Some("sk-audit-smoke".into()),
+                max_tokens: Some(2048),
+                temperature: Some(0.2),
+                protocol: None,
+                show_reasoning: None,
+                activate: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+        // 直接改 config.toml 开审计开关（settings_save_provider 会把 diagnostics
+        // 段以默认值落盘；ensure_real_runtime 每次 load_global_unvalidated 重读文件）。
+        let config_path = state.config_dir.join("config.toml");
+        let config_toml = std::fs::read_to_string(&config_path).unwrap();
+        assert!(config_toml.contains("request_audit = false"));
+        std::fs::write(
+            &config_path,
+            config_toml.replace("request_audit = false", "request_audit = true"),
+        )
+        .unwrap();
+
+        // 生产路径由 bin 侧 enable_real_agent_mode 打开；测试默认 Mock。
+        state.agent.enable_real_mode();
+
+        let task = task_create(&state, Some(&workspace), "Audit smoke", "g", "ask")
+            .await
+            .unwrap();
+        agent_send(&state, &task.id, "audit smoke goal")
+            .await
+            .unwrap();
+        // 轮询等 run 收尾（文本轮 → Idle）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let detail = task_detail(&state, &task.id).await.unwrap();
+            if matches!(detail.task.state, TaskState::Idle | TaskState::ReviewReady) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "audit smoke run did not settle; state = {:?}",
+                detail.task.state
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        // sidecar 出现在 request-audit/{storage_id}.jsonl（测试分支 storage_id
+        // 与 task.id 同源），首枚 RequestHeader 的 reason == "initial"。
+        let sidecar = state
+            .sessions_dir
+            .join("request-audit")
+            .join(format!("{}.jsonl", task.id));
+        let sidecar_jsonl = tokio::fs::read_to_string(&sidecar)
+            .await
+            .expect("request-audit sidecar must exist for audited session");
+        let headers: Vec<serde_json::Value> = sidecar_jsonl
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|value| value.get("request_header").is_some())
+            .collect();
+        assert!(!headers.is_empty());
+        assert_eq!(headers[0]["request_header"]["reason"], "initial");
+        assert!(
+            !headers[0]["request_header"]["tool_names"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .is_empty(),
+            "工作区会话首轮目录清单应非空"
+        );
+        // canonical 文件零污染：不写 request_header 行（红线 1，宿主单写方）。
+        let canonical =
+            tokio::fs::read_to_string(state.sessions_dir.join(format!("{}.jsonl", task.id)))
+                .await
+                .unwrap();
+        assert!(
+            !canonical.contains("\"request_header\""),
+            "canonical JSONL 不得出现 request_header 事件"
+        );
+        // 自检计数：正常会话 mismatches 恒为 0。
+        let counters = request_audit_counters(&state, &task.id).await.unwrap();
+        assert_eq!(
+            counters,
+            Some((headers.len(), 0)),
+            "审计开启时计数应等于 sidecar 内 RequestHeader 数且零误报"
+        );
+
+        // 关闭开关：新任务（新 bridge → 新 runtime → 重读配置）不再产生审计文件。
+        let config_toml = std::fs::read_to_string(&config_path).unwrap();
+        std::fs::write(
+            &config_path,
+            config_toml.replace("request_audit = true", "request_audit = false"),
+        )
+        .unwrap();
+        let second = task_create(&state, Some(&workspace), "Audit off", "g", "ask")
+            .await
+            .unwrap();
+        agent_send(&state, &second.id, "audit off goal")
+            .await
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let detail = task_detail(&state, &second.id).await.unwrap();
+            if matches!(detail.task.state, TaskState::Idle | TaskState::ReviewReady) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "audit-off run did not settle; state = {:?}",
+                detail.task.state
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(
+            !state
+                .sessions_dir
+                .join("request-audit")
+                .join(format!("{}.jsonl", second.id))
+                .exists(),
+            "关闭开关后新会话不得再产生审计文件"
+        );
+        // Mock/断言辅助：非 audited 任务的计数返回 None 或 0——这里该任务走了
+        // Real runtime 但未接线 journal，计数为 (0, 0)。
+        let counters_off = request_audit_counters(&state, &second.id).await.unwrap();
+        assert_eq!(counters_off, Some((0, 0)));
         SettingsService::new(state.config_dir.clone())
             .set_provider_secret(&provider_name, "")
             .unwrap();

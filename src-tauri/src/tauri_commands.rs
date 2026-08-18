@@ -1577,6 +1577,16 @@ pub async fn cmd_rtk_status(
     r_code_host::commands::rtk_status(&state).await
 }
 
+/// A4：请求信封审计自检计数（headers_appended, mismatches）。Real runtime
+/// 不在场时返回 None；soak 期间经 devtools 消费，不进设置 UI。
+#[tauri::command]
+pub async fn cmd_request_audit_counters(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<(usize, usize)>, String> {
+    r_code_host::commands::request_audit_counters(&state, &task_id).await
+}
+
 /// Install RTK from its verified official release when needed, then atomically toggle policy.
 #[tauri::command]
 pub async fn cmd_rtk_set_enabled(
