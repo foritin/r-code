@@ -2056,6 +2056,7 @@ pub async fn task_prepare(state: &CommandState, task_id: &str) -> Result<(), Str
             &mut bridge,
             task.provider_name.as_deref(),
             task.workspace_path.as_deref(),
+            &state.sessions_dir,
         )
         .await?;
     }
@@ -4589,6 +4590,17 @@ impl AgentRuntime for AgentRuntimeKind {
             Self::Mock(r) => r.poll_events().await,
         }
     }
+    async fn set_request_journal_target(
+        &mut self,
+        session_id: &str,
+        journal_id: String,
+    ) -> Result<(), ProductError> {
+        // A3.2：Real 转发（journal 未接线时映射惰性无害）；Mock 无 journal 概念。
+        match self {
+            Self::Real(r) => r.set_request_journal_target(session_id, journal_id).await,
+            Self::Mock(_) => Ok(()),
+        }
+    }
 }
 
 impl AgentBridge {
@@ -4650,6 +4662,7 @@ async fn ensure_real_runtime(
     bridge: &mut AgentBridge,
     requested_provider: Option<&str>,
     workspace_path: Option<&str>,
+    sessions_dir: &Path,
 ) -> Result<(), String> {
     // Read global Provider config and health receipts as one snapshot. Probe/save/delete/pool-save
     // use the same writer lock, so a root can never pair a new config file with an old receipt.
@@ -4811,6 +4824,18 @@ async fn ensure_real_runtime(
     .with_agent_prompts(agent_prompts.clone())
     .with_external_tools(mcp_manager.clone())
     .with_codex_subagent_runner(codex_runner);
+    // A3.2：请求信封审计（opt-in，默认关闭）。旁路 journal 写子目录
+    // sessions/request-audit/，runtime 是唯一写方，canonical {storage_id}.jsonl
+    // 与其 14 处读者零改动（红线 1）；开关关闭时完全不构造 Store（零路径执行）。
+    // 会话中途开启：sidecar 从空文件起步，首轮自检报一次消息数不一致（log-only，
+    // 计数器可见），不做增量回填——审计开关建议在会话开始前开启。
+    let runtime = if config.diagnostics.request_audit {
+        let audit_dir = sessions_dir.join("request-audit");
+        std::fs::create_dir_all(&audit_dir).map_err(err_str)?;
+        runtime.with_request_journal(agent_store::SessionStore::new(audit_dir))
+    } else {
+        runtime
+    };
     install_runtime_subagent_candidate_pool(&runtime, candidate_pool_update);
 
     bridge.kind = AgentRuntimeKind::Real(runtime);
@@ -5716,6 +5741,14 @@ async fn ensure_runtime_session(
         .load(&branch.storage_id)
         .await
         .map_err(err_str)?;
+    // A3.2：声明审计 journal 的落盘目标 id（branch.storage_id）。无条件调用——
+    // journal 未接线时该映射惰性无害；映射随会话重建（重启 / runtime 重建后同
+    // storage_id 继续追加同一 sidecar 文件）。
+    bridge
+        .kind
+        .set_request_journal_target(&session.meta.id, branch.storage_id.clone())
+        .await
+        .map_err(err_str)?;
     bridge
         .kind
         .replace_context(&session.meta.id, history.messages, history.model_projection)
@@ -6584,6 +6617,7 @@ pub async fn agent_send_with_mode_and_attachments(
             &mut bridge,
             task.provider_name.as_deref(),
             task.workspace_path.as_deref(),
+            &state.sessions_dir,
         )
         .await?;
     }
@@ -7409,6 +7443,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 &mut bridge,
                 task.provider_name.as_deref(),
                 task.workspace_path.as_deref(),
+                &sessions_dir,
             )
             .await
             {
@@ -18286,6 +18321,8 @@ struct CodexRCodeDelegateContext {
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
     config_dir: PathBuf,
+    /// A3.2：委托侧 ensure_real_runtime 接审计 journal 时定位 request-audit/。
+    sessions_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
     subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
@@ -19144,6 +19181,7 @@ async fn handle_codex_rcode_dynamic_tool(
             &mut bridge,
             task.provider_name.as_deref(),
             task.workspace_path.as_deref(),
+            &delegate.sessions_dir,
         )
         .await
         {
@@ -19847,6 +19885,7 @@ async fn run_codex_app_server_process_with_images_and_registry(
                     &mut bridge,
                     requested_provider,
                     workspace_path,
+                    &delegate.sessions_dir,
                 )
                 .await
                 {
@@ -20653,6 +20692,7 @@ fn spawn_codex_main(
                     external_agents: external_agents.clone(),
                     db: db.clone(),
                     config_dir: config_dir.clone(),
+                    sessions_dir: sessions_dir.clone(),
                     tool_gateway: tool_gateway.clone(),
                     mcp_manager: mcp_manager.clone(),
                     subagent_config_mutations: subagent_config_mutations.clone(),
@@ -27036,6 +27076,7 @@ kind = "codex_cli"
             &mut bridge,
             None,
             None,
+            &state.sessions_dir,
         )
         .await
         .unwrap();
@@ -27117,6 +27158,7 @@ kind = "codex_cli"
                 &mut bridge,
                 None,
                 None,
+                &state.sessions_dir,
             )
             .await
             .unwrap();
@@ -30179,6 +30221,7 @@ command = "r-code-host"
                 &mut bridge,
                 None,
                 None,
+                &state.sessions_dir,
             )
             .await
             .unwrap();
@@ -30207,6 +30250,7 @@ command = "r-code-host"
                 external_agents: state.external_agents.clone(),
                 db: state.db.clone(),
                 config_dir: state.config_dir.clone(),
+                sessions_dir: state.sessions_dir.clone(),
                 tool_gateway: state.tool_gateway.clone(),
                 mcp_manager: state.mcp_manager.clone(),
                 subagent_config_mutations: state.subagent_config_mutations.clone(),
@@ -30477,6 +30521,7 @@ command = "r-code-host"
                 &mut bridge,
                 None,
                 None,
+                &state.sessions_dir,
             )
             .await
             .unwrap();
@@ -30498,6 +30543,7 @@ command = "r-code-host"
                 external_agents: state.external_agents.clone(),
                 db: state.db.clone(),
                 config_dir: state.config_dir.clone(),
+                sessions_dir: state.sessions_dir.clone(),
                 tool_gateway: state.tool_gateway.clone(),
                 mcp_manager: state.mcp_manager.clone(),
                 subagent_config_mutations: state.subagent_config_mutations.clone(),
