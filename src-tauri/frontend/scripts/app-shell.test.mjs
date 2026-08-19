@@ -3730,6 +3730,20 @@ test("request audit toggle and first-round anchoring expose the diagnostics expe
     assert.equal(await guide.locator(".tier-card").count(), 3,
       "tier cards must be generated from the same catalog option list as the select");
     assert.match(await guide.locator(".tier-card.is-recommended").innerText(), /只读清单/);
+    // 排版回归：验证步骤里的 <strong>/<code>/.path-chip 必须随正文行内排布，
+    // 不能被序号列挤成一字一行的竖条。
+    const stepLayout = await guide.evaluate((dialog) => {
+      const strong = dialog.querySelector(".verify-steps li strong");
+      const chip = dialog.querySelector(".verify-steps .path-chip");
+      return {
+        strongWidth: strong?.getBoundingClientRect().width ?? 0,
+        chipWidth: chip?.getBoundingClientRect().width ?? 0,
+      };
+    });
+    assert.ok(stepLayout.strongWidth > 40,
+      `step text must flow inline, not squeeze into a narrow cell: ${stepLayout.strongWidth}`);
+    assert.ok(stepLayout.chipWidth > 200,
+      `the audit path chip must render as one inline block, not a vertical strip: ${stepLayout.chipWidth}`);
     await page.keyboard.press("Escape");
     await guide.waitFor({ state: "detached" });
     await page.waitForFunction(() => document.activeElement?.classList.contains("guide-link"));
