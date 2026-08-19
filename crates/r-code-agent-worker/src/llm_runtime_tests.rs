@@ -1617,6 +1617,7 @@ fn api_only_candidate_pool_delegate_spec_describes_the_configured_subagent_route
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -2761,6 +2762,7 @@ async fn workspace_free_suspend_tool_closes_the_per_run_tool_gate() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: gate.clone(),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -2807,6 +2809,7 @@ async fn external_tools_cannot_shadow_builtin_or_reserved_host_tools() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -3990,6 +3993,7 @@ async fn stale_tool_calls_cannot_bypass_the_delegation_latch() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: disabled,
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4403,6 +4407,7 @@ async fn delegate_task_routes_explicit_codex_requests_through_the_host_runner() 
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4514,6 +4519,7 @@ async fn session_tool_host_tool_specs_is_stable_across_calls_and_registration_or
             caller: "agent".to_string(),
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(true)),
+            catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
             suspension_gate: Arc::new(AtomicBool::new(false)),
             continuation_gate: Arc::new(AtomicBool::new(false)),
         }
@@ -4803,6 +4809,7 @@ async fn delegation_codex_availability_is_frozen_within_a_run() {
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4873,6 +4880,7 @@ async fn delegation_codex_availability_is_frozen_within_a_run() {
         caller: "agent".to_string(),
         delegation: Some(fresh_supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -5304,6 +5312,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
         caller: "agent".to_string(),
         delegation: Some(supervisor.clone()),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7015,6 +7024,7 @@ async fn read_only_policy_never_trusts_mcp_read_only_hints() {
         caller: "subagent:child-read-only-mcp".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7063,6 +7073,7 @@ fn full_access_subagent_policy_exposes_bash_in_an_attached_workspace() {
         caller: "subagent:child-full-access".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7097,6 +7108,7 @@ fn request_approval_subagent_policy_exposes_bash_but_gates_through_approval() {
         caller: "subagent:child-request-approval".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7307,6 +7319,7 @@ async fn full_access_parent_read_only_child_reads_without_approval() {
         caller: "subagent:child-full-access-read".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7362,6 +7375,7 @@ async fn request_approval_parent_read_only_child_still_asks_for_r1_read() {
         caller: "subagent:child-approval-read".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7430,6 +7444,7 @@ async fn request_approval_subagent_executes_bash_only_after_user_approval() {
         caller: "subagent:child-request-approval-exec".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7614,6 +7629,7 @@ fn registered_git_status_defaults_to_the_attached_workspace_root() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7652,6 +7668,7 @@ async fn registered_glob_defaults_to_workspace_and_keeps_input_errors_non_fatal(
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7986,6 +8003,7 @@ fn mcp_confirmation_preparation_is_main_agent_only() {
         caller: caller.to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -8028,6 +8046,7 @@ fn mcp_save_draft_is_visible_to_the_main_agent_but_not_subagents() {
         caller: caller.to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -8320,6 +8339,7 @@ fn plan_gate_tool_host(
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     }
@@ -9546,6 +9566,231 @@ async fn first_round_tool_call_mode_stays_restricted_until_tool_use() {
         timelines[3], timelines[2],
         "run3 首轮保持完整目录（已晋升，粘性）"
     );
+}
+
+/// 规划门门铃回合：模型调用 plan_ready（空参数，StopReason::ToolUse）。
+fn plan_ready_turn(id: &str) -> RecordedTurn {
+    RecordedTurn::ok(vec![
+        StreamEvent::ToolUseStart {
+            id: id.to_string(),
+            name: "plan_ready".to_string(),
+        },
+        StreamEvent::ToolUseComplete {
+            id: id.to_string(),
+            input: serde_json::json!({}),
+        },
+        StreamEvent::Stop {
+            reason: StopReason::ToolUse,
+        },
+    ])
+}
+
+#[tokio::test]
+async fn plan_gate_with_plan_complete_holds_until_plan_ready() {
+    // 规划门目标形态：plan_gate + plan_complete。首轮目录恰为 ["plan_ready"]；
+    // 纯文字回合不晋升（剥夺跨回合、跨 run 持续），模型调用 plan_ready 后
+    // 下一轮恢复完整目录；可见行收窄×2（每 run 首派发各一条）+ 晋升×1，
+    // tool_count 反映真实派发（= 1）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("plan draft v1", Usage::default());
+    provider.push_turn(plan_ready_turn("pg-ready"));
+    provider.push_text_turn("executing now", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::PlanGate,
+        agent_config::FirstRoundPromoteOn::PlanComplete,
+    );
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    // run1：纯文字终答（目录仅门铃），run 结束但粘性保持。
+    rt.start_run(&session.meta.id, "gate goal").await.unwrap();
+    wait_until_finished(&rt).await;
+    // run2：首轮仍仅门铃（跨 run 持续），plan_ready 后下一轮恢复完整。
+    rt.start_run(&session.meta.id, "ready to execute")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let anchors = anchor_events(&mut rt).await;
+    assert_eq!(anchors.len(), 3, "收窄×2 + 晋升×1：{anchors:?}");
+    assert!(matches!(
+        anchors.as_slice(),
+        [
+            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c1, 1, f1),
+            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c2, 1, f2),
+            (r_code_core::dto::CatalogAnchorPhase::Promoted, ref c3, 1, f3),
+        ] if c1 == "plan_gate"
+            && c2 == "plan_gate"
+            && c3 == "plan_gate"
+            && *f1 > 1
+            && *f2 == *f1
+            && *f3 == *f1
+    ));
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(
+        timelines.len(),
+        3,
+        "run1×1（纯文字） + run2×2（门铃 + 恢复）：{timelines:?}"
+    );
+    assert_eq!(
+        timelines[0],
+        vec!["plan_ready".to_string()],
+        "plan_gate 首轮目录恰为门铃"
+    );
+    assert_eq!(
+        timelines[1],
+        vec!["plan_ready".to_string()],
+        "纯文字 run 之后新 run 首轮仍仅门铃（剥夺跨 run 持续）"
+    );
+    assert!(
+        timelines[2].iter().any(|name| name == "read_file") && timelines[2].len() > 1,
+        "plan_ready 后下一轮恢复完整目录：{:?}",
+        timelines[2]
+    );
+}
+
+#[tokio::test]
+async fn readonly_with_plan_complete_appends_doorbell_and_holds_without_it() {
+    // readonly + plan_complete：收窄目录 = 五件套 ∩ 注册目录 + plan_ready；
+    // 模型不调 plan_ready 则跨 run 持续收窄，无晋升可见行。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("text only", Usage::default());
+    provider.push_text_turn("run two text", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::ReadOnly,
+        agent_config::FirstRoundPromoteOn::PlanComplete,
+    );
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "run one").await.unwrap();
+    wait_until_finished(&rt).await;
+    rt.start_run(&session.meta.id, "run two").await.unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(
+        timelines[0],
+        vec!["plan_ready".to_string(), "read_file".to_string()],
+        "readonly + plan_complete 的收窄目录 = 五件套交集 + 门铃（按名排序）"
+    );
+    assert_eq!(
+        timelines[1], timelines[0],
+        "无 plan_ready 则跨 run 持续收窄"
+    );
+    let anchors = anchor_events(&mut rt).await;
+    assert!(matches!(
+        anchors.as_slice(),
+        [
+            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c1, 2, _),
+            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c2, 2, _),
+        ] if c1 == "readonly" && c2 == "readonly"
+    ));
+}
+
+#[tokio::test]
+async fn plan_gate_with_either_dispatches_empty_catalog_for_one_round() {
+    // 退化组合（UI 联动规避，合同层仍需良定义）：plan_gate + either =
+    // 空目录一回合纯思考，任意 assistant 内容即恢复完整目录。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("pg-either"));
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::PlanGate,
+        agent_config::FirstRoundPromoteOn::Either,
+    );
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "empty first round")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(
+        timelines[0],
+        Vec::<String>::new(),
+        "plan_gate + either 首轮派发空目录"
+    );
+    assert!(
+        timelines[1].iter().any(|name| name == "read_file"),
+        "either 下任意 assistant 内容（这里是目录外 read_file ToolUse）即恢复：{:?}",
+        timelines[1]
+    );
+}
+
+#[tokio::test]
+async fn plan_ready_is_intercepted_without_gateway_dispatch() {
+    // 门铃是目录里唯一不经 gateway 的工具：test_gateway 只注册 read_file，
+    // 若 plan_ready 被转发会得到 unknown tool 错误——这里断言拿到的是
+    // worker 侧的成功语义；非 pending（目录已恢复后的重放/子代理）则返回
+    // 可修正错误。
+    fn gate_host(pending: bool) -> SessionToolHost {
+        SessionToolHost {
+            gateway: test_gateway(),
+            external_tools: None,
+            task_id: "task-plan-gate".to_string(),
+            run_id: "run-plan-gate".to_string(),
+            abort: Arc::new(AtomicBool::new(false)),
+            workspace_scope: None,
+            policy: ToolPolicy::Main,
+            caller: "agent".to_string(),
+            delegation: None,
+            delegation_disabled: Arc::new(AtomicBool::new(false)),
+            suspension_gate: Arc::new(AtomicBool::new(false)),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
+            catalog_bootstrap_pending: Arc::new(AtomicBool::new(pending)),
+        }
+    }
+    let accepted = gate_host(true)
+        .call_inner(Some("call-pg-1"), "plan_ready", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(!accepted.is_error, "pending 期门铃必须成功：{accepted:?}");
+    assert!(
+        accepted.content.contains("Planning accepted"),
+        "成功语义由 worker 给出（未转发 gateway）：{accepted:?}"
+    );
+    let rejected = gate_host(false)
+        .call_inner(Some("call-pg-2"), "plan_ready", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(
+        rejected.is_error,
+        "非 pending 调用门铃必须返回可修正错误：{rejected:?}"
+    );
+    assert!(rejected.content.contains("only available while the planning gate"));
 }
 
 #[tokio::test]

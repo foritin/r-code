@@ -1537,12 +1537,14 @@ pub enum AgentEvent {
         detail: Option<String>,
     },
     /// 首轮工具清单锚定的可观察变化（docs/request-audit-and-anchoring.md 阶段 C）。
-    /// 每会话至多两条：narrowed 随首个收窄请求派发，promoted 在恢复完整清单时。
-    /// 只描述档位与数量；清单本身见审计 journal 的 `RequestHeader.tool_names`。
+    /// 每会话至多一条 promoted；narrowed 随每个仍处锚定期的 run 首个收窄请求
+    /// 派发（plan_complete 晋升信号下剥夺跨回合、跨 run 持续，收窄行可随 run
+    /// 重复直到模型调用 plan_ready）。只描述档位与数量；清单本身见审计 journal
+    /// 的 `RequestHeader.tool_names`。
     CatalogAnchor {
         /// 阶段（narrowed / promoted）。
         phase: CatalogAnchorPhase,
-        /// 收窄档位的 serde 名（readonly / editor_pair）。
+        /// 收窄档位的 serde 名（readonly / editor_pair / plan_gate）。
         catalog: String,
         /// 收窄清单的工具数。
         tool_count: usize,
