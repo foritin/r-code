@@ -164,9 +164,22 @@ test("controller handshake replays lost READY/PREF revisions and transparent pad
       height: "196px",
     });
     document.body.append(avatar);
+    const ghost = document.createElement("div");
+    ghost.className = "companion-session-card";
+    Object.assign(ghost.style, {
+      position: "fixed",
+      left: "0px",
+      top: "0px",
+      width: "300px",
+      height: "300px",
+      visibility: "hidden",
+    });
+    document.body.append(ghost);
     const visibleHit = pointHitsCompanionSurface(document, 140, 160);
     const avatarEdgeHit = pointHitsCompanionSurface(document, 404, 480);
     const transparentPaddingHit = pointHitsCompanionSurface(document, 20, 20);
+    const hiddenGhostHit = pointHitsCompanionSurface(document, 30, 30);
+    ghost.remove();
     avatar.remove();
     sprite.remove();
     cleanup();
@@ -178,6 +191,7 @@ test("controller handshake replays lost READY/PREF revisions and transparent pad
       visibleHit,
       avatarEdgeHit,
       transparentPaddingHit,
+      hiddenGhostHit,
     };
   });
 
@@ -192,7 +206,10 @@ test("controller handshake replays lost READY/PREF revisions and transparent pad
   assert.equal(result.visibleHit, true);
   assert.equal(result.avatarEdgeHit, true,
     "the avatar button's own bounds must stay interactive; only inner sprite rects would leave the pet's fringe click-through");
-  assert.equal(result.transparentPaddingHit, false);
+  assert.equal(result.transparentPaddingHit, false,
+    "a visibility:hidden shell over the padding must not claim native interactivity");
+  assert.equal(result.hiddenGhostHit, false,
+    "hidden elements would otherwise become ghost frames swallowing clicks meant for windows behind");
   await page.close();
 });
 

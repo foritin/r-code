@@ -131,16 +131,35 @@ const COMPANION_INTERACTIVE_SURFACES = [
   ".companion-tracking-toggle",
 ] as const;
 
+/** 命中测试的几何基底以 onMoved/onScaleChanged 事件驱动为主，但这些事件在睡眠恢复、
+ * 显示器拓扑或 DPI 变化时可能漏发；每 ~1s（12×80ms）主动重取一次兜底，避免拿旧坐标
+ * 把命中框整体偏移成“别处被隐形大框挡住、宠物本体却点不中”。 */
+const GEOMETRY_REFRESH_TICKS = 12;
+/** 原生拖拽不保证派发 pointerup：移动事件停顿这么久就视为按压结束，及时恢复穿透判定，
+ * 否则整窗（含透明死区）会在拖拽结束后继续吞点击直到 3 秒兜底超时。 */
+const POINTER_IDLE_RELEASE_MS = 640;
+
 function rectContainsPoint(rect: DOMRect, x: number, y: number): boolean {
   return rect.width > 0 && rect.height > 0
     && x >= rect.left && x <= rect.right
     && y >= rect.top && y <= rect.bottom;
 }
 
+/** 布局矩形无法区分 visibility:hidden / display:none 的空壳与可见表面；只有可见元素才允许
+ * 认领原生交互，否则其不可见边界会变成吞点击的"幽灵框"。opacity 不纳入判定（光晕等
+ * 半透明装饰仍算可见）。 */
+function elementClaimsInteractivity(element: HTMLElement): boolean {
+  if (typeof element.checkVisibility === "function") {
+    return element.checkVisibility({ checkVisibilityCSS: true });
+  }
+  return element.getClientRects().length > 0;
+}
+
 /** Visible companion surfaces remain interactive; transparent padding passes through natively. */
 export function pointHitsCompanionSurface(documentRoot: Document, x: number, y: number): boolean {
   return COMPANION_INTERACTIVE_SURFACES.some((selector) =>
     [...documentRoot.querySelectorAll<HTMLElement>(selector)]
+      .filter(elementClaimsInteractivity)
       .some((element) => rectContainsPoint(element.getBoundingClientRect(), x, y)));
 }
 
@@ -261,20 +280,25 @@ export function NativeCompanionWindowController() {
       return;
     }
     let disposed = false;
-    let clickThroughSupported = true;
-    // A single transient IPC hiccup must not permanently disable pass-through: the dead zone
-    // would silently revert to swallowing clicks. Only repeated failures give up (fail open).
+    // 瞬断 IPC 曾会让穿透一次性停摆（置标志位 + 停计时器），整窗从此以不可见大框吞掉背后
+    // 所有点击。现在进入降级模式：fail-open 保持宠物可点可拖，并以慢节奏持续探活——一旦
+    // 原生调用恢复成功，命中判定自动回到正常 80ms 循环。
     let consecutiveFailures = 0;
+    let degradedWarned = false;
     let pointerActive = false;
     let pointerReleaseTimer: number | null = null;
+    let lastNativeMoveAt = 0;
     let tickTimer: number | null = null;
     let tickInFlight = false;
+    let effectivelyHidden = false;
+    let geometryRefreshCountdown = 0;
     let windowPosition: PhysicalPosition | null = null;
     let scaleFactor = 1;
     const nativeListeners = createAsyncCleanupScope();
 
     const pointerDown = () => {
       pointerActive = true;
+      lastNativeMoveAt = Date.now();
       if (pointerReleaseTimer !== null) window.clearTimeout(pointerReleaseTimer);
       pointerReleaseTimer = window.setTimeout(() => { pointerActive = false; }, 3_000);
     };
@@ -290,24 +314,46 @@ export function NativeCompanionWindowController() {
     const recordFailure = (error: unknown) => {
       consecutiveFailures += 1;
       if (consecutiveFailures < 3) return;
-      if (clickThroughSupported) {
-        clickThroughSupported = false;
-        console.warn("Companion click-through disabled after repeated cursor/native failures.", error);
-        // Fail open，且必须真正下发：停摆时若上一次成功的是 setIgnored(true)，原生窗口会
-        // 永远停留在 WS_EX_TRANSPARENT——点击与拖拽全部穿透，而 WebView 渲染不受影响，
-        // 表现为“动画还在播但怎么点都没反应”。
-        if (cursorPolicy.applied() !== false) void cursorPolicy.setIgnored(false).catch(() => {});
+      if (!degradedWarned) {
+        degradedWarned = true;
+        console.warn("Companion click-through degraded after repeated cursor/native failures; probing continues.", error);
       }
+      // Fail open，且必须真正下发：停摆时若上一次成功的是 setIgnored(true)，原生窗口会
+      // 永远停留在 WS_EX_TRANSPARENT——点击与拖拽全部穿透，而 WebView 渲染不受影响，
+      // 表现为“动画还在播但怎么点都没反应”。
+      if (cursorPolicy.applied() !== false) void cursorPolicy.setIgnored(false).catch(() => {});
     };
 
     const tick = async () => {
-      if (disposed || !clickThroughSupported || tickInFlight) return;
+      if (disposed || tickInFlight) return;
       tickInFlight = true;
+      let healthy = true;
       try {
-        if (document.visibilityState === "hidden") {
+        // WebView2 的 visibilityState 可能滞留 hidden（最小化 / Win+D 恢复后事件未送达）：
+        // DOM 说隐藏时用原生 isVisible 复核——真正可见的窗口绝不能整窗放开吞点击。
+        let hidden = document.visibilityState === "hidden";
+        if (hidden) hidden = !(await appWindow.isVisible());
+        effectivelyHidden = hidden;
+        if (hidden) {
           if (cursorPolicy.applied() !== false) await cursorPolicy.setIgnored(false);
         } else {
-          if (!windowPosition) windowPosition = await appWindow.outerPosition();
+          geometryRefreshCountdown -= 1;
+          if (!windowPosition || geometryRefreshCountdown <= 0) {
+            const [position, scale] = await Promise.all([
+              appWindow.outerPosition(),
+              appWindow.scaleFactor(),
+            ]);
+            windowPosition = position;
+            if (Number.isFinite(scale) && scale > 0) scaleFactor = scale;
+            geometryRefreshCountdown = GEOMETRY_REFRESH_TICKS;
+          }
+          // 按压态只覆盖真实拖拽：指针按下但没有后续移动事件（原生拖拽不派发 pointerup
+          // 的常见情形）时，超时释放，让透明死区尽快恢复穿透。
+          if (pointerActive && Date.now() - lastNativeMoveAt > POINTER_IDLE_RELEASE_MS) {
+            pointerActive = false;
+            if (pointerReleaseTimer !== null) window.clearTimeout(pointerReleaseTimer);
+            pointerReleaseTimer = null;
+          }
           if (pointerActive) {
             if (cursorPolicy.applied() !== false) await cursorPolicy.setIgnored(false);
           } else {
@@ -318,28 +364,61 @@ export function NativeCompanionWindowController() {
           }
         }
         consecutiveFailures = 0;
+        degradedWarned = false;
       } catch (error) {
+        healthy = false;
         recordFailure(error);
       } finally {
         tickInFlight = false;
-        if (!disposed && clickThroughSupported) {
-          tickTimer = window.setTimeout(tick, document.visibilityState === "hidden" ? 400 : 80);
+        if (!disposed) {
+          tickTimer = window.setTimeout(tick, healthy && !effectivelyHidden ? 80 : 400);
         }
       }
     };
 
+    let moveListenerReady = false;
+    let scaleListenerReady = false;
     const attach = async () => {
       [windowPosition, scaleFactor] = await Promise.all([
         appWindow.outerPosition(),
         appWindow.scaleFactor(),
       ]);
-      if (!await nativeListeners.retain(appWindow.onMoved(({ payload }) => {
-        windowPosition = payload;
-      }))) return;
-      if (!await nativeListeners.retain(appWindow.onScaleChanged(({ payload }) => {
-        scaleFactor = payload.scaleFactor;
-      }))) return;
+      geometryRefreshCountdown = GEOMETRY_REFRESH_TICKS;
+      if (!moveListenerReady) {
+        if (!await nativeListeners.retain(appWindow.onMoved(({ payload }) => {
+          windowPosition = payload;
+          lastNativeMoveAt = Date.now();
+        }))) return;
+        moveListenerReady = true;
+      }
+      if (!scaleListenerReady) {
+        if (!await nativeListeners.retain(appWindow.onScaleChanged(({ payload }) => {
+          scaleFactor = payload.scaleFactor;
+        }))) return;
+        scaleListenerReady = true;
+      }
       if (!nativeListeners.isDisposed()) await tick();
+    };
+    // 挂载失败（IPC 暂断）不再永久退化为整窗吞点击：保持 fail-open 并按退避重试。
+    const attachWithRetry = async () => {
+      let attempt = 0;
+      while (!disposed) {
+        try {
+          await attach();
+          return;
+        } catch (error) {
+          attempt += 1;
+          if (attempt === 1 || attempt % 10 === 0) {
+            console.warn("Companion click-through attach failed; retrying.", error);
+          }
+          if (cursorPolicy.applied() !== false) {
+            await cursorPolicy.setIgnored(false).catch(() => {});
+          }
+          await new Promise((resolve) => {
+            window.setTimeout(resolve, Math.min(2_000, 250 * attempt));
+          });
+        }
+      }
     };
     // 隐藏期间的原生搬动（DPI 切换、显示器拓扑变化）不保证都能通过 onMoved 回放到
     // WebView；恢复可见时重取几何，避免拿旧坐标做命中测试而误判“光标不在宠物上”。
@@ -350,6 +429,7 @@ export function NativeCompanionWindowController() {
           if (disposed) return;
           windowPosition = position;
           scaleFactor = scale;
+          geometryRefreshCountdown = GEOMETRY_REFRESH_TICKS;
         })
         .catch(() => {});
     };
@@ -357,10 +437,7 @@ export function NativeCompanionWindowController() {
       if (document.visibilityState === "visible") refreshGeometry();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
-    void attach().catch(() => {
-      clickThroughSupported = false;
-      if (cursorPolicy.applied() !== false) void cursorPolicy.setIgnored(false).catch(() => {});
-    });
+    void attachWithRetry();
 
     return () => {
       disposed = true;

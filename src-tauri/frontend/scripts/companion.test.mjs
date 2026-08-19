@@ -46,7 +46,16 @@ test("companion is a separate native-window entry with a narrow capability", () 
   assert.match(controller, /setIgnoreCursorEvents/);
   assert.match(controller, /pointHitsCompanionSurface/);
   assert.match(controller, /"\.companion-avatar",/);
-  assert.match(controller, /clickThroughSupported = false;[\s\S]*?cursorPolicy\.setIgnored\(false\)/);
+  // 穿透降级必须自愈：失败时 fail-open（可点可拖）但持续探活，禁止永久性 give-up。
+  assert.match(controller, /degraded[\s\S]*?cursorPolicy\.applied\(\) !== false/);
+  assert.doesNotMatch(controller, /clickThroughSupported/);
+  // 可见性以原生 isVisible 复核为准，防止 WebView2 visibilityState 滞留 hidden 导致整窗吞点击。
+  assert.match(controller, /appWindow\.isVisible\(\)/);
+  // 几何基底周期重取 + 拖拽移动停顿后释放按压态 + 隐藏元素不得认领交互。
+  assert.match(controller, /GEOMETRY_REFRESH_TICKS/);
+  assert.match(controller, /POINTER_IDLE_RELEASE_MS/);
+  assert.match(controller, /checkVisibility/);
+  assert.match(controller, /attachWithRetry/);
   assert.match(controller, /visibilitychange/);
   assert.match(controller, /\.companion-pulse-more/);
   assert.match(controller, /openRoom\(taskId\)/);
