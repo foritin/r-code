@@ -262,7 +262,7 @@ Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会�
 - Steer 消息在下一次模型请求前合入，而不是篡改已发出的 Provider 请求。
 - 编排策略包含委派路由、是否允许跨引擎、质量循环模式、Reviewer 和最大轮数。
 - 质量循环可以关闭、自动或总是运行；Reviewer 返回 `PASS` 或 `REVISE`，修订意见会进入下一轮可见草稿。
-- 首轮工具目录锚定是 opt-in 实验（`orchestration.first_round_catalog` / `first_round_promote_on`，默认 `full`/`either` 即现状）：非默认值时主代理首轮只看到受限目录，首轮出现任意回复（或按配置：首次工具调用）后恢复完整目录；会话级粘性保证每会话至多一次目录变化，两个旋钮纳入 runtime 重建指纹。目录裁剪只是呈现层，工具执行与审批边界不变（`docs/request-audit-and-anchoring.md`）。
+- 首轮工具目录锚定是 opt-in 实验（`orchestration.first_round_catalog` / `first_round_promote_on`，默认 `full`/`either` 即现状）：非默认值时主代理首轮只看到受限目录，首轮出现任意回复（或按配置：首次工具调用）后恢复完整目录；会话级粘性保证每会话至多一次目录变化，两个旋钮纳入 runtime 重建指纹。目录裁剪只是呈现层，工具执行与审批边界不变（`docs/request-audit-and-anchoring.md`）。两个旋钮可在「设置 → Agent 编排」的「首轮目录锚定（实验）」卡片中调整（经通用 `settings_set` 逐键写入并做类型化校验）。
 
 ### 6.3 DeepSeek 前缀缓存与请求字节稳定
 
@@ -351,7 +351,7 @@ flowchart TD
 - SQLite 是产品状态 source of truth，承担列表、筛选、权限、通知、审核和审计查询。
 - Blob 以 BLAKE3 hash 为 key，用引用计数保存基线、大输出等内容。
 - 启动恢复先扫描 JSONL/未结束 Run，再读取 SQLite 状态；孤儿 Run 和待审批请求会出现在恢复页。
-- 请求信封审计（`diagnostics.request_audit`，默认关闭）开启时，agent runtime 在每轮模型派发前向旁路文件 `sessions/request-audit/{storage_id}.jsonl` 追加 `RequestHeader` 快照（system/tools/messages 指纹、工具目录名单与输出预算）并做重建自检（只记录不阻断）。该文件由 runtime 单写、子目录隔离，不参与会话枚举/恢复/导出，canonical JSONL 与其读者零改动；只读命令 `request_audit_counters` 暴露（追加数, 不一致数）计数（`docs/request-audit-and-anchoring.md`）。
+- 请求信封审计（`diagnostics.request_audit`，默认关闭）开启时，agent runtime 在每轮模型派发前向旁路文件 `sessions/request-audit/{storage_id}.jsonl` 追加 `RequestHeader` 快照（system/tools/messages 指纹、工具目录名单与输出预算）并做重建自检（只记录不阻断）。该文件由 runtime 单写、子目录隔离，不参与会话枚举/恢复/导出，canonical JSONL 与其读者零改动；只读命令 `request_audit_counters` 暴露（追加数, 不一致数）计数（`docs/request-audit-and-anchoring.md`）。开关位于「设置 → 诊断」的「请求构成审计」卡片。
 
 ### 9.1 SQLite migration
 

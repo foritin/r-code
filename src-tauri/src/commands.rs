@@ -26598,6 +26598,60 @@ input.on('line', (line) => {
     }
 
     #[tokio::test]
+    async fn settings_set_persists_request_audit_and_first_round_anchoring() {
+        let (_dir, state) = setup_state();
+        settings_set(&state, "diagnostics.request_audit", serde_json::json!(true))
+            .await
+            .unwrap();
+        settings_set(
+            &state,
+            "orchestration.first_round_catalog",
+            serde_json::json!("readonly"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "orchestration.first_round_promote_on",
+            serde_json::json!("tool_call"),
+        )
+        .await
+        .unwrap();
+
+        let payload = settings_get(&state).await.unwrap();
+        assert_eq!(payload["config"]["diagnostics"]["request_audit"], true);
+        assert_eq!(
+            payload["config"]["orchestration"]["first_round_catalog"],
+            "readonly"
+        );
+        assert_eq!(
+            payload["config"]["orchestration"]["first_round_promote_on"],
+            "tool_call"
+        );
+        let raw = std::fs::read_to_string(state.config_dir.join("config.toml")).unwrap();
+        assert!(raw.contains("request_audit = true"));
+        assert!(raw.contains("first_round_catalog = \"readonly\""));
+
+        // 未知枚举必须被类型化往返拒绝，且不能落盘覆盖已保存的合法值。
+        let error = settings_set(
+            &state,
+            "orchestration.first_round_catalog",
+            serde_json::json!("everything"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("unknown variant"),
+            "unexpected error: {error}"
+        );
+        let after = settings_get(&state).await.unwrap();
+        assert_eq!(
+            after["config"]["orchestration"]["first_round_catalog"],
+            "readonly"
+        );
+    }
+
+    #[tokio::test]
     async fn generic_settings_cannot_bypass_subagent_pool_cas_or_project_scope() {
         let (_dir, state) = setup_state();
         for key in [

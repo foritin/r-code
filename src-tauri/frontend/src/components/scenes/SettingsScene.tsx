@@ -616,6 +616,7 @@ export function SettingsScene() {
 
             {activePane === "diagnostics" && (
               <div className="settings-sheet">
+                {config && <RequestAuditSection config={config} reload={loadConfig} />}
                 {config && <LogLevelSection config={config} reload={loadConfig} />}
                 <LogSection />
                 <SupportSection />
@@ -1380,6 +1381,8 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
     test_fail_limit: 3,
     checkpoint_enabled: true,
   },
+  first_round_catalog: "full",
+  first_round_promote_on: "either",
 };
 
 function OrchestrationSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
@@ -1521,6 +1524,43 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
             <option value={2}>2 轮</option>
             <option value={3}>3 轮</option>
           </select>
+        </div>
+      </section>
+
+      <section className="settings-block">
+        <h3>首轮目录锚定（实验）</h3>
+        <p className="desc">
+          新会话的第一轮只向模型展示收窄的工具目录，之后在本会话内恢复完整目录，以稳定首轮提示词。
+          只影响给模型看的目录，不改变工具执行的审批边界。对新会话生效。
+        </p>
+        <div className="field">
+          <label htmlFor="set-first-round-catalog">首轮目录</label>
+          <select
+            id="set-first-round-catalog"
+            className="input"
+            value={policy.first_round_catalog ?? "full"}
+            disabled={busy != null}
+            onChange={(event) => void save("first_round_catalog", event.target.value)}
+          >
+            <option value="full">完整目录 · 不锚定（默认）</option>
+            <option value="readonly">只读目录</option>
+            <option value="editor_pair">读写最小对 · read_file + edit</option>
+          </select>
+          <span className="hint">只读目录含读文件、列目录、搜索等；读写最小对只剩 read_file 和 edit。</span>
+        </div>
+        <div className="field">
+          <label htmlFor="set-first-round-promote">恢复完整目录的时机</label>
+          <select
+            id="set-first-round-promote"
+            className="input"
+            value={policy.first_round_promote_on ?? "either"}
+            disabled={busy != null || (policy.first_round_catalog ?? "full") === "full"}
+            onChange={(event) => void save("first_round_promote_on", event.target.value)}
+          >
+            <option value="either">任意首轮回应（默认）</option>
+            <option value="tool_call">首次真实工具调用</option>
+          </select>
+          <span className="hint">「工具调用」更严格：纯文本回答不会解除收窄，直到模型真正动手。</span>
         </div>
       </section>
 
@@ -1694,6 +1734,49 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
 }
 
 
+
+function RequestAuditSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const enabled = config.diagnostics?.request_audit ?? false;
+
+  const setAudit = async (value: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await settingsSet("diagnostics.request_audit", value);
+      await reload();
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-block">
+      <h3>请求构成审计</h3>
+      <p className="desc">
+        开启后，每个会话发给模型的请求信封（工具目录、托管工具、输出上限）会写入旁路审计文件，
+        用于核对请求构成；正式的会话记录不受影响。对新开始的会话生效。
+      </p>
+      {err && <div className="errbar" role="alert">{err}</div>}
+      <div className="field">
+        <label htmlFor="set-request-audit">旁路审计</label>
+        <input
+          id="set-request-audit"
+          className="switch"
+          type="checkbox"
+          role="switch"
+          checked={enabled}
+          disabled={busy}
+          onChange={(event) => void setAudit(event.target.checked)}
+        />
+        <span className="hint">审计文件按会话存放在应用数据目录的 sessions/request-audit/ 下。</span>
+      </div>
+    </section>
+  );
+}
 
 function LogLevelSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
   const [err, setErr] = useState<string | null>(null);

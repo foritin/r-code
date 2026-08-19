@@ -1363,10 +1363,17 @@ export interface AppConfig {
   storage?: Record<string, unknown>;
   compaction?: Record<string, unknown>;
   orchestration?: OrchestrationConfig;
+  /** 诊断开关段；旧配置缺失时由后端回填默认值（全部关闭）。 */
+  diagnostics?: DiagnosticsConfig;
   /** 用户级协作提示，保存在 R-Code AppData，不进入任何项目。 */
   agent_prompts?: AgentPromptConfig;
   tauri?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export interface DiagnosticsConfig {
+  /** 请求构成审计旁路：把每次派发的请求信封写入 sessions/request-audit/。 */
+  request_audit?: boolean;
 }
 
 export interface ReviewPathStatus {
@@ -1484,6 +1491,9 @@ export interface OrchestrationConfig {
   subagent_pool?: SubagentPoolConfig;
   /** 长任务循环护栏预算；旧配置缺失时由后端回填默认值。 */
   run_budget?: RunBudgetConfig;
+  /** 首轮目录锚定实验；旧配置缺失时由后端回填默认值 full/either。 */
+  first_round_catalog?: "full" | "readonly" | "editor_pair";
+  first_round_promote_on?: "either" | "tool_call";
 }
 
 export interface RunBudgetConfig {

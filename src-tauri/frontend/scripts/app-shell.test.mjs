@@ -3680,6 +3680,72 @@ test("agent coordination prompts can be edited, saved, and restored", async () =
   }
 });
 
+test("request audit toggle and first-round anchoring expose the diagnostics experiments", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const original = await page.evaluate(async () => {
+    const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+    return structuredClone({
+      diagnostics: browserMockSettings.config.diagnostics,
+      orchestration: browserMockSettings.config.orchestration,
+    });
+  });
+
+  try {
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("button", { name: "Agent 编排", exact: true }).click();
+    await page.getByRole("heading", { name: "首轮目录锚定（实验）", exact: true })
+      .waitFor({ state: "visible" });
+
+    const catalog = page.locator("#set-first-round-catalog");
+    const promote = page.locator("#set-first-round-promote");
+    assert.equal(await catalog.inputValue(), "full");
+    assert.equal(await promote.isDisabled(), true,
+      "promote-on stays inert while the catalog is not anchoring");
+
+    await catalog.selectOption("readonly");
+    await page.waitForFunction(() => {
+      const select = document.querySelector("#set-first-round-promote");
+      return select instanceof HTMLSelectElement && !select.disabled;
+    });
+    await promote.selectOption("tool_call");
+
+    const applied = await page.evaluate(async () => {
+      const { settingsGet } = await import("/src/lib/ipc.ts");
+      const { config } = await settingsGet(true);
+      return {
+        catalog: config.orchestration?.first_round_catalog,
+        promote: config.orchestration?.first_round_promote_on,
+      };
+    });
+    assert.equal(applied.catalog, "readonly");
+    assert.equal(applied.promote, "tool_call");
+
+    await page.getByRole("button", { name: "诊断", exact: true }).click();
+    await page.getByRole("heading", { name: "请求构成审计", exact: true })
+      .waitFor({ state: "visible" });
+    const audit = page.locator("#set-request-audit");
+    assert.equal(await audit.isChecked(), false);
+    await audit.check();
+    await page.waitForFunction(() => {
+      const toggle = document.querySelector("#set-request-audit");
+      return toggle instanceof HTMLInputElement && toggle.checked;
+    });
+    const auditState = await page.evaluate(async () => {
+      const { settingsGet } = await import("/src/lib/ipc.ts");
+      return (await settingsGet(true)).config.diagnostics?.request_audit;
+    });
+    assert.equal(auditState, true);
+  } finally {
+    await page.evaluate(async (value) => {
+      const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+      browserMockSettings.config.diagnostics = structuredClone(value.diagnostics);
+      browserMockSettings.config.orchestration = structuredClone(value.orchestration);
+    }, original).catch(() => {});
+    await page.close();
+  }
+});
+
 test("project prompts merge explicitly and project Skills promote into inherited global Skills", async () => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
