@@ -286,6 +286,106 @@
 .settings-block .desc { margin:0 0 var(--sp-6); color:var(--fg-faint); font-size:var(--text-meta); line-height:1.6; }
 .settings-loading { padding:var(--sp-8) var(--sp-9); color:var(--fg-faint); font-size:var(--text-sm); }
 
+/* ---------- 实验功能 · 指引手册 ---------- */
+/* 卡片标题行：标题与低调的「指引手册」入口基线对齐，不与表单控件抢层级。 */
+.block-title-row { display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-6); margin:0 0 var(--sp-4); }
+.block-title-row > h3 { margin:0; color:var(--fg); font-family:var(--font-display); font-size:var(--text-md); font-weight:var(--weight-strong); }
+.guide-link {
+  flex:none; display:inline-flex; align-items:center; gap:6px;
+  padding:4px 12px; border:1px solid var(--border); border-radius:999px;
+  background:transparent; color:var(--accent-2); cursor:pointer; font-size:var(--text-meta); white-space:nowrap;
+  transition:border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
+}
+.guide-link:hover { border-color:color-mix(in srgb, var(--accent) 45%, var(--border)); background:var(--tint-accent); color:var(--fg); }
+
+.guide-overlay {
+  position:fixed; inset:0; z-index:60; display:grid; place-items:center; padding:var(--sp-9);
+  background:var(--scrim); animation:fadeIn var(--dur-2) var(--ease-out);
+}
+.guide-dialog {
+  width:min(720px, 100%); max-height:min(80vh, 760px);
+  display:grid; grid-template-rows:auto minmax(0,1fr) auto;
+  border:1px solid var(--border-strong); border-radius:var(--radius-lg);
+  background:var(--bg-panel); box-shadow:var(--shadow-popover);
+  animation:popIn var(--dur-2) var(--ease-out);
+}
+.guide-head { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--sp-6); padding:var(--sp-8) var(--sp-9) var(--sp-6); border-bottom:1px solid var(--border); }
+.guide-head h2 { margin:0; font-family:var(--font-display); font-size:var(--text-lg); font-weight:var(--weight-strong); letter-spacing:-0.01em; }
+.guide-head .eyebrow { display:inline-block; margin-bottom:6px; color:var(--accent); font-size:10px; font-weight:var(--weight-strong); letter-spacing:0.14em; text-transform:uppercase; }
+.guide-head p { margin:4px 0 0; color:var(--fg-faint); font-size:var(--text-meta); }
+.guide-close {
+  flex:0 0 auto; width:30px; height:30px; border:1px solid var(--border); border-radius:var(--radius-sm);
+  background:transparent; color:var(--fg-muted); cursor:pointer; font-size:15px; line-height:1;
+  transition:background var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
+}
+.guide-close:hover { background:var(--bg-hover); color:var(--fg); }
+.guide-body { overflow-y:auto; padding:var(--sp-8) var(--sp-9) var(--sp-9); scrollbar-width:thin; }
+.guide-body section + section { margin-top:var(--sp-9); }
+.guide-body h3 { margin:0 0 var(--sp-4); color:var(--fg); font-family:var(--font-display); font-size:var(--text-sm); font-weight:var(--weight-strong); }
+.guide-body h3 .idx { margin-right:8px; color:var(--accent-2); font-family:var(--font-mono); font-size:var(--text-meta); }
+.guide-body p { margin:0 0 var(--sp-4); color:var(--fg-muted); font-size:var(--text-base); line-height:1.65; }
+.guide-body code { padding:1px 5px; border:1px solid var(--border); border-radius:4px; background:var(--bg-inset); color:var(--accent-2); font-family:var(--font-mono); font-size:var(--text-meta); }
+
+.tier-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:var(--sp-4); }
+.tier-card { position:relative; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-card); }
+.tier-card.is-recommended { border-color:color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.tier-card .tier-name { color:var(--fg); font-size:var(--text-sm); font-weight:var(--weight-strong); }
+.tier-card .tier-tag { display:inline-block; margin-left:8px; padding:1px 7px; border-radius:999px; background:var(--bg-chip); color:var(--fg-faint); font-size:10.5px; vertical-align:1px; }
+.tier-card.is-recommended .tier-tag { background:var(--tint-accent); color:var(--accent); }
+.tier-card .tier-menu { display:flex; flex-wrap:wrap; gap:4px; margin:var(--sp-3) 0; }
+.menu-chip { padding:1px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-inset); color:var(--fg-muted); font-family:var(--font-mono); font-size:11px; }
+.menu-chip.more { border-style:dashed; color:var(--fg-faint); }
+.tier-card .tier-use { margin:0; color:var(--fg-faint); font-size:var(--text-meta); line-height:1.55; }
+
+.promote-rows { display:grid; gap:var(--sp-3); }
+.promote-row { display:grid; grid-template-columns:150px 1fr; gap:12px; align-items:baseline; padding:10px 14px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-card); }
+.promote-row .promote-name { color:var(--fg); font-family:var(--font-mono); font-size:var(--text-meta); font-weight:var(--weight-strong); }
+.promote-row .promote-desc { margin:0; color:var(--fg-muted); font-size:var(--text-meta); }
+.promote-row .promote-note { display:block; margin-top:2px; color:var(--fg-faint); font-size:11.5px; }
+
+.combo-list { display:grid; gap:var(--sp-3); }
+.combo-row { display:grid; grid-template-columns:auto 1fr; gap:14px; align-items:start; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-card); }
+.combo-pill { padding:4px 10px; border-radius:999px; background:var(--bg-chip); color:var(--accent-2); font-family:var(--font-mono); font-size:11.5px; font-weight:var(--weight-strong); white-space:nowrap; }
+.combo-row.is-main .combo-pill { background:var(--tint-accent); color:var(--accent); }
+.combo-body strong { display:block; margin-bottom:2px; color:var(--fg); font-size:var(--text-sm); }
+.combo-body p { margin:0; color:var(--fg-muted); font-size:var(--text-meta); }
+.combo-body .caveat { margin-top:3px; color:var(--warning); font-size:11.5px; }
+
+.verify-steps { margin:0; padding:0; list-style:none; counter-reset:step; display:grid; gap:var(--sp-4); }
+.verify-steps li { counter-increment:step; display:grid; grid-template-columns:22px 1fr; gap:12px; color:var(--fg-muted); font-size:var(--text-meta); line-height:1.6; }
+.verify-steps li::before {
+  content:counter(step); width:20px; height:20px; border:1px solid var(--border-strong); border-radius:50%;
+  color:var(--accent-2); font-size:11px; font-weight:var(--weight-strong); line-height:20px; text-align:center;
+}
+.verify-steps .path-chip { display:inline-block; margin-top:2px; padding:2px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-inset); color:var(--accent-2); font-family:var(--font-mono); font-size:11.5px; }
+
+.fact-list { margin:0; padding:0; list-style:none; display:grid; gap:var(--sp-3); }
+.fact-list li { position:relative; padding-left:18px; color:var(--fg-muted); font-size:var(--text-meta); line-height:1.6; }
+.fact-list li::before { content:""; position:absolute; left:2px; top:8px; width:6px; height:6px; border-radius:50%; background:var(--accent-2); }
+
+.guide-foot { display:flex; align-items:center; gap:var(--sp-5); padding:var(--sp-6) var(--sp-9); border-top:1px solid var(--border); }
+.guide-foot .foot-note { margin:0; color:var(--fg-faint); font-size:11.5px; }
+.guide-foot .spacer { flex:1; }
+
+/* 手册跳转后，目标设置卡短暂高亮以定位。 */
+.settings-block.flash-target { animation:flashTarget 1.6s var(--ease); }
+@keyframes flashTarget {
+  0% { background:var(--tint-accent); }
+  100% { background:transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-overlay, .guide-dialog { animation:none; }
+  .guide-link, .guide-close { transition:none; }
+  .settings-block.flash-target { animation:none; background:var(--tint-accent); }
+}
+
+@media (max-width: 759px) {
+  .tier-grid { grid-template-columns:minmax(0,1fr); }
+  .promote-row { grid-template-columns:minmax(0,1fr); gap:2px; }
+  .combo-row { grid-template-columns:minmax(0,1fr); }
+}
+
 /* 外观与小助手：用留白和行级分隔建立层级，不再套用通用 settings-sheet。 */
 .settings-preferences {
   width:min(100%,940px);

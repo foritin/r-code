@@ -3721,7 +3721,28 @@ test("request audit toggle and first-round anchoring expose the diagnostics expe
     assert.equal(applied.catalog, "readonly");
     assert.equal(applied.promote, "tool_call");
 
-    await page.getByRole("button", { name: "诊断", exact: true }).click();
+    // 指引手册：入口在锚定卡标题行；Esc 关闭后焦点必须还给触发按钮。
+    const guideLink = page.getByRole("button", { name: /指引手册/ });
+    await guideLink.click();
+    const guide = page.getByRole("dialog", { name: "首轮工具清单锚定" });
+    await guide.waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "关闭指引手册");
+    assert.equal(await guide.locator(".tier-card").count(), 3,
+      "tier cards must be generated from the same catalog option list as the select");
+    assert.match(await guide.locator(".tier-card.is-recommended").innerText(), /只读清单/);
+    await page.keyboard.press("Escape");
+    await guide.waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.classList.contains("guide-link"));
+
+    // 页脚动作：关闭手册 → 切到诊断页 → 审计卡闪烁定位并聚焦开关。
+    await guideLink.click();
+    await guide.waitFor({ state: "visible" });
+    await guide.getByRole("button", { name: "去开启请求构成审计" }).click();
+    await guide.waitFor({ state: "detached" });
+    await page.locator("#request-audit-block").waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.querySelector("#request-audit-block")?.classList.contains("flash-target"));
+    await page.waitForFunction(() => document.activeElement?.id === "set-request-audit");
+
     await page.getByRole("heading", { name: "请求构成审计", exact: true })
       .waitFor({ state: "visible" });
     const audit = page.locator("#set-request-audit");

@@ -56,6 +56,13 @@ import { providerIconFor, providerInitial } from "../../lib/provider-icons";
 import { McpPanel } from "./McpPanel";
 import { KnowledgeSettingsPane } from "./KnowledgeSettingsPane";
 import { SubagentProvidersPanel } from "./SubagentProvidersPanel";
+import {
+  FIRST_ROUND_CATALOG_OPTIONS,
+  FIRST_ROUND_PROMOTE_OPTIONS,
+  GuideSheet,
+  type GuideAction,
+  type GuideId,
+} from "../settings/GuideSheet";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
@@ -492,6 +499,30 @@ export function SettingsScene() {
   const [configErr, setConfigErr] = useState<string | null>(null);
   const [validation, setValidation] = useState<string | null>(null);
   const [providerStatus, setProviderStatus] = useState<Record<string, ProviderStatus>>({});
+  const [openGuide, setOpenGuide] = useState<GuideId | null>(null);
+  // 手册页脚动作请求的跨页定位目标（如诊断页的审计卡）：页签渲染完成后闪烁并聚焦。
+  const pendingPaneFocus = useRef<string | null>(null);
+
+  const handleGuideAction = useCallback((action: GuideAction) => {
+    if (action !== "open-request-audit") return;
+    setOpenGuide(null);
+    pendingPaneFocus.current = "request-audit-block";
+    setActivePane("diagnostics");
+  }, [setActivePane]);
+
+  useEffect(() => {
+    if (!pendingPaneFocus.current) return;
+    const targetId = pendingPaneFocus.current;
+    const block = document.getElementById(targetId);
+    if (!block) return;
+    pendingPaneFocus.current = null;
+    block.scrollIntoView({ block: "center" });
+    // 重启动画：先移除类再强制 reflow，保证连续两次跳转也能看到定位闪烁。
+    block.classList.remove("flash-target");
+    void block.offsetWidth;
+    block.classList.add("flash-target");
+    block.querySelector<HTMLElement>(".switch, .input, button")?.focus({ preventScroll: true });
+  }, [activePane, config]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -607,7 +638,7 @@ export function SettingsScene() {
             {activePane === "agents" && (
               <div className="settings-sheet">
                 {config ? (
-                  <OrchestrationSection config={config} reload={loadConfig} />
+                  <OrchestrationSection config={config} reload={loadConfig} onOpenGuide={setOpenGuide} />
                 ) : (
                   !configErr && <div className="settings-loading">正在读取 Agent 编排策略…</div>
                 )}
@@ -632,6 +663,11 @@ export function SettingsScene() {
           </div>
         </div>
       </div>
+      <GuideSheet
+        guideId={openGuide}
+        onClose={() => setOpenGuide(null)}
+        onAction={handleGuideAction}
+      />
     </div>
   );
 }
@@ -1385,7 +1421,11 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
   first_round_promote_on: "either",
 };
 
-function OrchestrationSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
+function OrchestrationSection({ config, reload, onOpenGuide }: {
+  config: AppConfig;
+  reload: () => Promise<void>;
+  onOpenGuide: (id: GuideId) => void;
+}) {
   const policy = config.orchestration ?? DEFAULT_ORCHESTRATION;
   const budget: RunBudgetConfig = policy.run_budget ?? DEFAULT_ORCHESTRATION.run_budget!;
   const [busy, setBusy] = useState<string | null>(null);
@@ -1528,7 +1568,17 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
       </section>
 
       <section className="settings-block">
-        <h3>首轮工具清单锚定（实验）</h3>
+        <div className="block-title-row">
+          <h3>首轮工具清单锚定（实验）</h3>
+          <button
+            type="button"
+            className="guide-link"
+            aria-haspopup="dialog"
+            onClick={() => onOpenGuide("first-round-catalog")}
+          >
+            指引手册 <span aria-hidden="true">→</span>
+          </button>
+        </div>
         <p className="desc">
           发给模型的每次请求都带一份「工具清单」（请求里的 tools 菜单，列明本轮可用的工具，与项目文件夹无关），
           清单中途变化会打断前缀缓存、分散模型首轮注意力。开启锚定后，新会话第一轮只展示收窄的清单，
@@ -1544,9 +1594,9 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
             disabled={busy != null}
             onChange={(event) => void save("first_round_catalog", event.target.value)}
           >
-            <option value="full">完整清单 · 不锚定（默认）</option>
-            <option value="readonly">只读清单 · 读文件/搜索等</option>
-            <option value="editor_pair">读写最小对 · read_file + edit</option>
+            {FIRST_ROUND_CATALOG_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
           <span className="hint">只读清单含读文件、列目录、搜索等；读写最小对只剩 read_file 和 edit。</span>
         </div>
@@ -1559,8 +1609,9 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
             disabled={busy != null || (policy.first_round_catalog ?? "full") === "full"}
             onChange={(event) => void save("first_round_promote_on", event.target.value)}
           >
-            <option value="either">任意首轮回应（默认）</option>
-            <option value="tool_call">首次真实工具调用</option>
+            {FIRST_ROUND_PROMOTE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
           <span className="hint">「工具调用」更严格：纯文本回答不会解除收窄，直到模型真正动手。</span>
         </div>
@@ -1756,7 +1807,7 @@ function RequestAuditSection({ config, reload }: { config: AppConfig; reload: ()
   };
 
   return (
-    <section className="settings-block">
+    <section className="settings-block" id="request-audit-block">
       <h3>请求构成审计</h3>
       <p className="desc">
         开启后，每个会话发给模型的请求信封（工具清单、托管工具、输出上限）会写入旁路审计文件，
