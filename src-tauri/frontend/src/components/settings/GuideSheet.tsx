@@ -8,11 +8,13 @@ export const FIRST_ROUND_CATALOG_OPTIONS = [
   { value: "full", label: "完整清单 · 不锚定（默认）" },
   { value: "readonly", label: "只读清单 · 读文件/搜索等" },
   { value: "editor_pair", label: "读写最小对 · read_file + edit" },
+  { value: "plan_gate", label: "规划门 · 零工具，仅 plan_ready" },
 ] as const;
 
 export const FIRST_ROUND_PROMOTE_OPTIONS = [
   { value: "either", label: "任意首轮回应（默认）" },
   { value: "tool_call", label: "首次真实工具调用" },
+  { value: "plan_complete", label: "规划完成（调用 plan_ready）" },
 ] as const;
 
 export type GuideId = "first-round-catalog";
@@ -50,6 +52,13 @@ const CATALOG_TIER_META = {
     more: false,
     use: "首轮只有读+改的闭环。适合边界清晰的小改动；需要跑命令验证的任务会拖慢起步。",
   },
+  plan_gate: {
+    tag: "规划门",
+    recommended: false,
+    menu: ["plan_ready"],
+    more: false,
+    use: "首轮起零工作工具，模型在纯文本里完成规划，自己调用 plan_ready 才恢复完整清单。剥夺跨回合持续。",
+  },
 } as const;
 
 const FIRST_ROUND_CATALOG_BODY = (
@@ -70,7 +79,7 @@ const FIRST_ROUND_CATALOG_BODY = (
     </section>
 
     <section>
-      <h3><span className="idx">02</span>三个档位</h3>
+      <h3><span className="idx">02</span>四个档位</h3>
       <div className="tier-grid">
         {FIRST_ROUND_CATALOG_OPTIONS.map((option) => {
           const meta = CATALOG_TIER_META[option.value];
@@ -113,6 +122,13 @@ const FIRST_ROUND_CATALOG_BODY = (
             <span className="promote-note">更严格：防止“好的我来做”式空谈提前放开清单。</span>
           </div>
         </div>
+        <div className="promote-row">
+          <span className="promote-name">{FIRST_ROUND_PROMOTE_OPTIONS[2].label.replace("（调用 plan_ready）", "")}</span>
+          <div>
+            <p className="promote-desc">只有模型调用 plan_ready 工具才恢复完整清单；剥夺跨回合持续，可跨多个回合甚至多个 run。</p>
+            <span className="promote-note">规划门形态：模型自己在规划完成时「按门铃」，纯文本回答不解除收窄。</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -132,6 +148,14 @@ const FIRST_ROUND_CATALOG_BODY = (
             <strong>最激进，边界清晰的小改动</strong>
             <p>首轮只有 read_file + edit，且必须真正动手才恢复。</p>
             <p className="caveat">注意：需要跑命令验证的任务会被拖慢——首轮无法执行任何命令。</p>
+          </div>
+        </div>
+        <div className="combo-row">
+          <span className="combo-pill">规划门 + 规划完成</span>
+          <div className="combo-body">
+            <strong>恶劣环境压榨首轮思考</strong>
+            <p>首轮起零工作工具，目录里唯一的工具是门铃 plan_ready；剥夺持续到模型自己声明规划完成才恢复。</p>
+            <p className="caveat">注意：需要外部证据（读文件/联网）才能规划的任务会被压住——模型只能基于给定上下文做假设并明说。</p>
           </div>
         </div>
         <div className="combo-row">
@@ -163,6 +187,8 @@ const FIRST_ROUND_CATALOG_BODY = (
       <ul className="fact-list">
         <li>生效过程在时间线可见：首个模型回合开始出现「本轮工具清单已收窄」行（含档位与工具数），回合结束出现「工具清单恢复完整」行；不锚定时零噪音。一个「回合」可以包含多次工具调用，收窄覆盖整个回合。</li>
         <li>收窄回合内托管联网工具（web_search / web_fetch）也一并剥离--「读写最小对」就是真的只剩 read_file + edit；恢复完整后联网工具随配置回归。</li>
+        <li>规划门（plan_gate + 规划完成）下剥夺跨回合持续：收窄不是只覆盖首轮，而是直到模型调用 plan_ready 才结束，可跨多个回合与多个 run；收窄目录本身包含 plan_ready（它由 worker 侧拦截执行，不经过网关审批）。</li>
+        <li>设置页的总开关滑纽决定整个实验的开/关：开 = 使用记住的档位；关 = 完整清单现状（记住的档位保留在本地，重新打开即恢复）。</li>
         <li>清单裁剪只是呈现层：模型看不见清单外的工具，但工具执行与审批边界原样工作，收窄不等于降低安全要求。</li>
         <li>只对新会话生效；运行中的会话不受配置变化影响，也不会被中途换清单。</li>
         <li>每个会话至多一次清单切换（收窄 → 完整），不存在反复横跳。</li>

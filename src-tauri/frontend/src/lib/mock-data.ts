@@ -660,6 +660,8 @@ export function browserMockMessages(taskId: string): SessionMessage[] {
       message(1, "user", task.goal),
       // 首轮工具清单锚定的可观察行：首个请求收窄，首轮回复后恢复完整（C4）。
       system(1.5, "r_code_catalog_anchor", { phase: "narrowed", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
+      // 规划门样例：零工作工具 + plan_ready 门铃 = tool_count 1（渲染路径对照）。
+      system(1.7, "r_code_catalog_anchor", { phase: "narrowed", catalog: "plan_gate", tool_count: 1, full_tool_count: 18 }),
       message(2, "assistant", "我会先核对任务队列和调度器的共享状态，再把验证工作拆给 Codex 子代理并行检查。"),
       system(2.5, "r_code_catalog_anchor", { phase: "promoted", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
       call(3, "mock-shell-single", "shell_command", { command: "rg -n \"Mutex|RwLock|await\" src-tauri/src" }),

@@ -1421,6 +1421,9 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
   first_round_promote_on: "either",
 };
 
+/** 锚定实验总开关的档位记忆：关闭总开关时保留用户选过的档位，重开即恢复。 */
+const ANCHOR_TIER_STORAGE_KEY = "r-code:first-round-anchor-tier";
+
 function OrchestrationSection({ config, reload, onOpenGuide }: {
   config: AppConfig;
   reload: () => Promise<void>;
@@ -1442,6 +1445,37 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
     } finally {
       setBusy(null);
     }
+  };
+
+  // 锚定实验总开关：开 = 记住的档位；关 = full（现状）。只接受三档合法值，
+  // 非法/缺失的本地记忆回落 readonly。
+  const anchorEnabled = (policy.first_round_catalog ?? "full") !== "full";
+  const isAnchorTier = (value: string): value is "readonly" | "editor_pair" | "plan_gate" =>
+    value === "readonly" || value === "editor_pair" || value === "plan_gate";
+  const rememberedAnchorTier = (): "readonly" | "editor_pair" | "plan_gate" => {
+    const stored = localStorage.getItem(ANCHOR_TIER_STORAGE_KEY);
+    return stored != null && isAnchorTier(stored) ? stored : "readonly";
+  };
+  const toggleAnchor = async (enabled: boolean) => {
+    if (enabled) {
+      await save("first_round_catalog", rememberedAnchorTier());
+      return;
+    }
+    const current = policy.first_round_catalog;
+    if (current != null && isAnchorTier(current)) {
+      localStorage.setItem(ANCHOR_TIER_STORAGE_KEY, current);
+    }
+    await save("first_round_catalog", "full");
+  };
+  const applyAnchorTier = async (tier: string) => {
+    if (isAnchorTier(tier)) {
+      localStorage.setItem(ANCHOR_TIER_STORAGE_KEY, tier);
+    }
+    // 规划门只在「规划完成」信号下有意义：选它时联动晋升信号，规避退化组合。
+    if (tier === "plan_gate" && (policy.first_round_promote_on ?? "either") !== "plan_complete") {
+      await save("first_round_promote_on", "plan_complete");
+    }
+    await save("first_round_catalog", tier);
   };
 
   const skills = [
@@ -1582,23 +1616,41 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
         <p className="desc">
           发给模型的每次请求都带一份「工具清单」（请求里的 tools 菜单，列明本轮可用的工具，与项目文件夹无关），
           清单中途变化会打断前缀缓存、分散模型首轮注意力。开启锚定后，新会话第一轮只展示收窄的清单，
-          模型给出回应后在本会话内恢复完整清单并保持稳定——每会话至多一次清单切换。
+          按下方时机在本会话内恢复完整清单并保持稳定——每会话至多一次清单切换。
           只影响给模型看的清单，不改变工具执行的审批边界。对新会话生效。
+          总开关关闭即回到完整清单现状；记住的档位保留在本地，重新打开即恢复。
         </p>
+        <div className="field">
+          <label htmlFor="set-first-round-anchor">锚定实验总开关</label>
+          <input
+            id="set-first-round-anchor"
+            className="switch"
+            type="checkbox"
+            role="switch"
+            checked={anchorEnabled}
+            disabled={busy != null}
+            onChange={(event) => void toggleAnchor(event.target.checked)}
+          />
+          <span className="hint">开 = 使用下方记住的档位；关 = 完整清单（不锚定）。</span>
+        </div>
         <div className="field">
           <label htmlFor="set-first-round-catalog">首轮工具清单</label>
           <select
             id="set-first-round-catalog"
             className="input"
-            value={policy.first_round_catalog ?? "full"}
-            disabled={busy != null}
-            onChange={(event) => void save("first_round_catalog", event.target.value)}
+            value={
+              policy.first_round_catalog != null && isAnchorTier(policy.first_round_catalog)
+                ? policy.first_round_catalog
+                : rememberedAnchorTier()
+            }
+            disabled={busy != null || !anchorEnabled}
+            onChange={(event) => void applyAnchorTier(event.target.value)}
           >
-            {FIRST_ROUND_CATALOG_OPTIONS.map((option) => (
+            {FIRST_ROUND_CATALOG_OPTIONS.filter((option) => option.value !== "full").map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
-          <span className="hint">只读清单含读文件、列目录、搜索等；读写最小对只剩 read_file 和 edit。</span>
+          <span className="hint">只读清单含读文件、列目录、搜索等；读写最小对只剩 read_file 和 edit；规划门零工具、仅剩门铃 plan_ready。</span>
         </div>
         <div className="field">
           <label htmlFor="set-first-round-promote">恢复完整清单的时机</label>
@@ -1606,14 +1658,14 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             id="set-first-round-promote"
             className="input"
             value={policy.first_round_promote_on ?? "either"}
-            disabled={busy != null || (policy.first_round_catalog ?? "full") === "full"}
+            disabled={busy != null || !anchorEnabled}
             onChange={(event) => void save("first_round_promote_on", event.target.value)}
           >
             {FIRST_ROUND_PROMOTE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
-          <span className="hint">「工具调用」更严格：纯文本回答不会解除收窄，直到模型真正动手。</span>
+          <span className="hint">「工具调用」更严格：纯文本回答不会解除收窄；「规划完成」：模型调用 plan_ready 才恢复，剥夺可跨多个回合。</span>
         </div>
       </section>
 

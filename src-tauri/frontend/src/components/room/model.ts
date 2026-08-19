@@ -786,6 +786,7 @@ function contextCompactionDetail(value: string | null | undefined): string | nul
 function catalogAnchorTierLabel(catalog: string): string {
   if (catalog === "readonly") return "只读清单";
   if (catalog === "editor_pair") return "读写最小对";
+  if (catalog === "plan_gate") return "规划门";
   return "收窄清单";
 }
 
@@ -804,14 +805,14 @@ function catalogAnchorRow(
         kind: "context",
         id,
         t,
-        label: "本轮工具清单已收窄（首个模型回合）",
+        label: "工具清单已收窄（锚定期）",
         detail: `${catalogAnchorTierLabel(catalog)} · 仅 ${toolCount} / ${fullToolCount} 个工具`,
       }
     : {
         kind: "context",
         id,
         t,
-        label: "首个模型回合已结束 · 工具清单恢复完整",
+        label: "锚定期结束 · 工具清单恢复完整",
         detail: `此后 ${fullToolCount} 个工具，本会话内不再变化`,
       };
 }
