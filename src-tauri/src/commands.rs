@@ -26719,6 +26719,31 @@ input.on('line', (line) => {
             after["config"]["orchestration"]["first_round_catalog"],
             "readonly"
         );
+
+        // 规划门档位与 plan_complete 晋升信号经同一通用点路径透传往返。
+        settings_set(
+            &state,
+            "orchestration.first_round_catalog",
+            serde_json::json!("plan_gate"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "orchestration.first_round_promote_on",
+            serde_json::json!("plan_complete"),
+        )
+        .await
+        .unwrap();
+        let gated = settings_get(&state).await.unwrap();
+        assert_eq!(
+            gated["config"]["orchestration"]["first_round_catalog"],
+            "plan_gate"
+        );
+        assert_eq!(
+            gated["config"]["orchestration"]["first_round_promote_on"],
+            "plan_complete"
+        );
     }
 
     #[tokio::test]
