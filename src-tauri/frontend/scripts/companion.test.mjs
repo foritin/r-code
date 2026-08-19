@@ -45,6 +45,9 @@ test("companion is a separate native-window entry with a narrow capability", () 
   assert.match(controller, /attachMainCompanionHandshake/);
   assert.match(controller, /setIgnoreCursorEvents/);
   assert.match(controller, /pointHitsCompanionSurface/);
+  assert.match(controller, /"\.companion-avatar",/);
+  assert.match(controller, /clickThroughSupported = false;[\s\S]*?cursorPolicy\.setIgnored\(false\)/);
+  assert.match(controller, /visibilitychange/);
   assert.match(controller, /\.companion-pulse-more/);
   assert.match(controller, /openRoom\(taskId\)/);
   assert.match(controller, /mainWindow\.show\(\)/);
@@ -168,6 +171,10 @@ test("six progress moods plus singing and dancing use bounded single-plane sprit
   assert.doesNotMatch(css, /has-tracking:not\(\.is-expanded\)\.avatar-top \.companion-avatar/);
   assert.match(css, /\.companion-window-root\.is-mini \.companion-tracking-toggle\s*\{[\s\S]*?width: 28px/);
   assert.match(component, /companionFootprint/);
+  assert.match(component, /PULSE_ROW_HEIGHT = 88/);
+  assert.match(component, /PULSE_ROW_STRIDE = 96/);
+  assert.match(component, /title=\{session\.task\.title\}/);
+  assert.match(css, /-webkit-line-clamp: 2/);
   assert.match(component, /MAX_PULSE_SESSIONS = 2/);
   assert.match(component, /trackedSessions\.slice\(0, MAX_PULSE_SESSIONS\)/);
   assert.match(component, /hiddenPulseCount/);

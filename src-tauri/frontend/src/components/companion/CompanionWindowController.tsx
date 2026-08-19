@@ -117,6 +117,9 @@ export async function attachMainCompanionHandshake(
 }
 
 const COMPANION_INTERACTIVE_SURFACES = [
+  // 头像按钮本体必须整块命中：只认内部 sprite/aura 矩形时，宠物边缘一圈会按“透明
+  // 死区”处理而原生穿透，点击与拖拽在边缘直接落空。
+  ".companion-avatar",
   ".companion-session-panel",
   ".companion-session-card",
   ".companion-pulse-more",
@@ -290,6 +293,10 @@ export function NativeCompanionWindowController() {
       if (clickThroughSupported) {
         clickThroughSupported = false;
         console.warn("Companion click-through disabled after repeated cursor/native failures.", error);
+        // Fail open，且必须真正下发：停摆时若上一次成功的是 setIgnored(true)，原生窗口会
+        // 永远停留在 WS_EX_TRANSPARENT——点击与拖拽全部穿透，而 WebView 渲染不受影响，
+        // 表现为“动画还在播但怎么点都没反应”。
+        if (cursorPolicy.applied() !== false) void cursorPolicy.setIgnored(false).catch(() => {});
       }
     };
 
@@ -334,7 +341,26 @@ export function NativeCompanionWindowController() {
       }))) return;
       if (!nativeListeners.isDisposed()) await tick();
     };
-    void attach().catch(() => { clickThroughSupported = false; });
+    // 隐藏期间的原生搬动（DPI 切换、显示器拓扑变化）不保证都能通过 onMoved 回放到
+    // WebView；恢复可见时重取几何，避免拿旧坐标做命中测试而误判“光标不在宠物上”。
+    const refreshGeometry = () => {
+      if (disposed) return;
+      void Promise.all([appWindow.outerPosition(), appWindow.scaleFactor()])
+        .then(([position, scale]) => {
+          if (disposed) return;
+          windowPosition = position;
+          scaleFactor = scale;
+        })
+        .catch(() => {});
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshGeometry();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    void attach().catch(() => {
+      clickThroughSupported = false;
+      if (cursorPolicy.applied() !== false) void cursorPolicy.setIgnored(false).catch(() => {});
+    });
 
     return () => {
       disposed = true;
@@ -343,6 +369,7 @@ export function NativeCompanionWindowController() {
       window.removeEventListener("pointerdown", pointerDown, { capture: true });
       window.removeEventListener("pointerup", pointerUp, { capture: true });
       window.removeEventListener("pointercancel", pointerUp, { capture: true });
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       nativeListeners.dispose();
       // Always enqueue the recovery state. `ignored` may still be false while an earlier native
       // `true` request is in flight; the shared policy guarantees this runs after that request.

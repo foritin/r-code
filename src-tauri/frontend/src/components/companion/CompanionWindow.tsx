@@ -51,8 +51,10 @@ const EXPANDED = { width: 420, height: 360 };
 const PULSE_STACK_WIDTH = 264;
 const PULSE_STACK_MARGIN = 8;
 const PULSE_GAP_ABOVE_AVATAR = 18;
-const PULSE_ROW_HEIGHT = 72;
-const PULSE_ROW_STRIDE = 80;
+// 行高按“标题最多两行”预算（CSS .companion-session-copy strong 的 -webkit-line-clamp: 2
+// 与 --companion-pulse-row-height 同源）：一行标题的卡片也在这一行高内垂直居中。
+const PULSE_ROW_HEIGHT = 88;
+const PULSE_ROW_STRIDE = 96;
 const MAX_PULSE_SESSIONS = 2;
 const TRACKING_FOOTER_HEIGHT = 40;
 const WINDOW_INSET = 18;
@@ -1546,6 +1548,7 @@ export function CompanionWindow() {
           className={`companion-session-row state-${session.mood}${session.unread ? " is-unread" : ""}`}
           disabled={navigating}
           onClick={() => void navigateToSession(session.task.id)}
+          title={session.task.title}
           aria-label={`${session.task.title}，${session.label}，${relativeTime(session.task.updated_at)}${session.unread ? "，未读" : ""}`}
         >
           <span className={`companion-session-dot${live ? " is-loading" : completed ? " is-done" : ""}`} aria-hidden="true" />
