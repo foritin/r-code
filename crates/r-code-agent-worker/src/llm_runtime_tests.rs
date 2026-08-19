@@ -9143,6 +9143,27 @@ async fn request_journal_target_overrides_session_id_for_file_name() {
 // 的目录」的权威记录。
 // ---------------------------------------------------------------------------
 
+/// 读取 journal 中全部 RequestHeader 的 hosted_tool_names（按派发顺序）。
+async fn journal_hosted_tool_names(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
+    let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
+        .await
+        .unwrap();
+    jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("request_header").is_some())
+        .map(|value| {
+            value["request_header"]["hosted_tool_names"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| name.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .collect()
+}
+
 /// 读取 journal 中全部 RequestHeader 的 tool_names（按派发顺序）。
 async fn journal_tool_names(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
     let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
@@ -9245,6 +9266,57 @@ async fn first_round_catalog_full_keeps_current_tool_timeline() {
     assert!(
         anchor_events(&mut rt).await.is_empty(),
         "full 不锚定，不产生可见时间线事件"
+    );
+}
+
+#[tokio::test]
+async fn first_round_narrowing_strips_hosted_web_tools() {
+    // C-variant-1：收窄轮 hosted 联网工具一并剥离--否则「读写最小对 · 2 个工具」
+    // 的时间线行会撒谎（模型仍能调 web_search），审计的人可读清单也与请求不符。
+    // 晋升后 hosted 工具随配置回归。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("hs-1"));
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = anchored_runtime(
+        provider,
+        &journal_dir,
+        agent_config::FirstRoundCatalog::EditorPair,
+        agent_config::FirstRoundPromoteOn::Either,
+    )
+    .with_hosted_tools(vec![HostedToolSpec::web_search()]);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "narrow with hosted tools")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(
+        timelines[0],
+        vec!["read_file".to_string()],
+        "收窄轮目录 = editor_pair 允许清单 ∩ 注册目录（test_gateway 只有 read_file）"
+    );
+    assert!(
+        timelines[1].len() > timelines[0].len()
+            && timelines[1].iter().any(|name| name == "delegate_task"),
+        "晋升轮恢复完整目录（含委派工具）：{:?}",
+        timelines[1]
+    );
+    let hosted = journal_hosted_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(
+        hosted,
+        vec![Vec::<String>::new(), vec!["web_search".to_string()]],
+        "收窄轮剥离 web_search，晋升后随配置回归"
     );
 }
 

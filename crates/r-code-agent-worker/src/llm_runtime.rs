@@ -3756,6 +3756,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             suspension_gate: ctx.suspension_gate.clone(),
             continuation_gate: ctx.continuation_gate.clone(),
         };
+        let mut first_round_narrowed = false;
         let tools = if summary_only {
             Vec::new()
         } else {
@@ -3763,15 +3764,15 @@ async fn run_loop(ctx: RunLoopCtx) {
                 client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools);
             // C：首轮锚定过滤。仅主代理 Main 策略（Ask/Plan 已是受限目录，二次
             // 过滤无意义且会与 hosted 别名逻辑纠缠）；目录裁剪是呈现层，执行边界
-            // 仍在 tool_allowed/scoped_input（红线 2）——模型即使在受限轮调用了
-            // 目录外工具（历史诱导），执行侧按既有 policy 处理。hosted 工具维持
-            // 现状随行（剥离变体登记为 C-variant-1，不在首期）。
+            // 仍在 tool_allowed/scoped_input（红线 2）--模型即使在受限轮调用了
+            // 目录外工具（历史诱导），执行侧按既有 policy 处理。
             if policy == ToolPolicy::Main && ctx.catalog_bootstrap_pending.load(Ordering::SeqCst) {
+                first_round_narrowed = true;
                 let allowlist = first_round_allowlist(ctx.orchestration.first_round_catalog);
                 let full_tool_count = specs.len();
                 specs.retain(|tool| allowlist.contains(&tool.name.as_str()));
                 // C4：可观察锚定行。pending 期间每次派发都会收窄，但时间线只需要
-                // 第一条「已收窄」——记录数量供晋升行对照。
+                // 第一条「已收窄」--记录数量供晋升行对照。
                 if !catalog_anchor_announced {
                     catalog_anchor_announced = true;
                     catalog_anchor_counts = Some((specs.len(), full_tool_count));
@@ -4041,6 +4042,11 @@ async fn run_loop(ctx: RunLoopCtx) {
             tools: Vec::new(),    // 同上
             hosted_tools: if summary_only {
                 Vec::new()
+            } else if first_round_narrowed {
+                // C-variant-1：收窄轮剥离 hosted 联网工具（web_search/web_fetch）。
+                // 否则「读写最小对 · 2 个工具」的行会撒谎--模型仍能调 web_search。
+                // 只影响呈现层目录；工具执行的审批边界照旧。
+                Vec::new()
             } else {
                 active_hosted_tools.clone()
             },
@@ -4112,7 +4118,10 @@ async fn run_loop(ctx: RunLoopCtx) {
                 // 记录的是模型实际看到的名字；max_tokens 取钳制后的请求值
                 // （request 在此之后才被 move 进迭代调用）。
                 tool_names: tools.iter().map(|tool| tool.name.clone()).collect(),
-                hosted_tool_names: if summary_only {
+                hosted_tool_names: if summary_only || first_round_narrowed {
+                    // 收窄轮 hosted 工具已随请求剥离（C-variant-1）；审计记录的
+                    // 是模型实际看到的目录，这里必须同步为空，否则人可读清单
+                    // 与 tools_sha256 会互相矛盾。
                     Vec::new()
                 } else {
                     active_hosted_tools

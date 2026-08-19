@@ -1584,11 +1584,11 @@ test("first-round catalog anchor rows surface from journal events and live strea
     };
   });
   assert.deepEqual(contract.history, [
-    ["首轮工具清单已收窄", "只读清单 · 6 / 18 个工具"],
-    ["首轮已过 · 工具清单恢复完整", "18 个工具 · 本会话不再变化"],
+    ["本轮工具清单已收窄（首个模型回合）", "只读清单 · 仅 6 / 18 个工具"],
+    ["首个模型回合已结束 · 工具清单恢复完整", "此后 18 个工具，本会话内不再变化"],
   ], "journal 回放路径必须渲染收窄与晋升两行");
   assert.deepEqual(contract.live, [
-    ["首轮工具清单已收窄", "读写最小对 · 2 / 18 个工具"],
+    ["本轮工具清单已收窄（首个模型回合）", "读写最小对 · 仅 2 / 18 个工具"],
   ], "实时事件路径必须立即出现收窄行");
   await page.close();
 });
