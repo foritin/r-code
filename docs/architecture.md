@@ -262,7 +262,7 @@ Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会�
 - Steer 消息在下一次模型请求前合入，而不是篡改已发出的 Provider 请求。
 - 编排策略包含委派路由、是否允许跨引擎、质量循环模式、Reviewer 和最大轮数。
 - 质量循环可以关闭、自动或总是运行；Reviewer 返回 `PASS` 或 `REVISE`，修订意见会进入下一轮可见草稿。
-- 首轮工具清单锚定（固定每次请求携带的 tools 清单的首轮形状，与项目文件夹无关）是 opt-in 实验（`orchestration.first_round_catalog` / `first_round_promote_on`，默认 `full`/`either` 即现状）：非默认值时主代理首轮只看到受限清单，首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单；会话级粘性保证每会话至多一次清单变化，两个旋钮纳入 runtime 重建指纹。清单裁剪只是呈现层，工具执行与审批边界不变（`docs/request-audit-and-anchoring.md`）。两个旋钮可在「设置 → Agent 编排」的「首轮工具清单锚定（实验）」卡片中调整（经通用 `settings_set` 逐键写入并做类型化校验）。
+- 首轮工具清单锚定（固定每次请求携带的 tools 清单的首轮形状，与项目文件夹无关）是 opt-in 实验（`orchestration.first_round_catalog` / `first_round_promote_on`，默认 `full`/`either` 即现状）：非默认值时主代理首轮只看到受限清单，首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单；会话级粘性保证每会话至多一次清单变化，两个旋钮纳入 runtime 重建指纹。清单裁剪只是呈现层，工具执行与审批边界不变（`docs/request-audit-and-anchoring.md`）。两个旋钮可在「设置 → Agent 编排」的「首轮工具清单锚定（实验）」卡片中调整（经通用 `settings_set` 逐键写入并做类型化校验）。规划门为其 opt-in 扩展：`plan_gate` 档（零工作工具）+ `plan_complete` 晋升信号下，收窄目录注入唯一门铃工具 `plan_ready`（worker 侧拦截执行，不转发网关），工具剥夺跨回合持续至模型调用 plan_ready 声明规划完成才恢复完整目录；设置卡片以总开关滑纽控制整个实验的开/关。
 
 ### 6.3 DeepSeek 前缀缓存与请求字节稳定
 
