@@ -9790,7 +9790,9 @@ async fn plan_ready_is_intercepted_without_gateway_dispatch() {
         rejected.is_error,
         "非 pending 调用门铃必须返回可修正错误：{rejected:?}"
     );
-    assert!(rejected.content.contains("only available while the planning gate"));
+    assert!(rejected
+        .content
+        .contains("only available while the planning gate"));
 }
 
 #[tokio::test]
