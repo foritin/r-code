@@ -1536,6 +1536,19 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// 首轮工具清单锚定的可观察变化（docs/request-audit-and-anchoring.md 阶段 C）。
+    /// 每会话至多两条：narrowed 随首个收窄请求派发，promoted 在恢复完整清单时。
+    /// 只描述档位与数量；清单本身见审计 journal 的 `RequestHeader.tool_names`。
+    CatalogAnchor {
+        /// 阶段（narrowed / promoted）。
+        phase: CatalogAnchorPhase,
+        /// 收窄档位的 serde 名（readonly / editor_pair）。
+        catalog: String,
+        /// 收窄清单的工具数。
+        tool_count: usize,
+        /// 完整清单的工具数。
+        full_tool_count: usize,
+    },
     /// Agent 树内受限的点对点消息活动。
     ///
     /// 完整正文只存在于 Worker 的有界内存 mailbox；跨进程事件仅携带字符数，
@@ -1696,6 +1709,16 @@ pub enum AgentActivityPhase {
     Reviewing,
     /// 正在结束本次运行并持久化已可见输出。
     Finalizing,
+}
+
+/// 首轮工具清单锚定的可观察阶段（呈现层事实，不承载清单内容）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogAnchorPhase {
+    /// 会话首个请求以收窄清单派发。
+    Narrowed,
+    /// 首轮结束，恢复完整清单（会话内此后不再变化）。
+    Promoted,
 }
 
 /// 计划步骤。

@@ -812,6 +812,17 @@ export type AgentEvent =
       content_chars?: number;
     }
   | { type: "subagent_lifecycle"; state: SubagentState; detail?: string }
+  | {
+      type: "catalog_anchor";
+      /** narrowed：会话首个请求以收窄清单派发；promoted：首轮结束恢复完整清单。 */
+      phase: "narrowed" | "promoted";
+      /** 收窄档位名（readonly / editor_pair）。 */
+      catalog: string;
+      /** 收窄清单的工具数。 */
+      tool_count: number;
+      /** 完整清单的工具数。 */
+      full_tool_count: number;
+    }
   | { type: "state"; state: TaskState }
   | { type: "guard_trip"; reason: GuardTripReason; detail: string }
   | { type: "checkpoint"; sha: string; base_head?: string };

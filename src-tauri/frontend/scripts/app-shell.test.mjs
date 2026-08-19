@@ -1550,6 +1550,49 @@ test("user send mode markers apply to the preceding user message, not the next o
   await page.close();
 });
 
+test("first-round catalog anchor rows surface from journal events and live stream", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const contract = await page.evaluate(async () => {
+    const { applyAgentEvent, buildTimeline } = await import("/src/components/room/model.ts");
+    const anchorSystem = (id, payload) => ({
+      kind: "system",
+      id,
+      role: null,
+      text: "r_code_catalog_anchor",
+      output_json: JSON.stringify(payload),
+    });
+    const history = buildTimeline(
+      [
+        { kind: "message", id: "u1", role: "user", text: "任务目标" },
+        anchorSystem("anchor-1", { phase: "narrowed", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
+        { kind: "message", id: "a1", role: "assistant", text: "先看一下再动手" },
+        anchorSystem("anchor-2", { phase: "promoted", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
+      ],
+      [], [], new Date().toISOString(),
+    );
+    const live = applyAgentEvent([], {
+      type: "catalog_anchor",
+      phase: "narrowed",
+      catalog: "editor_pair",
+      tool_count: 2,
+      full_tool_count: 18,
+    }, 1, () => "live-anchor");
+    return {
+      history: history.filter((item) => item.kind === "context").map((item) => [item.label, item.detail]),
+      live: live.filter((item) => item.kind === "context").map((item) => [item.label, item.detail]),
+    };
+  });
+  assert.deepEqual(contract.history, [
+    ["首轮工具清单已收窄", "只读清单 · 6 / 18 个工具"],
+    ["首轮已过 · 工具清单恢复完整", "18 个工具 · 本会话不再变化"],
+  ], "journal 回放路径必须渲染收窄与晋升两行");
+  assert.deepEqual(contract.live, [
+    ["首轮工具清单已收窄", "读写最小对 · 2 / 18 个工具"],
+  ], "实时事件路径必须立即出现收窄行");
+  await page.close();
+});
+
 test("active run duration refreshes on the shared second tick and isolates renders", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });

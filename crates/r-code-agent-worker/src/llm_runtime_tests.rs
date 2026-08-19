@@ -9188,6 +9188,27 @@ fn anchored_runtime(
     })
 }
 
+/// C4：收集本轮 run 广播的锚定可见事件（phase, catalog, 收窄数, 完整数）。
+/// poll_events 只在 drain 前积压，wait_until_finished 不会消费通道。
+async fn anchor_events(
+    rt: &mut LlmAgentRuntime,
+) -> Vec<(r_code_core::dto::CatalogAnchorPhase, String, usize, usize)> {
+    rt.poll_events()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event {
+            AgentEvent::CatalogAnchor {
+                phase,
+                catalog,
+                tool_count,
+                full_tool_count,
+            } => Some((phase, catalog, tool_count, full_tool_count)),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn first_round_catalog_full_keeps_current_tool_timeline() {
     // C4-1（默认回归保护）：full 下两轮目录逐字节一致，行为与接入前不变。
@@ -9221,6 +9242,10 @@ async fn first_round_catalog_full_keeps_current_tool_timeline() {
         "完整目录应含 read_file：{:?}",
         timelines[0]
     );
+    assert!(
+        anchor_events(&mut rt).await.is_empty(),
+        "full 不锚定，不产生可见时间线事件"
+    );
 }
 
 #[tokio::test]
@@ -9252,10 +9277,42 @@ async fn first_round_readonly_filters_first_dispatch_and_promotes_within_run() {
         .await
         .unwrap();
     wait_until_finished(&rt).await;
+    // C4 可见行：run1 收窄 + 晋升各一条；数量对齐 test_gateway（收窄 1 个，
+    // 完整目录含内置工具，必然更多）。
+    let run1_anchors = anchor_events(&mut rt).await;
+    assert_eq!(
+        run1_anchors.len(),
+        2,
+        "收窄与晋升各广播一次：{run1_anchors:?}"
+    );
+    assert!(matches!(
+        run1_anchors.as_slice(),
+        [
+            (
+                r_code_core::dto::CatalogAnchorPhase::Narrowed,
+                ref catalog,
+                1,
+                full_count
+            ),
+            (
+                r_code_core::dto::CatalogAnchorPhase::Promoted,
+                ref promoted_catalog,
+                1,
+                promoted_full
+            ),
+        ] if catalog == "readonly"
+            && promoted_catalog == "readonly"
+            && *full_count > 1
+            && *promoted_full == *full_count
+    ));
     rt.start_run(&session.meta.id, "second run goal")
         .await
         .unwrap();
     wait_until_finished(&rt).await;
+    assert!(
+        anchor_events(&mut rt).await.is_empty(),
+        "粘性晋升后第二个 run 不再重复广播"
+    );
 
     let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
     assert_eq!(timelines.len(), 3, "run1 两轮 + run2 一轮：{:?}", timelines);
@@ -9326,8 +9383,19 @@ async fn first_round_readonly_promotes_on_pure_text_answer_for_next_run() {
         .unwrap();
     rt.start_run(&session.meta.id, "text only").await.unwrap();
     wait_until_finished(&rt).await;
+    // either 逃生舱：纯文字首答也晋升——可见行仍是收窄 + 晋升两条。
+    let run1_anchors = anchor_events(&mut rt).await;
+    assert_eq!(
+        run1_anchors.len(),
+        2,
+        "纯文字首答也要有完整可见行：{run1_anchors:?}"
+    );
     rt.start_run(&session.meta.id, "follow up").await.unwrap();
     wait_until_finished(&rt).await;
+    assert!(
+        anchor_events(&mut rt).await.is_empty(),
+        "已晋升会话的后续 run 不再广播锚定行"
+    );
 
     let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
     assert_eq!(timelines.len(), 2);
@@ -9373,6 +9441,18 @@ async fn first_round_tool_call_mode_stays_restricted_until_tool_use() {
     wait_until_finished(&rt).await;
     rt.start_run(&session.meta.id, "run three").await.unwrap();
     wait_until_finished(&rt).await;
+    // tool_call 对照组的可见行：run1 纯文字只有收窄；run2 首轮再次受限（重新广播
+    // 收窄）并在 ToolUse 后晋升；run3 已粘性完整，零广播。
+    let all_anchors = anchor_events(&mut rt).await;
+    assert_eq!(all_anchors.len(), 3, "收窄×2 + 晋升×1：{all_anchors:?}");
+    assert!(matches!(
+        all_anchors.as_slice(),
+        [
+            (r_code_core::dto::CatalogAnchorPhase::Narrowed, _, _, _),
+            (r_code_core::dto::CatalogAnchorPhase::Narrowed, _, _, _),
+            (r_code_core::dto::CatalogAnchorPhase::Promoted, _, _, _),
+        ]
+    ));
 
     let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
     assert_eq!(

@@ -5516,6 +5516,31 @@ async fn persist_runtime_event(
                 )
                 .await;
         }
+        AgentEvent::CatalogAnchor {
+            phase,
+            catalog,
+            tool_count,
+            full_tool_count,
+        } => {
+            flush_pending_runtime_text(session_store, pending_text, &scope_key, &event_storage_id)
+                .await;
+            // C4：锚定只属于主运行（worker 仅在 Main 策略收窄/晋升时发出）；时间线行
+            // 落主会话日志，重开任务详情仍可回放。清单本身的权威记录在审计 journal。
+            let _ = session_store
+                .append(
+                    &event_storage_id,
+                    SessionEvent::System {
+                        event: "r_code_catalog_anchor".into(),
+                        data: serde_json::json!({
+                            "phase": phase,
+                            "catalog": catalog,
+                            "tool_count": tool_count,
+                            "full_tool_count": full_tool_count,
+                        }),
+                    },
+                )
+                .await;
+        }
         AgentEvent::State { state } => {
             flush_pending_runtime_text(session_store, pending_text, &scope_key, &event_storage_id)
                 .await;
@@ -23897,6 +23922,51 @@ input.on('line', (line) => {
                 .count(),
             1,
             "子代理工具结果不能污染主分支时间锚点"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_anchor_event_persists_timeline_row() {
+        // C4：锚定事件由 drain 落成 r_code_catalog_anchor System 行，重开任务详情时
+        // 前端时间线仍能回放「收窄 → 恢复完整」。清单本身的权威记录在审计 journal。
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "锚定可见性", "g", "edit")
+            .await
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let mut pending_text = PendingRuntimeText::default();
+        for phase in [
+            r_code_core::dto::CatalogAnchorPhase::Narrowed,
+            r_code_core::dto::CatalogAnchorPhase::Promoted,
+        ] {
+            persist_runtime_event(
+                &state.db,
+                &state.session_store,
+                &state.sessions_dir,
+                &task.id,
+                &branch.id,
+                "main",
+                &branch.storage_id,
+                &AgentEvent::CatalogAnchor {
+                    phase,
+                    catalog: "readonly".to_string(),
+                    tool_count: 6,
+                    full_tool_count: 18,
+                },
+                &mut pending_text,
+            )
+            .await;
+        }
+        let log =
+            std::fs::read_to_string(session_file_path(&state.sessions_dir, &branch.storage_id))
+                .unwrap();
+        assert_eq!(log.matches("r_code_catalog_anchor").count(), 2);
+        assert!(log.contains("\"phase\":\"narrowed\"") || log.contains("\"phase\": \"narrowed\""));
+        assert!(log.contains("\"phase\":\"promoted\"") || log.contains("\"phase\": \"promoted\""));
+        assert!(
+            log.contains("\"catalog\":\"readonly\"") || log.contains("\"catalog\": \"readonly\"")
         );
     }
 

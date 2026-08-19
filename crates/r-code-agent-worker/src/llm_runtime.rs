@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRunRuntimeKind,
-    CreateSessionInput, PeerMessageDeliveryStatus, ProjectAccessMode, RiskLevel,
-    SubagentAccessMode, SubagentState, TaskMode, TaskState,
+    CatalogAnchorPhase, CreateSessionInput, PeerMessageDeliveryStatus, ProjectAccessMode,
+    RiskLevel, SubagentAccessMode, SubagentState, TaskMode, TaskState,
 };
 use r_code_core::error::ProductError;
 use r_code_core::plan::{PlanExecutionContext, PlanExecutionStatus, PlanItemState, PlanView};
@@ -3545,6 +3545,10 @@ async fn run_loop(ctx: RunLoopCtx) {
     let mut continuation_reprompts = 0usize;
     let mut summary_recovery_attempted = false;
     let mut summary_recovery_pending = false;
+    // C4：锚定可观察行——收窄只在首个受限派发广播一次；counts 记录
+    // (收窄数, 完整数) 供晋升行对照（pending 跨轮保持时避免重复广播）。
+    let mut catalog_anchor_announced = false;
+    let mut catalog_anchor_counts: Option<(usize, usize)> = None;
     let mut active_hosted_tools = ctx.hosted_tools.clone();
     let mut hosted_web_fallback_attempted = false;
     let mut emergency_context_recovery_attempted = false;
@@ -3764,7 +3768,21 @@ async fn run_loop(ctx: RunLoopCtx) {
             // 现状随行（剥离变体登记为 C-variant-1，不在首期）。
             if policy == ToolPolicy::Main && ctx.catalog_bootstrap_pending.load(Ordering::SeqCst) {
                 let allowlist = first_round_allowlist(ctx.orchestration.first_round_catalog);
+                let full_tool_count = specs.len();
                 specs.retain(|tool| allowlist.contains(&tool.name.as_str()));
+                // C4：可观察锚定行。pending 期间每次派发都会收窄，但时间线只需要
+                // 第一条「已收窄」——记录数量供晋升行对照。
+                if !catalog_anchor_announced {
+                    catalog_anchor_announced = true;
+                    catalog_anchor_counts = Some((specs.len(), full_tool_count));
+                    let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
+                        phase: CatalogAnchorPhase::Narrowed,
+                        catalog: first_round_catalog_key(ctx.orchestration.first_round_catalog)
+                            .to_string(),
+                        tool_count: specs.len(),
+                        full_tool_count,
+                    });
+                }
             }
             specs
         };
@@ -4238,6 +4256,19 @@ async fn run_loop(ctx: RunLoopCtx) {
                             promote_on = ?ctx.orchestration.first_round_promote_on,
                             "C first-round catalog promoted to full"
                         );
+                        // C4：晋升时间线行。收窄行存在才可能有晋升（pending 先经
+                        // 受限派发武装）；数量对齐收窄时的记录。
+                        if let Some((tool_count, full_tool_count)) = catalog_anchor_counts.take() {
+                            let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
+                                phase: CatalogAnchorPhase::Promoted,
+                                catalog: first_round_catalog_key(
+                                    ctx.orchestration.first_round_catalog,
+                                )
+                                .to_string(),
+                                tool_count,
+                                full_tool_count,
+                            });
+                        }
                     }
                 }
                 // P2-G：用上一轮真实 usage 校准 tokPerChar（失败轮不校准，
@@ -5154,6 +5185,15 @@ fn first_round_allowlist(catalog: agent_config::FirstRoundCatalog) -> &'static [
         agent_config::FirstRoundCatalog::Full => &[],
         agent_config::FirstRoundCatalog::ReadOnly => FIRST_ROUND_READONLY_TOOLS,
         agent_config::FirstRoundCatalog::EditorPair => FIRST_ROUND_EDITOR_PAIR_TOOLS,
+    }
+}
+
+/// C4：锚定事件的档位名（与配置 serde 名一致，前端按名映射展示文案）。
+fn first_round_catalog_key(catalog: agent_config::FirstRoundCatalog) -> &'static str {
+    match catalog {
+        agent_config::FirstRoundCatalog::Full => "full",
+        agent_config::FirstRoundCatalog::ReadOnly => "readonly",
+        agent_config::FirstRoundCatalog::EditorPair => "editor_pair",
     }
 }
 

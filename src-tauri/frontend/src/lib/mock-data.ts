@@ -658,7 +658,10 @@ export function browserMockMessages(taskId: string): SessionMessage[] {
       message(-2, "user", "编辑历史消息后，原分支的上下文还会保留吗？"),
       message(-1, "assistant", "会保留已确认的历史上下文，新的执行从当前分支继续。"),
       message(1, "user", task.goal),
+      // 首轮工具清单锚定的可观察行：首个请求收窄，首轮回复后恢复完整（C4）。
+      system(1.5, "r_code_catalog_anchor", { phase: "narrowed", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
       message(2, "assistant", "我会先核对任务队列和调度器的共享状态，再把验证工作拆给 Codex 子代理并行检查。"),
+      system(2.5, "r_code_catalog_anchor", { phase: "promoted", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
       call(3, "mock-shell-single", "shell_command", { command: "rg -n \"Mutex|RwLock|await\" src-tauri/src" }),
       result(4, "mock-shell-single", { stdout: "src-tauri/src/commands.rs:241: state.write().await\n", exit_code: 0 }),
       message(5, "assistant", "现有实现把持锁范围和异步等待混在一起；我会保留关键上下文，再继续核对并发边界。"),
