@@ -1491,7 +1491,7 @@ export interface OrchestrationConfig {
   subagent_pool?: SubagentPoolConfig;
   /** 长任务循环护栏预算；旧配置缺失时由后端回填默认值。 */
   run_budget?: RunBudgetConfig;
-  /** 首轮目录锚定实验；旧配置缺失时由后端回填默认值 full/either。 */
+  /** 首轮工具清单（tools catalog）锚定实验；旧配置缺失时由后端回填默认值 full/either。 */
   first_round_catalog?: "full" | "readonly" | "editor_pair";
   first_round_promote_on?: "either" | "tool_call";
 }

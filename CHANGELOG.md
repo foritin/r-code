@@ -8,8 +8,8 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ### Added
 
-- 请求信封审计（诊断，默认关闭）：新增配置 `diagnostics.request_audit`，开启后每轮模型派发前向 `sessions/request-audit/{会话id}.jsonl` 追加旁路快照（system/tools/messages 指纹、工具目录名单、hosted 工具与实际派发的输出预算），并做重建自检（只记录不阻断）；canonical 会话文件与既有读者零改动。配套只读命令 `request_audit_counters` 可读取（追加数, 不一致数）计数。「设置 → 诊断」新增「请求构成审计」开关。
-- 首轮工具目录锚定实验（opt-in，默认关闭）：新增配置 `orchestration.first_round_catalog`（`full` 默认/`readonly`/`editor_pair`）与 `orchestration.first_round_promote_on`（`either` 默认/`tool_call`）。非默认值时主代理首轮只看到受限工具目录，首轮出现任意回复（或按配置：首次工具调用）后恢复完整目录，会话级粘性保证每会话至多一次目录变化；目录裁剪只是呈现层，工具执行与审批边界不变。「设置 → Agent 编排」新增「首轮目录锚定（实验）」卡片。
+- 请求信封审计（诊断，默认关闭）：新增配置 `diagnostics.request_audit`，开启后每轮模型派发前向 `sessions/request-audit/{会话id}.jsonl` 追加旁路快照（system/tools/messages 指纹、工具清单名单、hosted 工具与实际派发的输出预算），并做重建自检（只记录不阻断）；canonical 会话文件与既有读者零改动。配套只读命令 `request_audit_counters` 可读取（追加数, 不一致数）计数。「设置 → 诊断」新增「请求构成审计」开关。
+- 首轮工具清单锚定实验（opt-in，默认关闭）：新增配置 `orchestration.first_round_catalog`（`full` 默认/`readonly`/`editor_pair`）与 `orchestration.first_round_promote_on`（`either` 默认/`tool_call`）。非默认值时主代理首轮只看到收窄的工具清单（每次请求携带的 tools 菜单，与项目文件夹无关），首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单，会话级粘性保证每会话至多一次清单变化；清单裁剪只是呈现层，工具执行与审批边界不变。「设置 → Agent 编排」新增「首轮工具清单锚定（实验）」卡片。
 - 子代理派生确认回路：新增 `plan_subagents` 工具，主代理要并行开出第 2 个及更多子代理前，必须先提交「每个方向一条条目」的计划并带 `confirm` 确认；运行时返回数量、角色槽位分布与同角色警告的分析，超出确认计划的 `delegate_task` 会被拒绝并引导修订计划。首个子代理仍可直接派生，子代理受阻时开孙代理（深度 2）的能力保持不变。
 - 子代理任务提示词全程可见：委派事件 scope 携带 goal 有界摘要，宿主在子代理独立会话记录首位落盘任务全文（优先取 `delegate_task` 审计输入，外部路径回退摘要）；子代理详情新增「任务 · 来自主代理」卡片，转录按任务样式渲染主代理下发的 user 消息，不再静默丢弃。
 - 时间线新增可展开的「子智能体」事件行（原型 C 的藏青高亮）：行首图标 + 藏青子代理名称 + 任务提示词摘要 + 运行状态计数，展开后为既有状态芯片；藏青色收敛为 `--subagent-run` 设计令牌，与目录状态环、运行中芯片描边同源。

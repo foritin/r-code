@@ -1528,13 +1528,15 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
       </section>
 
       <section className="settings-block">
-        <h3>首轮目录锚定（实验）</h3>
+        <h3>首轮工具清单锚定（实验）</h3>
         <p className="desc">
-          新会话的第一轮只向模型展示收窄的工具目录，之后在本会话内恢复完整目录，以稳定首轮提示词。
-          只影响给模型看的目录，不改变工具执行的审批边界。对新会话生效。
+          发给模型的每次请求都带一份「工具清单」（请求里的 tools 菜单，列明本轮可用的工具，与项目文件夹无关），
+          清单中途变化会打断前缀缓存、分散模型首轮注意力。开启锚定后，新会话第一轮只展示收窄的清单，
+          模型给出回应后在本会话内恢复完整清单并保持稳定——每会话至多一次清单切换。
+          只影响给模型看的清单，不改变工具执行的审批边界。对新会话生效。
         </p>
         <div className="field">
-          <label htmlFor="set-first-round-catalog">首轮目录</label>
+          <label htmlFor="set-first-round-catalog">首轮工具清单</label>
           <select
             id="set-first-round-catalog"
             className="input"
@@ -1542,14 +1544,14 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
             disabled={busy != null}
             onChange={(event) => void save("first_round_catalog", event.target.value)}
           >
-            <option value="full">完整目录 · 不锚定（默认）</option>
-            <option value="readonly">只读目录</option>
+            <option value="full">完整清单 · 不锚定（默认）</option>
+            <option value="readonly">只读清单 · 读文件/搜索等</option>
             <option value="editor_pair">读写最小对 · read_file + edit</option>
           </select>
-          <span className="hint">只读目录含读文件、列目录、搜索等；读写最小对只剩 read_file 和 edit。</span>
+          <span className="hint">只读清单含读文件、列目录、搜索等；读写最小对只剩 read_file 和 edit。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-first-round-promote">恢复完整目录的时机</label>
+          <label htmlFor="set-first-round-promote">恢复完整清单的时机</label>
           <select
             id="set-first-round-promote"
             className="input"
@@ -1757,7 +1759,7 @@ function RequestAuditSection({ config, reload }: { config: AppConfig; reload: ()
     <section className="settings-block">
       <h3>请求构成审计</h3>
       <p className="desc">
-        开启后，每个会话发给模型的请求信封（工具目录、托管工具、输出上限）会写入旁路审计文件，
+        开启后，每个会话发给模型的请求信封（工具清单、托管工具、输出上限）会写入旁路审计文件，
         用于核对请求构成；正式的会话记录不受影响。对新开始的会话生效。
       </p>
       {err && <div className="errbar" role="alert">{err}</div>}

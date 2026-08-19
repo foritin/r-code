@@ -3694,7 +3694,7 @@ test("request audit toggle and first-round anchoring expose the diagnostics expe
   try {
     await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.getByRole("button", { name: "Agent 编排", exact: true }).click();
-    await page.getByRole("heading", { name: "首轮目录锚定（实验）", exact: true })
+    await page.getByRole("heading", { name: "首轮工具清单锚定（实验）", exact: true })
       .waitFor({ state: "visible" });
 
     const catalog = page.locator("#set-first-round-catalog");
