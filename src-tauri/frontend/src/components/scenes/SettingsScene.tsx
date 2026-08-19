@@ -1691,7 +1691,7 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
           <span className="hint">默认 3；覆盖 cargo/pytest/npm/pnpm/yarn/go/dotnet 测试命令。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-replay">相邻轮 replay 检测</label>
+          <label htmlFor="set-budget-replay">循环重放检测</label>
           <input
             id="set-budget-replay"
             className="switch"
@@ -1701,7 +1701,7 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
             disabled={busy != null}
             onChange={(event) => void save("run_budget.replay_detection", event.target.checked)}
           />
-          <span className="hint">相邻两轮工具请求与结果完全一致时立即停止。</span>
+          <span className="hint">连续 3 轮工具调用与成败形态完全一致时停止。失败重试不计入（由同错连败统计）；触发后先做一次无工具收尾总结再结束，改动保留。</span>
         </div>
         <div className="field">
           <label htmlFor="set-budget-checkpoint">绿灯 git checkpoint</label>
