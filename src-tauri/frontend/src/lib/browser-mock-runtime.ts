@@ -62,6 +62,8 @@ import type {
   WorkflowSkill,
   WorkflowSkillDraft,
   ProjectAgentPromptConfig,
+  PlanEntryOfferView,
+  PlanningStatusView,
 } from "./types";
 import {
   browserMockAbortSubagent,
@@ -672,6 +674,28 @@ function taskById(taskId: string): Task {
   const task = browserMockTasks.find((item) => item.id === taskId);
   if (!task) throw new Error(`Demo 中不存在任务 ${taskId}`);
   return task;
+}
+
+/** 浏览器回归钩子：当前模拟的待决 Plan 入口建议（默认无）。 */
+let browserMockPlanEntryOffer: PlanEntryOfferView | null = null;
+
+export function setBrowserMockPlanEntryOffer(offer: PlanEntryOfferView | null): void {
+  browserMockPlanEntryOffer = offer;
+}
+
+/** 浏览器回归钩子：模拟的规划发布状态（默认 off，证据未通过）。 */
+let browserMockPlanningStatus: PlanningStatusView = {
+  release_state: "off",
+  emergency_off: false,
+  evidence_version: "",
+  eligibility_profile_version: "deepseek-plan-v1",
+  customer_card_visible: true,
+  evidence_validated: false,
+  basis: "browser mock: no validated evidence manifest embedded",
+};
+
+export function setBrowserMockPlanningStatus(status: PlanningStatusView): void {
+  browserMockPlanningStatus = status;
 }
 
 function detailById(taskId: string): TaskDetail {
@@ -2155,7 +2179,31 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const count = browserMockMessages(stringArg(args, "taskId")).filter((item) => item.kind === "message").length;
       return { compacted: count > 4, before_messages: count, after_messages: count > 4 ? 3 : count };
     }
-    case "cmd_task_detail": return copy(detailById(stringArg(args, "taskId")));
+    case "cmd_task_detail": {
+      const detail = copy(detailById(stringArg(args, "taskId")));
+      detail.pending_plan_entry_offer = browserMockPlanEntryOffer
+        ? copy({ ...browserMockPlanEntryOffer, task_id: stringArg(args, "taskId") })
+        : null;
+      return detail;
+    }
+    case "cmd_plan_entry_offer_get": return null;
+    case "cmd_plan_entry_decide": {
+      const offer = browserMockPlanEntryOffer;
+      if (!offer) throw new Error("没有待决的 Plan 入口建议");
+      const decision = String(
+        (args as { input?: { decision?: string } }).input?.decision ?? "continue",
+      );
+      browserMockPlanEntryOffer = null;
+      return copy({
+        ...offer,
+        state: decision === "accept" ? "accepted" : "declined",
+        continuation_state: "sent",
+      });
+    }
+    case "cmd_plan_entry_retry_continuation": {
+      return null;
+    }
+    case "cmd_planning_status": return copy(browserMockPlanningStatus);
     case "cmd_task_detail_batch": return {
       details: copy(((args.taskIds as string[] | undefined) ?? []).map((id) => browserMockDetails[id]).filter(Boolean)),
     };

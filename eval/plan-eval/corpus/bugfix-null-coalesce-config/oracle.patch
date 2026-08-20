@@ -1,0 +1,19 @@
+diff --git a/lib/config.js b/lib/config.js
+index c96d441..e6e11df 100644
+--- a/lib/config.js
++++ b/lib/config.js
+@@ -5,5 +5,13 @@ export const DEFAULTS = {
+ 
+ export function mergeConfig(user) {
+   if (!user) return structuredClone(DEFAULTS);
+-  return { ...DEFAULTS, ...user };
++  const merged = structuredClone(DEFAULTS);
++  for (const [key, value] of Object.entries(user)) {
++    if (value === null || Array.isArray(value) || typeof value !== "object") {
++      merged[key] = value;
++      continue;
++    }
++    merged[key] = { ...(merged[key] ?? {}), ...value };
++  }
++  return merged;
+ }

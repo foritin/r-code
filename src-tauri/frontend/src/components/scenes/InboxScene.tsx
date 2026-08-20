@@ -26,7 +26,7 @@ import {
   IconShield,
 } from "../icons";
 
-type InspectorKind = "permission" | "review_ready";
+type InspectorKind = "permission" | "review_ready" | "plan_entry_offer";
 
 interface ReviewStatusEntry {
   status: ReviewGitStatus | null;
@@ -43,7 +43,7 @@ interface InboxProjectGroup {
   pendingFileCount: number;
 }
 
-const itemKey = (item: NeedsYouItem) => item.kind === "permission" ? `permission:${item.permission!.id}` : `review:${item.task.id}`;
+const itemKey = (item: NeedsYouItem) => item.kind === "permission" ? `permission:${item.permission!.id}` : item.kind === "plan_entry_offer" ? `plan-offer:${item.task.id}` : `review:${item.task.id}`;
 
 function reviewStatusSignature(entry: ReviewStatusEntry | undefined): string {
   if (!entry) return "missing";

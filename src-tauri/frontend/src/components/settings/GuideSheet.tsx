@@ -2,22 +2,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useFocusTrap } from "../../lib/hooks";
 
-/** 「首轮工具清单」档位的唯一事实来源：设置页下拉与指引手册的档位卡都从这里取，
- * 手册文案与 `orchestration.first_round_catalog` 枚举值不会各自漂移。 */
-export const FIRST_ROUND_CATALOG_OPTIONS = [
-  { value: "full", label: "完整清单 · 不锚定（默认）" },
-  { value: "readonly", label: "只读清单 · 读文件/搜索等" },
-  { value: "editor_pair", label: "读写最小对 · read_file + edit" },
-  { value: "plan_gate", label: "规划门 · 零工具，仅 plan_ready" },
-] as const;
-
-export const FIRST_ROUND_PROMOTE_OPTIONS = [
-  { value: "either", label: "任意首轮回应（默认）" },
-  { value: "tool_call", label: "首次真实工具调用" },
-  { value: "plan_complete", label: "规划完成（调用 plan_ready）" },
-] as const;
-
-export type GuideId = "first-round-catalog";
+export type GuideId = "plan-suggestion";
 /** 手册页脚动作：由宿主场景解释（手册组件本身不碰路由与页签状态）。 */
 export type GuideAction = "open-request-audit";
 
@@ -30,183 +15,49 @@ interface GuideEntry {
   action?: { id: GuideAction; label: string };
 }
 
-const CATALOG_TIER_META = {
-  full: {
-    tag: "默认 · 不锚定",
-    recommended: false,
-    menu: ["read_file", "edit", "bash", "search"],
-    more: true,
-    use: "完全现状。随时退回，不产生任何行为差异。",
-  },
-  readonly: {
-    tag: "推荐起步",
-    recommended: true,
-    menu: ["read_file", "list_files", "search", "glob"],
-    more: false,
-    use: "逼模型首轮先侦察再动手。适合大多数“先理解再改”的开发任务。",
-  },
-  editor_pair: {
-    tag: "最激进",
-    recommended: false,
-    menu: ["read_file", "edit"],
-    more: false,
-    use: "首轮只有读+改的闭环。适合边界清晰的小改动；需要跑命令验证的任务会拖慢起步。",
-  },
-  plan_gate: {
-    tag: "规划门",
-    recommended: false,
-    menu: ["plan_ready"],
-    more: false,
-    use: "首轮起零工作工具，模型在纯文本里完成规划，自己调用 plan_ready 才恢复完整清单。剥夺跨回合持续。",
-  },
-} as const;
-
-const FIRST_ROUND_CATALOG_BODY = (
+const PLAN_SUGGESTION_BODY = (
   <>
     <section>
-      <h3><span className="idx">01</span>这是什么</h3>
+      <h3><span className="idx">01</span>什么时候会建议先计划</h3>
       <p>
-        每次发给模型的请求都携带一份「工具清单」（<code>tools</code> 数组：工具名 + 参数说明）。
-        模型只能从清单里选择工具——清单就是它的菜单，与你的项目文件夹无关。
-      </p>
-      <p>
-        清单在会话中途变化（托管联网工具启停、收尾总结轮清空等）会带来两个成本：
-        其一，清单排在对话历史之前，字节级前缀缓存的公共前缀断在清单处，历史要重新计费重算；
-        其二，第一轮给几十个工具，选择面过大会让模型在还没理解代码时就动用重工具。
-        锚定把清单变化收敛为受控的一次：首个模型回合收窄（一个回合可含多次工具调用）
-        {" -> "}回合结束恢复完整{" -> "}会话内不再变。
+        处理复杂任务时（例如改动跨越多个相互依赖的部分、涉及数据或兼容性变化、需要你
+        先拍板的方案取舍，或直接做错之后不好回退），R-Code 会问你一次：
+        <strong>先列个计划，还是直接继续。</strong>每个任务最多问一次；选择直接继续后
+        本任务不再主动弹出，你仍可随时手动选择 Plan 模式。
       </p>
     </section>
-
     <section>
-      <h3><span className="idx">02</span>四个档位</h3>
-      <div className="tier-grid">
-        {FIRST_ROUND_CATALOG_OPTIONS.map((option) => {
-          const meta = CATALOG_TIER_META[option.value];
-          return (
-            <div
-              key={option.value}
-              className={`tier-card${meta.recommended ? " is-recommended" : ""}`}
-            >
-              <span className="tier-name">{option.label.split(" ·")[0]}</span>
-              <span className="tier-tag">{meta.tag}</span>
-              <div className="tier-menu">
-                {meta.menu.map((tool) => <span key={tool} className="menu-chip">{tool}</span>)}
-                {meta.more && <span className="menu-chip more">…全部</span>}
-              </div>
-              <p className="tier-use">{meta.use}</p>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-
-    <section>
-      <h3><span className="idx">03</span>恢复完整清单的时机</h3>
+      <h3><span className="idx">02</span>进入后会先调查，不会先改文件</h3>
       <p>
-        「首轮」指会话里的<strong>第一个模型回合</strong>（你的消息到模型完成响应，中间可含多次工具调用），
-        不是第一个工具调用。回合结束后按下面的时机恢复：
+        Plan 模式只做只读调查：读文件、搜索、查看状态，必要时向你提几个阻塞性问题。
+        在你看到并批准计划之前，不会修改任何文件、不会执行命令。
       </p>
-      <div className="promote-rows">
-        <div className="promote-row">
-          <span className="promote-name">{FIRST_ROUND_PROMOTE_OPTIONS[0].label.replace("（默认）", "")}</span>
-          <div>
-            <p className="promote-desc">模型给出任意 assistant 回复（含纯文本）即恢复完整清单。</p>
-            <span className="promote-note">默认。首轮收窄很快结束，清单变化几乎无感。</span>
-          </div>
-        </div>
-        <div className="promote-row">
-          <span className="promote-name">{FIRST_ROUND_PROMOTE_OPTIONS[1].label}</span>
-          <div>
-            <p className="promote-desc">模型必须真正发起工具调用才解除收窄；纯文本寒暄不触发。</p>
-            <span className="promote-note">更严格：防止“好的我来做”式空谈提前放开清单。</span>
-          </div>
-        </div>
-        <div className="promote-row">
-          <span className="promote-name">{FIRST_ROUND_PROMOTE_OPTIONS[2].label.replace("（调用 plan_ready）", "")}</span>
-          <div>
-            <p className="promote-desc">只有模型调用 plan_ready 工具才恢复完整清单；剥夺跨回合持续，可跨多个回合甚至多个 run。</p>
-            <span className="promote-note">规划门形态：模型自己在规划完成时「按门铃」，纯文本回答不解除收窄。</span>
-          </div>
-        </div>
-      </div>
     </section>
-
     <section>
-      <h3><span className="idx">04</span>推荐组合</h3>
-      <div className="combo-list">
-        <div className="combo-row is-main">
-          <span className="combo-pill">只读清单 + 任意回应</span>
-          <div className="combo-body">
-            <strong>最平衡，建议从这里开始</strong>
-            <p>首轮只能读/搜/列目录，模型一开口就放开全部工具。适合大多数先理解再动手的任务。</p>
-          </div>
-        </div>
-        <div className="combo-row">
-          <span className="combo-pill">读写最小对 + 工具调用</span>
-          <div className="combo-body">
-            <strong>最激进，边界清晰的小改动</strong>
-            <p>首轮只有 read_file + edit，且必须真正动手才恢复。</p>
-            <p className="caveat">注意：需要跑命令验证的任务会被拖慢——首轮无法执行任何命令。</p>
-          </div>
-        </div>
-        <div className="combo-row">
-          <span className="combo-pill">规划门 + 规划完成</span>
-          <div className="combo-body">
-            <strong>恶劣环境压榨首轮思考</strong>
-            <p>首轮起零工作工具，目录里唯一的工具是门铃 plan_ready；剥夺持续到模型自己声明规划完成才恢复。</p>
-            <p className="caveat">注意：需要外部证据（读文件/联网）才能规划的任务会被压住——模型只能基于给定上下文做假设并明说。</p>
-          </div>
-        </div>
-        <div className="combo-row">
-          <span className="combo-pill">完整清单</span>
-          <div className="combo-body">
-            <strong>随时退回</strong>
-            <p>选择“完整清单 · 不锚定”即回到现状，运行中的会话本就不受影响。</p>
-          </div>
-        </div>
-      </div>
+      <h3><span className="idx">03</span>你需要再次批准才开始实施</h3>
+      <p>
+        计划列好后 R-Code 会展示完整清单：要做什么、按什么顺序、每一步怎么验证。
+        你可以批准、继续追问或取消；批准后才开始实施，随时可以停下来。
+      </p>
     </section>
-
     <section>
-      <h3><span className="idx">05</span>如何验证效果</h3>
-      <ol className="verify-steps">
-        <li>到「设置 → 诊断」打开<strong>请求构成审计</strong>开关。</li>
-        <li>用锚定配置新开会话，跑 2–3 个真实任务。</li>
-        <li>
-          打开审计文件，对比第 1 轮与第 2 轮的 <code>tool_names</code> 字段：
-          首轮应是收窄名单，晋升后恢复完整，之后不再变化。<br />
-          <span className="path-chip">应用数据目录 / sessions / request-audit / {"{会话id}"}.jsonl</span>
-        </li>
-        <li>积累一周数据后，比较锚定开/关会话的清单种类数（= 缓存断点预算），再决定是否转正。</li>
-      </ol>
-    </section>
-
-    <section>
-      <h3><span className="idx">06</span>边界与事实</h3>
-      <ul className="fact-list">
-        <li>生效过程在时间线可见：首个模型回合开始出现「本轮工具清单已收窄」行（含档位与工具数），回合结束出现「工具清单恢复完整」行；不锚定时零噪音。一个「回合」可以包含多次工具调用，收窄覆盖整个回合。</li>
-        <li>收窄回合内托管联网工具（web_search / web_fetch）也一并剥离--「读写最小对」就是真的只剩 read_file + edit；恢复完整后联网工具随配置回归。</li>
-        <li>规划门（plan_gate + 规划完成）下剥夺跨回合持续：收窄不是只覆盖首轮，而是直到模型调用 plan_ready 才结束，可跨多个回合与多个 run；收窄目录本身包含 plan_ready（它由 worker 侧拦截执行，不经过网关审批）。</li>
-        <li>设置页的总开关滑纽决定整个实验的开/关：开 = 使用记住的档位；关 = 完整清单现状（记住的档位保留在本地，重新打开即恢复）。</li>
-        <li>清单裁剪只是呈现层：模型看不见清单外的工具，但工具执行与审批边界原样工作，收窄不等于降低安全要求。</li>
-        <li>只对新会话生效；运行中的会话不受配置变化影响，也不会被中途换清单。</li>
-        <li>每个会话至多一次清单切换（收窄 → 完整），不存在反复横跳。</li>
-        <li>「只读清单」是清单级收窄，与 Ask 模式的只读策略无关；Ask 模式本来就是只读，不受锚定影响。</li>
-      </ul>
+      <h3><span className="idx">04</span>首发只支持经过验证的 DeepSeek</h3>
+      <p>
+        自动建议目前只对通过验证的 DeepSeek 服务开启。其他模型服务不受影响：
+        你仍可以随时手动选择 Plan 模式，功能与以往一致。
+      </p>
     </section>
   </>
 );
 
 /** 实验功能的随版本内置手册：离线可用、与配置行为同源维护。新实验在这里登记即可复用同一浮层壳。 */
 export const GUIDE_ENTRIES: Record<GuideId, GuideEntry> = {
-  "first-round-catalog": {
-    eyebrow: "实验指引",
-    title: "首轮工具清单锚定",
-    intro: "目标是稳定首轮请求形状，而不是永久隐藏工具；配置写入即对新会话生效。",
-    body: FIRST_ROUND_CATALOG_BODY,
-    footNote: "内容随应用版本内置，与配置行为同源维护；Esc 随时关闭。",
-    action: { id: "open-request-audit", label: "去开启请求构成审计" },
+  "plan-suggestion": {
+    eyebrow: "Plan 模式指引",
+    title: "Plan 模式与复杂任务建议",
+    intro: "复杂任务开始修改前，先花十几秒确认范围和顺序。",
+    body: PLAN_SUGGESTION_BODY,
+    footNote: "内容随应用版本内置；Esc 随时关闭，不影响任何未做的决定。",
   },
 };
 

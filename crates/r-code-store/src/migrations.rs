@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 31;
+pub const LATEST_SCHEMA_VERSION: u32 = 33;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -60,6 +60,8 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(29, MIGRATION_029, false),
     MigrationSpec::new(30, MIGRATION_030, false),
     MigrationSpec::new(31, MIGRATION_031, false),
+    MigrationSpec::new(32, MIGRATION_032, false),
+    MigrationSpec::new(33, MIGRATION_033, false),
 ];
 
 impl MigrationSpec {
@@ -1515,6 +1517,92 @@ const MIGRATION_031: &str = r#"
 ALTER TABLE agent_runs ADD COLUMN guard_trip TEXT;
 ALTER TABLE agent_runs ADD COLUMN checkpoint_sha TEXT;
 ALTER TABLE agent_runs ADD COLUMN checkpoint_base_head TEXT;
+"#;
+
+/// Migration 032: Plan 入口建议（docs/plan-mode-dual-track-gate.md §10、§11）。
+/// - `origin_requests`：所有发送分支之前创建的统一宿主请求信封（request key 是
+///   幂等与恢复边界）；
+/// - `plan_entry_offers`：待决建议聚合。pending 不切任务模式、不建 Plan；决策用
+///   revision CAS；
+/// - `plan_suggestion_branch_states`：branch 级建议预算与拒绝后持久安静状态；
+/// - `queued_messages.request_key`：队列行携带创建它的请求键，领取后续接仍继承
+///   同一真实请求身份（宿主 continuation）。
+const MIGRATION_032: &str = r#"
+CREATE TABLE origin_requests (
+    request_key TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('direct', 'queued', 'steer', 'host_continuation')),
+    parent_request_key TEXT REFERENCES origin_requests(request_key),
+    operation_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_origin_requests_task ON origin_requests(task_id, created_at);
+
+CREATE TABLE plan_entry_offers (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    source_run_id TEXT NOT NULL,
+    request_key TEXT NOT NULL,
+    original_mode TEXT NOT NULL,
+    reason_audit TEXT NOT NULL,
+    signals_json TEXT NOT NULL,
+    primary_signal TEXT NOT NULL,
+    customer_copy_key TEXT NOT NULL,
+    customer_copy_version INTEGER NOT NULL,
+    provider_kind TEXT NOT NULL,
+    provider_profile_id TEXT NOT NULL,
+    provider_profile_version TEXT NOT NULL,
+    provider_route_revision TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    wire_protocol TEXT NOT NULL,
+    endpoint_class TEXT NOT NULL,
+    eligibility_profile_version TEXT NOT NULL,
+    evidence_version TEXT NOT NULL,
+    resolved_plan_runtime_profile_json TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN
+        ('pending', 'accepted', 'declined', 'superseded_provider_changed', 'expired')),
+    decision TEXT CHECK (decision IS NULL OR decision IN ('accept', 'continue', 'close', 'escape')),
+    plan_id TEXT,
+    continuation_state TEXT NOT NULL DEFAULT 'none' CHECK (continuation_state IN
+        ('none', 'queued', 'dispatching', 'sent', 'failed')),
+    continuation_operation_id TEXT,
+    error TEXT,
+    decision_idempotency_key TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT,
+    UNIQUE (task_id, branch_id, request_key)
+);
+CREATE UNIQUE INDEX idx_plan_entry_offers_one_pending ON plan_entry_offers(task_id)
+    WHERE state = 'pending';
+
+CREATE TABLE plan_suggestion_branch_states (
+    task_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    suggestion_budget_consumed_at TEXT,
+    quiet_after_decline INTEGER NOT NULL DEFAULT 0,
+    quiet_reason TEXT CHECK (quiet_reason IS NULL OR quiet_reason IN ('continue', 'close', 'escape')),
+    revision INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, branch_id)
+);
+
+ALTER TABLE queued_messages ADD COLUMN request_key TEXT;
+CREATE INDEX idx_queued_messages_request_key ON queued_messages(request_key);
+"#;
+
+/// Migration 033: Plan 冻结运行 profile 与权威 catalog phase（docs §14）。
+/// `runtime_profile_json` 是创建时冻结的 `ResolvedPlanRuntimeProfile`；`catalog_phase`
+/// 是 task-level 权威，只允许 `bootstrap -> resident` 单向 CAS。旧行为 NULL =
+/// baseline。
+const MIGRATION_033: &str = r#"
+ALTER TABLE plans ADD COLUMN runtime_profile_json TEXT;
+ALTER TABLE plans ADD COLUMN catalog_phase TEXT
+    CHECK (catalog_phase IS NULL OR catalog_phase IN ('bootstrap', 'resident'));
+ALTER TABLE plans ADD COLUMN profile_version INTEGER;
 "#;
 
 #[cfg(test)]

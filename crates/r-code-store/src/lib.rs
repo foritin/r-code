@@ -22,6 +22,7 @@ pub mod lifecycle_purge;
 pub mod memory_store;
 pub mod migrations;
 pub mod patch_engine;
+pub mod plan_entry_store;
 pub mod plan_review;
 pub mod plan_store;
 pub mod repositories;
@@ -50,6 +51,7 @@ pub use memory_store::{
     MemoryReviewClaim, MemoryReviewJobView, MemoryStore,
 };
 pub use patch_engine::{apply_patch, hash_content, PatchError};
+pub use plan_entry_store::{CreatePlanEntryOfferInput, PlanEntryDecisionOutcome, PlanEntryStore};
 pub use plan_review::{
     CoordinatedWriteGuard, EnhancedReviewEventView, EnhancedReviewFileView,
     EnhancedReviewGroupView, EnhancedReviewTarget, EnhancedReviewView, FinishPlanWriteInput,

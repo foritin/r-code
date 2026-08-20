@@ -315,6 +315,9 @@ export const browserMockSettings: SettingsResponse = {
       },
     },
     log_level: "info",
+    planning: {
+      suggest_complex_tasks: false,
+    },
     orchestration: {
       default_agent_engine: "r_code",
       delegation_router: "balanced",

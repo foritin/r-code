@@ -1,0 +1,9 @@
+{
+  "id": "feature-audit-log",
+  "category": "feature",
+  "task": "添加审计日志：新增 `lib/audit.js`（append-only 记录 + 按操作类型查询，外部拿到的是拷贝），并在 `lib/account.js` 的 transfer 里记录 from/to/amount 与时间戳。",
+  "expected_signals": [
+    "multi_subsystem",
+    "expensive_rollback"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "feature-rate-limiter",
+  "category": "feature",
+  "task": "为服务添加可配置限流：新增 `lib/limiter.js`（滑动窗口计数），并在 `lib/server.js` 的 handleRequest 入口按 per-key 限流（超出返回 429），`lib/config.js` 暴露 { windowMs, max } 默认 60000/100。",
+  "expected_signals": [
+    "multi_subsystem",
+    "design_decision"
+  ]
+}

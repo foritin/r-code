@@ -1,0 +1,28 @@
+diff --git a/lib/logger.js b/lib/logger.js
+index 33741f4..7b8cc85 100644
+--- a/lib/logger.js
++++ b/lib/logger.js
+@@ -1,7 +1,9 @@
++import { redact } from "./redact.js";
++
+ const lines = [];
+ 
+ export const logger = {
+-  info(message) { lines.push(message); },
+-  warn(message) { lines.push(message); },
++  info(message) { lines.push(redact(message)); },
++  warn(message) { lines.push(redact(message)); },
+   all() { return [...lines]; },
+ };
+diff --git a/lib/redact.js b/lib/redact.js
+new file mode 100644
+index 0000000..bebceac
+--- /dev/null
++++ b/lib/redact.js
+@@ -0,0 +1,6 @@
++export function redact(text) {
++  return String(text)
++    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]")
++    .replace(/(api[_-]?key["'=:\s]+)[A-Za-z0-9._-]+/gi, "$1[REDACTED]")
++    .replace(/\b[0-9a-f]{32,}\b/gi, "[REDACTED]");
++}

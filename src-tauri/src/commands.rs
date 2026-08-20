@@ -38,6 +38,8 @@ use security_framework::os::macos::code_signing::{
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+use crate::plan_entry_commands::PlanningRuntimeState;
+use crate::plan_tools::ProposePlanModeTool;
 use agent_config::{SubagentPoolConfig, SubagentProviderSource};
 use agent_contract::{
     CompletionRequest, ContentBlock, FileSource, HostedToolFormat, HostedToolSpec,
@@ -73,6 +75,7 @@ use r_code_core::plan::{
     PlanQuestionAnswer, PlanQuestionSet, PlanQuestionSetKind, PlanQuestionSetState,
     PlanReviewDecision, PlanState, PlanView, UpdatePlanItemInput,
 };
+use r_code_core::plan_entry::OriginRequestKind;
 use r_code_core::process::hide_background_console;
 use r_code_core::secret::redact_text;
 use r_code_core::security::{PathGuard, WorkspaceFileAccess};
@@ -316,6 +319,7 @@ struct QueuedDispatchResources {
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
     subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
+    planning: Arc<crate::plan_entry_commands::PlanningRuntimeState>,
     sink: Option<AgentEventSink>,
 }
 
@@ -335,6 +339,7 @@ fn queued_dispatch_resources(state: &CommandState) -> QueuedDispatchResources {
         tool_gateway: state.tool_gateway.clone(),
         mcp_manager: state.mcp_manager.clone(),
         subagent_config_mutations: state.subagent_config_mutations.clone(),
+        planning: state.planning.clone(),
         sink,
     }
 }
@@ -911,6 +916,8 @@ pub struct CommandState {
     pub agent_event_sink: Mutex<Option<AgentEventSink>>,
     /// 工具门（内置工具 + 权限门 + 审计账本），真实 runtime 的 ToolHost 来源
     pub tool_gateway: Arc<r_code_gateway::ToolGateway>,
+    /// Plan 入口建议与双轨的宿主运行时状态（docs/plan-mode-dual-track-gate.md）。
+    pub planning: Arc<PlanningRuntimeState>,
     /// 本机 MCP / 联网工具管理器。配置热更新由同一个长生命周期实例承载。
     pub mcp_manager: Arc<McpManager>,
     /// 旧版审核补录只允许稳定任务扫描一次；当前运行中的任务仍可在结束后重试。
@@ -1015,6 +1022,29 @@ impl CommandState {
             db.clone(),
             plan_projection_root(&config_dir),
         ));
+        let planning = Arc::new(PlanningRuntimeState::new(
+            db.clone(),
+            plan_store.clone(),
+            config_dir.clone(),
+        ));
+        // 崩溃窗口恢复（docs §12.4 降级合同）：未确认续接显式 failed 供重试；
+        // Provider 已变化的 pending 建议 superseded（恢复顺序先于任何新 Run）。
+        match planning.recover_interrupted_continuations() {
+            Ok(count) if count > 0 => tracing::info!(
+                count,
+                "plan entry continuations interrupted by restart marked failed"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!("plan entry continuation recovery failed: {error}"),
+        }
+        match planning.reconcile_pending_offers() {
+            Ok(superseded) if !superseded.is_empty() => tracing::info!(
+                count = superseded.len(),
+                "pending plan entry offers superseded by provider changes"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!("plan entry offer reconciliation failed: {error}"),
+        }
         let plan_review = Arc::new(PlanReviewServices::new(db.clone(), blobs_dir.clone()));
         match reconcile_tool_calls_for_finished_runs(&db) {
             Ok(repaired) if repaired > 0 => tracing::info!(
@@ -1053,10 +1083,21 @@ impl CommandState {
         )));
         gateway.register(Box::new(CreateMcpDraftTool::new(mcp_manager.clone())));
         gateway.register(Box::new(SaveMcpDraftTool::new(mcp_manager.clone())));
+        // run -> origin request key 解析器：宿主可信执行上下文的来源
+        //（docs §10：propose_plan_mode 只能使用该宿主字段查重）。
+        let run_origins = planning.run_origins.clone();
+        gateway.set_run_origin_resolver(Arc::new(move |run_id| run_origins.current(run_id)));
         // 主任务生命周期控制
+        let profile_planning = planning.clone();
         gateway.register(Box::new(EnterPlanModeTool::new(
             db.clone(),
             plan_store.clone(),
+            Arc::new(move |task_id| profile_planning.resolve_profile_for_task_id(task_id)),
+        )));
+        gateway.register(Box::new(ProposePlanModeTool::new(
+            db.clone(),
+            planning.plan_entry.clone(),
+            planning.suggestion_gate.clone(),
         )));
         gateway.register(Box::new(PlanPublishTool::new(
             db.clone(),
@@ -1113,6 +1154,7 @@ impl CommandState {
             mcp_manager,
             legacy_reconciliation: tokio::sync::Mutex::new(LegacyReconciliationCache::default()),
             subagent_config_mutations: Arc::new(tokio::sync::Mutex::new(())),
+            planning,
         }
     }
 
@@ -1259,6 +1301,9 @@ pub struct TaskDetail {
     pub verifications: Vec<VerificationRecord>,
     /// 当前活跃分支上等待调度的消息
     pub queued_messages: Vec<QueuedMessage>,
+    /// Plan 入口建议的待决决定（docs §6）：弹窗与 Needs You 投影的数据源。
+    /// 无建议或已决定时为 None；恢复时不重新询问模型生成文案。
+    pub pending_plan_entry_offer: Option<crate::plan_entry_commands::PlanEntryOfferView>,
 }
 
 /// 批量任务详情响应。
@@ -2145,7 +2190,7 @@ fn render_host_task_context(state: &CommandState, task: &Task) -> Result<String,
     render_host_task_context_from_store(&state.plan_store, task)
 }
 
-async fn refresh_runtime_task_context_if_present(
+pub(crate) async fn refresh_runtime_task_context_if_present(
     state: &CommandState,
     task: &Task,
 ) -> Result<(), String> {
@@ -2253,11 +2298,16 @@ pub async fn plan_create(state: &CommandState, task_id: &str) -> Result<PlanView
     {
         return Ok(current);
     }
+    // §14.2：UI plan_create 也必须接收宿主解析的冻结 profile；存储层不读设置。
+    let profile = state.planning.resolve_profile_for_task_id(task_id);
     let view = state
         .plan_store
-        .create_plan(&CreatePlanInput {
-            task_id: task_id.to_string(),
-        })
+        .create_plan_with_profile(
+            &CreatePlanInput {
+                task_id: task_id.to_string(),
+            },
+            &profile,
+        )
         .map_err(err_str)?;
     refresh_runtime_task_context_if_present(state, &task).await?;
     Ok(view)
@@ -3936,6 +3986,9 @@ pub async fn task_detail(state: &CommandState, task_id: &str) -> Result<TaskDeta
         .list_pending(task_id, &active_branch.id)
         .map_err(err_str)?;
 
+    let pending_plan_entry_offer =
+        crate::plan_entry_commands::plan_entry_offer_view_for_task(&state.planning, task_id)
+            .map_err(err_str)?;
     Ok(TaskDetail {
         task,
         active_branch,
@@ -3946,6 +3999,7 @@ pub async fn task_detail(state: &CommandState, task_id: &str) -> Result<TaskDeta
         permissions,
         verifications,
         queued_messages,
+        pending_plan_entry_offer,
     })
 }
 
@@ -4763,9 +4817,6 @@ async fn ensure_real_runtime(
             test_fail_limit: config.orchestration.run_budget.test_fail_limit,
             checkpoint_enabled: config.orchestration.run_budget.checkpoint_enabled,
         },
-        // C2：首轮锚定旋钮直接透传（worker 侧复用同一 agent-config 枚举）。
-        first_round_catalog: config.orchestration.first_round_catalog,
-        first_round_promote_on: config.orchestration.first_round_promote_on,
     };
     // 该开关是热配置：设置页在活跃运行中会直接更新同一个原子门；这里再次同步，
     // 也覆盖用户在应用外编辑配置文件后开始下一轮交互的情况。
@@ -4782,10 +4833,6 @@ async fn ensure_real_runtime(
             orchestration.quality_reviewer,
             orchestration.max_review_rounds,
             orchestration.run_budget,
-            // C2（红线级要求）：两个锚定旋钮必须入指纹，漏加会导致改配置后
-            // 旧 runtime 残留旧目录策略。
-            orchestration.first_round_catalog,
-            orchestration.first_round_promote_on,
         ),
         prompt_fingerprint.to_hex(),
     );
@@ -4818,7 +4865,7 @@ async fn ensure_real_runtime(
         subagent_prompt: agent_prompts.subagent.clone(),
         model_override: None,
     });
-    let runtime = r_code_agent_worker::LlmAgentRuntime::new(
+    let mut runtime = r_code_agent_worker::LlmAgentRuntime::new(
         provider,
         pcfg.model.clone(),
         tool_gateway.clone(),
@@ -4831,6 +4878,19 @@ async fn ensure_real_runtime(
     .with_agent_prompts(agent_prompts.clone())
     .with_external_tools(mcp_manager.clone())
     .with_codex_subagent_runner(codex_runner);
+    // Plan 原生目录晋升钩子（docs §14.3）：worker 首次 durable outcome 后同步
+    // 调用，这里完成 PlanStore bootstrap -> resident CAS；失败向上传播，worker
+    // fail closed 不发下一轮请求。PlanStore 是共享同一 SQLite 池的轻句柄。
+    {
+        let promotion_store =
+            Arc::new(PlanStore::new(db.clone(), plan_projection_root(config_dir)));
+        runtime = runtime.with_plan_catalog_promotion(Arc::new(move |task_id| {
+            promotion_store
+                .promote_catalog_phase(task_id)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }));
+    }
     // A3.2：请求信封审计（opt-in，默认关闭）。旁路 journal 写子目录
     // sessions/request-audit/，runtime 是唯一写方，canonical {storage_id}.jsonl
     // 与其 14 处读者零改动（红线 1）；开关关闭时完全不构造 Store（零路径执行）。
@@ -6466,7 +6526,19 @@ fn enqueue_message(
     message: &str,
     priority: i64,
 ) -> Result<QueuedMessage, String> {
-    let queued = QueuedMessage::new(task_id, branch_id, message, priority);
+    enqueue_message_with_key(db, task_id, branch_id, message, priority, None)
+}
+
+fn enqueue_message_with_key(
+    db: &Database,
+    task_id: &str,
+    branch_id: &str,
+    message: &str,
+    priority: i64,
+    request_key: Option<&str>,
+) -> Result<QueuedMessage, String> {
+    let queued = QueuedMessage::new(task_id, branch_id, message, priority)
+        .with_request_key(request_key.map(str::to_string));
     QueuedMessageRepository::new(db)
         .enqueue(&queued)
         .map_err(err_str)?;
@@ -6483,6 +6555,7 @@ fn enqueue_message_with_attachments(
     message: &str,
     priority: i64,
     attachments: &[ValidatedAttachment],
+    request_key: Option<&str>,
 ) -> Result<QueuedMessage, String> {
     let attachments_json = queued_attachments_payload(attachments);
     let queued = QueuedMessage::new_with_attachments(
@@ -6491,7 +6564,8 @@ fn enqueue_message_with_attachments(
         message,
         priority,
         attachments_json,
-    );
+    )
+    .with_request_key(request_key.map(str::to_string));
     QueuedMessageRepository::new(db)
         .enqueue(&queued)
         .map_err(err_str)?;
@@ -6654,12 +6728,31 @@ pub async fn agent_send_with_mode_and_attachments(
         .await?;
     }
     let active = bridge.active.clone();
+    // 统一宿主请求信封（docs §10.1）：在进入所有发送分支之前创建并持久化。
+    // direct = 空闲直发（Auto/SendNow/空闲规范化后的 Queue|Steer）；
+    // queued = 运行中排队；steer = 运行中引导（以持久 operation ID 为请求身份）。
+    let envelope_kind = match mode {
+        AgentSendMode::Steer => OriginRequestKind::Steer,
+        AgentSendMode::Queue | AgentSendMode::Auto if active.is_some() => OriginRequestKind::Queued,
+        _ => OriginRequestKind::Direct,
+    };
+    let steer_operation_id =
+        (mode == AgentSendMode::Steer).then(|| uuid::Uuid::new_v4().to_string());
+    let envelope = crate::plan_entry_commands::new_origin_request_envelope(
+        &state.planning,
+        task_id,
+        &branch.id,
+        envelope_kind,
+        steer_operation_id.as_deref(),
+        None,
+    )?;
     let active_is_closing = active
         .as_ref()
         .is_some_and(|active| bridge.closing_run_id.as_deref() == Some(active.run_id.as_str()));
     if active_is_closing && matches!(mode, AgentSendMode::Steer | AgentSendMode::SendNow) {
         // The provider has already reported completion. Preserve the user's intent durably, but
         // never inject into or abort the runtime after the drain loop sealed its final history.
+        // 收尾竞态回退队列：复用原信封，不生成第二个真实请求键（docs §10）。
         let priority = if mode == AgentSendMode::SendNow {
             1_000_000
         } else {
@@ -6672,6 +6765,7 @@ pub async fn agent_send_with_mode_and_attachments(
             message,
             priority,
             &attachments,
+            Some(envelope.request_key.as_str()),
         )?;
         return Ok(());
     }
@@ -6684,7 +6778,10 @@ pub async fn agent_send_with_mode_and_attachments(
             }
             // JSONL is the durable outbox. Stage the user message before the runtime can accept
             // it, so a crash or disk failure can never create an acknowledged-but-missing turn.
-            let operation_id = uuid::Uuid::new_v4().to_string();
+            // operation_id 即信封请求身份（进入分支前已生成并持久化）。
+            let operation_id = steer_operation_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             stage_steer_context_with_retry(
                 &state.session_store,
                 task_id,
@@ -6704,7 +6801,14 @@ pub async fn agent_send_with_mode_and_attachments(
                         &operation_id,
                     )
                     .await?;
-                    enqueue_message(&state.db, task_id, &branch.id, message, 1)?;
+                    enqueue_message_with_key(
+                        &state.db,
+                        task_id,
+                        &branch.id,
+                        message,
+                        1,
+                        Some(envelope.request_key.as_str()),
+                    )?;
                     tracing::warn!(
                         task_id,
                         "active run could not accept steer; queued it next: {error}"
@@ -6714,6 +6818,12 @@ pub async fn agent_send_with_mode_and_attachments(
             };
             match result {
                 SteerResult::Accepted => {
+                    // Steer 接受后更新 runtime 当前请求键（docs §10：使用持久
+                    // steer operation ID 作为请求身份）。
+                    state
+                        .planning
+                        .run_origins
+                        .bind(&active.run_id, &envelope.request_key);
                     if let Some(current) = bridge
                         .active
                         .as_mut()
@@ -6742,7 +6852,14 @@ pub async fn agent_send_with_mode_and_attachments(
                         &operation_id,
                     )
                     .await?;
-                    enqueue_message(&state.db, task_id, &branch.id, message, 1)?;
+                    enqueue_message_with_key(
+                        &state.db,
+                        task_id,
+                        &branch.id,
+                        message,
+                        1,
+                        Some(envelope.request_key.as_str()),
+                    )?;
                 }
             }
             Ok(())
@@ -6755,6 +6872,7 @@ pub async fn agent_send_with_mode_and_attachments(
                 message,
                 0,
                 &attachments,
+                Some(envelope.request_key.as_str()),
             )?;
             // 在空闲 runtime 上“排队”不应留下永远不会被消费的消息；立即交给同一
             // 分发路径，确保其按会话绑定的 provider 进行就绪检查和 runtime 重建。
@@ -6778,6 +6896,7 @@ pub async fn agent_send_with_mode_and_attachments(
                         tool_gateway: state.tool_gateway.clone(),
                         mcp_manager: state.mcp_manager.clone(),
                         subagent_config_mutations: state.subagent_config_mutations.clone(),
+                        planning: state.planning.clone(),
                         sink,
                     },
                     task_id.to_string(),
@@ -6795,6 +6914,7 @@ pub async fn agent_send_with_mode_and_attachments(
                     message,
                     1_000_000,
                     &attachments,
+                    Some(envelope.request_key.as_str()),
                 )?;
                 bridge
                     .kind
@@ -6824,6 +6944,8 @@ pub async fn agent_send_with_mode_and_attachments(
                     &user_message,
                     AgentSendMode::SendNow,
                     &attachments,
+                    &state.planning,
+                    &envelope.request_key,
                 )
                 .await?;
                 drop(bridge);
@@ -6849,6 +6971,7 @@ pub async fn agent_send_with_mode_and_attachments(
                     message,
                     0,
                     &attachments,
+                    Some(envelope.request_key.as_str()),
                 )?;
                 Ok(())
             } else {
@@ -6863,6 +6986,8 @@ pub async fn agent_send_with_mode_and_attachments(
                     &user_message,
                     AgentSendMode::Auto,
                     &attachments,
+                    &state.planning,
+                    &envelope.request_key,
                 )
                 .await?;
                 drop(bridge);
@@ -6894,6 +7019,7 @@ fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
         state.tool_gateway.clone(),
         state.mcp_manager.clone(),
         state.subagent_config_mutations.clone(),
+        state.planning.clone(),
         state.agent_event_sink.lock().unwrap().clone(),
         active,
     );
@@ -6915,6 +7041,7 @@ fn spawn_drain_loop_with_resources(
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
     subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
+    planning: Arc<crate::plan_entry_commands::PlanningRuntimeState>,
     sink: Option<AgentEventSink>,
     active: ActiveRun,
 ) {
@@ -7285,6 +7412,7 @@ fn spawn_drain_loop_with_resources(
                 tool_gateway,
                 mcp_manager,
                 subagent_config_mutations,
+                planning,
                 sink,
             },
             task_id,
@@ -7331,6 +7459,11 @@ fn is_transient_queue_claim_error(error: &ProductError) -> bool {
 }
 
 /// Current task runtime is idle: claim and start the highest-priority durable queue message.
+/// 面向 Plan 入口决定/重试的队列派发入口：与 Queue 分支同一资源组装。
+pub(crate) async fn dispatch_queue_for_task(state: &CommandState, task_id: &str) {
+    dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
+}
+
 async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: String) {
     let QueuedDispatchResources {
         agent_pool,
@@ -7342,8 +7475,10 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
         tool_gateway,
         mcp_manager,
         subagent_config_mutations,
+        planning,
         sink,
     } = resources;
+    let dispatch_planning = planning;
     let AgentRuntimePaths {
         blobs_dir,
         sessions_dir,
@@ -7493,6 +7628,11 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 }
             };
         let queued_message = user_message_with_attachments(&queued.message, &restored_attachments);
+        // 领取的队列行继承它创建时的请求键（host continuation；docs §10）。
+        let request_key = queued
+            .request_key
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let started = start_run_locked_with_message(
             &mut bridge,
             &db,
@@ -7504,6 +7644,8 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             &queued_message,
             queued_dispatch_mode(&queued),
             &restored_attachments,
+            &dispatch_planning,
+            &request_key,
         )
         .await;
         match started {
@@ -7536,6 +7678,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                     tool_gateway,
                     mcp_manager,
                     subagent_config_mutations,
+                    dispatch_planning,
                     sink,
                     active,
                 );
@@ -12060,12 +12203,22 @@ async fn start_run_locked_with_message(
     message: &Message,
     message_mode: AgentSendMode,
     attachments: &[ValidatedAttachment],
+    planning: &crate::plan_entry_commands::PlanningRuntimeState,
+    request_key: &str,
 ) -> Result<ActiveRun, String> {
     if bridge.active.is_some() {
         return Err("已有运行正在收尾，无法并发启动新的运行".to_string());
     }
     let runtime_session_id =
         ensure_runtime_session(bridge, db, session_store, sessions_dir, task, branch).await?;
+    // Plan 入口建议注册门 + Plan 原生目录配置（docs §9/§14.3）：资格判断发生在
+    // 注册工具和构建提示之前；每个 run 启动前按最新 branch/offer 状态刷新。
+    let mut armed_suggestion = None;
+    if let AgentRuntimeKind::Real(runtime) = &mut bridge.kind {
+        armed_suggestion = planning
+            .prepare_runtime_session(runtime, &runtime_session_id, task, &branch.id, request_key)
+            .await;
+    }
     let task_context = render_host_task_context_from_store(plan_store, task)?;
     bridge
         .kind
@@ -12109,6 +12262,12 @@ async fn start_run_locked_with_message(
         .start_run_with_message(&runtime_session_id, message.clone())
         .await
         .map_err(err_str)?;
+    // run → origin request key 登记（gateway resolver 读取；docs §10），并按资格
+    // 武装建议 gate（propose 工具执行时的复核边界）。
+    planning.run_origins.bind(&runtime_run_id, request_key);
+    if let Some(armed) = armed_suggestion.take() {
+        planning.suggestion_gate.arm(&runtime_run_id, armed);
+    }
 
     let run_model =
         resolved_native_run_model(task.model.as_deref(), bridge.resolved_model.as_deref());
@@ -12643,7 +12802,10 @@ fn provider_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// 没存过（升级前的旧配置）才推断，且**推断结果永不为 Responses**：Responses 与
 /// Chat 在同一地址上往往都可用但计费不同，静默切过去等于替用户改了账单。目录声明
 /// Responses 的一律降级为 Chat，等用户自己去设置页选。
-fn resolve_effective_protocol(name: &str, pcfg: &agent_config::ProviderConfig) -> ProviderProtocol {
+pub(crate) fn resolve_effective_protocol(
+    name: &str,
+    pcfg: &agent_config::ProviderConfig,
+) -> ProviderProtocol {
     pcfg.protocol
         .as_deref()
         .and_then(ProviderProtocol::parse)
@@ -13408,7 +13570,13 @@ pub async fn settings_save_provider(
             .set_provider_secret(&name, secret)
             .map_err(err_str)?;
     }
-    settings.save_global(&config).map_err(err_str)
+    settings.save_global(&config).map_err(err_str)?;
+    // Provider 设置保存共用同一 snapshot 比对（docs §12.3）：pending 建议的
+    // 冻结 route 不再匹配时立即 superseded，零 Plan 副作用。
+    if let Err(error) = state.planning.reconcile_pending_offers() {
+        tracing::warn!("could not reconcile pending plan entry offers: {error}");
+    }
+    Ok(())
 }
 
 /// 将已有的、可用的 Provider 设为新对话默认服务。
@@ -17031,6 +17199,8 @@ async fn agent_send_codex_with_mode(
                 message,
                 priority,
                 attachments,
+                // Codex 主 Agent 不参与 Plan 入口建议（docs §4.1）；队列行不绑定键。
+                None,
             )?;
             if mode == AgentSendMode::SendNow {
                 let _ = state.external_agents.cancel_task(&task.id).await;
@@ -20896,6 +21066,14 @@ fn spawn_codex_main(
 
         dispatch_next_queued(
             QueuedDispatchResources {
+                planning: Arc::new(crate::plan_entry_commands::PlanningRuntimeState::new(
+                    db.clone(),
+                    Arc::new(PlanStore::new(
+                        db.clone(),
+                        plan_projection_root(&config_dir.clone()),
+                    )),
+                    config_dir.clone(),
+                )),
                 agent_pool,
                 external_agents,
                 codex_app_server,
@@ -21572,6 +21750,13 @@ pub async fn settings_set(
 
     if key == "orchestration.subagent_pool" || key.starts_with("orchestration.subagent_pool.") {
         return Err("子代理候选池只能通过带 revision 的原子保存接口修改".to_string());
+    }
+    // 旧 first_round_* 实验档位：客户设置已移除（docs §15.2）。legacy 输入只返回
+    // 明确诊断警告，不得静默映射为新 Plan 语义。
+    if key == "orchestration.first_round_catalog" || key == "orchestration.first_round_promote_on" {
+        return Err(format!(
+            "“{key}”是已下线的未发布实验字段：首轮工具清单锚定实验已被 Plan 入口建议与 Plan 原生目录取代，该字段不再生效。旧值只作 legacy 输入告警，不会迁移。"
+        ));
     }
     let _mutation_guard = state.subagent_config_mutations.lock().await;
 
@@ -26668,81 +26853,44 @@ input.on('line', (line) => {
     }
 
     #[tokio::test]
-    async fn settings_set_persists_request_audit_and_first_round_anchoring() {
+    async fn settings_set_persists_diagnostics_and_planning_preference() {
         let (_dir, state) = setup_state();
         settings_set(&state, "diagnostics.request_audit", serde_json::json!(true))
             .await
             .unwrap();
+        // 客户偏好只有一个布尔开关（docs §15.1）；默认关闭直到发布硬门通过。
         settings_set(
             &state,
-            "orchestration.first_round_catalog",
-            serde_json::json!("readonly"),
-        )
-        .await
-        .unwrap();
-        settings_set(
-            &state,
-            "orchestration.first_round_promote_on",
-            serde_json::json!("tool_call"),
+            "planning.suggest_complex_tasks",
+            serde_json::json!(true),
         )
         .await
         .unwrap();
 
         let payload = settings_get(&state).await.unwrap();
         assert_eq!(payload["config"]["diagnostics"]["request_audit"], true);
-        assert_eq!(
-            payload["config"]["orchestration"]["first_round_catalog"],
-            "readonly"
-        );
-        assert_eq!(
-            payload["config"]["orchestration"]["first_round_promote_on"],
-            "tool_call"
-        );
+        assert_eq!(payload["config"]["planning"]["suggest_complex_tasks"], true);
         let raw = std::fs::read_to_string(state.config_dir.join("config.toml")).unwrap();
         assert!(raw.contains("request_audit = true"));
-        assert!(raw.contains("first_round_catalog = \"readonly\""));
+        assert!(raw.contains("suggest_complex_tasks = true"));
 
-        // 未知枚举必须被类型化往返拒绝，且不能落盘覆盖已保存的合法值。
-        let error = settings_set(
-            &state,
+        // 旧 first_round_* 实验档位只返回明确诊断警告，不得静默映射或落盘。
+        for key in [
             "orchestration.first_round_catalog",
-            serde_json::json!("everything"),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error.contains("unknown variant"),
-            "unexpected error: {error}"
-        );
+            "orchestration.first_round_promote_on",
+        ] {
+            let error = settings_set(&state, key, serde_json::json!("plan_gate"))
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("已下线的未发布实验字段"),
+                "unexpected error: {error}"
+            );
+        }
         let after = settings_get(&state).await.unwrap();
         assert_eq!(
             after["config"]["orchestration"]["first_round_catalog"],
-            "readonly"
-        );
-
-        // 规划门档位与 plan_complete 晋升信号经同一通用点路径透传往返。
-        settings_set(
-            &state,
-            "orchestration.first_round_catalog",
-            serde_json::json!("plan_gate"),
-        )
-        .await
-        .unwrap();
-        settings_set(
-            &state,
-            "orchestration.first_round_promote_on",
-            serde_json::json!("plan_complete"),
-        )
-        .await
-        .unwrap();
-        let gated = settings_get(&state).await.unwrap();
-        assert_eq!(
-            gated["config"]["orchestration"]["first_round_catalog"],
-            "plan_gate"
-        );
-        assert_eq!(
-            gated["config"]["orchestration"]["first_round_promote_on"],
-            "plan_complete"
+            "full"
         );
     }
 
@@ -27461,261 +27609,43 @@ kind = "codex_cli"
             .unwrap();
     }
 
-    /// 阶段 C 冒烟的 cargo 级等价物（完成定义第 4 条）：审计 + readonly 锚定下
-    /// 跑短任务，核对（B1 配方 1/5 的程序化等价）首轮 tool_names 恰为只读五件套、
-    /// distinct tools_sha256 == 2（bootstrap 目录 + 完整目录）；改回 full 后新会话
-    /// 目录时间线恒定（与现状一致）。
+    /// M0-08 characterization：旧 first_round_* 实验档位已下线——即使配置里仍残留
+    /// legacy 值，Main 模式目录也不再收窄；Plan 入口建议不受其影响（docs §15.2）。
     #[tokio::test]
-    async fn first_round_readonly_smoke_end_to_end() {
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    async fn legacy_first_round_config_no_longer_narrows_main_catalog() {
         let (_dir, state) = setup_state();
         let workspace = scoped_test_workspace(&state).await;
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind anchoring smoke provider fixture");
-        let provider_addr = listener
-            .local_addr()
-            .expect("anchoring smoke provider address");
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    break;
-                };
-                tokio::spawn(async move {
-                    let mut request = Vec::with_capacity(4096);
-                    let mut chunk = [0_u8; 1024];
-                    let header_end = loop {
-                        if let Some(offset) =
-                            request.windows(4).position(|window| window == b"\r\n\r\n")
-                        {
-                            break offset + 4;
-                        }
-                        match stream.read(&mut chunk).await {
-                            Ok(0) | Err(_) => return,
-                            Ok(read) => request.extend_from_slice(&chunk[..read]),
-                        }
-                    };
-                    let content_length = String::from_utf8_lossy(&request[..header_end])
-                        .lines()
-                        .filter_map(|line| line.split_once(':'))
-                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-                        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    while request.len() < header_end.saturating_add(content_length) {
-                        match stream.read(&mut chunk).await {
-                            Ok(0) | Err(_) => return,
-                            Ok(read) => request.extend_from_slice(&chunk[..read]),
-                        }
-                    }
-                    let body = concat!(
-                        "data: {\"choices\":[{\"delta\":{\"content\":\"anchored\"},\"finish_reason\":null}]}\n\n",
-                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-                        "data: [DONE]\n\n"
-                    );
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    let _ = stream.write_all(response.as_bytes()).await;
-                    let _ = stream.shutdown().await;
-                });
-            }
-        });
-        let provider_name = format!("r-code-anchor-smoke-{}", uuid::Uuid::new_v4());
-        settings_save_provider(
-            &state,
-            ProviderSettingsInput {
-                name: provider_name.clone(),
-                provider_kind: None,
-                base_url: format!("http://{provider_addr}/v1"),
-                model: "test-model".into(),
-                api_key: Some("sk-anchor-smoke".into()),
-                max_tokens: Some(2048),
-                temperature: Some(0.2),
-                protocol: None,
-                show_reasoning: None,
-                activate: Some(true),
-            },
-        )
-        .await
-        .unwrap();
-        // 开审计 + readonly 锚定（[orchestration] 段以默认值落盘，直接替换值）。
+        // 直接在全局配置写入 legacy 值（绕过 settings_set 的诊断告警），模拟旧
+        // 安装升级后 config.toml 的残留状态。
         let config_path = state.config_dir.join("config.toml");
-        let config_toml = std::fs::read_to_string(&config_path).unwrap();
-        assert!(config_toml.contains("request_audit = false"));
-        assert!(config_toml.contains("first_round_catalog = \"full\""));
+        std::fs::create_dir_all(&state.config_dir).unwrap();
         std::fs::write(
             &config_path,
-            config_toml
-                .replace("request_audit = false", "request_audit = true")
-                .replace(
-                    "first_round_catalog = \"full\"",
-                    "first_round_catalog = \"readonly\"",
-                ),
+            "first_round_catalog = \"readonly\"
+[planning]
+suggest_complex_tasks = false
+",
         )
         .unwrap();
-        state.agent.enable_real_mode();
 
-        let settle = |task_id: String| {
-            let state = &state;
-            async move {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-                loop {
-                    let detail = task_detail(state, &task_id).await.unwrap();
-                    if matches!(detail.task.state, TaskState::Idle | TaskState::ReviewReady) {
-                        return;
-                    }
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "anchoring smoke run did not settle; state = {:?}",
-                        detail.task.state
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-        };
+        let task = task_create(&state, Some(&workspace), "Legacy", "g", "edit")
+            .await
+            .unwrap();
+        agent_send(&state, &task.id, "plain goal").await.unwrap();
 
-        // 短任务：两条消息 = 两个 run。run1 首轮受限（纯文字首答，either 晋升），
-        // run2 首轮已恢复完整目录 → distinct tools_sha256 恰为 2。
-        let task = task_create(&state, Some(&workspace), "Anchoring", "g", "edit")
+        // Legacy 值不得静默映射为新语义：任务保持原模式（收窄实验不再生效，
+        // Plan 入口建议也未被 legacy 配置意外武装）。
+        let detail = task_detail(&state, &task.id).await.unwrap();
+        assert_eq!(detail.task.mode, TaskMode::Edit);
+        assert!(detail.pending_plan_entry_offer.is_none());
+        // propose 工具不受 legacy 配置影响：客户开关关闭 + 无证据 manifest 时
+        // 资格恒为关闭（release state off）。
+        let status = crate::plan_entry_commands::planning_status(&state)
             .await
             .unwrap();
-        agent_send(&state, &task.id, "anchoring smoke goal")
-            .await
-            .unwrap();
-        settle(task.id.clone()).await;
-        agent_send(&state, &task.id, "follow up").await.unwrap();
-        settle(task.id.clone()).await;
-
-        let sidecar = state
-            .sessions_dir
-            .join("request-audit")
-            .join(format!("{}.jsonl", task.id));
-        let sidecar_jsonl = tokio::fs::read_to_string(&sidecar).await.unwrap();
-        let headers: Vec<serde_json::Value> = sidecar_jsonl
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .filter(|value| value.get("request_header").is_some())
-            .collect();
-        assert!(headers.len() >= 2, "两个 run 至少两枚 header");
-        let names = |index: usize| -> Vec<String> {
-            headers[index]["request_header"]["tool_names"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| name.as_str().unwrap_or_default().to_string())
-                .collect()
-        };
-        let first_names = names(0);
-        // 允许清单五件套 ∩ Main 策略真实目录：load_skill 不在
-        // workspace_tool_allowed 清单（Main 目录本就不暴露），交集恰为四个
-        // 只读探索工具——过滤是 retain 语义，清单是超集，行为正确。
-        assert_eq!(
-            first_names,
-            vec![
-                "glob".to_string(),
-                "list_files".to_string(),
-                "read_file".to_string(),
-                "search".to_string(),
-            ],
-            "首轮目录 = 只读允许清单与 Main 目录的交集（按名排序，P1-C）：{first_names:?}"
-        );
-        let full_names = names(1);
-        assert!(
-            full_names.len() > first_names.len(),
-            "晋升后的完整目录应大于五件套：{full_names:?}"
-        );
-        assert!(full_names.iter().any(|name| name == "edit"));
-        // B1 配方 5 的等价断言：distinct tools_sha256 == 2。
-        let mut shas: Vec<String> = headers
-            .iter()
-            .map(|header| {
-                header["request_header"]["tools_sha256"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string()
-            })
-            .collect();
-        shas.sort();
-        shas.dedup();
-        assert_eq!(
-            shas.len(),
-            2,
-            "distinct tools_sha256 应恰为 2（bootstrap 目录 + 完整目录）"
-        );
-
-        // 改回 full：新会话目录时间线恒定（与现状一致）。
-        let config_toml = std::fs::read_to_string(&config_path).unwrap();
-        std::fs::write(
-            &config_path,
-            config_toml.replace(
-                "first_round_catalog = \"readonly\"",
-                "first_round_catalog = \"full\"",
-            ),
-        )
-        .unwrap();
-        let control = task_create(&state, Some(&workspace), "Control", "g", "edit")
-            .await
-            .unwrap();
-        agent_send(&state, &control.id, "control goal")
-            .await
-            .unwrap();
-        settle(control.id.clone()).await;
-        agent_send(&state, &control.id, "control follow up")
-            .await
-            .unwrap();
-        settle(control.id.clone()).await;
-        let control_jsonl = tokio::fs::read_to_string(
-            state
-                .sessions_dir
-                .join("request-audit")
-                .join(format!("{}.jsonl", control.id)),
-        )
-        .await
-        .unwrap();
-        let control_headers: Vec<serde_json::Value> = control_jsonl
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .filter(|value| value.get("request_header").is_some())
-            .collect();
-        assert!(control_headers.len() >= 2);
-        let control_names = |index: usize| -> Vec<String> {
-            control_headers[index]["request_header"]["tool_names"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| name.as_str().unwrap_or_default().to_string())
-                .collect()
-        };
-        assert_eq!(
-            control_names(0),
-            control_names(1),
-            "full（现状）下目录时间线必须恒定"
-        );
-        assert_eq!(
-            control_names(0),
-            full_names,
-            "对照组首轮即完整目录，与实验组晋升后的目录一致"
-        );
-        let mut control_shas: Vec<String> = control_headers
-            .iter()
-            .map(|header| {
-                header["request_header"]["tools_sha256"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string()
-            })
-            .collect();
-        control_shas.sort();
-        control_shas.dedup();
-        assert_eq!(control_shas.len(), 1, "full 下 distinct 目录数恒为 1");
-        SettingsService::new(state.config_dir.clone())
-            .set_provider_secret(&provider_name, "")
-            .unwrap();
+        assert_eq!(status.release_state, "off");
+        assert!(!status.evidence_validated);
     }
 
     #[tokio::test]

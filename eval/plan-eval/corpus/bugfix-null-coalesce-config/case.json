@@ -1,0 +1,8 @@
+{
+  "id": "bugfix-null-coalesce-config",
+  "category": "bugfix",
+  "task": "修复配置合并缺陷：`lib/config.js` 在用户配置缺省时把嵌套默认值整段覆盖为 undefined，`lib/service.js` 读取 server.port 时因此抛错。要求缺省字段逐级回退默认值，并保持显式 null 被保留的既有语义。",
+  "expected_signals": [
+    "multi_subsystem"
+  ]
+}

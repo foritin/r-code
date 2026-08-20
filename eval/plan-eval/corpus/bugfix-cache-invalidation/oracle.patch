@@ -1,0 +1,12 @@
+diff --git a/lib/cache.js b/lib/cache.js
+index 4e56b74..efd50bc 100644
+--- a/lib/cache.js
++++ b/lib/cache.js
+@@ -2,6 +2,6 @@ const store = new Map();
+ 
+ export const cache = {
+   get(key) { return store.get(key); },
+-  set(key, value) { store.set(key + "#", value); },
++  set(key, value) { store.set(key, value); },
+   size() { return store.size; },
+ };

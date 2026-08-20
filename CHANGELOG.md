@@ -8,6 +8,16 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ### Added
 
+- DeepSeek 复杂任务 Plan 建议（Phase 0，默认关闭、证据门控）：DeepSeek 主代理识别到复杂请求时可调用新工具 `propose_plan_mode` 提交受控信号（multi_subsystem / migration_or_data / design_decision / expensive_rollback / multi_stage_verification），宿主按固定本地化模板生成客户弹窗——「直接继续 / 先制定计划」二选一，拒绝（含关闭与 Escape）后同任务分支持久安静、仍可手动选择 Plan；建议以 SQLite `plan_entry_offers` 聚合持久化（同请求键唯一、同分支一次预算、revision CAS、Provider 快照比对 supersede、崩溃窗口显式重试），接受事务原子完成建 Plan、切模式与续接。同一真实请求获得稳定 `origin_request_key`（direct/queued/steer/host-continuation 全路径），普通客户设置只新增一个 DeepSeek 专属开关 `planning.suggest_complex_tasks`；「Plan 模式会做什么」指引手册可从弹窗、DeepSeek 设置卡与 Help 菜单打开（替换决策弹窗而非叠加）。
+- Plan 原生双轨（DeepSeek 证据门控）：符合条件的 DeepSeek Plan 冻结 5→8 只读目录（bootstrap：glob/plan_publish/read_file/request_user_input/search_files；resident 追加 git_status/list_files/load_skill）与最小上下文（不注入本地时钟、委派说明与 memory），目录阶段以 `plans.catalog_phase` 为权威、经宿主 CAS 确认持久化后才允许下一轮请求，clear context/fork/重启不回退；执行硬门保持原生状态机（只读调查 → plan_publish → 用户批准 → 实施），隐藏的 edit/Shell/MCP/委派调用在副作用前硬拒。Plan 运行 profile 在创建时冻结（UI plan_create / 显式 enter_plan_mode / 建议接受共用同一 resolver），其他 Provider 与子代理不受影响。
+- 真实 DeepSeek 三臂评估基建（`eval/plan-eval/`）：25 个冻结 case（5 类 × 5，初始测试红 / oracle patch 绿）+ 40 个路由 probe（20 simple + 20 complex），预注册发布门与 corpus sha256 锁；`plan_eval` 二进制提供 eval-only 自动 accept/approve 的三臂/路由运行器（非 dry-run 只认原生 DeepSeek，dry-run 记录不得作为证据）；`score.mjs` 只消费 raw results 生成 manifest，`verify-manifest.mjs` 独立重算每个数字；manifest 经 `build.rs` 嵌入并由 `plan_policy` 运行时重验，未通过前 validated 恒为关闭。
+
+### Changed
+
+- 自动复杂度路由不再调用 `enter_plan_mode`：该工具只保留给用户显式选择 Plan 或明确要求先做结构化计划的路径；Agent 模式提示词按建议资格分档（eligible DeepSeek 注入建议策略，其余保持显式入口）。
+- 旧 `first_round_*` 实验档位从客户设置移除：`orchestration.first_round_catalog` / `first_round_promote_on` 仍可解析但写入时返回明确诊断警告，不再映射为新语义；首轮工具清单锚定实验（含 `plan_ready` 规划门）整体下线，Plan 原生目录取而代之。
+
+
 - 请求信封审计（诊断，默认关闭）：新增配置 `diagnostics.request_audit`，开启后每轮模型派发前向 `sessions/request-audit/{会话id}.jsonl` 追加旁路快照（system/tools/messages 指纹、工具清单名单、hosted 工具与实际派发的输出预算），并做重建自检（只记录不阻断）；canonical 会话文件与既有读者零改动。配套只读命令 `request_audit_counters` 可读取（追加数, 不一致数）计数。「设置 → 诊断」新增「请求构成审计」开关。
 - 首轮工具清单锚定实验（opt-in，默认关闭）：新增配置 `orchestration.first_round_catalog`（`full` 默认/`readonly`/`editor_pair`）与 `orchestration.first_round_promote_on`（`either` 默认/`tool_call`）。非默认值时主代理首轮只看到收窄的工具清单（每次请求携带的 tools 菜单，与项目文件夹无关），首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单，会话级粘性保证每会话至多一次清单变化；清单裁剪只是呈现层，工具执行与审批边界不变。「设置 → Agent 编排」新增「首轮工具清单锚定（实验）」卡片。
 - 子代理派生确认回路：新增 `plan_subagents` 工具，主代理要并行开出第 2 个及更多子代理前，必须先提交「每个方向一条条目」的计划并带 `confirm` 确认；运行时返回数量、角色槽位分布与同角色警告的分析，超出确认计划的 `delegate_task` 会被拒绝并引导修订计划。首个子代理仍可直接派生，子代理受阻时开孙代理（深度 2）的能力保持不变。

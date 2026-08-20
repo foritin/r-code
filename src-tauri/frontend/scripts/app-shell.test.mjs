@@ -1565,17 +1565,17 @@ test("first-round catalog anchor rows surface from journal events and live strea
     const history = buildTimeline(
       [
         { kind: "message", id: "u1", role: "user", text: "任务目标" },
-        anchorSystem("anchor-1", { phase: "narrowed", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
+        anchorSystem("anchor-1", { phase: "narrowed", catalog: "plan_native", tool_count: 5, full_tool_count: 18 }),
         { kind: "message", id: "a1", role: "assistant", text: "先看一下再动手" },
-        anchorSystem("anchor-2", { phase: "promoted", catalog: "readonly", tool_count: 6, full_tool_count: 18 }),
+        anchorSystem("anchor-2", { phase: "promoted", catalog: "plan_native", tool_count: 8, full_tool_count: 18 }),
       ],
       [], [], new Date().toISOString(),
     );
     const live = applyAgentEvent([], {
       type: "catalog_anchor",
       phase: "narrowed",
-      catalog: "editor_pair",
-      tool_count: 2,
+      catalog: "plan_native",
+      tool_count: 5,
       full_tool_count: 18,
     }, 1, () => "live-anchor");
     return {
@@ -1584,12 +1584,12 @@ test("first-round catalog anchor rows surface from journal events and live strea
     };
   });
   assert.deepEqual(contract.history, [
-    ["本轮工具清单已收窄（首个模型回合）", "只读清单 · 仅 6 / 18 个工具"],
-    ["首个模型回合已结束 · 工具清单恢复完整", "此后 18 个工具，本会话内不再变化"],
-  ], "journal 回放路径必须渲染收窄与晋升两行");
+    ["Plan 原生目录已收敛", "Plan 原生目录 · 仅 5 / 18 个工具"],
+    ["Plan 目录晋升 resident", "此后 8 / 18 个工具（只读，不恢复完整目录）"],
+  ], "journal 回放路径必须渲染 plan_native 收敛与晋升两行");
   assert.deepEqual(contract.live, [
-    ["本轮工具清单已收窄（首个模型回合）", "读写最小对 · 仅 2 / 18 个工具"],
-  ], "实时事件路径必须立即出现收窄行");
+    ["Plan 原生目录已收敛", "Plan 原生目录 · 仅 5 / 18 个工具"],
+  ], "实时事件路径必须立即出现收敛行");
   await page.close();
 });
 
@@ -3723,106 +3723,184 @@ test("agent coordination prompts can be edited, saved, and restored", async () =
   }
 });
 
-test("request audit toggle and first-round anchoring expose the diagnostics experiments", async () => {
+test("planning suggestion card only appears for eligible deepseek with validated evidence", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   const original = await page.evaluate(async () => {
     const { browserMockSettings } = await import("/src/lib/mock-data.ts");
     return structuredClone({
-      diagnostics: browserMockSettings.config.diagnostics,
-      orchestration: browserMockSettings.config.orchestration,
+      planning: browserMockSettings.config.planning,
     });
   });
 
   try {
     await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.getByRole("button", { name: "Agent 编排", exact: true }).click();
-    await page.getByRole("heading", { name: "首轮工具清单锚定（实验）", exact: true })
+
+    // 证据未通过：卡片可见但开关不可启用，提示「功能仍在验证中」。
+    await page.getByRole("heading", { name: "复杂任务先建议制定计划", exact: true })
       .waitFor({ state: "visible" });
+    assert.equal(await page.locator("#set-planning-suggest").isDisabled(), true,
+      "evidence-pending providers cannot enable the customer switch");
+    assert.match(await page.locator("#planning-suggestion-block .hint").textContent(),
+      /功能仍在验证中/);
 
-    const catalog = page.locator("#set-first-round-catalog");
-    const promote = page.locator("#set-first-round-promote");
-    assert.equal(await catalog.inputValue(), "full");
-    assert.equal(await promote.isDisabled(), true,
-      "promote-on stays inert while the catalog is not anchoring");
-
-    await catalog.selectOption("readonly");
-    await page.waitForFunction(() => {
-      const select = document.querySelector("#set-first-round-promote");
-      return select instanceof HTMLSelectElement && !select.disabled;
+    // 证据通过后：开关可启用并持久化到 planning.suggest_complex_tasks。
+    await page.evaluate(async () => {
+      const { setBrowserMockPlanningStatus } = await import("/src/lib/browser-mock-runtime.ts");
+      setBrowserMockPlanningStatus({
+        release_state: "validated",
+        emergency_off: false,
+        evidence_version: "test-1",
+        eligibility_profile_version: "deepseek-plan-v1",
+        customer_card_visible: true,
+        evidence_validated: true,
+        basis: "test",
+      });
     });
-    await promote.selectOption("tool_call");
+    await page.locator("#planning-suggestion-block .guide-link").click();
+    await page.getByRole("dialog", { name: "Plan 模式与复杂任务建议" }).waitFor({ state: "visible" });
+    // 指引手册四件事：没有 catalog / 工具 schema / 证据统计等内部术语。
+    const guideText = await page.locator(".guide-dialog").textContent();
+    for (const banned of ["catalog", "plan_ready", "bootstrap", "resident", "profile version"]) {
+      assert.ok(!guideText.includes(banned), `guide copy must not leak internal term: ${banned}`);
+    }
+    await page.keyboard.press("Escape");
+    await page.locator(".guide-dialog").waitFor({ state: "detached" });
 
-    const applied = await page.evaluate(async () => {
+    await page.evaluate(async () => {
+      const { setBrowserMockPlanningStatus } = await import("/src/lib/browser-mock-runtime.ts");
+      setBrowserMockPlanningStatus({
+        release_state: "validated",
+        emergency_off: false,
+        evidence_version: "test-1",
+        eligibility_profile_version: "deepseek-plan-v1",
+        customer_card_visible: true,
+        evidence_validated: true,
+        basis: "test",
+      });
+      window.dispatchEvent(new Event("r-code:planning-status-changed"));
+    });
+    await page.waitForFunction(() => {
+      const input = document.querySelector("#set-planning-suggest");
+      return input instanceof HTMLInputElement && !input.disabled;
+    });
+    const enabled = await page.locator("#set-planning-suggest").isEnabled();
+    assert.equal(enabled, true, "validated evidence unlocks the customer switch");
+    await page.locator("#set-planning-suggest").check();
+    await page.waitForFunction(async () => {
       const { settingsGet } = await import("/src/lib/ipc.ts");
       const { config } = await settingsGet(true);
-      return {
-        catalog: config.orchestration?.first_round_catalog,
-        promote: config.orchestration?.first_round_promote_on,
-      };
+      return config.planning?.suggest_complex_tasks === true;
     });
-    assert.equal(applied.catalog, "readonly");
-    assert.equal(applied.promote, "tool_call");
-
-    // 指引手册：入口在锚定卡标题行；Esc 关闭后焦点必须还给触发按钮。
-    const guideLink = page.getByRole("button", { name: /指引手册/ });
-    await guideLink.click();
-    const guide = page.getByRole("dialog", { name: "首轮工具清单锚定" });
-    await guide.waitFor({ state: "visible" });
-    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "关闭指引手册");
-    assert.equal(await guide.locator(".tier-card").count(), 3,
-      "tier cards must be generated from the same catalog option list as the select");
-    assert.match(await guide.locator(".tier-card.is-recommended").innerText(), /只读清单/);
-    // 排版回归：验证步骤里的 <strong>/<code>/.path-chip 必须随正文行内排布，
-    // 不能被序号列挤成一字一行的竖条。
-    const stepLayout = await guide.evaluate((dialog) => {
-      const strong = dialog.querySelector(".verify-steps li strong");
-      const chip = dialog.querySelector(".verify-steps .path-chip");
-      return {
-        strongWidth: strong?.getBoundingClientRect().width ?? 0,
-        chipWidth: chip?.getBoundingClientRect().width ?? 0,
-      };
-    });
-    assert.ok(stepLayout.strongWidth > 40,
-      `step text must flow inline, not squeeze into a narrow cell: ${stepLayout.strongWidth}`);
-    assert.ok(stepLayout.chipWidth > 200,
-      `the audit path chip must render as one inline block, not a vertical strip: ${stepLayout.chipWidth}`);
-    await page.keyboard.press("Escape");
-    await guide.waitFor({ state: "detached" });
-    await page.waitForFunction(() => document.activeElement?.classList.contains("guide-link"));
-
-    // 页脚动作：关闭手册 → 切到诊断页 → 审计卡闪烁定位并聚焦开关。
-    await guideLink.click();
-    await guide.waitFor({ state: "visible" });
-    await guide.getByRole("button", { name: "去开启请求构成审计" }).click();
-    await guide.waitFor({ state: "detached" });
-    await page.locator("#request-audit-block").waitFor({ state: "visible" });
-    await page.waitForFunction(() => document.querySelector("#request-audit-block")?.classList.contains("flash-target"));
-    await page.waitForFunction(() => document.activeElement?.id === "set-request-audit");
-
-    await page.getByRole("heading", { name: "请求构成审计", exact: true })
-      .waitFor({ state: "visible" });
-    const audit = page.locator("#set-request-audit");
-    assert.equal(await audit.isChecked(), false);
-    await audit.check();
-    await page.waitForFunction(() => {
-      const toggle = document.querySelector("#set-request-audit");
-      return toggle instanceof HTMLInputElement && toggle.checked;
-    });
-    const auditState = await page.evaluate(async () => {
-      const { settingsGet } = await import("/src/lib/ipc.ts");
-      return (await settingsGet(true)).config.diagnostics?.request_audit;
-    });
-    assert.equal(auditState, true);
   } finally {
-    await page.evaluate(async (value) => {
+    await page.evaluate(async (snapshot) => {
       const { browserMockSettings } = await import("/src/lib/mock-data.ts");
-      browserMockSettings.config.diagnostics = structuredClone(value.diagnostics);
-      browserMockSettings.config.orchestration = structuredClone(value.orchestration);
-    }, original).catch(() => {});
+      browserMockSettings.config.planning = snapshot.planning;
+      const { setBrowserMockPlanningStatus } = await import("/src/lib/browser-mock-runtime.ts");
+      setBrowserMockPlanningStatus({
+        release_state: "off",
+        emergency_off: false,
+        evidence_version: "",
+        eligibility_profile_version: "deepseek-plan-v1",
+        customer_card_visible: true,
+        evidence_validated: false,
+        basis: "reset",
+      });
+    }, original);
     await page.close();
   }
 });
+
+test("plan entry dialog stays two-action, swaps guide without stacking, and escapes like continue", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  // 打开演示任务房间
+  const firstTaskId = await page.evaluate(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const tasks = useTasksStore.getState().tasks;
+    return tasks.length > 0 ? tasks[0].id : "mock-task-queue";
+  });
+  await page.evaluate(async (taskId) => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().openRoom(taskId);
+  }, firstTaskId);
+  await page.getByRole("textbox", { name: "给 Agent 的消息" }).waitFor({ state: "visible" });
+
+  // 注入待决建议（mock 决定后自动清空）。
+  await page.evaluate(async () => {
+    const { setBrowserMockPlanEntryOffer } = await import("/src/lib/browser-mock-runtime.ts");
+    setBrowserMockPlanEntryOffer({
+      id: "offer-test-1",
+      task_id: "mock-task-queue",
+      revision: 1,
+      state: "pending",
+      customer_copy: {
+        lead: "它涉及多个相互关联的改动。",
+        suffix: "先制定计划可以让你确认范围和顺序，再开始修改。",
+        quiet_note: "选择直接继续后，本任务不再主动弹出；你仍可随时手动选择 Plan。",
+        version: 1,
+      },
+      notice: null,
+      continuation_state: "none",
+    });
+  });
+  const dialog = page.getByRole("dialog", { name: "这个任务适合先列个计划" });
+  await dialog.waitFor({ state: "visible" });
+
+  // 客户文案只来自固定模板：不得出现内部 signal / 工具 / 目录 / reason 词。
+  const dialogText = await dialog.textContent();
+  for (const banned of ["multi_subsystem", "plan_ready", "catalog", "reason", "offer", "revision"]) {
+    assert.ok(!dialogText.includes(banned), `customer dialog must not leak internal term: ${banned}`);
+  }
+  // 初始焦点在推荐主动作「先制定计划」。
+  await page.waitForFunction(() => document.activeElement instanceof HTMLButtonElement
+    && document.activeElement.textContent?.trim() === "先制定计划");
+
+  // 打开手册：替换而非叠加（同一时刻只有一个 aria-modal）。
+  await dialog.getByRole("button", { name: "Plan 模式会做什么？" }).click();
+  const guide = page.getByRole("dialog", { name: "Plan 模式与复杂任务建议" });
+  await guide.waitFor({ state: "visible" });
+  await dialog.waitFor({ state: "detached", timeout: 2000 }).catch(() => {});
+  const modalCount = await page.locator('[aria-modal="true"]').count();
+  assert.equal(modalCount, 1, "guide replaces the decision dialog instead of stacking");
+
+  // 手册 Escape 只关闭手册，不代表拒绝；焦点回到「Plan 模式会做什么？」。
+  await page.keyboard.press("Escape");
+  await guide.waitFor({ state: "detached" });
+  await dialog.waitFor({ state: "visible" });
+  await page.waitForFunction(() => document.activeElement instanceof HTMLButtonElement
+    && document.activeElement.textContent?.includes("Plan 模式会做什么"));
+
+  // 决策弹窗 Escape 等价于「直接继续」：offer 清空、弹窗消失。
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  const cleared = await page.evaluate(async () => {
+    const { taskDetail } = await import("/src/lib/ipc.ts");
+    const detail = await taskDetail("mock-task-queue").catch(() => null);
+    return detail?.pending_plan_entry_offer ?? null;
+  });
+  assert.equal(cleared, null, "escape must decide (continue) instead of leaving an ambiguous pending state");
+
+  await page.evaluate(async () => {
+    const { setBrowserMockPlanEntryOffer } = await import("/src/lib/browser-mock-runtime.ts");
+    setBrowserMockPlanEntryOffer(null);
+  });
+  await page.close();
+});
+
+test("help menu opens the plan guide from anywhere and closes back", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "帮助", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Plan 模式与复杂任务建议" }).click();
+  const guide = page.getByRole("dialog", { name: "Plan 模式与复杂任务建议" });
+  await guide.waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await guide.waitFor({ state: "detached" });
+  await page.close();
+});
+
 
 test("project prompts merge explicitly and project Skills promote into inherited global Skills", async () => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });

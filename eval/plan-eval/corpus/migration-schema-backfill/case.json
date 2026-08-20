@@ -1,0 +1,8 @@
+{
+  "id": "migration-schema-backfill",
+  "category": "migration",
+  "task": "实现缺失字段回填迁移：`lib/backfill.js` 的 backfill(posts) 给所有缺 slug 的文章生成稳定 slug（标题小写、非字母数字转 -、去重加序号），`lib/index.js` 的 buildIndex 要求全部条目都有 slug。",
+  "expected_signals": [
+    "migration_or_data"
+  ]
+}

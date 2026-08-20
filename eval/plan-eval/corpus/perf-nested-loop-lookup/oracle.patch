@@ -1,0 +1,25 @@
+diff --git a/lib/matcher.js b/lib/matcher.js
+index 7584c26..58cf574 100644
+--- a/lib/matcher.js
++++ b/lib/matcher.js
+@@ -1,9 +1,17 @@
+ export function buildMatcher(resources) {
++  const index = new Map();
++  for (const resource of resources) {
++    for (const tag of resource.tags) {
++      const key = tag.toLowerCase();
++      const bucket = index.get(key) ?? [];
++      bucket.push(resource.id);
++      index.set(key, bucket);
++    }
++  }
+   return {
+     matchTags(tag) {
+-      return resources.filter((resource) =>
+-        resource.tags.some((candidate) => candidate.toLowerCase() === tag.toLowerCase())
+-      ).map((resource) => resource.id);
++      return index.get(tag.toLowerCase()) ?? [];
+     },
++    indexed() { return true; },
+   };
+ }

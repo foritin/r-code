@@ -1,0 +1,8 @@
+{
+  "id": "perf-batched-writes",
+  "category": "performance",
+  "task": "优化 `lib/writer.js` 的逐条写入：writeEach 每条一次 sink。改为缓冲批量提交（保留顺序），`lib/pipeline.js` 的 runPipeline 在结尾必须 flushBuffer 保证全部落盘。",
+  "expected_signals": [
+    "multi_stage_verification"
+  ]
+}

@@ -120,4 +120,5 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 objc2-vision = { version = "0.3.2", default-features = false, features = ["std", "VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler"] }
 
 [build-dependencies]
+serde_json = { workspace = true }
 tauri-build = { workspace = true }

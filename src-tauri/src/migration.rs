@@ -592,6 +592,22 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 31,
+            to_version: 32,
+            description: "Plan entry suggestion infrastructure: origin request envelopes,                           plan_entry_offers, plan suggestion branch states, queued request keys"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 32,
+            to_version: 33,
+            description: "Frozen plan runtime profile columns and authoritative catalog phase"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
@@ -656,10 +672,11 @@ mod tests {
     }
 
     fn downgrade_latest_schema_to_previous(conn: &Connection) {
+        // 上一版本边界 = TARGET-1：撤销最后一个迁移的全部痕迹（列 + 版本标记）。
         conn.execute_batch(
-            "ALTER TABLE agent_runs DROP COLUMN checkpoint_base_head;
-             ALTER TABLE agent_runs DROP COLUMN checkpoint_sha;
-             ALTER TABLE agent_runs DROP COLUMN guard_trip;",
+            "ALTER TABLE plans DROP COLUMN profile_version;
+             ALTER TABLE plans DROP COLUMN catalog_phase;
+             ALTER TABLE plans DROP COLUMN runtime_profile_json;",
         )
         .unwrap();
         conn.execute(
@@ -667,9 +684,12 @@ mod tests {
             [TARGET_VERSION],
         )
         .unwrap();
-        assert!(!column_exists(conn, "agent_runs", "checkpoint_base_head"));
-        assert!(!column_exists(conn, "agent_runs", "checkpoint_sha"));
-        assert!(!column_exists(conn, "agent_runs", "guard_trip"));
+        assert!(!column_exists(conn, "plans", "runtime_profile_json"));
+        assert!(!column_exists(conn, "plans", "catalog_phase"));
+        assert!(!column_exists(conn, "plans", "profile_version"));
+        // v32/v31 及更早的迁移保持原样（含 Plan 入口基础设施表）。
+        assert!(column_exists(conn, "plan_entry_offers", "request_key"));
+        assert!(column_exists(conn, "agent_runs", "checkpoint_base_head"));
     }
 
     // ── current_version / needs_migration ─────────────────────────
@@ -824,13 +844,18 @@ mod tests {
             "plan_question_sets",
             "restore_mode"
         ));
-        assert!(!column_exists(&restored, "agent_runs", "guard_trip"));
-        assert!(!column_exists(&restored, "agent_runs", "checkpoint_sha"));
-        assert!(!column_exists(
+        // 上一版本边界 = TARGET-1：v31/v32 迁移已存在（含 guard_trip 与 Plan 入口
+        // 基础设施表），只有最后的 v33 profile 列被回滚。
+        assert!(column_exists(&restored, "agent_runs", "guard_trip"));
+        assert!(column_exists(&restored, "agent_runs", "checkpoint_sha"));
+        assert!(column_exists(
             &restored,
             "agent_runs",
             "checkpoint_base_head"
         ));
+        assert!(column_exists(&restored, "plan_entry_offers", "request_key"));
+        assert!(!column_exists(&restored, "plans", "runtime_profile_json"));
+        assert!(!column_exists(&restored, "plans", "catalog_phase"));
     }
 
     #[tokio::test]

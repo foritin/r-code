@@ -1,0 +1,14 @@
+diff --git a/lib/pager.js b/lib/pager.js
+index 87d952c..0adf7f3 100644
+--- a/lib/pager.js
++++ b/lib/pager.js
+@@ -1,7 +1,7 @@
+ export const PAGE_SIZE = 20;
+ export function pageToOffset(page) {
+-  // page is 1-based
+-  return (page - 2) * PAGE_SIZE;
++  // page is 1-based: the first page starts at zero.
++  return (page - 1) * PAGE_SIZE;
+ }
+ export function clampPage(page, totalItems) {
+   const maxPage = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));

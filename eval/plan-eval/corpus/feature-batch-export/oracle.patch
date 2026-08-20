@@ -1,0 +1,40 @@
+diff --git a/lib/exporter.js b/lib/exporter.js
+new file mode 100644
+index 0000000..d960802
+--- /dev/null
++++ b/lib/exporter.js
+@@ -0,0 +1,15 @@
++function csvCell(value) {
++  const text = String(value ?? "");
++  return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
++}
++
++export function toCsv(records) {
++  if (records.length === 0) return "";
++  const headers = Object.keys(records[0]);
++  const lines = records.map((record) => headers.map((key) => csvCell(record[key])).join(","));
++  return [headers.join(","), ...lines].join("\n");
++}
++
++export function toJsonl(records) {
++  return records.map((record) => JSON.stringify(record)).join("\n");
++}
+diff --git a/lib/repo.js b/lib/repo.js
+index 6a47003..882e516 100644
+--- a/lib/repo.js
++++ b/lib/repo.js
+@@ -1,7 +1,14 @@
++import { toCsv, toJsonl } from "./exporter.js";
++
+ export function makeRepo() {
+   const items = [];
+   return {
+     add(item) { items.push(item); return items.length; },
+     all() { return [...items]; },
++    exportAs(format) {
++      if (format === "csv") return toCsv(items);
++      if (format === "jsonl") return toJsonl(items);
++      throw new Error("unknown format: " + format);
++    },
+   };
+ }

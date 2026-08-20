@@ -1343,6 +1343,10 @@ pub struct QueuedMessage {
     /// 排队附件的 JSON 序列化载荷；为空表示纯文本消息。
     #[serde(default)]
     pub attachments_json: Option<String>,
+    /// 创建该排队消息的宿主请求键（docs/plan-mode-dual-track-gate.md §10）。
+    /// 领取分发时继承同一真实请求身份（host continuation 语义）。
+    #[serde(default)]
+    pub request_key: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1357,6 +1361,12 @@ impl QueuedMessage {
         Self::new_with_attachments(task_id, branch_id, message, priority, None)
     }
 
+    /// 为排队消息绑定宿主请求键（builder 风格，保持既有构造签名兼容）。
+    pub fn with_request_key(mut self, request_key: Option<String>) -> Self {
+        self.request_key = request_key;
+        self
+    }
+
     pub fn new_with_attachments(
         task_id: impl Into<String>,
         branch_id: impl Into<String>,
@@ -1366,6 +1376,7 @@ impl QueuedMessage {
     ) -> Self {
         let now = Utc::now();
         Self {
+            request_key: None,
             id: Uuid::new_v4().to_string(),
             task_id: task_id.into(),
             branch_id: branch_id.into(),

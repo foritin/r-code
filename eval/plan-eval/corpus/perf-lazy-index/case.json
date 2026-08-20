@@ -1,0 +1,8 @@
+{
+  "id": "perf-lazy-index",
+  "category": "performance",
+  "task": "把 `lib/catalog.js` 的即时全量索引改为惰性构建：makeCatalog 构造时不建索引，首次 findByTag 才构建一次并复用；`lib/shelf.js` 创建大量 catalog 后只查询少数的路径不再为每个 catalog 付费。",
+  "expected_signals": [
+    "multi_stage_verification"
+  ]
+}

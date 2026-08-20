@@ -1,0 +1,8 @@
+{
+  "id": "feature-batch-export",
+  "category": "feature",
+  "task": "实现批量导出：新增 `lib/exporter.js`（把记录数组导出为 CSV 与 JSONL 两种格式，处理转义），并在 `lib/repo.js` 增加 exportAs(records, format) 委托；非法 format 抛错。",
+  "expected_signals": [
+    "multi_subsystem"
+  ]
+}

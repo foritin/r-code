@@ -522,11 +522,59 @@ pub struct OrchestrationPolicy {
     pub quality_reviewer: QualityReviewer,
     pub max_review_rounds: u8,
     pub run_budget: RunBudgetPolicy,
-    /// C2：首轮目录锚定实验旋钮。类型直接复用 agent-config 枚举（不另造镜像），
-    /// 宿主在 ensure_real_runtime 组装点透传，且必须纳入 runtime 重建指纹。
-    pub first_round_catalog: agent_config::FirstRoundCatalog,
-    pub first_round_promote_on: agent_config::FirstRoundPromoteOn,
 }
+
+/// Plan 原生目录晋升钩子类型（宿主安装；docs §14.3）。
+pub type PlanCatalogPromotionHook = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+/// Plan 原生目录阶段（worker 侧镜像）。权威值在宿主 `plans.catalog_phase`；
+/// worker 只按宿主传入的阶段过滤目录，并在晋升钩子确认后本地推进。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanNativeCatalogPhase {
+    Bootstrap,
+    Resident,
+}
+
+/// Plan 原生 5→8 目录配置（docs §13.1）。由宿主按冻结 profile 传入；
+/// baseline Plan（None）保持现状完整目录。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanNativeCatalogConfig {
+    pub phase: PlanNativeCatalogPhase,
+}
+
+impl PlanNativeCatalogConfig {
+    /// 该阶段的允许清单（名称即派发字节，含 hosted 改名后的 search_files）。
+    pub fn allowlist(self) -> &'static [&'static str] {
+        match self.phase {
+            PlanNativeCatalogPhase::Bootstrap => PLAN_NATIVE_BOOTSTRAP_TOOLS,
+            PlanNativeCatalogPhase::Resident => PLAN_NATIVE_RESIDENT_TOOLS,
+        }
+    }
+}
+
+/// bootstrap 目录（精确 5 项，docs §13.1 轨道 A）。`search_files` 是 hosted
+/// web search 在场时本地 `search` 的派发别名；两者都放行，模型实际看到的名字
+/// 取决于别名状态，目录槽位不变。
+const PLAN_NATIVE_BOOTSTRAP_TOOLS: &[&str] = &[
+    "glob",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+    "search_files",
+];
+/// resident 目录（bootstrap + 3 个只读工具，精确 8 项；不恢复完整目录）。
+const PLAN_NATIVE_RESIDENT_TOOLS: &[&str] = &[
+    "git_status",
+    "glob",
+    "list_files",
+    "load_skill",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+    "search_files",
+];
 
 /// 用户可编辑的 Agent 协作提示。它只补充角色分工，不替代工具权限、工作区范围或
 /// 本轮显式禁用子代理等宿主硬边界。
@@ -588,8 +636,6 @@ impl Default for OrchestrationPolicy {
             quality_reviewer: QualityReviewer::RCode,
             max_review_rounds: 1,
             run_budget: RunBudgetPolicy::default(),
-            first_round_catalog: agent_config::FirstRoundCatalog::Full,
-            first_round_promote_on: agent_config::FirstRoundPromoteOn::Either,
         }
     }
 }
@@ -897,9 +943,12 @@ tool result for all subsequent work in the same run.\n{task_context}"
     ))
 }
 
-/// plan mode 策略文本作为**尾部 user 消息**注入（P0-A §5 方案 5），语义与原文案
-/// 完全一致，只是承载位置从 system 中段移到每轮尾部 user 消息。
-fn build_plan_mode_message(plan_mode: bool) -> Message {
+/// plan mode 策略文本作为**尾部 user 消息**注入（P0-A §5 方案 5）。
+///
+/// Agent 分支按建议资格分两档（docs §9）：eligible DeepSeek Run 注入复杂度建议
+/// 策略（propose_plan_mode 只建议、不切模式）；其余 Run 只保留显式 Plan 入口，
+/// 不注入复杂度建议策略（非 DeepSeek 的建议提示注入必须为 0）。
+fn build_plan_mode_message(plan_mode: bool, suggestion_enabled: bool) -> Message {
     let text = if plan_mode {
         "Plan mode is active. Investigate with read-only workspace tools and use the \
 host-provided Plan tools to clarify or publish the plan. Do not edit files, run shell commands, \
@@ -918,40 +967,33 @@ Codex CLI is installed and authenticated. If the user asks to invoke Codex in Pl
 this runtime boundary and continue planning directly; for that request, do not call `mcp_discover` or `suggest_mcp`, \
 and do not claim Codex is missing or unconfigured. An approved Plan may use the configured Codex \
 collaborator during its later implementation run."
+    } else if suggestion_enabled {
+        "Agent mode is active. The host can offer the user a one-time structured planning step for \
+complex requests. Judge the request while working normally, and if it is genuinely complex — it \
+spans multiple interdependent subsystems, involves data migration or protocol/persistence \
+compatibility, needs a design or product decision the user must approve, a wrong attempt is \
+expensive to roll back, or it cannot be verified safely in one pass — call `propose_plan_mode` once \
+with the matching signals and a short reason, then stop this run and wait; the host asks the user \
+whether to plan first. If the user explicitly asked for a structured plan, call `enter_plan_mode` \
+instead — explicit consent needs no second confirmation. Never call `propose_plan_mode` for a \
+single isolated fix, explanations, reviews, read-only checks, after the user said to work directly, \
+or twice for the same task; when unsure, keep working directly. Do not call `plan_publish` or \
+`request_user_input` from Agent mode."
     } else {
-        "Agent mode is active. Before making any writes, judge the request's complexity and act accordingly: \
-call `enter_plan_mode` before making changes when any of these hold: the change spans multiple \
-interdependent files, subsystems, or requires a migration; it needs a design tradeoff, impact \
-assessment, or a decision the user must approve before implementation; it cannot be verified safely \
-in one pass, or a failed attempt is expensive to roll back; or the user explicitly asked for a \
-plan. The host will end this Agent run and resume the same request in Plan mode. Otherwise, for a \
-single, isolated, immediately verifiable change, implement directly — do not plan for its own sake. \
+        "Agent mode is active. Implement the request directly. Call `enter_plan_mode` only when the \
+user explicitly asked for a structured plan first; do not interrupt simple work with planning. \
 Do not call `plan_publish` or `request_user_input` from Agent mode. Returning from Plan to Agent \
 requires explicit user approval of the published Plan."
     };
     Message::user_text(text)
 }
 
-/// 规划门（plan_complete 晋升信号）的每轮尾部指令：剥夺跨回合持续，模型
-/// 只能靠调用 plan_ready 关门。文案按目录档位区分——plan_gate 下零工作
-/// 工具，其余档位保留只读小集合。
-fn build_plan_gate_message(catalog: agent_config::FirstRoundCatalog) -> Message {
-    let text = if catalog == agent_config::FirstRoundCatalog::PlanGate {
-        "Planning gate is active. All workspace, web, and delegation tools are \
-withheld until you signal that planning is complete. Work through the request in \
-plain text: analyze it, decompose it, and write out a concrete plan with explicit \
-acceptance criteria. If information is missing, state your assumption and keep \
-planning. When — and only when — your plan is final, call the plan_ready tool; the \
-full tool catalog will be restored on the next round and you may execute directly."
-    } else {
-        "Planning gate is active. Write and delegation tools are withheld until \
-planning is complete; only a small read-only set remains available. Build your \
-understanding and write out a concrete plan with explicit acceptance criteria. \
-When — and only when — your plan is final, call the plan_ready tool; the full tool \
-catalog will be restored on the next round."
-    };
-    Message::user_text(text)
-}
+/// 复杂度建议策略的补充尾部指令：与 propose_plan_mode 目录注入同条件
+///（docs §9：任一资格条件不满足时，工具和提示同时缺席）。
+const PLAN_SUGGESTION_TAIL: &str = "Planning suggestion is available: for a genuinely complex \
+request call propose_plan_mode once with 1-5 matching signals and a short reason, then stop and \
+wait for the user. Modifying multiple files alone is not complexity; do not suggest planning for \
+isolated fixes, explanations, reviews, or after the user asked to work directly.";
 
 fn build_subagent_system_prompt(
     has_workspace_tools: bool,
@@ -1679,6 +1721,8 @@ pub struct LlmAgentRuntime {
     /// 1.3 自检观测计数（headers / mismatches）。自检只记录不阻断，计数供
     /// 宿主接线与单测断言「追加了几枚、误报了几次」，不参与任何控制流。
     request_self_check: Arc<RequestSelfCheckCounters>,
+    /// Plan 原生目录的晋升钩子（宿主安装；docs §14.3）。None 时不晋升。
+    plan_catalog_promotion: Option<PlanCatalogPromotionHook>,
 }
 
 struct SessionState {
@@ -1705,10 +1749,15 @@ struct SessionState {
     /// 用户在当前运行中显式关闭委派后立即锁存；工具执行阶段再次检查，避免 steer
     /// 与同一轮 provider 工具调用之间的竞态。
     delegation_disabled: Arc<AtomicBool>,
-    /// C：首轮目录锚定是否仍待晋升。会话级粘性：跨 run 保持，避免每个 run 的
-    /// 首轮都重付一次目录变化（缓存断点预算 ≤ 1/会话）；晋升后写 false 不再
-    /// 复位。进程内存态，重启后同会话首轮重新锚定（V1 接受，C3 登记后续项）。
-    catalog_bootstrap_pending: Arc<AtomicBool>,
+    /// Plan 入口建议是否可在本会话的主 run 中注册（docs §9）。宿主在每个 run
+    /// 启动前按资格（DeepSeek eligible + 客户开关 + branch 预算/安静 + 无既有
+    /// offer）刷新；工具目录注入与尾部建议策略同开关。
+    plan_suggestion_enabled: bool,
+    /// Plan 原生 5→8 目录配置（docs §13.1）。None = baseline（现状目录）；
+    /// Some 时按 catalog_phase 过滤派发目录并启用最小上下文。权威 phase 在
+    /// 宿主 plans.catalog_phase，宿主每次 run 启动前传入，task_clear_context/
+    /// fork/重启都不会让同一个 Plan 回退到 bootstrap。
+    plan_native_catalog: Option<PlanNativeCatalogConfig>,
     /// 工作区作用域。None 即纯聊天；附加后始终通过 PathGuard 限制本地工具。
     workspace_scope: Option<WorkspaceScope>,
     /// 当前主运行所拥有的子代理监督器；仅在运行期间存在。
@@ -1791,6 +1840,7 @@ impl LlmAgentRuntime {
             agent_prompts: AgentPromptPolicy::default(),
             request_journal: None,
             request_self_check: Arc::new(RequestSelfCheckCounters::default()),
+            plan_catalog_promotion: None,
         }
     }
 
@@ -1911,6 +1961,36 @@ impl LlmAgentRuntime {
         self
     }
 
+    /// 安装 Plan 原生目录的 bootstrap -> resident 晋升钩子（宿主侧完成
+    /// PlanStore CAS；docs §14.3）。钩子返回 Err 时 run_loop fail closed。
+    pub fn with_plan_catalog_promotion(mut self, hook: PlanCatalogPromotionHook) -> Self {
+        self.plan_catalog_promotion = Some(hook);
+        self
+    }
+
+    /// 宿主在每个 run 启动前刷新「本会话是否可注册 propose_plan_mode」
+    ///（docs §9：资格判断发生在注册工具和构建提示之前）。默认（未刷新）
+    /// 为 false：工具与建议提示同时缺席。
+    pub async fn update_plan_entry_suggestion(&mut self, session_id: &str, enabled: bool) {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.plan_suggestion_enabled = enabled;
+        }
+    }
+
+    /// 宿主在每个 Plan run 启动前传入冻结的原生目录配置与当前权威 phase
+    ///（来自 plans.catalog_phase；docs §14.3）。None 恢复 baseline 目录。
+    pub async fn update_plan_native_catalog(
+        &mut self,
+        session_id: &str,
+        config: Option<PlanNativeCatalogConfig>,
+    ) {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.plan_native_catalog = config;
+        }
+    }
+
     /// 热切换新的 Codex 子代理委派。监督器共享同一原子门，因此已经启动的子代理
     /// 继续完成，而之后的显式或自动 Codex 路由会立即改用 R-Code。
     pub fn set_cross_engine_delegation_enabled(&self, enabled: bool) {
@@ -1982,11 +2062,8 @@ impl AgentRuntime for LlmAgentRuntime {
                 accepting_steer: false,
                 abort: Arc::new(AtomicBool::new(false)),
                 delegation_disabled: Arc::new(AtomicBool::new(false)),
-                // C2：非 Full 目录策略才武装粘性标志；Full（默认）恒 false，
-                // 现有行为零变化。
-                catalog_bootstrap_pending: Arc::new(AtomicBool::new(
-                    self.orchestration.first_round_catalog != agent_config::FirstRoundCatalog::Full,
-                )),
+                plan_suggestion_enabled: false,
+                plan_native_catalog: None,
                 workspace_scope,
                 supervisor: None,
                 next_memory_context: None,
@@ -2016,7 +2093,8 @@ impl AgentRuntime for LlmAgentRuntime {
             inference,
             abort,
             delegation_disabled,
-            catalog_bootstrap_pending,
+            plan_suggestion_enabled,
+            plan_native_catalog,
             workspace_scope,
             mode,
             memory_context,
@@ -2046,7 +2124,8 @@ impl AgentRuntime for LlmAgentRuntime {
                 session.inference.clone(),
                 session.abort.clone(),
                 session.delegation_disabled.clone(),
-                session.catalog_bootstrap_pending.clone(),
+                session.plan_suggestion_enabled,
+                session.plan_native_catalog,
                 session.workspace_scope.clone(),
                 session.mode,
                 session.next_memory_context.take(),
@@ -2166,13 +2245,15 @@ impl AgentRuntime for LlmAgentRuntime {
             inference,
             abort,
             delegation_disabled,
-            catalog_bootstrap_pending,
+            plan_suggestion_enabled,
+            plan_native_catalog,
             workspace_scope,
             supervisor,
             suspension_gate,
             continuation_gate,
             orchestration: self.orchestration,
             agent_prompts: self.agent_prompts.clone(),
+            plan_catalog_promotion: self.plan_catalog_promotion.clone(),
             memory_context,
             request_journal: self.request_journal.clone(),
             request_self_check: self.request_self_check.clone(),
@@ -2511,9 +2592,14 @@ struct RunLoopCtx {
     inference: InferenceOptions,
     abort: Arc<AtomicBool>,
     delegation_disabled: Arc<AtomicBool>,
-    /// C：首轮目录锚定粘性标志（与 SessionState 共享同一 Arc，镜像
-    /// delegation_disabled 的共享方式）。
-    catalog_bootstrap_pending: Arc<AtomicBool>,
+    /// Plan 入口建议注册开关（宿主按 run 资格刷新；docs §9）。
+    plan_suggestion_enabled: bool,
+    /// Plan 原生 5→8 目录配置（None = baseline）。
+    plan_native_catalog: Option<PlanNativeCatalogConfig>,
+    /// 宿主安装的 bootstrap -> resident 晋升钩子：首次 durable outcome 后同步
+    /// 调用，宿主完成 PlanStore CAS 并确认持久化后才允许下一次 Provider 请求
+    ///（docs §14.3）。失败时 fail closed 终止 run。
+    plan_catalog_promotion: Option<PlanCatalogPromotionHook>,
     workspace_scope: Option<WorkspaceScope>,
     supervisor: Arc<SubagentSupervisor>,
     /// Per-run one-way gate set by a successful `suspend_for_user` tool directive.
@@ -3230,7 +3316,7 @@ const TAIL_LABEL_PEER_MESSAGES: &str = "peer_messages";
 const TAIL_LABEL_LOCAL_CLOCK: &str = "local_clock";
 const TAIL_LABEL_TASK_CONTEXT: &str = "task_context";
 const TAIL_LABEL_PLAN_MODE: &str = "plan_mode";
-const TAIL_LABEL_PLAN_GATE: &str = "plan_gate";
+const TAIL_LABEL_PLAN_SUGGESTION: &str = "plan_suggestion";
 const TAIL_LABEL_TOOL_PROGRESS_CHECKPOINT: &str = "tool_progress_checkpoint";
 const TAIL_LABEL_DELEGATION_HINT: &str = "delegation_hint";
 const TAIL_LABEL_WEB_FALLBACK_PROMPT: &str = "web_fallback_prompt";
@@ -3560,17 +3646,19 @@ fn emit_run_guard_trip(
 
 /// 多轮 agent loop：长工具任务仅接受阶段性软提醒，不按固定轮次终止；无工具回复
 /// 若在收尾临界点收到 steer，则原子地将其并入下一次模型请求，而不是提前结束 run。
-async fn run_loop(ctx: RunLoopCtx) {
+async fn run_loop(mut ctx: RunLoopCtx) {
     let mut terminal_err: Option<String> = None;
     let mut tool_iterations = 0usize;
     let mut quality_rounds = 0u8;
     let mut continuation_reprompts = 0usize;
     let mut summary_recovery_attempted = false;
     let mut summary_recovery_pending = false;
-    // C4：锚定可观察行——收窄只在首个受限派发广播一次；counts 记录
-    // (收窄数, 完整数) 供晋升行对照（pending 跨轮保持时避免重复广播）。
+    // Plan 原生目录可观察行——收窄只在首个受限派发广播一次；counts 记录
+    // (收窄数, 完整数) 供晋升行对照（时间线是二级审计投影，非状态权威）。
     let mut catalog_anchor_announced = false;
     let mut catalog_anchor_counts: Option<(usize, usize)> = None;
+    // 本 run 是否已把 plan-native 晋升为 resident（每个 run 至多一次钩子调用）。
+    let mut plan_catalog_promoted = false;
     let mut active_hosted_tools = ctx.hosted_tools.clone();
     let mut hosted_web_fallback_attempted = false;
     let mut emergency_context_recovery_attempted = false;
@@ -3777,45 +3865,34 @@ async fn run_loop(ctx: RunLoopCtx) {
             delegation_disabled: ctx.delegation_disabled.clone(),
             suspension_gate: ctx.suspension_gate.clone(),
             continuation_gate: ctx.continuation_gate.clone(),
-            catalog_bootstrap_pending: ctx.catalog_bootstrap_pending.clone(),
+            plan_suggestion_enabled: ctx.plan_suggestion_enabled,
         };
-        let mut first_round_narrowed = false;
+        let mut plan_catalog_narrowed = false;
         let tools = if summary_only {
             Vec::new()
         } else {
             let mut specs =
                 client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools);
-            // C：首轮锚定过滤。仅主代理 Main 策略（Ask/Plan 已是受限目录，二次
-            // 过滤无意义且会与 hosted 别名逻辑纠缠）；目录裁剪是呈现层，执行边界
-            // 仍在 tool_allowed/scoped_input（红线 2）--模型即使在受限轮调用了
-            // 目录外工具（历史诱导），执行侧按既有 policy 处理。
-            if policy == ToolPolicy::Main && ctx.catalog_bootstrap_pending.load(Ordering::SeqCst) {
-                first_round_narrowed = true;
-                let allowlist = first_round_allowlist(ctx.orchestration.first_round_catalog);
-                let full_tool_count = specs.len();
-                specs.retain(|tool| allowlist.contains(&tool.name.as_str()));
-                // 规划门门铃：plan_complete 信号下把 plan_ready 注入收窄目录
-                //（plan_gate 档 = 它是唯一目录项；readonly/editor_pair = 原
-                // 允许清单 + 它），tool_count 因此反映真实派发。按名重排序
-                // 维持 P1-C 派发字节稳定。
-                if ctx.orchestration.first_round_promote_on
-                    == agent_config::FirstRoundPromoteOn::PlanComplete
-                {
-                    specs.push(plan_ready_tool_spec());
+            // Plan 原生 5→8 目录（docs §13.1 轨道 A）：仅 Plan 策略 + 冻结
+            // plan_native_v1 profile。目录裁剪是呈现层；执行边界仍在
+            // tool_allowed/scoped_input——隐藏调用按 Plan policy 硬拒（红线 2）。
+            if policy == ToolPolicy::Plan {
+                if let Some(plan_catalog) = ctx.plan_native_catalog {
+                    plan_catalog_narrowed = true;
+                    let allowlist = plan_catalog.allowlist();
+                    let full_tool_count = specs.len();
+                    specs.retain(|tool| allowlist.contains(&tool.name.as_str()));
                     specs.sort_by(|a, b| a.name.cmp(&b.name));
-                }
-                // C4：可观察锚定行。pending 期间每次派发都会收窄，但时间线只需要
-                // 第一条「已收窄」--记录数量供晋升行对照。
-                if !catalog_anchor_announced {
-                    catalog_anchor_announced = true;
-                    catalog_anchor_counts = Some((specs.len(), full_tool_count));
-                    let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
-                        phase: CatalogAnchorPhase::Narrowed,
-                        catalog: first_round_catalog_key(ctx.orchestration.first_round_catalog)
-                            .to_string(),
-                        tool_count: specs.len(),
-                        full_tool_count,
-                    });
+                    if !catalog_anchor_announced {
+                        catalog_anchor_announced = true;
+                        catalog_anchor_counts = Some((specs.len(), full_tool_count));
+                        let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
+                            phase: CatalogAnchorPhase::Narrowed,
+                            catalog: "plan_native".to_string(),
+                            tool_count: specs.len(),
+                            full_tool_count,
+                        });
+                    }
                 }
             }
             specs
@@ -4017,41 +4094,45 @@ async fn run_loop(ctx: RunLoopCtx) {
                 break;
             }
         }
-        tail_injections.push(Message::user_text(build_local_clock_user_message(
-            Local::now().fixed_offset(),
-        )));
-        tail_labels.push(TAIL_LABEL_LOCAL_CLOCK);
+        // 最小上下文（docs §13.1）：plan_native_v1 的 Plan 期间不注入本地时钟与
+        // 委派说明，只保留原用户请求与权威任务上下文（PlanContextCapsule）。
+        let minimal_context = policy == ToolPolicy::Plan && ctx.plan_native_catalog.is_some();
+        if !minimal_context {
+            tail_injections.push(Message::user_text(build_local_clock_user_message(
+                Local::now().fixed_offset(),
+            )));
+            tail_labels.push(TAIL_LABEL_LOCAL_CLOCK);
+        }
         if let Some(task_context) = task_context.as_deref() {
             tail_injections.push(build_task_context_message(task_context));
             tail_labels.push(TAIL_LABEL_TASK_CONTEXT);
         }
-        tail_injections.push(build_plan_mode_message(policy == ToolPolicy::Plan));
+        tail_injections.push(build_plan_mode_message(
+            policy == ToolPolicy::Plan,
+            ctx.plan_suggestion_enabled,
+        ));
         tail_labels.push(TAIL_LABEL_PLAN_MODE);
-        // 规划门尾部指令：与目录注入同条件（主 run + pending + plan_complete），
-        // 每轮追加直到模型调用 plan_ready 晋升（剥夺跨回合持续的口头契约）。
-        if policy == ToolPolicy::Main
-            && ctx.catalog_bootstrap_pending.load(Ordering::SeqCst)
-            && ctx.orchestration.first_round_promote_on
-                == agent_config::FirstRoundPromoteOn::PlanComplete
-        {
-            tail_injections.push(build_plan_gate_message(
-                ctx.orchestration.first_round_catalog,
-            ));
-            tail_labels.push(TAIL_LABEL_PLAN_GATE);
+        // 复杂度建议策略：与 propose_plan_mode 注册同条件（docs §9：任一资格
+        // 条件不满足时，工具和提示同时缺席）。非 DeepSeek 的注入恒为 0。
+        if policy == ToolPolicy::Main && ctx.plan_suggestion_enabled {
+            tail_injections.push(Message::user_text(PLAN_SUGGESTION_TAIL));
+            tail_labels.push(TAIL_LABEL_PLAN_SUGGESTION);
         }
         if let Some(checkpoint) = build_tool_progress_checkpoint_message(tool_iterations) {
             tail_injections.push(checkpoint);
             tail_labels.push(TAIL_LABEL_TOOL_PROGRESS_CHECKPOINT);
         }
-        if let Some(hint) = build_delegation_hint_message(
-            delegation_allowed,
-            mode,
-            ctx.supervisor.codex_available(),
-            ctx.supervisor.codex_configured(),
-            ctx.workspace_scope.is_some(),
-        ) {
-            tail_injections.push(hint);
-            tail_labels.push(TAIL_LABEL_DELEGATION_HINT);
+        if !minimal_context {
+            if let Some(hint) = build_delegation_hint_message(
+                delegation_allowed,
+                mode,
+                ctx.supervisor.codex_available(),
+                ctx.supervisor.codex_configured(),
+                ctx.workspace_scope.is_some(),
+            ) {
+                tail_injections.push(hint);
+                tail_labels.push(TAIL_LABEL_DELEGATION_HINT);
+            }
         }
         if !summary_only && hosted_web_fallback_attempted {
             tail_injections.push(Message::user_text(DEEPSEEK_LOCAL_WEB_FALLBACK_PROMPT));
@@ -4070,7 +4151,8 @@ async fn run_loop(ctx: RunLoopCtx) {
         let mut request_messages = Vec::with_capacity(
             messages.len() + tail_injections.len() + usize::from(memory_message.is_some()),
         );
-        if let Some(memory) = &memory_message {
+        let memory_included = memory_message.is_some() && !minimal_context;
+        if let Some(memory) = memory_message.as_ref().filter(|_| memory_included) {
             request_messages.push(memory.clone());
         }
         request_messages.extend(messages.iter().cloned());
@@ -4085,12 +4167,10 @@ async fn run_loop(ctx: RunLoopCtx) {
             system: Some(system_prompt.clone()),
             messages: Vec::new(), // 由 run_agent_loop_iteration 同步
             tools: Vec::new(),    // 同上
-            hosted_tools: if summary_only {
-                Vec::new()
-            } else if first_round_narrowed {
-                // C-variant-1：收窄轮剥离 hosted 联网工具（web_search/web_fetch）。
-                // 否则「读写最小对 · 2 个工具」的行会撒谎--模型仍能调 web_search。
-                // 只影响呈现层目录；工具执行的审批边界照旧。
+            hosted_tools: if summary_only || plan_catalog_narrowed {
+                // 收窄目录（Plan 原生 5→8）期间剥离 hosted 联网工具：目录声明
+                // 的工具面必须与模型实际可见的能力一致。只影响呈现层目录；
+                // 工具执行的审批边界照旧。
                 Vec::new()
             } else {
                 active_hosted_tools.clone()
@@ -4163,10 +4243,10 @@ async fn run_loop(ctx: RunLoopCtx) {
                 // 记录的是模型实际看到的名字；max_tokens 取钳制后的请求值
                 // （request 在此之后才被 move 进迭代调用）。
                 tool_names: tools.iter().map(|tool| tool.name.clone()).collect(),
-                hosted_tool_names: if summary_only || first_round_narrowed {
-                    // 收窄轮 hosted 工具已随请求剥离（C-variant-1）；审计记录的
-                    // 是模型实际看到的目录，这里必须同步为空，否则人可读清单
-                    // 与 tools_sha256 会互相矛盾。
+                hosted_tool_names: if summary_only || plan_catalog_narrowed {
+                    // 收窄轮 hosted 工具已随请求剥离；审计记录的是模型实际看到
+                    // 的目录，这里必须同步为空，否则人可读清单与 tools_sha256
+                    // 会互相矛盾。
                     Vec::new()
                 } else {
                     active_hosted_tools
@@ -4285,53 +4365,61 @@ async fn run_loop(ctx: RunLoopCtx) {
                         }
                     }
                 }
-                // C：首轮目录晋升。Either 下首轮 outcome 必然含 assistant 消息 →
-                // 晋升恒发生在第 2 轮派发前（受限窗口 = 恰好首轮）；ToolCall 下
-                // 纯文字回复则停留（对照组用途）；PlanComplete 下剥夺跨回合、
-                // 跨 run 持续（会话级粘性），仅模型调用 plan_ready 才晋升，纯
-                // 文本终答自然结束 run、粘性保持到下一个 run 的首轮。工具执行
-                // 失败不影响晋升（只看 ToolUse 是否产生，与 dsh「执行失败仍晋升」
-                // 一致）；粘性标志会话级跨 run，晋升后不再复位。
-                if ctx.catalog_bootstrap_pending.load(Ordering::SeqCst) {
-                    let promoted = match ctx.orchestration.first_round_promote_on {
-                        agent_config::FirstRoundPromoteOn::Either => outcome
-                            .appended_messages
-                            .iter()
-                            .any(|m| m.role == Role::Assistant),
-                        agent_config::FirstRoundPromoteOn::ToolCall => {
-                            outcome.appended_messages.iter().any(|m| {
-                                m.role == Role::Assistant
-                                    && m.content.iter().any(|b| b.is_tool_use())
-                            })
-                        }
-                        agent_config::FirstRoundPromoteOn::PlanComplete => {
-                            outcome.appended_messages.iter().any(|m| {
-                                m.role == Role::Assistant
-                                    && m.content.iter().any(|b| {
-                                        b.is_tool_use() && b.tool_name() == Some("plan_ready")
-                                    })
-                            })
-                        }
-                    };
-                    if promoted {
-                        ctx.catalog_bootstrap_pending.store(false, Ordering::SeqCst);
-                        tracing::info!(
-                            session_id = %ctx.session_id,
-                            promote_on = ?ctx.orchestration.first_round_promote_on,
-                            "C first-round catalog promoted to full"
-                        );
-                        // C4：晋升时间线行。收窄行存在才可能有晋升（pending 先经
-                        // 受限派发武装）；数量对齐收窄时的记录。
-                        if let Some((tool_count, full_tool_count)) = catalog_anchor_counts.take() {
-                            let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
-                                phase: CatalogAnchorPhase::Promoted,
-                                catalog: first_round_catalog_key(
-                                    ctx.orchestration.first_round_catalog,
-                                )
-                                .to_string(),
-                                tool_count,
-                                full_tool_count,
+                // Plan 原生目录晋升（docs §14.3）：首次 durable assistant/tool
+                // outcome 后同步调用宿主钩子，宿主完成 PlanStore 的
+                // bootstrap -> resident CAS 并确认持久化，之后本 run 才切换到
+                // resident 目录并允许下一次 Provider 请求。钩子失败（或未安装）
+                // 时 fail closed：终止 run，不发下一轮请求。宿主在下个 run 启动
+                // 前重新传入权威 phase，因此 runtime 重建 / clear context /
+                // 重启都不会让同一 Plan 回退到 bootstrap。
+                if policy == ToolPolicy::Plan
+                    && matches!(
+                        ctx.plan_native_catalog,
+                        Some(PlanNativeCatalogConfig {
+                            phase: PlanNativeCatalogPhase::Bootstrap
+                        })
+                    )
+                    && !plan_catalog_promoted
+                    && outcome
+                        .appended_messages
+                        .iter()
+                        .any(|m| m.role == Role::Assistant)
+                {
+                    plan_catalog_promoted = true;
+                    match ctx
+                        .plan_catalog_promotion
+                        .as_ref()
+                        .map(|promote| promote(&ctx.task_id))
+                    {
+                        Some(Ok(())) => {
+                            ctx.plan_native_catalog = Some(PlanNativeCatalogConfig {
+                                phase: PlanNativeCatalogPhase::Resident,
                             });
+                            tracing::info!(
+                                session_id = %ctx.session_id,
+                                task_id = %ctx.task_id,
+                                "plan native catalog promoted to resident"
+                            );
+                            if let Some((tool_count, full_tool_count)) =
+                                catalog_anchor_counts.take()
+                            {
+                                let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
+                                    phase: CatalogAnchorPhase::Promoted,
+                                    catalog: "plan_native".to_string(),
+                                    tool_count,
+                                    full_tool_count,
+                                });
+                            }
+                        }
+                        Some(Err(error)) => {
+                            terminal_err =
+                                Some(format!("Plan 目录晋升未持久化，已停止本轮请求：{error}"));
+                            break;
+                        }
+                        None => {
+                            terminal_err =
+                                Some("Plan 目录晋升钩子未安装，已停止本轮请求".to_string());
+                            break;
                         }
                     }
                 }
@@ -4916,10 +5004,9 @@ struct SessionToolHost {
     delegation_disabled: Arc<AtomicBool>,
     suspension_gate: Arc<AtomicBool>,
     continuation_gate: Arc<AtomicBool>,
-    /// C-规划门：与 SessionState 共享的目录粘性标志。主 run 传真实标志，
-    /// plan_ready 的执行拦截据此判定；子代理与测试恒 false（规划门只作用
-    /// 于主 run 派发，红线 3）。
-    catalog_bootstrap_pending: Arc<AtomicBool>,
+    /// Plan 入口建议注册开关（主 run 由宿主按资格刷新；子代理恒 false——
+    /// propose_plan_mode 只属于 R-Code 主 Agent，docs §9）。
+    plan_suggestion_enabled: bool,
 }
 
 /// Request-local execution guard used by DeepSeek's cheap evidence dose.  It intentionally does
@@ -5231,66 +5318,6 @@ fn has_hosted_web_search(hosted_tools: &[HostedToolSpec]) -> bool {
     hosted_tools.iter().any(HostedToolSpec::is_web_search)
 }
 
-/// C2：首轮只读探索五件套。含 search_files——hosted web search 在场时本地
-/// `search` 已被改名为 `search_files`（client_tools_for_hosted_tools），
-/// 过滤发生在改名之后，必须按模型实际看到的名字放行才能保住五件套完整。
-const FIRST_ROUND_READONLY_TOOLS: &[&str] = &[
-    "read_file",
-    "list_files",
-    "search",
-    "glob",
-    "load_skill",
-    "search_files",
-];
-/// C2：read_file + edit 最小编辑对（对标 dsh Minimal 工具对的编辑变体）。
-const FIRST_ROUND_EDITOR_PAIR_TOOLS: &[&str] = &["read_file", "edit"];
-/// C2-规划门：plan_gate 档零工作工具（空清单），目录里唯一项是 plan_complete
-/// 信号下注入的 plan_ready（见下方注入点）。
-const FIRST_ROUND_PLAN_GATE_TOOLS: &[&str] = &[];
-
-/// C2：目录策略 → 允许清单。委派、MCP、bash、生命周期工具（enter_plan_mode
-/// 等）首轮一律不在目录——模型首轮只能读不能委派不能写，这是有意的
-/// （对齐 dsh 的 Minimal 身份：极少工具）。
-fn first_round_allowlist(catalog: agent_config::FirstRoundCatalog) -> &'static [&'static str] {
-    match catalog {
-        agent_config::FirstRoundCatalog::Full => &[],
-        agent_config::FirstRoundCatalog::ReadOnly => FIRST_ROUND_READONLY_TOOLS,
-        agent_config::FirstRoundCatalog::EditorPair => FIRST_ROUND_EDITOR_PAIR_TOOLS,
-        agent_config::FirstRoundCatalog::PlanGate => FIRST_ROUND_PLAN_GATE_TOOLS,
-    }
-}
-
-/// 规划门的唯一目录项：模型声明「规划完成」的门铃。worker 侧拦截执行
-/// （见 SessionToolHost::call_inner），不转发 gateway、无需审批。
-fn plan_ready_tool_spec() -> ToolSpec {
-    ToolSpec {
-        name: "plan_ready".to_string(),
-        description: "Signal that planning is complete. Call this only when \
-you have finished analyzing the request and have written out your final plan in \
-your response. Calling it restores the full tool catalog so you can execute \
-directly. Never call it to ask questions or midway through thinking."
-            .to_string(),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false,
-            "required": [],
-        }),
-        source: ToolSource::Builtin,
-        requires_confirmation: false,
-    }
-}
-
-/// C4：锚定事件的档位名（与配置 serde 名一致，前端按名映射展示文案）。
-fn first_round_catalog_key(catalog: agent_config::FirstRoundCatalog) -> &'static str {
-    match catalog {
-        agent_config::FirstRoundCatalog::Full => "full",
-        agent_config::FirstRoundCatalog::ReadOnly => "readonly",
-        agent_config::FirstRoundCatalog::EditorPair => "editor_pair",
-        agent_config::FirstRoundCatalog::PlanGate => "plan_gate",
-    }
-}
-
 /// A2：hosted 工具的审计名。`HostedToolSpec` 是变体枚举（WebSearch/WebFetch），
 /// 无 name 字段，用现有判定器映射，不动合同层。
 fn hosted_tool_display_name(tool: &HostedToolSpec) -> String {
@@ -5446,11 +5473,18 @@ impl SessionToolHost {
                     | "collect_subagents"
                     | "list_agents"
                     | "send_agent_message"
-                    | "plan_ready"
+                    | "propose_plan_mode"
             )
     }
 
     fn tool_allowed(&self, name: &str) -> bool {
+        // Plan 入口建议工具的呈现层与执行层同门（docs §9：非 eligible Run 的
+        // 工具注册与调用都必须为 0；工具不在目录里不是安全边界）。
+        if name == "propose_plan_mode" {
+            return self.policy == ToolPolicy::Main
+                && self.plan_suggestion_enabled
+                && !self.caller.starts_with("subagent:");
+        }
         if matches!(name, "mcp_create_draft" | "mcp_save_draft")
             && self.caller.starts_with("subagent:")
         {
@@ -5784,27 +5818,20 @@ impl SessionToolHost {
                 .await
                 .map_err(|e| agent_error::Error::ToolHost(e.to_string()));
         }
-        if name == "plan_ready" {
-            // 规划门门铃：worker 侧拦截，不转发 gateway、无审批（红线 2 的唯一
-            // 例外）。pending 时返回成功并让晋升判定关门；非 pending（含子代理
-            // 调用、目录已恢复后的历史诱导重放）返回可修正的错误。
-            return Ok(if self.catalog_bootstrap_pending.load(Ordering::SeqCst) {
-                ToolCallOutcome {
-                    content: "Planning accepted. The full tool catalog is restored \
-from the next round; proceed to execute your plan."
-                        .to_string(),
-                    is_error: false,
-                    metadata: None,
-                }
-            } else {
-                ToolCallOutcome {
-                    content: "plan_ready is only available while the planning gate \
-is active."
-                        .to_string(),
+        if name == "propose_plan_mode" {
+            // Plan 入口建议是宿主自有工具（gateway 注册、store 事务建 offer），
+            // 但 worker 侧仍要在进入 Gateway 前复核注册门：目录缺席时历史诱导
+            // 调用必须在此拒绝（docs §9，非 eligible Run 的调用数为 0）。
+            if !(self.policy == ToolPolicy::Main
+                && self.plan_suggestion_enabled
+                && !self.caller.starts_with("subagent:"))
+            {
+                return Ok(ToolCallOutcome {
+                    content: "propose_plan_mode is not available for this run".to_string(),
                     is_error: true,
                     metadata: None,
-                }
-            });
+                });
+            }
         }
         if name == "collect_subagents" {
             let supervisor = self.delegation.as_ref().ok_or_else(|| {
@@ -5950,9 +5977,8 @@ fn host_lifecycle_tool_allowed(policy: ToolPolicy, name: &str) -> bool {
         "enter_plan_mode" => matches!(policy, ToolPolicy::Main | ToolPolicy::ReadOnly),
         "plan_publish" | "request_user_input" => policy == ToolPolicy::Plan,
         "plan_item_update" => matches!(policy, ToolPolicy::Main | ToolPolicy::FullAccess),
-        // 规划门门铃只属于主 run：子代理的 catalog_bootstrap_pending 恒 false，
-        // 配合 call_inner 的拦截直接拒绝（红线 3：子代理不受规划门影响）。
-        "plan_ready" => policy == ToolPolicy::Main,
+        // Plan 入口建议只属于主 run；子代理的额外 caller 检查在 tool_allowed。
+        "propose_plan_mode" => policy == ToolPolicy::Main,
         _ => true,
     }
 }
@@ -8515,7 +8541,7 @@ impl SubagentExecutionContext {
             suspension_gate: Arc::new(AtomicBool::new(false)),
             continuation_gate: Arc::new(AtomicBool::new(false)),
             // 红线 3：子代理永不处于规划门——plan_ready 拦截恒走非 pending 分支。
-            catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+            plan_suggestion_enabled: false,
         };
         let mut messages = vec![Message::user_text(goal)];
         // memory_context 保持 run 冻结，作为独立消息置于请求头部（P0-A），
@@ -10173,9 +10199,8 @@ mod compaction_tests {
             delegation_disabled: Arc::new(AtomicBool::new(false)),
             suspension_gate: Arc::new(AtomicBool::new(false)),
             continuation_gate: Arc::new(AtomicBool::new(false)),
-            catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+            plan_suggestion_enabled: false,
         };
-        let directory_scope = host.workspace_scope.clone();
         let evidence = DeepSeekEvidenceToolHost { inner: &host };
 
         let normal_names = host

@@ -33,11 +33,11 @@ pub use llm_runtime::{
     ExternalAgentDescriptor, ExternalAgentEventSink, ExternalAgentId, ExternalAgentOutcome,
     ExternalAgentRequest, ExternalAgentRunner, FrozenSubagentCandidatePool, FrozenSubagentSlot,
     FrozenSubagentSlotDescriptor, LlmAgentRuntime, NativeSubagentRuntimeOptions,
-    OrchestrationPolicy, QualityLoopMode, QualityReviewer, RCodeSubagentOutcome,
-    RCodeSubagentRequest, RCodeSubagentRunner, SubagentCandidateOutcome, SubagentCandidateRequest,
-    SubagentCandidateRunner, SubagentCandidateSource, SubagentProviderCapabilities,
-    DEFAULT_MAIN_AGENT_PROMPT, DEFAULT_SUBAGENT_PROMPT, MAX_ACTIVE_DESCENDANTS,
-    MAX_DESCENDANTS_PER_TREE, MAX_SUBAGENT_DEPTH,
+    OrchestrationPolicy, PlanNativeCatalogConfig, PlanNativeCatalogPhase, QualityLoopMode,
+    QualityReviewer, RCodeSubagentOutcome, RCodeSubagentRequest, RCodeSubagentRunner,
+    SubagentCandidateOutcome, SubagentCandidateRequest, SubagentCandidateRunner,
+    SubagentCandidateSource, SubagentProviderCapabilities, DEFAULT_MAIN_AGENT_PROMPT,
+    DEFAULT_SUBAGENT_PROMPT, MAX_ACTIVE_DESCENDANTS, MAX_DESCENDANTS_PER_TREE, MAX_SUBAGENT_DEPTH,
 };
 pub use mock_runtime::MockAgentRuntime;
 pub use recovery::{scan_orphaned_runs, RecoveryState};

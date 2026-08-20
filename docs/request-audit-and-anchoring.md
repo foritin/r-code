@@ -1,5 +1,13 @@
 # 请求构成审计与首轮锚定实验（落地方案）
 
+> **状态更新（Phase 0）**：本文描述的首轮目录锚定实验（含「规划门 plan_gate /
+> plan_complete / plan_ready」扩展）已随 DeepSeek 复杂任务 Plan 建议与 Plan-only
+> 双轨（`docs/plan-mode-dual-track-gate.md`）整体下线：客户设置移除
+> `first_round_*` 档位（legacy 输入只返回诊断警告），worker 不再收窄 Main 模式
+> 目录，`plan_ready` 工具与门铃注入已删除。请求信封审计（`diagnostics.request_audit`）
+> 继续有效。本文保留为实验记录与请求审计协议的权威。
+
+
 > 操作手册。本文承接 [harness-migration.md](./harness-migration.md) 阶段 1.3 的
 > 「request/header 快照 + 重建自检」：合同半与运行时半已在测试接线中完成，
 > 本文补齐**宿主接线**（阶段 A），并在其上叠加**目录构成审计**（阶段 B）与

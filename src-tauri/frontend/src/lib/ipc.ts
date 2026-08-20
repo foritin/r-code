@@ -12,6 +12,8 @@ import type {
   AgentSendMode,
   ChangeDiff,
   NotificationPage,
+  PlanEntryOfferView,
+  PlanningStatusView,
   ProjectActivityPage,
   TaskDetailBatch,
   WorkspaceDashboard,
@@ -297,6 +299,26 @@ export const taskCompactContext = async (taskId: string, focus?: string) => {
   if (result.compacted) invalidateSessionMessages(taskId);
   return result;
 };
+
+export const planEntryDecide = (input: {
+  offerId: string;
+  expectedRevision: number;
+  decision: "accept" | "continue" | "close" | "escape";
+  idempotencyKey: string;
+}) =>
+  ipc<PlanEntryOfferView>("cmd_plan_entry_decide", {
+    input: {
+      offer_id: input.offerId,
+      expected_revision: input.expectedRevision,
+      decision: input.decision,
+      idempotency_key: input.idempotencyKey,
+    },
+  });
+
+export const planEntryRetryContinuation = (offerId: string) =>
+  ipc<PlanEntryOfferView>("cmd_plan_entry_retry_continuation", { offerId });
+
+export const planningStatus = () => ipc<PlanningStatusView>("cmd_planning_status");
 
 export const taskDetail = (taskId: string) =>
   ipc<TaskDetail>("cmd_task_detail", { taskId });

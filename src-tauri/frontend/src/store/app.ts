@@ -83,6 +83,10 @@ interface AppState {
   taskFileReferences: Record<string, TaskFileReferenceRequest>;
   /** 设置页当前分类，允许命令和深链直接打开目标区域。 */
   settingsPane: SettingsPane;
+  /** 全局指引手册（Help 菜单入口跨场景打开；docs §6.3）。 */
+  guideSheetId: import("../components/settings/GuideSheet").GuideId | null;
+  openGuideSheet: (id: import("../components/settings/GuideSheet").GuideId) => void;
+  closeGuideSheet: () => void;
   /** 知识控制面当前分类。 */
   knowledgeTab: KnowledgeTab;
   /** 来自 Agent MCP 建议的可选市场检索词。 */
@@ -521,6 +525,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       mode: "docked",
       launcherOpen: false,
     }))),
+  guideSheetId: null,
+  openGuideSheet: (id) => set({ guideSheetId: id }),
+  closeGuideSheet: () => set({ guideSheetId: null }),
   setSettingsPane: (pane) => set((state) => ({
     ...navigateTo(state, {
       scene: "settings",

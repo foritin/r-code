@@ -426,6 +426,35 @@ export interface TaskDetail {
   permissions: PermissionRequest[];
   verifications: VerificationRecord[];
   queued_messages: QueuedMessage[];
+  /** Plan 入口建议的待决决定；无建议或已决定时为 null。 */
+  pending_plan_entry_offer?: PlanEntryOfferView | null;
+}
+
+/** Plan 入口建议的客户可见视图（不含模型 reason / 信号枚举等内部词）。 */
+export interface PlanEntryOfferView {
+  id: string;
+  task_id: string;
+  revision: number;
+  state: "pending" | "accepted" | "declined" | "superseded_provider_changed" | "expired";
+  customer_copy: {
+    lead: string;
+    suffix: string;
+    quiet_note: string;
+    version: number;
+  };
+  notice?: string | null;
+  continuation_state: "none" | "queued" | "dispatching" | "sent" | "failed";
+}
+
+/** cmd_planning_status：内部发布控制与客户开关可见性。 */
+export interface PlanningStatusView {
+  release_state: "off" | "experiment" | "validated";
+  emergency_off: boolean;
+  evidence_version: string;
+  eligibility_profile_version: string;
+  customer_card_visible: boolean;
+  evidence_validated: boolean;
+  basis: string;
 }
 
 /** cmd_task_detail_batch：每项与单任务详情完全一致。 */
@@ -1376,6 +1405,8 @@ export interface AppConfig {
   orchestration?: OrchestrationConfig;
   /** 诊断开关段；旧配置缺失时由后端回填默认值（全部关闭）。 */
   diagnostics?: DiagnosticsConfig;
+  /** Plan 入口建议客户偏好；默认关闭。 */
+  planning?: PlanningConfig;
   /** 用户级协作提示，保存在 R-Code AppData，不进入任何项目。 */
   agent_prompts?: AgentPromptConfig;
   tauri?: Record<string, unknown>;
@@ -1502,9 +1533,14 @@ export interface OrchestrationConfig {
   subagent_pool?: SubagentPoolConfig;
   /** 长任务循环护栏预算；旧配置缺失时由后端回填默认值。 */
   run_budget?: RunBudgetConfig;
-  /** 首轮工具清单（tools catalog）锚定实验；旧配置缺失时由后端回填默认值 full/either。 */
+  /** 已下线的未发布实验档位：仅作 legacy 解析保留，客户设置不再读写。 */
   first_round_catalog?: "full" | "readonly" | "editor_pair" | "plan_gate";
   first_round_promote_on?: "either" | "tool_call" | "plan_complete";
+}
+
+/** Plan 入口建议客户偏好（普通客户只有一个布尔开关）。 */
+export interface PlanningConfig {
+  suggest_complex_tasks?: boolean;
 }
 
 export interface RunBudgetConfig {

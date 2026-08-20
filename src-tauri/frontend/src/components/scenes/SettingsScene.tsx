@@ -15,11 +15,13 @@ import {
   settingsDeleteProvider,
   settingsGet,
   settingsSaveProvider,
+  planningStatus,
   settingsSelectProvider,
   settingsSet,
   supportBundleChoose,
   supportPreview,
 } from "../../lib/ipc";
+import type { PlanningStatusView } from "../../lib/types";
 import type {
   AppConfig,
   CodexCliPreferences,
@@ -56,13 +58,7 @@ import { providerIconFor, providerInitial } from "../../lib/provider-icons";
 import { McpPanel } from "./McpPanel";
 import { KnowledgeSettingsPane } from "./KnowledgeSettingsPane";
 import { SubagentProvidersPanel } from "./SubagentProvidersPanel";
-import {
-  FIRST_ROUND_CATALOG_OPTIONS,
-  FIRST_ROUND_PROMOTE_OPTIONS,
-  GuideSheet,
-  type GuideAction,
-  type GuideId,
-} from "../settings/GuideSheet";
+import { GuideSheet, type GuideAction, type GuideId } from "../settings/GuideSheet";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
@@ -1417,12 +1413,96 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
     test_fail_limit: 3,
     checkpoint_enabled: true,
   },
-  first_round_catalog: "full",
-  first_round_promote_on: "either",
 };
 
-/** 锚定实验总开关的档位记忆：关闭总开关时保留用户选过的档位，重开即恢复。 */
-const ANCHOR_TIER_STORAGE_KEY = "r-code:first-round-anchor-tier";
+/** DeepSeek 复杂任务建议卡（docs §6.4）：普通客户只看到一个开关；证据状态、
+ * profile version、experiment 与 emergency off 留在诊断/开发者层。只有当前默认
+ * Provider 符合资格时显示该卡；证据未通过时开关不可启用。 */
+function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
+  config: AppConfig;
+  reload: () => Promise<void>;
+  onOpenGuide: (id: GuideId) => void;
+}) {
+  const [status, setStatus] = useState<PlanningStatusView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const enabled = config.planning?.suggest_complex_tasks ?? false;
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      planningStatus()
+        .then((value) => {
+          if (!cancelled) setStatus(value);
+        })
+        .catch(() => {
+          if (!cancelled) setStatus(null);
+        });
+    };
+    load();
+    // 宿主推送/测试钩子：状态变化时重查（诊断层证据状态更新）。
+    window.addEventListener("r-code:planning-status-changed", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("r-code:planning-status-changed", load);
+    };
+  }, []);
+
+  if (!status?.customer_card_visible) {
+    // 非 DeepSeek 默认 Provider：不显示一组无效的禁用控件。
+    return null;
+  }
+  const evidencePending = !status.evidence_validated;
+
+  const toggle = async (value: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await settingsSet("planning.suggest_complex_tasks", value);
+      await reload();
+    } catch (cause) {
+      setErr(errText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-block" id="planning-suggestion-block">
+      <div className="block-title-row">
+        <h3>复杂任务先建议制定计划</h3>
+        <button
+          type="button"
+          className="guide-link"
+          aria-haspopup="dialog"
+          onClick={() => onOpenGuide("plan-suggestion")}
+        >
+          指引手册 <span aria-hidden="true">→</span>
+        </button>
+      </div>
+      <p className="desc">
+        仅在 DeepSeek 识别到复杂任务时询问；每个任务最多一次。选择直接继续后本任务不再
+        主动弹出，仍可随时手动选择 Plan 模式。
+      </p>
+      <div className="field">
+        <label htmlFor="set-planning-suggest">复杂任务先建议制定计划</label>
+        <input
+          id="set-planning-suggest"
+          className="switch"
+          type="checkbox"
+          role="switch"
+          checked={enabled && !evidencePending}
+          disabled={busy || evidencePending}
+          onChange={(event) => void toggle(event.target.checked)}
+        />
+        <span className="hint">
+          {evidencePending ? "功能仍在验证中，暂不可启用。" : "开 = 复杂任务先询问；关 = 全部直接执行。"}
+        </span>
+      </div>
+      {err ? <p className="field-error" role="alert">{err}</p> : null}
+    </section>
+  );
+}
 
 function OrchestrationSection({ config, reload, onOpenGuide }: {
   config: AppConfig;
@@ -1445,37 +1525,6 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
     } finally {
       setBusy(null);
     }
-  };
-
-  // 锚定实验总开关：开 = 记住的档位；关 = full（现状）。只接受三档合法值，
-  // 非法/缺失的本地记忆回落 readonly。
-  const anchorEnabled = (policy.first_round_catalog ?? "full") !== "full";
-  const isAnchorTier = (value: string): value is "readonly" | "editor_pair" | "plan_gate" =>
-    value === "readonly" || value === "editor_pair" || value === "plan_gate";
-  const rememberedAnchorTier = (): "readonly" | "editor_pair" | "plan_gate" => {
-    const stored = localStorage.getItem(ANCHOR_TIER_STORAGE_KEY);
-    return stored != null && isAnchorTier(stored) ? stored : "readonly";
-  };
-  const toggleAnchor = async (enabled: boolean) => {
-    if (enabled) {
-      await save("first_round_catalog", rememberedAnchorTier());
-      return;
-    }
-    const current = policy.first_round_catalog;
-    if (current != null && isAnchorTier(current)) {
-      localStorage.setItem(ANCHOR_TIER_STORAGE_KEY, current);
-    }
-    await save("first_round_catalog", "full");
-  };
-  const applyAnchorTier = async (tier: string) => {
-    if (isAnchorTier(tier)) {
-      localStorage.setItem(ANCHOR_TIER_STORAGE_KEY, tier);
-    }
-    // 规划门只在「规划完成」信号下有意义：选它时联动晋升信号，规避退化组合。
-    if (tier === "plan_gate" && (policy.first_round_promote_on ?? "either") !== "plan_complete") {
-      await save("first_round_promote_on", "plan_complete");
-    }
-    await save("first_round_catalog", tier);
   };
 
   const skills = [
@@ -1601,73 +1650,7 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
         </div>
       </section>
 
-      <section className="settings-block">
-        <div className="block-title-row">
-          <h3>首轮工具清单锚定（实验）</h3>
-          <button
-            type="button"
-            className="guide-link"
-            aria-haspopup="dialog"
-            onClick={() => onOpenGuide("first-round-catalog")}
-          >
-            指引手册 <span aria-hidden="true">→</span>
-          </button>
-        </div>
-        <p className="desc">
-          发给模型的每次请求都带一份「工具清单」（请求里的 tools 菜单，列明本轮可用的工具，与项目文件夹无关），
-          清单中途变化会打断前缀缓存、分散模型首轮注意力。开启锚定后，新会话第一轮只展示收窄的清单，
-          按下方时机在本会话内恢复完整清单并保持稳定——每会话至多一次清单切换。
-          只影响给模型看的清单，不改变工具执行的审批边界。对新会话生效。
-          总开关关闭即回到完整清单现状；记住的档位保留在本地，重新打开即恢复。
-        </p>
-        <div className="field">
-          <label htmlFor="set-first-round-anchor">锚定实验总开关</label>
-          <input
-            id="set-first-round-anchor"
-            className="switch"
-            type="checkbox"
-            role="switch"
-            checked={anchorEnabled}
-            disabled={busy != null}
-            onChange={(event) => void toggleAnchor(event.target.checked)}
-          />
-          <span className="hint">开 = 使用下方记住的档位；关 = 完整清单（不锚定）。</span>
-        </div>
-        <div className="field">
-          <label htmlFor="set-first-round-catalog">首轮工具清单</label>
-          <select
-            id="set-first-round-catalog"
-            className="input"
-            value={
-              policy.first_round_catalog != null && isAnchorTier(policy.first_round_catalog)
-                ? policy.first_round_catalog
-                : rememberedAnchorTier()
-            }
-            disabled={busy != null || !anchorEnabled}
-            onChange={(event) => void applyAnchorTier(event.target.value)}
-          >
-            {FIRST_ROUND_CATALOG_OPTIONS.filter((option) => option.value !== "full").map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <span className="hint">只读清单含读文件、列目录、搜索等；读写最小对只剩 read_file 和 edit；规划门零工具、仅剩门铃 plan_ready。</span>
-        </div>
-        <div className="field">
-          <label htmlFor="set-first-round-promote">恢复完整清单的时机</label>
-          <select
-            id="set-first-round-promote"
-            className="input"
-            value={policy.first_round_promote_on ?? "either"}
-            disabled={busy != null || !anchorEnabled}
-            onChange={(event) => void save("first_round_promote_on", event.target.value)}
-          >
-            {FIRST_ROUND_PROMOTE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <span className="hint">「工具调用」更严格：纯文本回答不会解除收窄；「规划完成」：模型调用 plan_ready 才恢复，剥夺可跨多个回合。</span>
-        </div>
-      </section>
+      <PlanningSuggestionCard config={config} reload={reload} onOpenGuide={onOpenGuide} />
 
       <section className="settings-block">
         <h3>运行护栏</h3>

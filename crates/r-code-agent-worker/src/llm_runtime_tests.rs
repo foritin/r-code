@@ -1617,7 +1617,7 @@ fn api_only_candidate_pool_delegate_spec_describes_the_configured_subagent_route
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -2576,7 +2576,7 @@ fn active_plan_context_sets_the_runtime_continuation_gate() {
 #[test]
 fn plan_mode_policy_requires_functional_acceptance_slices() {
     // P0-A：plan mode 策略文本改为尾部 user 消息形态（不再拼进 system）。
-    let message = build_plan_mode_message(true);
+    let message = build_plan_mode_message(true, false);
     let prompt = message.text_content();
 
     assert_eq!(message.role, agent_contract::Role::User);
@@ -2591,14 +2591,30 @@ fn plan_mode_policy_requires_functional_acceptance_slices() {
 }
 
 #[test]
-fn agent_mode_policy_can_reduce_to_plan_but_cannot_bypass_approval() {
-    let message = build_plan_mode_message(false);
+fn agent_mode_policy_keeps_only_explicit_plan_entry_by_default() {
+    // M0-05/M0-08：自动复杂度路由不再调用 enter_plan_mode；默认（无建议资格）
+    // 只保留显式 Plan 入口，不注入复杂度建议策略。
+    let message = build_plan_mode_message(false, false);
     let prompt = message.text_content();
 
     assert_eq!(message.role, agent_contract::Role::User);
-    assert!(prompt.contains("call `enter_plan_mode` before making changes"));
+    assert!(prompt.contains("only when the user explicitly asked for a structured plan"));
+    assert!(!prompt.contains("propose_plan_mode"));
     assert!(prompt.contains("Do not call `plan_publish`"));
     assert!(prompt.contains("requires explicit user approval"));
+}
+
+#[test]
+fn agent_mode_policy_adds_suggestion_route_only_when_eligible() {
+    // 建议资格开启时才出现 propose_plan_mode 策略；显式 Plan 仍免二次确认。
+    let message = build_plan_mode_message(false, true);
+    let prompt = message.text_content();
+
+    assert!(prompt.contains("call `propose_plan_mode` once"));
+    assert!(prompt.contains("explicitly asked for a structured plan, call `enter_plan_mode`"));
+    assert!(prompt.contains("Never call `propose_plan_mode` for a single isolated fix"));
+    assert!(PLAN_SUGGESTION_TAIL.contains("do not suggest planning for isolated fixes"));
+    assert!(PLAN_SUGGESTION_TAIL.contains("Modifying multiple files alone is not complexity"));
 }
 
 #[test]
@@ -2762,7 +2778,7 @@ async fn workspace_free_suspend_tool_closes_the_per_run_tool_gate() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: gate.clone(),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -2809,7 +2825,7 @@ async fn external_tools_cannot_shadow_builtin_or_reserved_host_tools() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -3993,7 +4009,7 @@ async fn stale_tool_calls_cannot_bypass_the_delegation_latch() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: disabled,
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4407,7 +4423,7 @@ async fn delegate_task_routes_explicit_codex_requests_through_the_host_runner() 
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4519,7 +4535,7 @@ async fn session_tool_host_tool_specs_is_stable_across_calls_and_registration_or
             caller: "agent".to_string(),
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(true)),
-            catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+            plan_suggestion_enabled: false,
             suspension_gate: Arc::new(AtomicBool::new(false)),
             continuation_gate: Arc::new(AtomicBool::new(false)),
         }
@@ -4809,7 +4825,7 @@ async fn delegation_codex_availability_is_frozen_within_a_run() {
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4880,7 +4896,7 @@ async fn delegation_codex_availability_is_frozen_within_a_run() {
         caller: "agent".to_string(),
         delegation: Some(fresh_supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -5312,7 +5328,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
         caller: "agent".to_string(),
         delegation: Some(supervisor.clone()),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7024,7 +7040,7 @@ async fn read_only_policy_never_trusts_mcp_read_only_hints() {
         caller: "subagent:child-read-only-mcp".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7073,7 +7089,7 @@ fn full_access_subagent_policy_exposes_bash_in_an_attached_workspace() {
         caller: "subagent:child-full-access".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7108,7 +7124,7 @@ fn request_approval_subagent_policy_exposes_bash_but_gates_through_approval() {
         caller: "subagent:child-request-approval".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7319,7 +7335,7 @@ async fn full_access_parent_read_only_child_reads_without_approval() {
         caller: "subagent:child-full-access-read".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7375,7 +7391,7 @@ async fn request_approval_parent_read_only_child_still_asks_for_r1_read() {
         caller: "subagent:child-approval-read".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7444,7 +7460,7 @@ async fn request_approval_subagent_executes_bash_only_after_user_approval() {
         caller: "subagent:child-request-approval-exec".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7629,7 +7645,7 @@ fn registered_git_status_defaults_to_the_attached_workspace_root() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7668,7 +7684,7 @@ async fn registered_glob_defaults_to_workspace_and_keeps_input_errors_non_fatal(
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -8003,7 +8019,7 @@ fn mcp_confirmation_preparation_is_main_agent_only() {
         caller: caller.to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -8046,7 +8062,7 @@ fn mcp_save_draft_is_visible_to_the_main_agent_but_not_subagents() {
         caller: caller.to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -8339,7 +8355,7 @@ fn plan_gate_tool_host(
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
-        catalog_bootstrap_pending: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     }
@@ -9163,27 +9179,6 @@ async fn request_journal_target_overrides_session_id_for_file_name() {
 // 的目录」的权威记录。
 // ---------------------------------------------------------------------------
 
-/// 读取 journal 中全部 RequestHeader 的 hosted_tool_names（按派发顺序）。
-async fn journal_hosted_tool_names(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
-    let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
-        .await
-        .unwrap();
-    jsonl
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|value| value.get("request_header").is_some())
-        .map(|value| {
-            value["request_header"]["hosted_tool_names"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| name.as_str().unwrap_or_default().to_string())
-                .collect()
-        })
-        .collect()
-}
-
 /// 读取 journal 中全部 RequestHeader 的 tool_names（按派发顺序）。
 async fn journal_tool_names(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
     let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
@@ -9205,31 +9200,22 @@ async fn journal_tool_names(dir: &std::path::Path, id: &str) -> Vec<Vec<String>>
         .collect()
 }
 
-/// 带 journal + 工作区 + 指定编排策略的 runtime。
-fn anchored_runtime(
-    provider: MockProvider,
-    journal_dir: &tempfile::TempDir,
-    catalog: agent_config::FirstRoundCatalog,
-    promote_on: agent_config::FirstRoundPromoteOn,
-) -> LlmAgentRuntime {
+/// 带 journal 的 runtime（目录锚定观测复用审计 journal：每轮
+/// RequestHeader.tool_names 即「模型实际看到的目录」的权威记录）。
+fn journaled_runtime(provider: MockProvider, journal_dir: &tempfile::TempDir) -> LlmAgentRuntime {
     LlmAgentRuntime::new(
         Box::new(provider),
         "mock-model".into(),
-        test_gateway(),
+        plan_native_test_gateway(),
         None,
         None,
     )
     .with_request_journal(agent_store::SessionStore::new(
         journal_dir.path().to_path_buf(),
     ))
-    .with_orchestration_policy(OrchestrationPolicy {
-        first_round_catalog: catalog,
-        first_round_promote_on: promote_on,
-        ..OrchestrationPolicy::default()
-    })
 }
 
-/// C4：收集本轮 run 广播的锚定可见事件（phase, catalog, 收窄数, 完整数）。
+/// 收集本轮 run 广播的目录锚定可见事件（phase, catalog, 收窄数, 完整数）。
 /// poll_events 只在 drain 前积压，wait_until_finished 不会消费通道。
 async fn anchor_events(
     rt: &mut LlmAgentRuntime,
@@ -9250,626 +9236,536 @@ async fn anchor_events(
         .collect()
 }
 
-#[tokio::test]
-async fn first_round_catalog_full_keeps_current_tool_timeline() {
-    // C4-1（默认回归保护）：full 下两轮目录逐字节一致，行为与接入前不变。
-    let provider = MockProvider::new("mock");
-    provider.push_turn(failing_read_turn("full-1"));
-    provider.push_text_turn("done", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::Full,
-        agent_config::FirstRoundPromoteOn::Either,
-    );
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
+/// 读取 journal 中全部 RequestHeader 的 excluded_tails（按派发顺序）。
+async fn journal_excluded_tails(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
+    let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
         .await
         .unwrap();
-    rt.start_run(&session.meta.id, "goal").await.unwrap();
-    wait_until_finished(&rt).await;
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(timelines.len(), 2);
-    assert_eq!(timelines[0], timelines[1], "full 下目录时间线必须恒定");
-    assert!(
-        timelines[0].iter().any(|name| name == "read_file"),
-        "完整目录应含 read_file：{:?}",
-        timelines[0]
-    );
-    assert!(
-        anchor_events(&mut rt).await.is_empty(),
-        "full 不锚定，不产生可见时间线事件"
-    );
+    jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("request_header").is_some())
+        .map(|value| {
+            value["request_header"]["excluded_tails"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| name.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .collect()
 }
 
-#[tokio::test]
-async fn first_round_narrowing_strips_hosted_web_tools() {
-    // C-variant-1：收窄轮 hosted 联网工具一并剥离--否则「读写最小对 · 2 个工具」
-    // 的时间线行会撒谎（模型仍能调 web_search），审计的人可读清单也与请求不符。
-    // 晋升后 hosted 工具随配置回归。
-    let provider = MockProvider::new("mock");
-    provider.push_turn(failing_read_turn("hs-1"));
-    provider.push_text_turn("done", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::EditorPair,
-        agent_config::FirstRoundPromoteOn::Either,
-    )
-    .with_hosted_tools(vec![HostedToolSpec::web_search()]);
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
-        .await
-        .unwrap();
-    rt.start_run(&session.meta.id, "narrow with hosted tools")
-        .await
-        .unwrap();
-    wait_until_finished(&rt).await;
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(timelines.len(), 2);
-    assert_eq!(
-        timelines[0],
-        vec!["read_file".to_string()],
-        "收窄轮目录 = editor_pair 允许清单 ∩ 注册目录（test_gateway 只有 read_file）"
-    );
-    assert!(
-        timelines[1].len() > timelines[0].len()
-            && timelines[1].iter().any(|name| name == "delegate_task"),
-        "晋升轮恢复完整目录（含委派工具）：{:?}",
-        timelines[1]
-    );
-    let hosted = journal_hosted_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(
-        hosted,
-        vec![Vec::<String>::new(), vec!["web_search".to_string()]],
-        "收窄轮剥离 web_search，晋升后随配置回归"
-    );
+struct NamedStubTool {
+    name: &'static str,
+    /// 宿主生命周期工具（plan_publish 等）不要求工作区。
+    workspace_scoped: bool,
 }
 
-#[tokio::test]
-async fn first_round_readonly_filters_first_dispatch_and_promotes_within_run() {
-    // C4-2：readonly + either。首轮目录 ⊆ 五件套（无 edit/委派/hosted）；
-    // 首轮 ToolUse（read_file，目录内）触发晋升，第二轮恢复完整目录；
-    // 同会话第二个 run 首轮即完整目录（粘性：跨 run 不重付目录变化）。
-    let provider = MockProvider::new("mock");
-    provider.push_turn(failing_read_turn("ro-1"));
-    provider.push_text_turn("done", Usage::default());
-    provider.push_text_turn("second run", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::ReadOnly,
-        agent_config::FirstRoundPromoteOn::Either,
-    );
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
-        .await
-        .unwrap();
-    rt.start_run(&session.meta.id, "inspect then answer")
-        .await
-        .unwrap();
-    wait_until_finished(&rt).await;
-    // C4 可见行：run1 收窄 + 晋升各一条；数量对齐 test_gateway（收窄 1 个，
-    // 完整目录含内置工具，必然更多）。
-    let run1_anchors = anchor_events(&mut rt).await;
-    assert_eq!(
-        run1_anchors.len(),
-        2,
-        "收窄与晋升各广播一次：{run1_anchors:?}"
-    );
-    assert!(matches!(
-        run1_anchors.as_slice(),
-        [
-            (
-                r_code_core::dto::CatalogAnchorPhase::Narrowed,
-                ref catalog,
-                1,
-                full_count
-            ),
-            (
-                r_code_core::dto::CatalogAnchorPhase::Promoted,
-                ref promoted_catalog,
-                1,
-                promoted_full
-            ),
-        ] if catalog == "readonly"
-            && promoted_catalog == "readonly"
-            && *full_count > 1
-            && *promoted_full == *full_count
-    ));
-    rt.start_run(&session.meta.id, "second run goal")
-        .await
-        .unwrap();
-    wait_until_finished(&rt).await;
-    assert!(
-        anchor_events(&mut rt).await.is_empty(),
-        "粘性晋升后第二个 run 不再重复广播"
-    );
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(timelines.len(), 3, "run1 两轮 + run2 一轮：{:?}", timelines);
-    let readonly_allowlist: Vec<&str> = timelines[0]
-        .iter()
-        .map(|name| {
-            assert!(
-                [
-                    "read_file",
-                    "list_files",
-                    "search",
-                    "glob",
-                    "load_skill",
-                    "search_files"
-                ]
-                .contains(&name.as_str()),
-                "首轮目录越界：{:?}",
-                timelines[0]
-            );
-            name.as_str()
-        })
-        .collect();
-    assert_eq!(timelines[0].len(), readonly_allowlist.len());
-    assert!(
-        !timelines[0].is_empty(),
-        "工作区会话受限首轮应保留五件套，而不是空目录"
-    );
-    assert_eq!(
-        timelines[0],
-        vec!["read_file".to_string()],
-        "test_gateway 只注册 read_file，受限首轮恰为它的子集"
-    );
-    assert!(
-        timelines[1].iter().any(|name| name == "read_file")
-            && timelines[1].len() > timelines[0].len(),
-        "第二轮应恢复完整目录：{:?}",
-        timelines[1]
-    );
-    // 粘性：第二个 run 的首轮目录与晋升后的完整目录一致。
-    assert_eq!(
-        timelines[2], timelines[1],
-        "同会话第二个 run 首轮应直接是完整目录（粘性）"
-    );
-}
-
-#[tokio::test]
-async fn first_round_readonly_promotes_on_pure_text_answer_for_next_run() {
-    // C4-3：either 的逃生舱——纯文字首答（无任何 ToolUse）也晋升，下一个 run
-    // 的首轮即完整目录，纯文字对话不会困死在受限目录。
-    let provider = MockProvider::new("mock");
-    provider.push_text_turn("just text", Usage::default());
-    provider.push_text_turn("second run text", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::ReadOnly,
-        agent_config::FirstRoundPromoteOn::Either,
-    );
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
-        .await
-        .unwrap();
-    rt.start_run(&session.meta.id, "text only").await.unwrap();
-    wait_until_finished(&rt).await;
-    // either 逃生舱：纯文字首答也晋升——可见行仍是收窄 + 晋升两条。
-    let run1_anchors = anchor_events(&mut rt).await;
-    assert_eq!(
-        run1_anchors.len(),
-        2,
-        "纯文字首答也要有完整可见行：{run1_anchors:?}"
-    );
-    rt.start_run(&session.meta.id, "follow up").await.unwrap();
-    wait_until_finished(&rt).await;
-    assert!(
-        anchor_events(&mut rt).await.is_empty(),
-        "已晋升会话的后续 run 不再广播锚定行"
-    );
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(timelines.len(), 2);
-    assert_eq!(
-        timelines[0],
-        vec!["read_file".to_string()],
-        "受限首轮恰为允许清单与注册目录的交集"
-    );
-    assert_ne!(
-        timelines[1], timelines[0],
-        "纯文字首答后（either）下一个 run 首轮应已晋升为完整目录"
-    );
-}
-
-#[tokio::test]
-async fn first_round_tool_call_mode_stays_restricted_until_tool_use() {
-    // C4-4：tool_call 对照组。纯文字首答不晋升——第二个 run 首轮仍受限；
-    // 出现 ToolUse 后晋升，其后的轮次与 run 恢复完整目录。
-    let provider = MockProvider::new("mock");
-    provider.push_text_turn("text no tool", Usage::default());
-    provider.push_turn(failing_read_turn("tc-tool"));
-    provider.push_text_turn("after tool", Usage::default());
-    provider.push_text_turn("third run", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::ReadOnly,
-        agent_config::FirstRoundPromoteOn::ToolCall,
-    );
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
-        .await
-        .unwrap();
-    rt.start_run(&session.meta.id, "run one").await.unwrap();
-    wait_until_finished(&rt).await;
-    rt.start_run(&session.meta.id, "run two").await.unwrap();
-    wait_until_finished(&rt).await;
-    rt.start_run(&session.meta.id, "run three").await.unwrap();
-    wait_until_finished(&rt).await;
-    // tool_call 对照组的可见行：run1 纯文字只有收窄；run2 首轮再次受限（重新广播
-    // 收窄）并在 ToolUse 后晋升；run3 已粘性完整，零广播。
-    let all_anchors = anchor_events(&mut rt).await;
-    assert_eq!(all_anchors.len(), 3, "收窄×2 + 晋升×1：{all_anchors:?}");
-    assert!(matches!(
-        all_anchors.as_slice(),
-        [
-            (r_code_core::dto::CatalogAnchorPhase::Narrowed, _, _, _),
-            (r_code_core::dto::CatalogAnchorPhase::Narrowed, _, _, _),
-            (r_code_core::dto::CatalogAnchorPhase::Promoted, _, _, _),
-        ]
-    ));
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(
-        timelines.len(),
-        4,
-        "run1×1 + run2×2 + run3×1：{timelines:?}"
-    );
-    assert_eq!(timelines[0], vec!["read_file".to_string()], "run1 受限");
-    assert_eq!(
-        timelines[1],
-        vec!["read_file".to_string()],
-        "纯文字未晋升，run2 首轮仍受限（tool_call 对照组语义）"
-    );
-    assert_ne!(
-        timelines[2], timelines[1],
-        "run2 第二轮（ToolUse 后）恢复完整目录"
-    );
-    assert_eq!(
-        timelines[3], timelines[2],
-        "run3 首轮保持完整目录（已晋升，粘性）"
-    );
-}
-
-/// 规划门门铃回合：模型调用 plan_ready（空参数，StopReason::ToolUse）。
-fn plan_ready_turn(id: &str) -> RecordedTurn {
-    RecordedTurn::ok(vec![
-        StreamEvent::ToolUseStart {
-            id: id.to_string(),
-            name: "plan_ready".to_string(),
-        },
-        StreamEvent::ToolUseComplete {
-            id: id.to_string(),
-            input: serde_json::json!({}),
-        },
-        StreamEvent::Stop {
-            reason: StopReason::ToolUse,
-        },
-    ])
-}
-
-#[tokio::test]
-async fn plan_gate_with_plan_complete_holds_until_plan_ready() {
-    // 规划门目标形态：plan_gate + plan_complete。首轮目录恰为 ["plan_ready"]；
-    // 纯文字回合不晋升（剥夺跨回合、跨 run 持续），模型调用 plan_ready 后
-    // 下一轮恢复完整目录；可见行收窄×2（每 run 首派发各一条）+ 晋升×1，
-    // tool_count 反映真实派发（= 1）。
-    let provider = MockProvider::new("mock");
-    provider.push_text_turn("plan draft v1", Usage::default());
-    provider.push_turn(plan_ready_turn("pg-ready"));
-    provider.push_text_turn("executing now", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::PlanGate,
-        agent_config::FirstRoundPromoteOn::PlanComplete,
-    );
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
-        .await
-        .unwrap();
-    // run1：纯文字终答（目录仅门铃），run 结束但粘性保持。
-    rt.start_run(&session.meta.id, "gate goal").await.unwrap();
-    wait_until_finished(&rt).await;
-    // run2：首轮仍仅门铃（跨 run 持续），plan_ready 后下一轮恢复完整。
-    rt.start_run(&session.meta.id, "ready to execute")
-        .await
-        .unwrap();
-    wait_until_finished(&rt).await;
-
-    let anchors = anchor_events(&mut rt).await;
-    assert_eq!(anchors.len(), 3, "收窄×2 + 晋升×1：{anchors:?}");
-    assert!(matches!(
-        anchors.as_slice(),
-        [
-            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c1, 1, f1),
-            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c2, 1, f2),
-            (r_code_core::dto::CatalogAnchorPhase::Promoted, ref c3, 1, f3),
-        ] if c1 == "plan_gate"
-            && c2 == "plan_gate"
-            && c3 == "plan_gate"
-            && *f1 > 1
-            && *f2 == *f1
-            && *f3 == *f1
-    ));
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(
-        timelines.len(),
-        3,
-        "run1×1（纯文字） + run2×2（门铃 + 恢复）：{timelines:?}"
-    );
-    assert_eq!(
-        timelines[0],
-        vec!["plan_ready".to_string()],
-        "plan_gate 首轮目录恰为门铃"
-    );
-    assert_eq!(
-        timelines[1],
-        vec!["plan_ready".to_string()],
-        "纯文字 run 之后新 run 首轮仍仅门铃（剥夺跨 run 持续）"
-    );
-    assert!(
-        timelines[2].iter().any(|name| name == "read_file") && timelines[2].len() > 1,
-        "plan_ready 后下一轮恢复完整目录：{:?}",
-        timelines[2]
-    );
-}
-
-#[tokio::test]
-async fn readonly_with_plan_complete_appends_doorbell_and_holds_without_it() {
-    // readonly + plan_complete：收窄目录 = 五件套 ∩ 注册目录 + plan_ready；
-    // 模型不调 plan_ready 则跨 run 持续收窄，无晋升可见行。
-    let provider = MockProvider::new("mock");
-    provider.push_text_turn("text only", Usage::default());
-    provider.push_text_turn("run two text", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::ReadOnly,
-        agent_config::FirstRoundPromoteOn::PlanComplete,
-    );
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
-        .await
-        .unwrap();
-    rt.start_run(&session.meta.id, "run one").await.unwrap();
-    wait_until_finished(&rt).await;
-    rt.start_run(&session.meta.id, "run two").await.unwrap();
-    wait_until_finished(&rt).await;
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(timelines.len(), 2);
-    assert_eq!(
-        timelines[0],
-        vec!["plan_ready".to_string(), "read_file".to_string()],
-        "readonly + plan_complete 的收窄目录 = 五件套交集 + 门铃（按名排序）"
-    );
-    assert_eq!(
-        timelines[1], timelines[0],
-        "无 plan_ready 则跨 run 持续收窄"
-    );
-    let anchors = anchor_events(&mut rt).await;
-    assert!(matches!(
-        anchors.as_slice(),
-        [
-            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c1, 2, _),
-            (r_code_core::dto::CatalogAnchorPhase::Narrowed, ref c2, 2, _),
-        ] if c1 == "readonly" && c2 == "readonly"
-    ));
-}
-
-#[tokio::test]
-async fn plan_gate_with_either_dispatches_empty_catalog_for_one_round() {
-    // 退化组合（UI 联动规避，合同层仍需良定义）：plan_gate + either =
-    // 空目录一回合纯思考，任意 assistant 内容即恢复完整目录。
-    let provider = MockProvider::new("mock");
-    provider.push_turn(failing_read_turn("pg-either"));
-    provider.push_text_turn("done", Usage::default());
-    let journal_dir = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-    let mut rt = anchored_runtime(
-        provider,
-        &journal_dir,
-        agent_config::FirstRoundCatalog::PlanGate,
-        agent_config::FirstRoundPromoteOn::Either,
-    );
-    let session = rt
-        .create_session(CreateSessionInput {
-            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
-            ..input()
-        })
-        .await
-        .unwrap();
-    rt.start_run(&session.meta.id, "empty first round")
-        .await
-        .unwrap();
-    wait_until_finished(&rt).await;
-
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(timelines.len(), 2);
-    assert_eq!(
-        timelines[0],
-        Vec::<String>::new(),
-        "plan_gate + either 首轮派发空目录"
-    );
-    assert!(
-        timelines[1].iter().any(|name| name == "read_file"),
-        "either 下任意 assistant 内容（这里是目录外 read_file ToolUse）即恢复：{:?}",
-        timelines[1]
-    );
-}
-
-#[tokio::test]
-async fn plan_ready_is_intercepted_without_gateway_dispatch() {
-    // 门铃是目录里唯一不经 gateway 的工具：test_gateway 只注册 read_file，
-    // 若 plan_ready 被转发会得到 unknown tool 错误——这里断言拿到的是
-    // worker 侧的成功语义；非 pending（目录已恢复后的重放/子代理）则返回
-    // 可修正错误。
-    fn gate_host(pending: bool) -> SessionToolHost {
-        SessionToolHost {
-            gateway: test_gateway(),
-            external_tools: None,
-            task_id: "task-plan-gate".to_string(),
-            run_id: "run-plan-gate".to_string(),
-            abort: Arc::new(AtomicBool::new(false)),
-            workspace_scope: None,
-            policy: ToolPolicy::Main,
-            caller: "agent".to_string(),
-            delegation: None,
-            delegation_disabled: Arc::new(AtomicBool::new(false)),
-            suspension_gate: Arc::new(AtomicBool::new(false)),
-            continuation_gate: Arc::new(AtomicBool::new(false)),
-            catalog_bootstrap_pending: Arc::new(AtomicBool::new(pending)),
-        }
+#[async_trait]
+impl Tool for NamedStubTool {
+    fn name(&self) -> &str {
+        self.name
     }
-    let accepted = gate_host(true)
-        .call_inner(Some("call-pg-1"), "plan_ready", serde_json::json!({}))
-        .await
-        .unwrap();
-    assert!(!accepted.is_error, "pending 期门铃必须成功：{accepted:?}");
-    assert!(
-        accepted.content.contains("Planning accepted"),
-        "成功语义由 worker 给出（未转发 gateway）：{accepted:?}"
-    );
-    let rejected = gate_host(false)
-        .call_inner(Some("call-pg-2"), "plan_ready", serde_json::json!({}))
-        .await
-        .unwrap();
-    assert!(
-        rejected.is_error,
-        "非 pending 调用门铃必须返回可修正错误：{rejected:?}"
-    );
-    assert!(rejected
-        .content
-        .contains("only available while the planning gate"));
+
+    fn description(&self) -> &str {
+        "stub tool used only to pin the catalog shape"
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+
+    fn requires_workspace_scope(&self) -> bool {
+        self.workspace_scoped
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+    ) -> Result<String, r_code_core::error::ProductError> {
+        Ok("stub".to_string())
+    }
 }
 
-#[tokio::test]
-async fn first_round_catalog_filter_does_not_touch_execution_boundary() {
-    // C4-5（红线 2）：受限轮模型仍调用目录外工具（构造历史诱导）时，调用照常
-    // 经 Gateway 执行并产生 ToolResult——目录过滤只裁剪呈现，不是执行边界。
+/// 覆盖 Plan 原生 5→8 目录全部名称 + 完整目录对照组（edit/bash 等）。
+fn plan_native_test_gateway() -> Arc<ToolGateway> {
     let engine = Arc::new(PermissionEngine::new());
     let mut gateway = ToolGateway::new(engine);
     gateway.register(Box::new(r_code_gateway::ReadFileTool));
-    gateway.register(Box::new(r_code_gateway::GitStatusTool));
-    let gateway = Arc::new(gateway);
+    // 宿主生命周期工具与真实注册一致：不要求工作区；工作区工具走默认。
+    for name in [
+        "plan_publish",
+        "request_user_input",
+        "enter_plan_mode",
+        "propose_plan_mode",
+    ] {
+        gateway.register(Box::new(NamedStubTool {
+            name,
+            workspace_scoped: false,
+        }));
+    }
+    for name in [
+        "glob",
+        "search",
+        "git_status",
+        "list_files",
+        "load_skill",
+        "edit",
+    ] {
+        gateway.register(Box::new(NamedStubTool {
+            name,
+            workspace_scoped: true,
+        }));
+    }
+    Arc::new(gateway)
+}
+
+// 测试环境无 hosted web search，本地内容搜索的派发名是 `search`（有 hosted
+// 别名时为 `search_files`；两者映射同一目录槽位）。
+const PLAN_NATIVE_BOOTSTRAP_NAMES: &[&str] = &[
+    "glob",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+];
+const PLAN_NATIVE_RESIDENT_NAMES: &[&str] = &[
+    "git_status",
+    "glob",
+    "list_files",
+    "load_skill",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+];
+
+#[tokio::test]
+async fn baseline_plan_mode_keeps_current_catalog_without_native_profile() {
+    // M0-01 characterization：baseline Plan（未传原生配置）保持现状——
+    // 目录不受 5→8 过滤影响，edit/enter_plan_mode 等照常可见。
     let provider = MockProvider::new("mock");
-    // 首轮直接调用 git_status（目录外的只读工具，避开审批流）：工作区不是 git
-    // 仓库也无妨——重点是调用被 Gateway 执行并产生 ToolResult（错误也是执行
-    // 产物），而不是因「不在目录」被拒。
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "baseline plan goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 1);
+    // baseline Plan 保持现状：Plan policy 的只读边界（edit/bash 不在场），
+    // 目录与执行边界一致；没有锚定/晋升事件。
+    assert!(
+        !timelines[0]
+            .iter()
+            .any(|name| name == "edit" || name == "bash"),
+        "baseline Plan 的只读边界不变：{:?}",
+        timelines[0]
+    );
+    assert!(
+        timelines[0].iter().any(|name| name == "read_file"),
+        "baseline Plan 保留既有只读调查工具：{:?}",
+        timelines[0]
+    );
+    assert!(anchor_events(&mut rt).await.is_empty());
+}
+
+#[tokio::test]
+async fn plan_native_bootstrap_dispatches_five_tools_then_promotes_to_resident() {
+    // M0-10：bootstrap 精确 5 项；首次 durable outcome 后宿主 CAS 钩子确认，
+    // 下一轮目录为 resident 精确 8 项（docs §13.1/§14.3）。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("plan-read-1"));
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let promotions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hook_promotions = promotions.clone();
+    let mut rt = journaled_runtime(provider, &journal_dir).with_plan_catalog_promotion(Arc::new(
+        move |_task_id| {
+            hook_promotions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        },
+    ));
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Bootstrap,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "native plan goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(
+        timelines[0],
+        PLAN_NATIVE_BOOTSTRAP_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        "bootstrap 目录必须精确为 5 项：{:?}",
+        timelines[0]
+    );
+    assert_eq!(
+        timelines[1],
+        PLAN_NATIVE_RESIDENT_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        "晋升后目录必须精确为 8 项（不恢复完整目录）：{:?}",
+        timelines[1]
+    );
+    assert_eq!(
+        promotions.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "宿主晋升钩子恰好调用一次"
+    );
+    let events = anchor_events(&mut rt).await;
+    assert_eq!(events.len(), 2, "Narrowed + Promoted：{events:?}");
+    assert_eq!(events[0].1, "plan_native");
+    assert_eq!(events[0].2, 5);
+    assert_eq!(events[1].0, r_code_core::dto::CatalogAnchorPhase::Promoted);
+    assert_eq!(events[1].2, 5);
+}
+
+#[tokio::test]
+async fn plan_native_promotion_failure_fails_closed_before_next_request() {
+    // M0-09/M0-10：宿主 CAS 失败时 fail closed——不发下一轮 Provider 请求。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("plan-read-fail"));
+    provider.push_text_turn("must not dispatch", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir).with_plan_catalog_promotion(Arc::new(
+        |_task_id| Err("plan store CAS failed".to_string()),
+    ));
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Bootstrap,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "fail closed goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(
+        timelines.len(),
+        1,
+        "晋升失败后不得派发第二次请求：{timelines:?}"
+    );
+    assert_eq!(timelines[0].len(), 5);
+}
+
+#[tokio::test]
+async fn plan_native_resident_start_does_not_rearm_bootstrap() {
+    // M0-09：宿主传入权威 resident phase 时，run 直接以 8 项目录起步，
+    // 不重新经历 bootstrap（clear context / runtime rebuild / 重启同理）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir)
+        .with_plan_catalog_promotion(Arc::new(|_task_id| panic!("resident 起步不应触发晋升钩子")));
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Resident,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "resident goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 1);
+    assert_eq!(
+        timelines[0],
+        PLAN_NATIVE_RESIDENT_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        "resident 起步目录精确 8 项：{:?}",
+        timelines[0]
+    );
+}
+
+#[tokio::test]
+async fn plan_native_minimal_context_drops_clock_and_delegation_tails() {
+    // M0-10 最小上下文：plan_native_v1 期间不注入本地时钟与委派说明，
+    // 只保留任务上下文（docs §13.1）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+
+    let mut baseline_rt = journaled_runtime(MockProvider::new("mock"), &journal_dir);
+    let baseline_session = baseline_rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    baseline_rt
+        .start_run(&baseline_session.meta.id, "baseline tails")
+        .await
+        .unwrap();
+    wait_until_finished(&baseline_rt).await;
+
+    let mut native_rt = journaled_runtime(provider, &journal_dir);
+    let native_session = native_rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    native_rt
+        .update_plan_native_catalog(
+            &native_session.meta.id,
+            Some(PlanNativeCatalogConfig {
+                phase: PlanNativeCatalogPhase::Resident,
+            }),
+        )
+        .await;
+    native_rt
+        .start_run(&native_session.meta.id, "native tails")
+        .await
+        .unwrap();
+    wait_until_finished(&native_rt).await;
+
+    let baseline_tails =
+        journal_excluded_tails(journal_dir.path(), &baseline_session.meta.id).await;
+    let native_tails = journal_excluded_tails(journal_dir.path(), &native_session.meta.id).await;
+    assert!(
+        baseline_tails[0].contains(&"local_clock".to_string()),
+        "baseline Plan 仍注入本地时钟：{:?}",
+        baseline_tails[0]
+    );
+    assert!(
+        !native_tails[0].contains(&"local_clock".to_string()),
+        "plan_native_v1 不注入本地时钟：{:?}",
+        native_tails[0]
+    );
+    assert!(
+        !native_tails[0].contains(&"delegation_hint".to_string()),
+        "plan_native_v1 不注入委派说明：{:?}",
+        native_tails[0]
+    );
+    // 权威任务上下文（PlanContextCapsule 投影）不属于最小上下文裁剪范围；
+    // 本测试未注入宿主 task_context，故只断言被裁剪项。
+}
+
+#[tokio::test]
+async fn propose_plan_mode_registered_only_for_suggestion_enabled_main_runs() {
+    // M0-05：propose_plan_mode 与建议提示同开关（docs §9：任一条件不满足时
+    // 工具和提示同时缺席）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_entry_suggestion(&session.meta.id, true)
+        .await;
+    rt.start_run(&session.meta.id, "complex-ish goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 1);
+    assert!(
+        timelines[0].iter().any(|name| name == "propose_plan_mode"),
+        "建议开关开启时目录含 propose_plan_mode：{:?}",
+        timelines[0]
+    );
+    let tails = journal_excluded_tails(journal_dir.path(), &session.meta.id).await;
+    assert!(
+        tails[0].contains(&"plan_suggestion".to_string()),
+        "建议策略尾部提示必须与工具同时在场：{:?}",
+        tails[0]
+    );
+}
+
+#[tokio::test]
+async fn propose_plan_mode_absent_without_suggestion_registration() {
+    // M0-01/M0-05 characterization：默认（未刷新建议开关）目录不含
+    // propose_plan_mode，也不注入建议提示——非 DeepSeek 的注册数为 0。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "plain goal").await.unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert!(
+        !timelines[0].iter().any(|name| name == "propose_plan_mode"),
+        "默认目录不得含 propose_plan_mode：{:?}",
+        timelines[0]
+    );
+    let tails = journal_excluded_tails(journal_dir.path(), &session.meta.id).await;
+    assert!(
+        !tails[0].contains(&"plan_suggestion".to_string()),
+        "默认不得注入建议提示：{:?}",
+        tails[0]
+    );
+}
+
+#[tokio::test]
+async fn propose_plan_mode_execution_gate_rejects_unregistered_calls() {
+    // M0-05 红线：工具不在目录里不是安全边界——历史诱导调用必须在进入
+    // Gateway 前被拒绝（docs §9）。
+    let host = SessionToolHost {
+        gateway: plan_native_test_gateway(),
+        external_tools: None,
+        task_id: "task-propose".to_string(),
+        run_id: "run-propose".to_string(),
+        abort: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        workspace_scope: None,
+        policy: ToolPolicy::Main,
+        caller: "agent".to_string(),
+        delegation: None,
+        delegation_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        suspension_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        continuation_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
+    };
+    let outcome = host
+        .call_inner(None, "propose_plan_mode", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(outcome.is_error);
+    assert!(outcome.content.contains("not available for this run"));
+}
+
+#[tokio::test]
+async fn plan_native_hidden_edit_call_is_rejected_at_execution_boundary() {
+    // M0-08：目录收窄是呈现层——隐藏的 edit/Shell/MCP/委派调用必须在
+    // 副作用前被 Plan policy 硬拒（docs §13.2 轨道 B）。
+    let provider = MockProvider::new("mock");
     provider.push_turn(RecordedTurn::ok(vec![
         StreamEvent::ToolUseStart {
-            id: "edge-git-1".to_string(),
-            name: "git_status".to_string(),
+            id: "hidden-edit-1".to_string(),
+            name: "edit".to_string(),
         },
         StreamEvent::ToolUseComplete {
-            id: "edge-git-1".to_string(),
-            input: serde_json::json!({}),
+            id: "hidden-edit-1".to_string(),
+            input: serde_json::json!({
+                "path": "stub.txt",
+                "old_string": "a",
+                "new_string": "b"
+            }),
         },
         StreamEvent::Stop {
             reason: StopReason::ToolUse,
         },
     ]));
-    provider.push_text_turn("recovered", Usage::default());
+    provider.push_text_turn("planned anyway", Usage::default());
     let journal_dir = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    let mut rt = LlmAgentRuntime::new(Box::new(provider), "mock-model".into(), gateway, None, None)
-        .with_request_journal(agent_store::SessionStore::new(
-            journal_dir.path().to_path_buf(),
-        ))
-        .with_orchestration_policy(OrchestrationPolicy {
-            first_round_catalog: agent_config::FirstRoundCatalog::ReadOnly,
-            first_round_promote_on: agent_config::FirstRoundPromoteOn::Either,
-            ..OrchestrationPolicy::default()
-        });
+    let mut rt = journaled_runtime(provider, &journal_dir)
+        .with_plan_catalog_promotion(Arc::new(|_task_id| Ok(())));
     let session = rt
         .create_session(CreateSessionInput {
             workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
-            mode: TaskMode::Edit,
+            mode: TaskMode::Plan,
             ..input()
         })
         .await
         .unwrap();
-    rt.start_run(&session.meta.id, "edge goal").await.unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Bootstrap,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "hidden edit goal")
+        .await
+        .unwrap();
     wait_until_finished(&rt).await;
 
-    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
-    assert_eq!(timelines.len(), 2);
-    assert_eq!(
-        timelines[0],
-        vec!["read_file".to_string()],
-        "受限首轮目录不含 edit"
-    );
-    assert!(
-        timelines[1].iter().any(|name| name == "git_status"),
-        "ToolUse 后第二轮恢复完整目录（含 git_status）：{:?}",
-        timelines[1]
-    );
-    // 执行边界：目录外调用被真实执行并产生 ToolResult 事件（错误也是执行产物，
-    // 证明 dispatch 走了 Gateway 的既有 policy，而非目录过滤拦截）。
     let events = rt.poll_events().await.unwrap();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AgentEvent::ToolResult { call_id, .. } if call_id == "edge-git-1"
-        )),
-        "受限轮的目录外工具调用必须照常执行并产生 ToolResult"
-    );
-    assert!(events.iter().any(|event| matches!(
+    let rejected = events.iter().any(|event| matches!(
         event,
-        AgentEvent::State {
-            state: TaskState::ReviewReady
-        }
-    )));
+        AgentEvent::ToolResult { call_id, is_error, .. } if call_id == "hidden-edit-1" && *is_error
+    ));
+    assert!(
+        rejected,
+        "Plan 模式的隐藏 edit 调用必须以错误工具结果拒绝（事件：{events:?}）"
+    );
+    // 目录不含 edit（呈现层），但执行边界才是权威。
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert!(!timelines[0].iter().any(|name| name == "edit"));
 }

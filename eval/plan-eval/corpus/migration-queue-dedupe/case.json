@@ -1,0 +1,8 @@
+{
+  "id": "migration-queue-dedupe",
+  "category": "migration",
+  "task": "把可重复投递的旧队列数据迁移为幂等队列：新增 `lib/dedupe.js`（按 operation_id 去重，保留首次出现），`lib/queue.js` 的 migrate 去掉重复项并输出 dropped 计数。",
+  "expected_signals": [
+    "migration_or_data"
+  ]
+}

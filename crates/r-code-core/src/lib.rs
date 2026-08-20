@@ -16,6 +16,7 @@ pub mod error;
 pub mod ids;
 mod memory;
 pub mod plan;
+pub mod plan_entry;
 pub mod process;
 pub mod secret;
 pub mod security;

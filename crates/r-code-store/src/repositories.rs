@@ -250,8 +250,8 @@ fn row_to_session_branch(row: &rusqlite::Row<'_>) -> Result<SessionBranch, Produ
 /// 列顺序：id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at
 fn row_to_queued_message(row: &rusqlite::Row<'_>) -> Result<QueuedMessage, ProductError> {
     let state: String = row.get(4).map_err(db_err)?;
-    let created_at: String = row.get(7).map_err(db_err)?;
-    let updated_at: String = row.get(8).map_err(db_err)?;
+    let created_at: String = row.get(8).map_err(db_err)?;
+    let updated_at: String = row.get(9).map_err(db_err)?;
     Ok(QueuedMessage {
         id: row.get(0).map_err(db_err)?,
         task_id: row.get(1).map_err(db_err)?,
@@ -260,6 +260,7 @@ fn row_to_queued_message(row: &rusqlite::Row<'_>) -> Result<QueuedMessage, Produ
         state: parse_queued_message_state(&state)?,
         priority: row.get(5).map_err(db_err)?,
         attachments_json: row.get(6).map_err(db_err)?,
+        request_key: row.get(7).map_err(db_err)?,
         created_at: parse_ts(&created_at)?,
         updated_at: parse_ts(&updated_at)?,
     })
@@ -1749,7 +1750,7 @@ impl<'a> QueuedMessageRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                  FROM queued_messages \
                  WHERE task_id = ?1 AND branch_id = ?2 \
                    AND state IN ('queued', 'dispatching', 'failed') \
@@ -1809,7 +1810,7 @@ impl<'a> QueuedMessageRepository<'a> {
         let candidate = if let Some(task_id) = task_id {
             let mut stmt = tx
                 .prepare(
-                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                      FROM queued_messages WHERE state = 'queued' AND task_id = ?1 \
                      ORDER BY sort_order ASC, priority DESC, created_at ASC, id ASC LIMIT 1",
                 )
@@ -1822,7 +1823,7 @@ impl<'a> QueuedMessageRepository<'a> {
         } else {
             let mut stmt = tx
                 .prepare(
-                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                      FROM queued_messages WHERE state = 'queued' \
                      ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
                 )
@@ -1961,7 +1962,7 @@ impl<'a> QueuedMessageRepository<'a> {
         let candidate = {
             let mut statement = tx
                 .prepare(
-                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                      FROM queued_messages \
                      WHERE id = ?1 AND task_id = ?2 AND branch_id = ?3 AND state = 'queued'",
                 )

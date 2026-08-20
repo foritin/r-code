@@ -1,0 +1,33 @@
+diff --git a/lib/batch.js b/lib/batch.js
+index 5be2eb0..f9d251d 100644
+--- a/lib/batch.js
++++ b/lib/batch.js
+@@ -1,5 +1,5 @@
+ import { validateAll } from "./validator.js";
+ 
+ export function runBatch(records, rules, options = {}) {
+-  return validateAll(records, rules);
++  return validateAll(records, rules, options);
+ }
+diff --git a/lib/validator.js b/lib/validator.js
+index 2ae0207..f3258c3 100644
+--- a/lib/validator.js
++++ b/lib/validator.js
+@@ -1,10 +1,15 @@
+-export function validateAll(records, rules) {
++export function validateAll(records, rules, options = {}) {
+   const errors = [];
++  let evaluated = 0;
+   for (const record of records) {
+     for (const rule of rules) {
++      evaluated += 1;
+       const error = rule(record);
+       if (error) errors.push(error);
++      if (options.strict && error) {
++        return { errors, evaluated, stoppedEarly: true };
++      }
+     }
+   }
+-  return { errors };
++  return { errors, evaluated, stoppedEarly: false };
+ }

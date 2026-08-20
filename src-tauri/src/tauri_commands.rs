@@ -17,6 +17,7 @@ use r_code_core::error::{ProductError, PROJECT_CONVERSATION_LIMIT_REACHED_CODE};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };
+use r_code_core::plan_entry::PlanEntryDecisionInput;
 use r_code_host::commands::{
     ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
     RecoveryCleanupResult, RecoveryPageData, SearchMatch, SessionMessage,
@@ -24,6 +25,7 @@ use r_code_host::commands::{
     TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard, WorkspaceForgetResult,
 };
 use r_code_host::log_buffer::LogEntry;
+use r_code_host::plan_entry_commands::{PlanEntryOfferView, PlanningStatusView};
 use r_code_host::replay::ReplayEntry;
 use r_code_store::{EnhancedReviewTarget, EnhancedReviewView, PlanRejectResult};
 use serde::Serialize;
@@ -273,6 +275,37 @@ pub async fn cmd_task_set_mode(
     let mode =
         TaskMode::try_from_str(mode.trim()).ok_or_else(|| format!("invalid task mode: {mode}"))?;
     r_code_host::commands::task_set_mode(&state, &task_id, mode).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_entry_offer_get(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<PlanEntryOfferView>, String> {
+    r_code_host::plan_entry_commands::plan_entry_offer_get(&state, &task_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_entry_decide(
+    state: State<'_, CommandState>,
+    input: PlanEntryDecisionInput,
+) -> Result<PlanEntryOfferView, String> {
+    r_code_host::plan_entry_commands::plan_entry_decide(&state, &input).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_entry_retry_continuation(
+    state: State<'_, CommandState>,
+    offer_id: String,
+) -> Result<PlanEntryOfferView, String> {
+    r_code_host::plan_entry_commands::plan_entry_retry_continuation(&state, &offer_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_planning_status(
+    state: State<'_, CommandState>,
+) -> Result<PlanningStatusView, String> {
+    r_code_host::plan_entry_commands::planning_status(&state).await
 }
 
 #[tauri::command]

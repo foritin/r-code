@@ -10,6 +10,7 @@
 | [联网工具与 MCP](./mcp.md) | 原生联网、MCP 管理、Registry、安全确认、跨平台启动和故障恢复 |
 | [演进记忆](./memory.md) | 全局/项目作用域、自动触发、Reviewer、审批、注入、持久化与隐私边界 |
 | [Plan 模式与增强审核](./plan-mode.md) · [English](./plan-mode.en.md) | 目标、结构化人工确认、Plan 投影、功能待办、增强审核、并发与崩溃恢复 |
+| [DeepSeek 复杂任务 Plan 建议与 Plan-only 双轨](./plan-mode-dual-track-gate.md) | PRD + 实施设计：DeepSeek 首发、低打扰用户确认、内置指引、Plan-only 轨迹锚定与原生硬门 |
 | [macOS 真机验证清单](./macos-validation.md) | Windows/Linux 无法替代的本地加密凭据、Finder、终端、RTK、MCP 与安装包运行验证 |
 | [发布手册](./releasing.md) | 版本、CHANGELOG、tag、GitHub Release、签名、失败恢复和首次发布清单 |
 | [安装、备份、恢复与卸载](./operations.md) · [English](./operations.en.md) | 用户/运维人员的安装、升级、完整数据备份、迁移恢复、卸载和支持包流程 |
