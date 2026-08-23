@@ -1,0 +1,8 @@
+{
+  "build": {
+    "beforeBundleCommand": {
+      "script": "bash presign-macos-bin.sh",
+      "cwd": "../scripts"
+    }
+  }
+}
