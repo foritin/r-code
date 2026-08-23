@@ -1,5 +1,13 @@
 # 请求构成审计与首轮锚定实验（落地方案）
 
+> **状态更新（Phase 0）**：本文描述的首轮目录锚定实验（含「规划门 plan_gate /
+> plan_complete / plan_ready」扩展）已随 DeepSeek 复杂任务 Plan 建议与 Plan-only
+> 双轨（`docs/plan-mode-dual-track-gate.md`）整体下线：客户设置移除
+> `first_round_*` 档位（legacy 输入只返回诊断警告），worker 不再收窄 Main 模式
+> 目录，`plan_ready` 工具与门铃注入已删除。请求信封审计（`diagnostics.request_audit`）
+> 继续有效。本文保留为实验记录与请求审计协议的权威。
+
+
 > 操作手册。本文承接 [harness-migration.md](./harness-migration.md) 阶段 1.3 的
 > 「request/header 快照 + 重建自检」：合同半与运行时半已在测试接线中完成，
 > 本文补齐**宿主接线**（阶段 A），并在其上叠加**目录构成审计**（阶段 B）与
@@ -564,7 +572,10 @@ summary-only 空目录轮、hosted web 回退。配方 2 的输出进入会话�
   代表性编码任务（读代码答问 / 定位修复 / 小功能实现 / 重构 / 多文件
   调查），每任务 N=5 次重复。
 - **分组**：`first_round_catalog = full`（对照组）vs `readonly` vs
-  `editor_pair`（两个实验组）；组内 `promote_on` 固定 `either`。
+  `editor_pair`（两个实验组）；组内 `promote_on` 固定 `either`。规划门
+  扩展后增设第四组 `plan_gate + plan_complete`（目标形态组：剥夺跨回合
+  持续到模型调用 plan_ready，重点观察指标 1/2 的首轮思考质量与指标 3
+  的总轮数代价）。
 - **指标**（每 run 记录，来源 sidecar + 产品状态）：
   1. 首轮 reasoning 首行文本（风格定性）；
   2. 风格标记计数（首轮 reasoning + 正文上正则计数；英文任务用
@@ -609,6 +620,10 @@ pub enum FirstRoundCatalog {
     ReadOnly,
     /// 首轮只暴露 read_file + edit（对标 dsh Minimal 工具对的编辑变体）。
     EditorPair,
+    /// 规划门：首轮起零工作工具，目录仅含 plan_ready（需配 plan_complete
+    /// 晋升信号）。剥夺跨回合持续到模型声明规划完成——恶劣环境压榨首轮
+    /// 思考的实验形态。
+    PlanGate,
 }
 
 /// 晋升信号。
@@ -622,6 +637,10 @@ pub enum FirstRoundPromoteOn {
     /// 仅首次 ToolUse 晋升；模型一直不调工具则一直停留在受限目录
     ///（dsh 的 tool-call 模式，保留作对照）。
     ToolCall,
+    /// 仅当模型调用 plan_ready 才晋升。剥夺跨回合、跨 run 持续（会话级
+    /// 粘性），直到模型自己声明规划完成。纯文本终答自然结束 run，粘性
+    /// 保持到下一个 run 的首轮。
+    PlanComplete,
 }
 ```
 
@@ -708,14 +727,40 @@ pub enum FirstRoundPromoteOn {
 
    语义对应 dsh：Either 下首轮 outcome 必然含 assistant 消息 → 晋升恒发生
    在第 2 轮派发前，受限窗口 = 恰好首轮；ToolCall 下模型纯文字回复则
-   停留（对照组用途）。工具执行失败不影响晋升（只看 ToolUse 是否产生，
-   与 dsh「执行失败仍晋升」一致）。
+   停留（对照组用途）；PlanComplete 下剥夺跨回合、跨 run 持续（会话级
+   粘性），仅模型调用 plan_ready 才晋升。工具执行失败不影响晋升（只看
+   ToolUse 是否产生，与 dsh「执行失败仍晋升」一致）。
+
+6. **规划门扩展（`plan_gate` / `plan_complete`，后补实施）**：
+
+   - 允许清单：`first_round_allowlist` 增臂 `PlanGate => &[]`（零工作
+     工具）；
+   - **spec 注入**：`promote_on == PlanComplete` 且主 run 处于 pending 时，
+     在过滤点 retain 之后、锚定计数与 Narrowed 事件之前注入
+     `plan_ready_tool_spec()`（Builtin、空 schema、无审批），并按名重排序
+     （P1-C 派发字节稳定）——`tool_count` 因此反映真实派发
+     （plan_gate + plan_complete = 1；readonly/editor_pair + plan_complete
+     = 原清单 + plan_ready）；
+   - **执行拦截**：`SessionToolHost` 增共享的 `catalog_bootstrap_pending`
+     字段（主 run 传真实标志、子代理恒 false）；`call_inner` 在 gateway
+     派发之前拦截 `plan_ready`——pending 返回成功语义（「下一轮恢复完整
+     目录」），非 pending 返回可修正错误；全程不转发 gateway、无审批
+     （红线 2 的唯一例外）。`host_owned_tool_name` /
+     `host_lifecycle_tool_allowed`（`plan_ready` 仅 Main 策略）同步接线；
+   - **尾部指令**：每轮尾部 user 消息注入 `build_plan_gate_message`
+     （`TAIL_LABEL_PLAN_GATE`，与 plan_mode 消息同法登记进
+     excluded_tails），文案按档位区分（plan_gate = 零工作工具版本），
+     直到晋升才停；
+   - **晋升新臂**：`PlanComplete => appended_messages 中存在 assistant
+     ToolUse 且 `tool_name() == "plan_ready"``——唯一的关门信号。
 
 ### C3 边界与不变量（实现与评审清单）
 
 - **子代理**：过滤点只在主 run 装配处（`:3699`）；子代理装配点
   （`:752-760`）不经过该逻辑，恒为完整目录——对齐 dsh「子 agent 始终看到
-  完整目录」。
+  完整目录」。规划门同样不影响子代理：子代理 host 的
+  `catalog_bootstrap_pending` 恒 false，`plan_ready` 拦截直接走非 pending
+  分支（可修正错误），`host_lifecycle_tool_allowed` 亦仅 Main 策略放行。
 - **summary_only / 恢复轮**：tools 已为空表，过滤不介入；晋升判定与
   governor 流程正交。
 - **system prompt**：run 冻结逻辑（`:3508-3519`）零改动。首轮 system 中
@@ -730,9 +775,16 @@ pub enum FirstRoundPromoteOn {
   RequestHeader.tool_names 链推导（dsh「从持久事件推导」的 r-code 对应
   物），登记为后续项。
 - **逃生舱**：默认 `either` 下不存在困死路径；`tool_call` 模式困死是
-  对照组的有意行为，配置注释写明。
+  对照组的有意行为，配置注释写明。规划门（`plan_complete`）的模型外
+  逃生路径有三条：设置页总开关滑纽关闭（catalog 回 `full`，经 runtime
+  重建指纹即时重建 runtime，新会话即现状）；`run_budget` 照常终止超时
+  run；纯文本终答自然结束 run（粘性只影响下一个 run 的首轮，不阻断
+  交付）。
 - **enable_caching**：bootstrap 目录非空 → `:3966` 的
-  `enable_caching: !tools.is_empty()` 行为不变。
+  `enable_caching: !tools.is_empty()` 行为不变。规划门下注意：`plan_gate`
+  档 + `either`/`tool_call`（退化组合，UI 联动规避）首轮 tools 为空 →
+  该轮 `enable_caching = false`，与 summary-only 空表轮同款行为；
+  `plan_gate + plan_complete` 下目录恰含 plan_ready（非空），不受影响。
 
 ### C4 测试
 
@@ -798,7 +850,7 @@ dsh 的实证只在 DeepSeek V4 Pro 上成立；机制（轨迹策略与可见�
 | 委派批次锁（第二个及以后的子代理须 `plan_subagents(confirm=true)`） | 模型确认批次 | 拒绝提示文本引导（`:1102-1108`）模型自查补救；用户 steer | 无（已达标） |
 | summary-only 恢复轮（空工具） | governor 判定 | governor 自身状态机推进，有界 | 无（已达标） |
 | suspension/continuation 门 | run 内事件 | run_budget / abort | 无（已达标） |
-| C 新增：首轮目录晋升 | 首轮 outcome（either 默认） | 默认恒晋升；`tool_call` 模式困死为有意对照组 | 无（设计内） |
+| C 新增：首轮目录晋升 | 首轮 outcome（either 默认） | 默认恒晋升；`tool_call` 模式困死为有意对照组；`plan_complete` 模式：设置页总开关滑纽关闭（经指纹重建 runtime）+ run_budget 终止 + 纯文本终答自然结束 run（粘性不阻断交付） | 无（设计内） |
 
 审计产出：如发现新困死路径，单独开 issue，不混入本方案 PR。
 

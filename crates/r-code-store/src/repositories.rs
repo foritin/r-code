@@ -250,8 +250,8 @@ fn row_to_session_branch(row: &rusqlite::Row<'_>) -> Result<SessionBranch, Produ
 /// 列顺序：id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at
 fn row_to_queued_message(row: &rusqlite::Row<'_>) -> Result<QueuedMessage, ProductError> {
     let state: String = row.get(4).map_err(db_err)?;
-    let created_at: String = row.get(7).map_err(db_err)?;
-    let updated_at: String = row.get(8).map_err(db_err)?;
+    let created_at: String = row.get(8).map_err(db_err)?;
+    let updated_at: String = row.get(9).map_err(db_err)?;
     Ok(QueuedMessage {
         id: row.get(0).map_err(db_err)?,
         task_id: row.get(1).map_err(db_err)?,
@@ -260,6 +260,7 @@ fn row_to_queued_message(row: &rusqlite::Row<'_>) -> Result<QueuedMessage, Produ
         state: parse_queued_message_state(&state)?,
         priority: row.get(5).map_err(db_err)?,
         attachments_json: row.get(6).map_err(db_err)?,
+        request_key: row.get(7).map_err(db_err)?,
         created_at: parse_ts(&created_at)?,
         updated_at: parse_ts(&updated_at)?,
     })
@@ -1749,7 +1750,7 @@ impl<'a> QueuedMessageRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                  FROM queued_messages \
                  WHERE task_id = ?1 AND branch_id = ?2 \
                    AND state IN ('queued', 'dispatching', 'failed') \
@@ -1809,7 +1810,7 @@ impl<'a> QueuedMessageRepository<'a> {
         let candidate = if let Some(task_id) = task_id {
             let mut stmt = tx
                 .prepare(
-                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                      FROM queued_messages WHERE state = 'queued' AND task_id = ?1 \
                      ORDER BY sort_order ASC, priority DESC, created_at ASC, id ASC LIMIT 1",
                 )
@@ -1822,7 +1823,7 @@ impl<'a> QueuedMessageRepository<'a> {
         } else {
             let mut stmt = tx
                 .prepare(
-                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                      FROM queued_messages WHERE state = 'queued' \
                      ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
                 )
@@ -1961,7 +1962,7 @@ impl<'a> QueuedMessageRepository<'a> {
         let candidate = {
             let mut statement = tx
                 .prepare(
-                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, created_at, updated_at \
+                    "SELECT id, task_id, branch_id, message, state, priority, attachments_json, request_key, created_at, updated_at \
                      FROM queued_messages \
                      WHERE id = ?1 AND task_id = ?2 AND branch_id = ?3 AND state = 'queued'",
                 )
@@ -2114,12 +2115,47 @@ impl<'a> BlobStore<'a> {
     }
 
     /// 写入内容，返回 blake3 哈希。相同内容去重（不覆盖已存在的文件）。
+    ///
+    /// 原子安装（docs/multimodal-attachments §4.3）：临时文件 + `sync_all()` +
+    /// 同目录 rename。目标已存在时删除临时文件并复用目标。崩溃窗口只会留下
+    /// 无 ledger 的临时/半装文件，由 `prune_unreferenced_files()` 回收——绝无
+    /// 「数据库已提交但 Blob 尚未安装」的顺序。
     pub fn put(&self, content: &[u8]) -> Result<String, ProductError> {
         let hash = blake3::hash(content).to_hex().to_string();
         let blob_path = self.blobs_dir.join(&hash);
         if !blob_path.exists() {
             std::fs::create_dir_all(&self.blobs_dir)?;
-            std::fs::write(&blob_path, content)?;
+            let temp_path =
+                self.blobs_dir
+                    .join(format!(".tmp-{}-{}", hash, uuid::Uuid::new_v4().simple()));
+            let write_result = (|| -> std::io::Result<()> {
+                use std::io::Write;
+                let mut file = std::fs::File::create(&temp_path)?;
+                file.write_all(content)?;
+                file.sync_all()?;
+                drop(file);
+                Ok(())
+            })();
+            match write_result {
+                Ok(()) => {
+                    // rename 已存在目标时语义为替换；并发写入同一 hash 的最终
+                    // 内容相同（内容寻址），替换无副作用。
+                    if let Err(error) = std::fs::rename(&temp_path, &blob_path) {
+                        let _ = std::fs::remove_file(&temp_path);
+                        // 另一个并发写入者可能已安装同 hash 目标——复用它。
+                        if !blob_path.exists() {
+                            return Err(error.into());
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = std::fs::remove_file(&temp_path);
+                    // 写失败但目标可能已由并发方安装。
+                    if !blob_path.exists() {
+                        return Err(error.into());
+                    }
+                }
+            }
         }
         Ok(hash)
     }

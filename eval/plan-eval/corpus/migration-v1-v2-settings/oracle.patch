@@ -1,0 +1,30 @@
+diff --git a/lib/migrate.js b/lib/migrate.js
+new file mode 100644
+index 0000000..d30b43e
+--- /dev/null
++++ b/lib/migrate.js
+@@ -0,0 +1,12 @@
++export function migrateSettings(v1) {
++  if (!v1 || v1.version === 2) return v1;
++  const { notify_email, notify_push, ...rest } = v1;
++  return {
++    ...rest,
++    version: 2,
++    notify: {
++      email: Boolean(notify_email),
++      push: Boolean(notify_push),
++    },
++  };
++}
+diff --git a/lib/store.js b/lib/store.js
+index 1fc2ac8..23ef42d 100644
+--- a/lib/store.js
++++ b/lib/store.js
+@@ -1,3 +1,6 @@
++import { migrateSettings } from "./migrate.js";
++
+ export function loadSettings(raw) {
+-  return typeof raw === "string" ? JSON.parse(raw) : raw;
++  const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
++  return migrateSettings(parsed);
+ }

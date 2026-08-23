@@ -33,6 +33,7 @@ export function MenuBar() {
   const canGoBack = useAppStore((s) => s.navigationBack.length > 0);
   const canGoForward = useAppStore((s) => s.navigationForward.length > 0);
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
+  const openGuideSheet = useAppStore((s) => s.openGuideSheet);
   const openKnowledge = useAppStore((s) => s.openKnowledge);
   const openRoom = useAppStore((s) => s.openRoom);
   const railCollapsed = useAppStore((s) => s.railCollapsed);
@@ -146,6 +147,8 @@ export function MenuBar() {
             {({ close }) => <>
               <MenuItem close={close} onSelect={requestOnboarding}>首次设置</MenuItem>
               <MenuSeparator />
+              <MenuItem close={close} onSelect={() => openGuideSheet("plan-suggestion")}>Plan 模式与复杂任务建议</MenuItem>
+              <MenuItem close={close} onSelect={() => { setSettingsPane("providers"); openGuideSheet("providers"); }}>设置与模型服务指引</MenuItem>
               <MenuItem close={close} shortcut={keyLabel("shortcuts")} onSelect={showShortcuts}>快捷键</MenuItem>
               <MenuItem close={close} onSelect={() => setSettingsPane("diagnostics")}>诊断与支持</MenuItem>
               <MenuItem close={close} onSelect={() => setSettingsPane("subagents")}>子代理配置</MenuItem>

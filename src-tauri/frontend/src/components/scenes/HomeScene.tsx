@@ -21,6 +21,9 @@ import { usePoll } from "../../lib/poll";
 import { displayPath, errText } from "../../lib/format";
 import { RUNTIME_SETTINGS_CHANGED_EVENT } from "../../lib/onboarding";
 import { usePlatformCapabilities } from "../../lib/platform-capabilities";
+import { useImageUnderstandingEngine } from "../../lib/image-understanding";
+import { resolveEffectiveImageEngine } from "../Attachments";
+import { mainModelVisionConfirmed } from "../room/model-capabilities";
 import type {
   CodexCliPreferences,
   CodexIntegrationStatus,
@@ -132,11 +135,22 @@ export function HomeScene() {
   const composerRef = useRef<HTMLDivElement>(null);
   const attachments = useAttachments();
   const platformCapabilities = usePlatformCapabilities();
+  const configuredImageEngine = useImageUnderstandingEngine();
   const { choices: providerChoices, fallback, error: providerError } = useProviders([]);
   // provider 列表可能在 HomeScene 重新挂载后的下一拍才写回本地选择；直接从
   // fallback 派生当前项，避免用户已输入目标但发送按钮短暂保持禁用。
   const activeProvider = provider ?? providerChoices.find((choice) => choice.name === fallback) ?? null;
   const activeModel = draftModel ?? activeProvider?.model ?? "";
+  // 主模型目录确认多模态时原图直发：OCR/视觉模型引擎只服务文本主模型。
+  const imageEngine = resolveEffectiveImageEngine(
+    configuredImageEngine,
+    mainModelVisionConfirmed({
+      agentEngine,
+      codexPreferences,
+      provider: activeProvider ?? undefined,
+      model: activeModel,
+    }),
+  );
   const imageCapability = agentEngine === "codex"
     ? codexImageCapability(codexPreferences)
     : imageCapabilityFor(activeProvider ?? undefined, activeModel);
@@ -153,11 +167,13 @@ export function HomeScene() {
     attachments.attachments,
     capabilityForAttachment,
     platformCapabilities,
+    imageEngine,
   );
   const attachmentBlockedReason = firstBlockedAttachmentReason(
     attachments.attachments,
     capabilityForAttachment,
     platformCapabilities,
+    imageEngine,
   );
   const currentWorkspace = workspaces.find((w) => w.canonical_path === currentWorkspacePath);
   const providerReady = activeProvider?.ready ?? false;
@@ -682,10 +698,20 @@ export function HomeScene() {
               }
             }}
           />
+          {launching
+            && attachments.attachments.some((attachment) => attachment.kind === "image")
+            && imageEngine.engine !== "direct" && (
+            <p className="composer-image-converting" role="status" aria-live="polite">
+              {imageEngine.engine === "model"
+                ? `正在由视觉模型 ${imageEngine.visionModelLabel ?? ""} 理解图片，完成后自动开始对话…`
+                : "正在用本机 OCR 识别图片文字，完成后自动开始对话…"}
+            </p>
+          )}
           <AttachmentTray
             attachments={launching ? [] : attachments.attachments}
             capabilityFor={capabilityForAttachment}
             platformCapabilities={platformCapabilities}
+            imageEngine={imageEngine}
             onRemove={attachments.remove}
           />
           <div className="chat-composer-foot">
@@ -791,7 +817,7 @@ export function HomeScene() {
                     </MenuItem>
                     <MenuSeparator />
                     <MenuItem close={close} onSelect={() => setSettingsPane("agents")}>管理 Agent 编排</MenuItem>
-                    {!codexReady && <MenuItem close={close} onSelect={() => setSettingsPane("subagents")}>连接 Codex CLI</MenuItem>}
+                    {!codexReady && <MenuItem close={close} onSelect={() => setSettingsPane("agents")}>连接 Codex CLI</MenuItem>}
                   </>
                 )}
               </Menu>
@@ -838,7 +864,7 @@ export function HomeScene() {
 
             <div className="composer-actions">
               {!engineReady && (
-                <button className="provider-link" onClick={() => setSettingsPane(agentEngine === "codex" ? "subagents" : "providers")}>
+                <button className="provider-link" onClick={() => setSettingsPane(agentEngine === "codex" ? "agents" : "providers")}>
                   {agentEngine === "codex" ? "连接 Codex CLI" : "连接模型服务"}
                 </button>
               )}

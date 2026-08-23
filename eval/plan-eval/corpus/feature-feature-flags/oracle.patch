@@ -1,0 +1,33 @@
+diff --git a/lib/flags.js b/lib/flags.js
+new file mode 100644
+index 0000000..1da900f
+--- /dev/null
++++ b/lib/flags.js
+@@ -0,0 +1,13 @@
++export function createFlags({ defaults = {}, userOverrides = {} } = {}) {
++  const sessionOverrides = new Map();
++  return {
++    isEnabled(name, context = {}) {
++      const session = sessionOverrides.get(name);
++      if (session !== undefined) return session;
++      const user = userOverrides[context.user ?? ""]?.[name];
++      if (user !== undefined) return user;
++      return Boolean(defaults[name]);
++    },
++    setSession(name, enabled) { sessionOverrides.set(name, enabled); },
++  };
++}
+diff --git a/lib/page.js b/lib/page.js
+index b683e8e..2fd8495 100644
+--- a/lib/page.js
++++ b/lib/page.js
+@@ -1,3 +1,8 @@
++import { createFlags } from "./flags.js";
++
++export const flags = createFlags({ defaults: { newHeader: true } });
++
+ export function render(user) {
+-  return { header: "classic", user: user.id };
++  const header = flags.isEnabled("newHeader", { user: user.id }) ? "modern" : "classic";
++  return { header, user: user.id };
+ }

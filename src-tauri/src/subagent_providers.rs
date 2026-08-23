@@ -872,13 +872,12 @@ fn catalog_entry_draft(
                 && fingerprint.is_some();
             let availability = if !input.codex.installed {
                 SubagentProviderAvailability::NotInstalled
-            } else if !input.codex.configured
-                || model.trim().is_empty()
-                || input.codex.permission_profile.trim().is_empty()
-            {
+            } else if !input.codex.configured || input.codex.permission_profile.trim().is_empty() {
                 SubagentProviderAvailability::NeedsConfiguration
             } else if !input.codex.auth_ready {
                 SubagentProviderAvailability::LoginRequired
+            } else if model.trim().is_empty() {
+                SubagentProviderAvailability::NeedsConfiguration
             } else if !input.codex.adapter_ready || fingerprint.is_none() {
                 SubagentProviderAvailability::TrustRequired
             } else {
@@ -1684,6 +1683,24 @@ mod tests {
         );
         assert!(!snapshot.entries[0].ready);
         assert!(!snapshot.entries[0].selectable);
+    }
+
+    #[test]
+    fn codex_login_requirement_is_not_masked_by_an_unresolved_default_model() {
+        let config = Config::default();
+        let receipts = SubagentHealthReceiptDocument::default();
+        let pepper = test_pepper(0x45);
+        let mut codex = codex_catalog_input(None);
+        codex.auth_ready = false;
+        codex.model.clear();
+
+        let snapshot = build_catalog(&config, &codex, &receipts, &pepper);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(
+            snapshot.entries[0].availability,
+            SubagentProviderAvailability::LoginRequired
+        );
+        assert!(!snapshot.entries[0].ready);
     }
 
     #[test]

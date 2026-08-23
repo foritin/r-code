@@ -1,0 +1,8 @@
+{
+  "id": "perf-short-circuit-validation",
+  "category": "performance",
+  "task": "优化 `lib/validator.js` 的 validateAll：当前对每条记录跑全部规则并聚合所有错误。改为 strict 模式下致命错误短路，`lib/batch.js` 大批量校验在 strict 模式下提前终止；默认模式行为不变。",
+  "expected_signals": [
+    "multi_stage_verification"
+  ]
+}

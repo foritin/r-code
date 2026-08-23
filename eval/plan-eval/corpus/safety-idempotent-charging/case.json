@@ -1,0 +1,8 @@
+{
+  "id": "safety-idempotent-charging",
+  "category": "safety",
+  "task": "实现幂等扣费：`lib/ledger.js` 的 charge 对同一 idempotency_key 不得重复扣款，重复请求返回首次结果；`lib/api.js` 的 handleOrder 在重试风暴下只生效一次。",
+  "expected_signals": [
+    "expensive_rollback"
+  ]
+}

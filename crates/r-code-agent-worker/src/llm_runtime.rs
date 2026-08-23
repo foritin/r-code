@@ -15,16 +15,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as SyncMutex, OnceLock, RwLock};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
+
 use agent_contract::{
-    CompletionRequest, ContentBlock, HostedToolSpec, InferenceOptions, LlmProvider, Message, Role,
-    Session, SessionEvent, SessionMeta, ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
+    AttachmentKind, AttachmentPurpose, CompletionRequest, ContentBlock, HostedToolSpec,
+    InferenceOptions, LlmProvider, Message, Role, Session, SessionEvent, SessionMeta,
+    ToolCallOutcome, ToolHost, ToolSource, ToolSpec, VisionBudgetProfile,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRunRuntimeKind,
-    CreateSessionInput, PeerMessageDeliveryStatus, ProjectAccessMode, RiskLevel,
-    SubagentAccessMode, SubagentState, TaskMode, TaskState,
+    CatalogAnchorPhase, CreateSessionInput, PeerMessageDeliveryStatus, ProjectAccessMode,
+    RiskLevel, SubagentAccessMode, SubagentState, TaskMode, TaskState,
 };
 use r_code_core::error::ProductError;
 use r_code_core::plan::{PlanExecutionContext, PlanExecutionStatus, PlanItemState, PlanView};
@@ -41,7 +45,7 @@ use uuid::Uuid;
 use crate::agent_loop::{
     repair_dangling_tool_uses, run_agent_loop_iteration_streaming_with_abort,
     run_agent_loop_iteration_with_abort_and_emit_with_retry_guard, EditRetryGuard,
-    ToolMetadataObservation,
+    OutputBudgetContext, ToolMetadataObservation,
 };
 use crate::cache_shape::{capture, compare, PrefixShape};
 use crate::checkpoint::GreenCheckpoint;
@@ -59,9 +63,15 @@ const FINAL_SUMMARY_RECOVERY_FAILED: &str = "工具已经执行，但模型在�
 /// Root is depth 0; native descendants may delegate through depth 2.
 pub const MAX_SUBAGENT_DEPTH: u8 = 2;
 /// Lifetime descendant budget for one root tree. The root itself is not counted.
-pub const MAX_DESCENDANTS_PER_TREE: usize = 12;
+///
+/// Keep this deliberately small: a depth-two tree multiplies quickly when every direct child
+/// fans out again. Four still permits one narrow second-level verification without turning a
+/// conversational "you may use subagents" into a large agent swarm.
+pub const MAX_DESCENDANTS_PER_TREE: usize = 4;
 /// Maximum descendants actively executing provider/tool work in one root tree.
-pub const MAX_ACTIVE_DESCENDANTS: usize = 5;
+pub const MAX_ACTIVE_DESCENDANTS: usize = 3;
+/// Lifetime model-initiated children owned by one supervisor node.
+pub const MAX_DIRECT_SUBAGENTS_PER_RUN: usize = 3;
 
 /// 同一 session 内的子代理展示名不再透出 run/slot id，而是从大池中分配不重名的
 /// 假名。中文用户用中文名，英文用户用英文名；主代理自身衍生的原生子代理则直接
@@ -195,6 +205,7 @@ pub struct DelegationLimits {
     pub max_depth: u8,
     pub max_descendants: usize,
     pub max_active_descendants: usize,
+    pub max_direct_subagents_per_run: usize,
 }
 
 impl Default for DelegationLimits {
@@ -203,13 +214,17 @@ impl Default for DelegationLimits {
             max_depth: MAX_SUBAGENT_DEPTH,
             max_descendants: MAX_DESCENDANTS_PER_TREE,
             max_active_descendants: MAX_ACTIVE_DESCENDANTS,
+            max_direct_subagents_per_run: MAX_DIRECT_SUBAGENTS_PER_RUN,
         }
     }
 }
 
-// Preserve the current single-level supervisor behavior until T6 replaces it with a root tree.
 const MAX_PARALLEL_SUBAGENTS: usize = MAX_ACTIVE_DESCENDANTS;
-const MAX_SUBAGENTS_PER_RUN: usize = MAX_DESCENDANTS_PER_TREE;
+/// Model-created direct children are intentionally stricter than internal runtime handles.
+const MAX_MODEL_SUBAGENTS_PER_RUN: usize = MAX_DIRECT_SUBAGENTS_PER_RUN;
+/// Runtime-owned handles may fill the small tree budget (for example a quality-review child), but
+/// the shared tree counter still prevents them from exceeding the lifetime descendant ceiling.
+const MAX_CHILD_HANDLES_PER_SUPERVISOR: usize = MAX_DESCENDANTS_PER_TREE;
 /// scope.goal 的有界摘要长度：完整任务提示词由宿主写入子代理自己的会话记录，
 /// 事件 scope 只携带可直接展示的摘要，避免每个事件重复放大长提示词。
 const SUBAGENT_SCOPE_GOAL_CHARS: usize = 400;
@@ -522,6 +537,247 @@ pub struct OrchestrationPolicy {
     pub quality_reviewer: QualityReviewer,
     pub max_review_rounds: u8,
     pub run_budget: RunBudgetPolicy,
+}
+
+/// Plan 原生目录晋升钩子类型（宿主安装；docs §14.3）。
+pub type PlanCatalogPromotionHook = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+/// Plan 原生目录阶段（worker 侧镜像）。权威值在宿主 `plans.catalog_phase`；
+/// worker 只按宿主传入的阶段过滤目录，并在晋升钩子确认后本地推进。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanNativeCatalogPhase {
+    Bootstrap,
+    Resident,
+}
+
+/// Plan 原生 5→8 目录配置（docs §13.1）。由宿主按冻结 profile 传入；
+/// baseline Plan（None）保持现状完整目录。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanNativeCatalogConfig {
+    pub phase: PlanNativeCatalogPhase,
+}
+
+impl PlanNativeCatalogConfig {
+    /// 该阶段的允许清单（名称即派发字节，含 hosted 改名后的 search_files）。
+    pub fn allowlist(self) -> &'static [&'static str] {
+        match self.phase {
+            PlanNativeCatalogPhase::Bootstrap => PLAN_NATIVE_BOOTSTRAP_TOOLS,
+            PlanNativeCatalogPhase::Resident => PLAN_NATIVE_RESIDENT_TOOLS,
+        }
+    }
+}
+
+/// bootstrap 目录（精确 5 项，docs §13.1 轨道 A）。`search_files` 是 hosted
+/// web search 在场时本地 `search` 的派发别名；两者都放行，模型实际看到的名字
+/// 取决于别名状态，目录槽位不变。
+const PLAN_NATIVE_BOOTSTRAP_TOOLS: &[&str] = &[
+    "glob",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+    "search_files",
+];
+/// resident 目录（bootstrap + 3 个只读工具，精确 8 项；不恢复完整目录）。
+const PLAN_NATIVE_RESIDENT_TOOLS: &[&str] = &[
+    "git_status",
+    "glob",
+    "list_files",
+    "load_skill",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+    "search_files",
+];
+
+// ---------------------------------------------------------------------------
+// 上下文注入闸门（docs/multimodal-attachments §8.5）
+// ---------------------------------------------------------------------------
+
+/// 统一上下文注入 profile：所有 system 与 tail 构造先经过同一闸门，不得在各
+/// 来源处零散判断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextInjectionProfile {
+    /// 标准注入：memory、clock、task context、MCP 文案、peer、governor 等全量。
+    Standard,
+    /// Plan 锚定最小注入：只允许固定 Plan 安全/system 文本、权威
+    /// PlanContextCapsule、原用户请求与主动 steer、多模态附件引用，以及
+    /// `plan_publish` / `request_user_input` 的固定协议说明。必须从固定最小
+    /// 模板**正向构造**，不得先构造 Standard 再做字符串删除。
+    PlanMinimalV1,
+}
+
+impl ContextInjectionProfile {
+    /// 该 profile 是否允许注入某来源（docs §8.5 白名单/黑名单的单一判定点）。
+    pub fn allows(self, source: ContextSource) -> bool {
+        match self {
+            ContextInjectionProfile::Standard => true,
+            ContextInjectionProfile::PlanMinimalV1 => matches!(
+                source,
+                ContextSource::PlanPolicy
+                    | ContextSource::TaskContextCapsule
+                    | ContextSource::SummaryRecovery
+            ),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ContextInjectionProfile::Standard => "Standard",
+            ContextInjectionProfile::PlanMinimalV1 => "PlanMinimalV1",
+        }
+    }
+}
+
+/// 尾部/头部注入来源清单（docs §8.5）。新增来源必须在此登记并声明 PlanMinimal
+/// 下的允许性，防止最小环境被零散注入重新撑大。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContextSource {
+    Memory,
+    LocalClock,
+    TaskContextCapsule,
+    PlanPolicy,
+    UserAgentPrompt,
+    McpPolicy,
+    PeerMailbox,
+    PlanSuggestion,
+    ToolProgressCheckpoint,
+    DelegationHint,
+    HostedWebFallback,
+    SummaryRecovery,
+    ReasoningGovernor,
+}
+
+/// Plan 锚定阶段的固定最小 system 模板（正向构造，不从 Standard 删除）。
+const PLAN_MINIMAL_SYSTEM_PROMPT: &str = "You are R-Code in planning mode, working inside a \
+user-approved workspace.\nYou are drafting an implementation plan, not implementing it. Read-only \
+investigation tools only; writes, shell commands, MCP mutations and subagents are hard-disabled by \
+the host.\nUse `plan_publish` to publish the plan and `request_user_input` when a genuine decision \
+only the user can make blocks the plan.\nKeep the plan concrete: files to touch, order of work, \
+risks, and verification steps. Base every claim on evidence you actually read this session.";
+
+/// 附件物化解析结果：由宿主从 BlobStore 读出。
+#[derive(Debug, Clone)]
+pub struct ResolvedAttachment {
+    pub name: String,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+    /// 文本附件的 UTF-8 正文（宿主已验证）。
+    pub text: Option<String>,
+}
+
+/// 异步附件解析器：`attachment_id` → Blob 内容。由宿主注入（持有 DB 与
+/// blobs_dir）；worker 在 Provider 请求构造前用它把引用物化为 `Image`/`File`
+/// 块，请求完成或失败后丢弃物化副本——Base64 只存在于该临时边界（§2.2）。
+pub type AttachmentResolver = Arc<
+    dyn Fn(String) -> futures::future::BoxFuture<'static, Result<ResolvedAttachment, ProductError>>
+        + Send
+        + Sync,
+>;
+
+/// 请求审计用的路由描述（docs §11）。显示名不参与判定；宿主注入冻结值。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RouteDescriptor {
+    /// 稳定厂商身份（provider_kind），如 "deepseek"。
+    pub provider_kind: String,
+    /// 用户显式选择的协议，如 "openai_chat"。
+    pub protocol: String,
+    /// 冻结 route revision（宿主侧目录/路由版本号）。
+    pub route_revision: String,
+}
+
+/// 把发送副本中的 `Attachment` 引用物化为 Provider 可读块（docs §6.3 步骤 6）。
+///
+/// - `NativeInput` 图片 → `Image`（Data URL 形式由适配器生成，这里给 Base64）；
+/// - `NativeInput` PDF → 二进制 `File`；
+/// - `TextInput` → 文本 `File`；
+/// - `DisplayOnly` → 不进入 Provider 请求，直接丢弃。
+///
+/// 返回物化后的消息副本与 wire bytes 增量；调用方只在本次请求内使用副本。
+async fn materialize_attachments(
+    messages: &[Message],
+    resolver: &AttachmentResolver,
+) -> Result<(Vec<Message>, u64), ProductError> {
+    let mut wire_bytes = 0u64;
+    let mut materialized = Vec::with_capacity(messages.len());
+    let mut resolved_cache: HashMap<String, ResolvedAttachment> = HashMap::new();
+    for message in messages {
+        let mut content = Vec::with_capacity(message.content.len());
+        let mut changed = false;
+        for block in &message.content {
+            let ContentBlock::Attachment { source } = block else {
+                content.push(block.clone());
+                continue;
+            };
+            changed = true;
+            match source.purpose {
+                AttachmentPurpose::DisplayOnly => {
+                    // 只服务 UI 预览；不进入 Provider 请求。
+                    continue;
+                }
+                AttachmentPurpose::TextInput | AttachmentPurpose::NativeInput => {
+                    let resolved = if let Some(hit) = resolved_cache.get(&source.attachment_id) {
+                        hit.clone()
+                    } else {
+                        let hit = (resolver)(source.attachment_id.clone()).await?;
+                        resolved_cache.insert(source.attachment_id.clone(), hit.clone());
+                        hit
+                    };
+                    match source.kind {
+                        AttachmentKind::Image => {
+                            wire_bytes =
+                                wire_bytes.saturating_add(resolved.bytes.len() as u64 * 4 / 3);
+                            content.push(ContentBlock::Image {
+                                source: agent_contract::ImageSource {
+                                    kind: "base64".to_string(),
+                                    media_type: resolved.media_type.clone(),
+                                    data: BASE64_STANDARD.encode(&resolved.bytes),
+                                },
+                            });
+                        }
+                        AttachmentKind::Pdf => {
+                            wire_bytes =
+                                wire_bytes.saturating_add(resolved.bytes.len() as u64 * 4 / 3);
+                            content.push(ContentBlock::File {
+                                source: agent_contract::FileSource {
+                                    kind: "base64".to_string(),
+                                    name: resolved.name.clone(),
+                                    media_type: resolved.media_type.clone(),
+                                    text: None,
+                                    data: Some(BASE64_STANDARD.encode(&resolved.bytes)),
+                                },
+                            });
+                        }
+                        AttachmentKind::Text => {
+                            let text = resolved.text.clone().unwrap_or_else(|| {
+                                String::from_utf8_lossy(&resolved.bytes).into_owned()
+                            });
+                            wire_bytes = wire_bytes.saturating_add(text.len() as u64);
+                            content.push(ContentBlock::File {
+                                source: agent_contract::FileSource {
+                                    kind: "text".to_string(),
+                                    name: resolved.name.clone(),
+                                    media_type: resolved.media_type.clone(),
+                                    text: Some(text),
+                                    data: None,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            materialized.push(Message {
+                role: message.role,
+                content,
+            });
+        } else {
+            materialized.push(message.clone());
+        }
+    }
+    Ok((materialized, wire_bytes))
 }
 
 /// 用户可编辑的 Agent 协作提示。它只补充角色分工，不替代工具权限、工作区范围或
@@ -851,12 +1107,19 @@ fn build_main_system_prompt(
     has_mcp_management: bool,
     has_mcp_services: bool,
     prompts: &AgentPromptPolicy,
+    profile: ContextInjectionProfile,
 ) -> String {
-    append_editable_prompt(
-        build_system_prompt(has_workspace_tools, has_mcp_management, has_mcp_services),
-        "User-configured main/subagent coordination guidance:",
-        &prompts.main_agent,
-    )
+    // docs/multimodal-attachments §8.5：PlanMinimal 从固定最小模板正向构造，
+    // 不先构造 Standard 再做字符串删除。MCP 文案与用户协作文案在 PlanMinimal
+    // 下缺席（ContextSource::McpPolicy / UserAgentPrompt 均被闸门禁止）。
+    match profile {
+        ContextInjectionProfile::PlanMinimalV1 => PLAN_MINIMAL_SYSTEM_PROMPT.to_string(),
+        ContextInjectionProfile::Standard => append_editable_prompt(
+            build_system_prompt(has_workspace_tools, has_mcp_management, has_mcp_services),
+            "User-configured main/subagent coordination guidance:",
+            &prompts.main_agent,
+        ),
+    }
 }
 
 /// memory_context 保持 run 冻结，作为**独立消息**置于请求 messages 头部，
@@ -891,9 +1154,12 @@ tool result for all subsequent work in the same run.\n{task_context}"
     ))
 }
 
-/// plan mode 策略文本作为**尾部 user 消息**注入（P0-A §5 方案 5），语义与原文案
-/// 完全一致，只是承载位置从 system 中段移到每轮尾部 user 消息。
-fn build_plan_mode_message(plan_mode: bool) -> Message {
+/// plan mode 策略文本作为**尾部 user 消息**注入（P0-A §5 方案 5）。
+///
+/// Agent 分支按建议资格分两档（docs §9）：eligible DeepSeek Run 注入复杂度建议
+/// 策略（propose_plan_mode 只建议、不切模式）；其余 Run 只保留显式 Plan 入口，
+/// 不注入复杂度建议策略（非 DeepSeek 的建议提示注入必须为 0）。
+fn build_plan_mode_message(plan_mode: bool, suggestion_enabled: bool) -> Message {
     let text = if plan_mode {
         "Plan mode is active. Investigate with read-only workspace tools and use the \
 host-provided Plan tools to clarify or publish the plan. Do not edit files, run shell commands, \
@@ -912,19 +1178,33 @@ Codex CLI is installed and authenticated. If the user asks to invoke Codex in Pl
 this runtime boundary and continue planning directly; for that request, do not call `mcp_discover` or `suggest_mcp`, \
 and do not claim Codex is missing or unconfigured. An approved Plan may use the configured Codex \
 collaborator during its later implementation run."
+    } else if suggestion_enabled {
+        "Agent mode is active. The host can offer the user a one-time structured planning step for \
+complex requests. Judge the request while working normally, and if it is genuinely complex — it \
+spans multiple interdependent subsystems, involves data migration or protocol/persistence \
+compatibility, needs a design or product decision the user must approve, a wrong attempt is \
+expensive to roll back, or it cannot be verified safely in one pass — call `propose_plan_mode` once \
+with the matching signals and a short reason, then stop this run and wait; the host asks the user \
+whether to plan first. If the user explicitly asked for a structured plan, call `enter_plan_mode` \
+instead — explicit consent needs no second confirmation. Never call `propose_plan_mode` for a \
+single isolated fix, explanations, reviews, read-only checks, after the user said to work directly, \
+or twice for the same task; when unsure, keep working directly. Do not call `plan_publish` or \
+`request_user_input` from Agent mode."
     } else {
-        "Agent mode is active. Before making any writes, judge the request's complexity and act accordingly: \
-call `enter_plan_mode` before making changes when any of these hold: the change spans multiple \
-interdependent files, subsystems, or requires a migration; it needs a design tradeoff, impact \
-assessment, or a decision the user must approve before implementation; it cannot be verified safely \
-in one pass, or a failed attempt is expensive to roll back; or the user explicitly asked for a \
-plan. The host will end this Agent run and resume the same request in Plan mode. Otherwise, for a \
-single, isolated, immediately verifiable change, implement directly — do not plan for its own sake. \
+        "Agent mode is active. Implement the request directly. Call `enter_plan_mode` only when the \
+user explicitly asked for a structured plan first; do not interrupt simple work with planning. \
 Do not call `plan_publish` or `request_user_input` from Agent mode. Returning from Plan to Agent \
 requires explicit user approval of the published Plan."
     };
     Message::user_text(text)
 }
+
+/// 复杂度建议策略的补充尾部指令：与 propose_plan_mode 目录注入同条件
+///（docs §9：任一资格条件不满足时，工具和提示同时缺席）。
+const PLAN_SUGGESTION_TAIL: &str = "Planning suggestion is available: for a genuinely complex \
+request call propose_plan_mode once with 1-5 matching signals and a short reason, then stop and \
+wait for the user. Modifying multiple files alone is not complexity; do not suggest planning for \
+isolated fixes, explanations, reviews, or after the user asked to work directly.";
 
 fn build_subagent_system_prompt(
     has_workspace_tools: bool,
@@ -952,7 +1232,7 @@ fn build_subagent_system_prompt(
         }
     };
     let delegation = if can_delegate {
-        "The host allows this native node to delegate focused work one level deeper. Use only the provided delegation tools, stay within the fixed tree budget, and collect every direct child before finishing. You may use list_agents and send_agent_message for concise coordination with only your direct parent, direct children, or siblings."
+        "The host allows this native node to delegate focused work one level deeper, but permission is not an instruction to fan out. Work directly by default. Delegate only a new, genuinely independent blocker that you cannot resolve efficiently yourself; use at most three direct children, never duplicate the parent's partitions, and stop expanding after that batch. Use only the provided delegation tools, stay within the fixed tree budget, and collect every direct child before finishing. You may use list_agents and send_agent_message for concise coordination with only your direct parent, direct children, or siblings."
     } else {
         "Do not create further subagents. You may still use list_agents and send_agent_message for concise coordination with only your direct parent or siblings."
     };
@@ -1099,16 +1379,19 @@ fn command_invokes_external_agent(command: &str) -> bool {
         })
 }
 
-const DELEGATION_PROMPT_HINT: &str = "\n\nFor independent investigation, delegate when it actually pays off: when the request has two or more independent \
-investigations or verifications that can run concurrently, when it would otherwise require many sequential \
-expensive steps, or when the user explicitly asks to parallelize. Solve a single, small, immediately answerable \
-request directly — do not delegate for its own sake. You may start ONE subagent directly with `delegate_task`. \
-To run two or more in parallel, first call `plan_subagents` with one entry per genuinely distinct direction, \
+const DELEGATION_PROMPT_HINT: &str = "\n\nSubagent use is opt-in by value, not by availability. Default to zero subagents and do the work yourself. \
+A statement that merely permits subagents (for example 'you can/may use subagents', '可以使用子代理', or \
+'允许使用') is authorization only; it is not an instruction to delegate and is never itself a reason to do so. \
+Delegate only when a genuinely independent, clearly bounded direction will save material elapsed time, or when \
+the user explicitly asks you to delegate or parallelize. Use no more than THREE direct subagents in one run. Solve \
+a single, small, or immediately answerable request directly — do not delegate for its own sake. You may start \
+ONE subagent directly with `delegate_task`. To run two or three in parallel, first call `plan_subagents` with one entry per genuinely distinct direction, \
 read the returned analysis (count, role-slot distribution, duplicate-role warnings), then re-call it with \
 `confirm=true` to lock the batch; `delegate_task` beyond the locked batch is rejected until you submit and \
 confirm a revised plan. Do not pad the plan with entries that restate the same direction — several same-role \
-subagents confuse the user; prefer fewer, broader subagents, and let a blocked subagent delegate its own child \
-(up to depth 2) instead of pre-spawning extras. Duplicate goals are hard-rejected: plan confirmation fails with \
+subagents confuse the user; prefer fewer, broader subagents. Do not ask children to fan out. A child may delegate \
+only for a new blocker it cannot resolve directly and only within the remaining tree budget. After one batch, \
+synthesize its results instead of opening another batch. Duplicate goals are hard-rejected: plan confirmation fails with \
 `needs_revision` while any two entries share the same goal, and `delegate_task` is rejected when its goal \
 matches a still-running child — wait for that child via `collect_subagents` or fold the direction into one \
 subagent instead of retrying the same goal. Subagents default to `access='read_only'`. \
@@ -1652,6 +1935,11 @@ pub struct LlmAgentRuntime {
     /// 1.3 自检观测计数（headers / mismatches）。自检只记录不阻断，计数供
     /// 宿主接线与单测断言「追加了几枚、误报了几次」，不参与任何控制流。
     request_self_check: Arc<RequestSelfCheckCounters>,
+    /// Plan 原生目录的晋升钩子（宿主安装；docs §14.3）。None 时不晋升。
+    plan_catalog_promotion: Option<PlanCatalogPromotionHook>,
+    /// 宿主注入的附件解析器（docs §6.3）。None = 无持久附件链路；Some 时主
+    /// run 在 Provider 请求构造前把 `Attachment` 引用物化为 Image/File 块。
+    attachment_resolver: Option<AttachmentResolver>,
 }
 
 struct SessionState {
@@ -1678,6 +1966,20 @@ struct SessionState {
     /// 用户在当前运行中显式关闭委派后立即锁存；工具执行阶段再次检查，避免 steer
     /// 与同一轮 provider 工具调用之间的竞态。
     delegation_disabled: Arc<AtomicBool>,
+    /// Plan 入口建议是否可在本会话的主 run 中注册（docs §9）。宿主在每个 run
+    /// 启动前按资格（DeepSeek eligible + 客户开关 + branch 预算/安静 + 无既有
+    /// offer）刷新；工具目录注入与尾部建议策略同开关。
+    plan_suggestion_enabled: bool,
+    /// Plan 原生 5→8 目录配置（docs §13.1）。None = baseline（现状目录）；
+    /// Some 时按 catalog_phase 过滤派发目录并启用最小上下文。权威 phase 在
+    /// 宿主 plans.catalog_phase，宿主每次 run 启动前传入，task_clear_context/
+    /// fork/重启都不会让同一个 Plan 回退到 bootstrap。
+    plan_native_catalog: Option<PlanNativeCatalogConfig>,
+    /// 本会话主模型的视觉预算 profile（docs §6.2）。目录确认多模态时由宿主
+    /// 注入；存在 native_input 图片附件而 profile 缺失时预算预检 fail closed。
+    vision_budget: Option<VisionBudgetProfile>,
+    /// 请求审计用的路由描述（provider_kind/protocol/route revision）。
+    route_descriptor: RouteDescriptor,
     /// 工作区作用域。None 即纯聊天；附加后始终通过 PathGuard 限制本地工具。
     workspace_scope: Option<WorkspaceScope>,
     /// 当前主运行所拥有的子代理监督器；仅在运行期间存在。
@@ -1693,6 +1995,9 @@ struct SessionState {
     /// 编辑”：run 循环每轮请求发送前经 `capture_run_prefix_shape` 把它作为
     /// `provider_visible_version` 捕获（PRD §5 P2-G 第 5 点）。
     rewrite_version: u32,
+    /// A3：本会话 journal 落盘使用的目标 id（宿主传入 branch.storage_id）。
+    /// None 时回退 ctx.session_id（保持既有测试接线行为不变）。
+    request_journal_id: Option<String>,
 }
 
 /// 会话持有的本地文件能力边界。
@@ -1757,7 +2062,18 @@ impl LlmAgentRuntime {
             agent_prompts: AgentPromptPolicy::default(),
             request_journal: None,
             request_self_check: Arc::new(RequestSelfCheckCounters::default()),
+            plan_catalog_promotion: None,
+            attachment_resolver: None,
         }
+    }
+
+    /// 注入附件解析器（docs §6.3）：主 run 在 Provider 请求构造前用它把
+    /// `Attachment` 引用物化为 Image/File 块，请求结束后丢弃物化副本。
+    /// 视觉预算 profile 与路由描述经 AgentRuntime::update_vision_budget_and_route
+    /// 在会话建立时注入（宿主持有冻结能力快照）。
+    pub fn with_attachment_resolver(mut self, resolver: AttachmentResolver) -> Self {
+        self.attachment_resolver = Some(resolver);
+        self
     }
 
     /// 附加 1.3 的请求信封日志（会话 JSONL 写入方）。
@@ -1877,6 +2193,36 @@ impl LlmAgentRuntime {
         self
     }
 
+    /// 安装 Plan 原生目录的 bootstrap -> resident 晋升钩子（宿主侧完成
+    /// PlanStore CAS；docs §14.3）。钩子返回 Err 时 run_loop fail closed。
+    pub fn with_plan_catalog_promotion(mut self, hook: PlanCatalogPromotionHook) -> Self {
+        self.plan_catalog_promotion = Some(hook);
+        self
+    }
+
+    /// 宿主在每个 run 启动前刷新「本会话是否可注册 propose_plan_mode」
+    ///（docs §9：资格判断发生在注册工具和构建提示之前）。默认（未刷新）
+    /// 为 false：工具与建议提示同时缺席。
+    pub async fn update_plan_entry_suggestion(&mut self, session_id: &str, enabled: bool) {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.plan_suggestion_enabled = enabled;
+        }
+    }
+
+    /// 宿主在每个 Plan run 启动前传入冻结的原生目录配置与当前权威 phase
+    ///（来自 plans.catalog_phase；docs §14.3）。None 恢复 baseline 目录。
+    pub async fn update_plan_native_catalog(
+        &mut self,
+        session_id: &str,
+        config: Option<PlanNativeCatalogConfig>,
+    ) {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.plan_native_catalog = config;
+        }
+    }
+
     /// 热切换新的 Codex 子代理委派。监督器共享同一原子门，因此已经启动的子代理
     /// 继续完成，而之后的显式或自动 Codex 路由会立即改用 R-Code。
     pub fn set_cross_engine_delegation_enabled(&self, enabled: bool) {
@@ -1948,12 +2294,17 @@ impl AgentRuntime for LlmAgentRuntime {
                 accepting_steer: false,
                 abort: Arc::new(AtomicBool::new(false)),
                 delegation_disabled: Arc::new(AtomicBool::new(false)),
+                plan_suggestion_enabled: false,
+                plan_native_catalog: None,
+                vision_budget: None,
+                route_descriptor: RouteDescriptor::default(),
                 workspace_scope,
                 supervisor: None,
                 next_memory_context: None,
                 name_allocator: Arc::new(SubagentNameAllocator::default()),
                 active_run_id: None,
                 rewrite_version: 0,
+                request_journal_id: None,
             },
         );
         Ok(session)
@@ -1976,6 +2327,10 @@ impl AgentRuntime for LlmAgentRuntime {
             inference,
             abort,
             delegation_disabled,
+            plan_suggestion_enabled,
+            plan_native_catalog,
+            vision_budget,
+            route_descriptor,
             workspace_scope,
             mode,
             memory_context,
@@ -2005,6 +2360,10 @@ impl AgentRuntime for LlmAgentRuntime {
                 session.inference.clone(),
                 session.abort.clone(),
                 session.delegation_disabled.clone(),
+                session.plan_suggestion_enabled,
+                session.plan_native_catalog,
+                session.vision_budget,
+                session.route_descriptor.clone(),
                 session.workspace_scope.clone(),
                 session.mode,
                 session.next_memory_context.take(),
@@ -2061,13 +2420,23 @@ impl AgentRuntime for LlmAgentRuntime {
         // 否则首轮重建自检必报「消息数不一致」。Meta 只在会话文件尚不存在时
         // 补写（load 报 SessionNotFound 即判定缺失）；goal 消息随后追加，
         // 与内存侧 session.messages.push 同序。
+        // A3：落盘目标 id 优先取宿主声明的映射（branch.storage_id），未声明时
+        // 回退 session_id。bootstrap 块在 spawn 之前执行，直接读映射即可。
+        let journal_target = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(session_id)
+                .and_then(|session| session.request_journal_id.clone())
+        };
         if let Some(journal) = self.request_journal.as_ref() {
-            match journal.load(session_id).await {
+            let journal_key = journal_target.as_deref().unwrap_or(session_id);
+            match journal.load(journal_key).await {
                 Err(agent_error::Error::SessionNotFound(_)) => {
                     // load 要求首行为 Meta；文件不存在时先补一行（meta.id 与
                     // 文件名不必一致，load 不校验）。
                     let meta = SessionMeta::new(model.as_str(), self.provider.name());
-                    if let Err(error) = journal.append(session_id, SessionEvent::Meta(meta)).await {
+                    if let Err(error) = journal.append(journal_key, SessionEvent::Meta(meta)).await
+                    {
                         tracing::warn!(
                             session_id,
                             error = %error,
@@ -2085,7 +2454,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 }
             }
             if let Err(error) = journal
-                .append(session_id, SessionEvent::Message(goal_journal_copy))
+                .append(journal_key, SessionEvent::Message(goal_journal_copy))
                 .await
             {
                 tracing::warn!(
@@ -2114,15 +2483,22 @@ impl AgentRuntime for LlmAgentRuntime {
             inference,
             abort,
             delegation_disabled,
+            plan_suggestion_enabled,
+            plan_native_catalog,
+            vision_budget,
+            route_descriptor,
+            attachment_resolver: self.attachment_resolver.clone(),
             workspace_scope,
             supervisor,
             suspension_gate,
             continuation_gate,
             orchestration: self.orchestration,
             agent_prompts: self.agent_prompts.clone(),
+            plan_catalog_promotion: self.plan_catalog_promotion.clone(),
             memory_context,
             request_journal: self.request_journal.clone(),
             request_self_check: self.request_self_check.clone(),
+            request_journal_id: journal_target,
         }));
 
         Ok(run_id_text)
@@ -2313,6 +2689,34 @@ impl AgentRuntime for LlmAgentRuntime {
         Ok(())
     }
 
+    async fn set_request_journal_target(
+        &mut self,
+        session_id: &str,
+        journal_id: String,
+    ) -> Result<(), ProductError> {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
+        session.request_journal_id = Some(journal_id);
+        Ok(())
+    }
+
+    async fn update_vision_budget_and_route(
+        &mut self,
+        session_id: &str,
+        vision_budget: Option<VisionBudgetProfile>,
+        route: RouteDescriptor,
+    ) -> Result<(), ProductError> {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
+        session.vision_budget = vision_budget;
+        session.route_descriptor = route;
+        Ok(())
+    }
+
     async fn poll_events(&mut self) -> Result<Vec<AgentEvent>, ProductError> {
         let mut event_rx = self.event_rx.lock().await;
         let mut events = Vec::new();
@@ -2444,6 +2848,20 @@ struct RunLoopCtx {
     inference: InferenceOptions,
     abort: Arc<AtomicBool>,
     delegation_disabled: Arc<AtomicBool>,
+    /// Plan 入口建议注册开关（宿主按 run 资格刷新；docs §9）。
+    plan_suggestion_enabled: bool,
+    /// Plan 原生 5→8 目录配置（None = baseline）。
+    plan_native_catalog: Option<PlanNativeCatalogConfig>,
+    /// 本会话主模型的视觉预算 profile；None = 文本模型/未注入。
+    vision_budget: Option<VisionBudgetProfile>,
+    /// 请求审计路由描述（宿主注入冻结值）。
+    route_descriptor: RouteDescriptor,
+    /// 宿主注入的附件解析器；None = 无持久附件链路（测试/旧宿主）。
+    attachment_resolver: Option<AttachmentResolver>,
+    /// 宿主安装的 bootstrap -> resident 晋升钩子：首次 durable outcome 后同步
+    /// 调用，宿主完成 PlanStore CAS 并确认持久化后才允许下一次 Provider 请求
+    ///（docs §14.3）。失败时 fail closed 终止 run。
+    plan_catalog_promotion: Option<PlanCatalogPromotionHook>,
     workspace_scope: Option<WorkspaceScope>,
     supervisor: Arc<SubagentSupervisor>,
     /// Per-run one-way gate set by a successful `suspend_for_user` tool directive.
@@ -2457,6 +2875,16 @@ struct RunLoopCtx {
     request_journal: Option<Arc<agent_store::SessionStore>>,
     /// 1.3 自检观测计数（与 runtime 共享，供外部断言）。
     request_self_check: Arc<RequestSelfCheckCounters>,
+    /// A3：本会话 journal 落盘目标 id（宿主传入 branch.storage_id）。
+    /// None 时回退 session_id（既有测试接线行为不变）。
+    request_journal_id: Option<String>,
+}
+
+/// A3：journal 落盘键——宿主声明的目标 id 优先，未声明时回退 runtime 内部
+/// session_id（既有测试接线行为逐字节不变）。run_loop 内全部 journal 调用
+/// 经此取键，禁止再直接引用 ctx.session_id。
+fn journal_key(ctx: &RunLoopCtx) -> &str {
+    ctx.request_journal_id.as_deref().unwrap_or(&ctx.session_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -2544,11 +2972,25 @@ impl CompactionState {
 
     /// 用上一轮真实 usage（input_tokens）反推 tokPerChar；0.05~2 范围过滤，
     /// 估算口径覆盖所有 provider-visible 内容块。
-    fn calibrate(&mut self, input_tokens: u32, chars: usize) {
+    ///
+    /// docs §6.1.4：携带图片请求的 usage 含视觉 token，必须先减去已按
+    /// `VisionBudgetProfile` 估算的视觉部分再校准文本比例；usage 无法拆分且
+    /// 减法不可靠（视觉估算 ≥ 总 usage）时跳过本轮校准。
+    fn calibrate(&mut self, input_tokens: u32, chars: usize, vision_tokens: u64) {
         if input_tokens == 0 || chars == 0 {
             return;
         }
-        let ratio = input_tokens as f32 / chars as f32;
+        let text_input_tokens = if vision_tokens > 0 {
+            let vision = u32::try_from(vision_tokens).unwrap_or(u32::MAX);
+            if u64::from(input_tokens) <= vision_tokens {
+                // usage 与视觉估算同量级：文本部分不可分辨，跳过本轮。
+                return;
+            }
+            input_tokens - vision.min(input_tokens)
+        } else {
+            input_tokens
+        };
+        let ratio = text_input_tokens as f32 / chars as f32;
         if (COMPACT_TOK_PER_CHAR_MIN..=COMPACT_TOK_PER_CHAR_MAX).contains(&ratio) {
             self.tok_per_char = ratio;
         }
@@ -2599,15 +3041,26 @@ impl CompactionState {
 /// P2-G：推导每轮请求的输出预留。优先使用 provider 声明的单次输出上限；
 /// 未声明（0）时回退到 `max_tokens`（旧的启发式），保持既有 provider 行为不变。
 fn compaction_output_reserve(provider_max_output_tokens: u32, max_tokens: u32) -> u32 {
-    if provider_max_output_tokens > 0 {
-        provider_max_output_tokens
-    } else {
+    // docs/multimodal-attachments §2.3：压缩与发送闸门只预留本次
+    // requested_output_tokens，不得无条件预留 Provider 服务端上限（DeepSeek
+    // 393,216 预留会把 1M 窗口的可用输入压掉近 40%，过早触发伪压缩）。
+    // provider_max_output_tokens 只用于限制单轮输出（resolve_request_max_tokens
+    // 的第二个候选），不再兼任压缩预留。
+    if max_tokens > 0 {
         max_tokens
+    } else {
+        provider_max_output_tokens
     }
 }
 
-/// P2-G：Provider 可见内容字符数。包含工具参数、附件与扩展块，避免压缩触发过晚。
-fn message_chars(message: &Message) -> usize {
+/// P2-G：Provider 可见内容**文本**字符数（docs/multimodal-attachments §6.1 重构）。
+///
+/// 二进制附件绝不按 Base64 字符计入——图片 token 由 `VisionBudgetProfile` 的
+/// 确定性 tile 上界单独核算，引用块只统计名称等少量可见元数据，物化发送副本
+/// 中短暂存在的 Image Base64 同样不计（图片 token 已在预算中按 profile 核算）。
+/// 旧实现把 4,511,012 个 Base64 字符当普通文本（0.25 tok/char ≈ 1,127,753
+/// token）是伪超窗故障链（§3）的第 3~4 步。
+fn message_text_chars(message: &Message) -> usize {
     message
         .content
         .iter()
@@ -2619,6 +3072,7 @@ fn message_chars(message: &Message) -> usize {
                 id.chars().count() + name.chars().count() + input.to_string().chars().count()
             }
             ContentBlock::File { source } => {
+                // 文本附件的 UTF-8 正文计入；二进制 data（Base64）绝不计入。
                 source.name.chars().count()
                     + source.media_type.chars().count()
                     + source
@@ -2627,15 +3081,12 @@ fn message_chars(message: &Message) -> usize {
                         .map(str::chars)
                         .map(Iterator::count)
                         .unwrap_or(0)
-                    + source
-                        .data
-                        .as_deref()
-                        .map(str::chars)
-                        .map(Iterator::count)
-                        .unwrap_or(0)
             }
-            ContentBlock::Image { source } => {
-                source.media_type.chars().count() + source.data.chars().count()
+            ContentBlock::Image { source } => source.media_type.chars().count(),
+            ContentBlock::Attachment { source } => {
+                // 引用块只有少量可见元数据；Blob 字节由物化阶段按 wire bytes
+                // 单独核算，绝不进入文本字符统计。
+                source.name.chars().count() + source.media_type.chars().count()
             }
             ContentBlock::Custom { type_name, data } => {
                 type_name.chars().count() + data.to_string().chars().count()
@@ -2647,7 +3098,7 @@ fn message_chars(message: &Message) -> usize {
 /// P2-G：一次请求的文本字符数（system + 消息历史 + tools 序列化长度）。
 /// 与 calibrate 的口径一致，保证 tokPerChar 反推与估算同源。
 fn request_chars(system: &str, messages: &[Message], tools_json_len: usize) -> usize {
-    system.chars().count() + messages.iter().map(message_chars).sum::<usize>() + tools_json_len
+    system.chars().count() + messages.iter().map(message_text_chars).sum::<usize>() + tools_json_len
 }
 
 fn automatic_compaction_message_source(index: usize, message: &Message) -> Option<String> {
@@ -2824,7 +3275,7 @@ fn automatic_compaction_tail_start(
     let mut tail_start = messages.len();
     for (index, message) in messages.iter().enumerate().rev() {
         tail_tokens = tail_tokens
-            .saturating_add((message_chars(message) as f32 * tok_per_char.max(0.05)) as u32);
+            .saturating_add((message_text_chars(message) as f32 * tok_per_char.max(0.05)) as u32);
         tail_start = index;
         if tail_tokens >= tail_budget {
             break;
@@ -2940,15 +3391,256 @@ fn estimated_input_over_budget(
     window_tokens == 0 || (estimated_tokens as u64 + output_reserve as u64) >= window_tokens as u64
 }
 
-/// 把请求的 max_tokens 钳制到「窗口 − 估算输入 − 余量」，防止输出预留把请求推超窗。
-fn clamp_request_max_tokens(user_max: u32, window_tokens: u32, estimated_input: u32) -> u32 {
-    if window_tokens == 0 {
-        return user_max;
+/// 请求类别（docs §2.3）：决定发送前必须保住的最低可执行输出额度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestKind {
+    /// 普通纯聊天。
+    PlainChat,
+    /// Agent 工具回合（请求携带工具目录）。
+    AgentToolRound,
+    /// Plan bootstrap/resident（锚定 Plan 请求）。
+    PlanAnchored,
+    /// 压缩或最终收尾专用请求（summary-only 轮、fold 摘要）。
+    Compaction,
+}
+
+impl RequestKind {
+    /// 最低 `effective_output_tokens`（docs §2.3 表）。
+    pub fn minimum_output_tokens(self) -> u32 {
+        match self {
+            RequestKind::PlainChat => 2_048,
+            RequestKind::AgentToolRound => 8_192,
+            RequestKind::PlanAnchored => 16_384,
+            RequestKind::Compaction => 4_096,
+        }
     }
-    let headroom = window_tokens
-        .saturating_sub(estimated_input)
-        .saturating_sub(CONTEXT_GUARD_RESERVE_MARGIN);
-    user_max.min(headroom.max(1))
+}
+
+/// 发送前预算快照（docs §2.3 `RequestBudgetV1`）。四类核算分离：上下文文本、
+/// 图片、文档、wire bytes；不含任何敏感正文，可安全进审计。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct RequestBudgetV1 {
+    pub context_window_tokens: u32,
+    pub text_tokens: u32,
+    pub tool_schema_tokens: u32,
+    pub image_tokens: u64,
+    pub document_tokens: u32,
+    pub estimated_input_tokens: u64,
+    pub requested_output_tokens: u32,
+    pub effective_output_tokens: u32,
+    pub reserve_tokens: u32,
+    pub materialized_wire_bytes: u64,
+    pub attachment_count: u32,
+}
+
+/// `resolve_request_max_tokens` 的成功输出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedOutputBudget {
+    pub effective_output_tokens: u32,
+    /// 是否因上下文 headroom 被钳制到请求值以下（MaxTokens 终态分类输入）。
+    pub headroom_clamped: bool,
+}
+
+/// 发送前预检失败（docs §2.3/§6.4）。Provider 调用次数必须为 0。
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreflightError {
+    /// 有效输出低于当前请求类别的最低额度。旧实现的 `.max(1)` 会把这类请求
+    /// 改成 1 token 继续发送——那是 `1 → 2 → 4` 故障链的第 5 步，已删除。
+    HeadroomBelowMinimum { effective_output: u32, minimum: u32 },
+    /// 整理（最多两次强制折叠/裁剪）后输入+输出仍超窗。
+    ContextPreflightFailed {
+        estimated_input: u64,
+        output_reserve: u32,
+        window: u32,
+    },
+}
+
+impl From<PreflightError> for ProductError {
+    fn from(error: PreflightError) -> Self {
+        match error {
+            PreflightError::HeadroomBelowMinimum {
+                effective_output,
+                minimum,
+            } => ProductError::OutputHeadroomBelowMinimum {
+                effective_output,
+                minimum,
+            },
+            PreflightError::ContextPreflightFailed {
+                estimated_input,
+                output_reserve,
+                window,
+            } => ProductError::ContextPreflightFailed {
+                estimated_input,
+                output_reserve,
+                window,
+            },
+        }
+    }
+}
+
+/// 请求的图片/PDF 附件 token 估算（docs §6.2）。
+///
+/// 图片按 `VisionBudgetProfile` 的确定性 tile 上界；目录确认多模态但未注入
+/// profile 时返回 `VisionBudgetProfileMissing`——不得回退到 Base64 字符估算
+/// 或 OCR。PDF 无协议级公式，按解码字节数 /4 的保守代理估算（与图片完全
+/// 分离核算）。
+fn attachment_image_document_tokens(
+    messages: &[Message],
+    vision_profile: Option<VisionBudgetProfile>,
+) -> Result<(u64, u32, u32), ProductError> {
+    let mut image_tokens = 0u64;
+    let mut document_tokens = 0u32;
+    let mut attachment_count = 0u32;
+    for message in messages {
+        for block in &message.content {
+            let ContentBlock::Attachment { source } = block else {
+                continue;
+            };
+            attachment_count += 1;
+            match source.kind {
+                AttachmentKind::Image => {
+                    // display_only 原图不进入 Provider 请求（只服务 UI 预览），
+                    // 不贡献输入 token。
+                    if source.purpose == AttachmentPurpose::DisplayOnly {
+                        continue;
+                    }
+                    let profile =
+                        vision_profile.ok_or_else(|| ProductError::VisionBudgetProfileMissing {
+                            model: String::new(),
+                        })?;
+                    let width = source.width.unwrap_or(profile.max_request_edge);
+                    let height = source.height.unwrap_or(profile.max_request_edge);
+                    image_tokens += profile.image_tokens(width, height);
+                }
+                AttachmentKind::Pdf => {
+                    if source.purpose == AttachmentPurpose::DisplayOnly {
+                        continue;
+                    }
+                    document_tokens += u32::try_from(source.byte_len / 4).unwrap_or(u32::MAX);
+                }
+                AttachmentKind::Text => {
+                    // 文本附件正文按字符计入 text_tokens（引用块本身不含正文，
+                    // 物化阶段展开；这里以元数据粗估 +1 保证非零）。
+                    document_tokens += 1;
+                }
+            }
+        }
+    }
+    Ok((image_tokens, document_tokens, attachment_count))
+}
+
+/// 估算一次请求的完整预算（docs §2.3）。必须在附件物化**之前**调用——引用块
+/// 尚未展开为 Base64，图片按 profile 而非字节数核算。
+#[allow(clippy::too_many_arguments)]
+fn estimate_request_budget(
+    system: &str,
+    messages: &[Message],
+    tools_json_len: usize,
+    tok_per_char: f32,
+    window_tokens: u32,
+    requested_output_tokens: u32,
+    provider_max_output_tokens: u32,
+    vision_profile: Option<VisionBudgetProfile>,
+    reserve_tokens: u32,
+    minimum_output: u32,
+) -> Result<(RequestBudgetV1, ResolvedOutputBudget), PreflightError> {
+    let text_chars =
+        system.chars().count() + messages.iter().map(message_text_chars).sum::<usize>();
+    let text_tokens = (text_chars as f32 * tok_per_char).ceil() as u32;
+    let tool_schema_tokens = (tools_json_len as f32 * tok_per_char).ceil() as u32;
+    let (image_tokens, document_tokens, attachment_count) =
+        attachment_image_document_tokens(messages, vision_profile).map_err(|_| {
+            PreflightError::ContextPreflightFailed {
+                estimated_input: 0,
+                output_reserve: 0,
+                window: window_tokens,
+            }
+        })?;
+    let estimated_input_tokens = u64::from(text_tokens)
+        + u64::from(tool_schema_tokens)
+        + image_tokens
+        + u64::from(document_tokens);
+
+    let resolved = resolve_request_max_tokens(
+        requested_output_tokens,
+        provider_max_output_tokens,
+        window_tokens,
+        estimated_input_tokens,
+        reserve_tokens,
+        minimum_output,
+    )?;
+
+    let budget = RequestBudgetV1 {
+        context_window_tokens: window_tokens,
+        text_tokens,
+        tool_schema_tokens,
+        image_tokens,
+        document_tokens,
+        estimated_input_tokens,
+        requested_output_tokens,
+        effective_output_tokens: resolved.effective_output_tokens,
+        reserve_tokens,
+        materialized_wire_bytes: 0,
+        attachment_count,
+    };
+    Ok((budget, resolved))
+}
+
+/// 解析本轮实际派发的输出额度（docs §2.3 公式，替代旧 `clamp_request_max_tokens`）。
+///
+/// ```text
+/// effective = min(requested, provider_max, window - ceil(input × 1.15) - reserve)
+/// ```
+///
+/// 可失败语义（§2.3 表）：「最低可执行输出额度」约束的是**窗口 headroom**
+/// （第三个候选）——headroom 被输入压到低于请求类别最低值时返回
+/// `HeadroomBelowMinimum`，调用方必须保证 Provider 调用次数为 0，绝不允许
+/// `.max(1)` 式把额度强制改成 1（`1 → 2 → 4` 故障链第 5 步，已删除）。
+/// 用户显式配置的 requested 低于最低值时以其配置为准（§8.4：Plan 阶段使用
+/// 正常请求输出上限，不因进入 Plan 被强制抬到 16,384）。窗口未知（0）时
+/// 不施加窗口钳制，只取 requested 与 provider 上限的较小值。
+pub fn resolve_request_max_tokens(
+    requested: u32,
+    provider_max_output_tokens: u32,
+    window_tokens: u32,
+    estimated_input_tokens: u64,
+    reserve_tokens: u32,
+    minimum_output: u32,
+) -> Result<ResolvedOutputBudget, PreflightError> {
+    let mut candidates = vec![u64::from(requested)];
+    if provider_max_output_tokens > 0 {
+        candidates.push(u64::from(provider_max_output_tokens));
+    }
+    if window_tokens > 0 {
+        let safety =
+            (estimated_input_tokens as f64 * f64::from(CONTEXT_GUARD_SAFETY_MARGIN)).ceil() as u64;
+        let headroom = u64::from(window_tokens)
+            .saturating_sub(safety)
+            .saturating_sub(u64::from(reserve_tokens));
+        // 区分两种失败（docs §13.4）：输入侧单独超窗（即使输出=最低额度也放
+        // 不下）报 ContextPreflightFailed；headroom 被压到最低值以下报
+        // HeadroomBelowMinimum。两者都是零发送。
+        if estimated_input_tokens >= u64::from(window_tokens) {
+            return Err(PreflightError::ContextPreflightFailed {
+                estimated_input: estimated_input_tokens,
+                output_reserve: minimum_output,
+                window: window_tokens,
+            });
+        }
+        if headroom < u64::from(minimum_output) {
+            return Err(PreflightError::HeadroomBelowMinimum {
+                effective_output: headroom.min(u64::from(u32::MAX)) as u32,
+                minimum: minimum_output,
+            });
+        }
+        candidates.push(headroom);
+    }
+    let effective = candidates.iter().copied().min().unwrap_or(0);
+    let effective = effective.min(u64::from(u32::MAX)) as u32;
+    Ok(ResolvedOutputBudget {
+        effective_output_tokens: effective,
+        headroom_clamped: effective < requested,
+    })
 }
 
 /// 折叠失败时的有界裁剪兜底：保留首条 + 由尾向前的完整消息，中段证据丢弃但
@@ -2962,7 +3654,7 @@ fn trim_history_to_budget(
     let input_budget = window_tokens.saturating_sub(output_reserve_tokens).max(1);
     let mut out = Vec::new();
     if let Some(first) = messages.first() {
-        let estimated = (message_chars(first) as f32 * tok_per_char) as u32;
+        let estimated = (message_text_chars(first) as f32 * tok_per_char) as u32;
         if estimated > input_budget {
             let budget_chars = ((input_budget as f32 / tok_per_char.max(0.05)) as usize).max(1);
             out.push(truncate_message_chars(first, budget_chars));
@@ -2972,7 +3664,7 @@ fn trim_history_to_budget(
     }
     let mut used_tokens = out
         .iter()
-        .map(|message| (message_chars(message) as f32 * tok_per_char) as u32)
+        .map(|message| (message_text_chars(message) as f32 * tok_per_char) as u32)
         .sum::<u32>();
     let mut index = messages.len();
     while index > 1 {
@@ -2982,11 +3674,11 @@ fn trim_history_to_budget(
             break;
         }
         let mut candidate = messages[index].clone();
-        let mut estimated = (message_chars(&candidate) as f32 * tok_per_char) as u32;
+        let mut estimated = (message_text_chars(&candidate) as f32 * tok_per_char) as u32;
         if estimated > remaining {
             let budget_chars = ((remaining as f32 / tok_per_char.max(0.05)) as usize).max(1);
             candidate = truncate_message_chars(&candidate, budget_chars);
-            estimated = (message_chars(&candidate) as f32 * tok_per_char) as u32;
+            estimated = (message_text_chars(&candidate) as f32 * tok_per_char) as u32;
         }
         if estimated > remaining || used_tokens + estimated > input_budget {
             tracing::warn!(
@@ -3053,20 +3745,211 @@ fn truncate_message_chars(message: &Message, budget_chars: usize) -> Message {
 /// 硬闸门用的「强制折叠，失败即裁剪」：折叠永远基于 canonical 证据，裁剪只在
 /// 折叠失败后对当前投影做最后兜底。
 #[allow(clippy::too_many_arguments)]
+/// VisualCheckpointV1 单次请求的输出上限与超时（与宿主图片理解执行器同档）。
+const VISUAL_CHECKPOINT_MAX_TOKENS: u32 = 2_048;
+const VISUAL_CHECKPOINT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// 检查点请求携带的相邻用户文本上限。
+const VISUAL_CHECKPOINT_ADJACENT_CHARS: usize = 2_000;
+
+/// docs/multimodal-attachments §7.1：VisualCheckpointV1 —— 图片即将移出
+/// exact tail（进入分层摘要）时，用**当前同一个多模态主模型**生成视觉检查点
+/// 文本。这是模型自身的视觉理解，不是 OCR：请求携带物化原图与相邻用户文本，
+/// 使用同一冻结 provider/model route；只有完整 stop 且非空、检查点文本记录了
+/// attachment id 才替换摘要输入中的旧图。失败时保留旧块（引用以小体积序列化
+/// 进摘要输入，摘要仍可进行）；canonical transcript 的原图引用永不改写。
+/// exact tail 内的引用保留原样并在 Provider 边界重新物化。
+async fn visual_checkpoint_prefold(
+    provider: &Arc<dyn LlmProvider>,
+    model: &str,
+    inference: &InferenceOptions,
+    window_tokens: u32,
+    tok_per_char: f32,
+    resolver: Option<&AttachmentResolver>,
+    abort: &AtomicBool,
+    messages: &[Message],
+) -> Option<Vec<Message>> {
+    let tail_start = automatic_compaction_tail_start(messages, window_tokens, tok_per_char);
+    if tail_start == 0 {
+        return None;
+    }
+    let summarizable = &messages[..tail_start];
+    let has_native_image = summarizable.iter().any(|message| {
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::Attachment { source }
+                    if source.kind == AttachmentKind::Image
+                        && source.purpose == AttachmentPurpose::NativeInput
+            )
+        })
+    });
+    if !has_native_image {
+        return None;
+    }
+    // 文本主模型的图片在首次发送时已转换（display_only 引用不进请求）；
+    // 无解析器 = 无多模态附件链路，不产生检查点（也不 OCR）。
+    let resolver = resolver?;
+
+    let mut out = messages.to_vec();
+    for index in 0..tail_start {
+        if abort.load(Ordering::Relaxed) {
+            return None;
+        }
+        let needs_checkpoint = out[index].content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::Attachment { source }
+                    if source.kind == AttachmentKind::Image
+                        && source.purpose == AttachmentPurpose::NativeInput
+            )
+        });
+        if !needs_checkpoint {
+            continue;
+        }
+        let adjacent_text: String = out[index]
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .collect::<String>()
+            .chars()
+            .take(VISUAL_CHECKPOINT_ADJACENT_CHARS)
+            .collect();
+        let mut content = Vec::with_capacity(out[index].content.len());
+        for block in &out[index].content {
+            match block {
+                ContentBlock::Attachment { source }
+                    if source.kind == AttachmentKind::Image
+                        && source.purpose == AttachmentPurpose::NativeInput =>
+                {
+                    match describe_image_for_checkpoint(
+                        provider,
+                        model,
+                        inference,
+                        resolver,
+                        source,
+                        &adjacent_text,
+                    )
+                    .await
+                    {
+                        Some(description) => {
+                            tracing::info!(
+                                attachment_id = %source.attachment_id,
+                                checkpoint_chars = description.chars().count(),
+                                "visual checkpoint captured for image leaving the exact tail"
+                            );
+                            content.push(ContentBlock::Text {
+                                text: format!(
+                                    "[visual_checkpoint attachment_id={}]\n{description}",
+                                    source.attachment_id
+                                ),
+                            });
+                        }
+                        None => {
+                            // 检查点失败：保留旧引用块（§7.1.5）。绝不 OCR，
+                            // 绝不移除证据。
+                            tracing::warn!(
+                                attachment_id = %source.attachment_id,
+                                "visual checkpoint failed; keeping attachment ref in summary input"
+                            );
+                            content.push(block.clone());
+                        }
+                    }
+                }
+                other => content.push(other.clone()),
+            }
+        }
+        out[index] = Message {
+            role: out[index].role,
+            content,
+        };
+    }
+    Some(out)
+}
+
+/// 单图检查点请求：同一 provider/model，物化原图 + 相邻用户文本。
+async fn describe_image_for_checkpoint(
+    provider: &Arc<dyn LlmProvider>,
+    model: &str,
+    inference: &InferenceOptions,
+    resolver: &AttachmentResolver,
+    source: &agent_contract::AttachmentRefV1,
+    adjacent_text: &str,
+) -> Option<String> {
+    let resolved = (resolver)(source.attachment_id.clone()).await.ok()?;
+    let prompt = if adjacent_text.trim().is_empty() {
+        "Describe this image concisely for later reference: key UI elements, text content, \
+         and visual structure. This description will replace the image in a conversation \
+         summary."
+            .to_string()
+    } else {
+        format!(
+            "The user sent this image with the message: \"{adjacent_text}\"\nDescribe the \
+             image concisely for later reference: key UI elements, text content, and visual \
+             structure. This description will replace the image in a conversation summary."
+        )
+    };
+    let request = CompletionRequest {
+        model: model.to_string(),
+        system: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Image {
+                    source: agent_contract::ImageSource {
+                        kind: "base64".to_string(),
+                        media_type: resolved.media_type.clone(),
+                        data: BASE64_STANDARD.encode(&resolved.bytes),
+                    },
+                },
+                ContentBlock::Text { text: prompt },
+            ],
+        }],
+        tools: vec![],
+        hosted_tools: vec![],
+        max_tokens: VISUAL_CHECKPOINT_MAX_TOKENS,
+        temperature: None,
+        enable_caching: false,
+        inference: inference.clone(),
+    };
+    match tokio::time::timeout(VISUAL_CHECKPOINT_TIMEOUT, provider.complete(request)).await {
+        Ok(Ok(response)) => {
+            let text = response.text().trim().to_string();
+            (!text.is_empty()).then_some(text)
+        }
+        _ => None,
+    }
+}
+
 async fn force_compaction_or_trim(
     provider: Arc<dyn LlmProvider>,
     model: &str,
+    inference: &InferenceOptions,
+    attachment_resolver: Option<&AttachmentResolver>,
+    abort: &AtomicBool,
     canonical_messages: &[Message],
     current_projection: &[Message],
     window_tokens: u32,
     output_reserve_tokens: u32,
     tok_per_char: f32,
-    inference: &InferenceOptions,
 ) -> Option<Vec<Message>> {
+    // 硬闸门的强制折叠同样先跑 VisualCheckpoint（§7.1：图片移出 exact tail
+    // 即生成检查点；失败保留引用继续折叠）。
+    let checkpointed = visual_checkpoint_prefold(
+        &provider,
+        model,
+        inference,
+        window_tokens,
+        tok_per_char,
+        attachment_resolver,
+        abort,
+        canonical_messages,
+    )
+    .await;
+    let fold_input: &[Message] = checkpointed.as_deref().unwrap_or(canonical_messages);
     if let Some(compacted) = fold_messages(
         provider.clone(),
         model,
-        canonical_messages,
+        fold_input,
         window_tokens,
         tok_per_char,
         inference,
@@ -3150,6 +4033,7 @@ const TAIL_LABEL_PEER_MESSAGES: &str = "peer_messages";
 const TAIL_LABEL_LOCAL_CLOCK: &str = "local_clock";
 const TAIL_LABEL_TASK_CONTEXT: &str = "task_context";
 const TAIL_LABEL_PLAN_MODE: &str = "plan_mode";
+const TAIL_LABEL_PLAN_SUGGESTION: &str = "plan_suggestion";
 const TAIL_LABEL_TOOL_PROGRESS_CHECKPOINT: &str = "tool_progress_checkpoint";
 const TAIL_LABEL_DELEGATION_HINT: &str = "delegation_hint";
 const TAIL_LABEL_WEB_FALLBACK_PROMPT: &str = "web_fallback_prompt";
@@ -3369,7 +4253,7 @@ fn log_provider_request_failure(
     run_id: &str,
     agent_id: Option<&str>,
 ) {
-    let message_chars = messages.iter().map(message_chars).sum::<usize>();
+    let message_chars_total = messages.iter().map(message_text_chars).sum::<usize>();
     let responses_items = messages
         .iter()
         .map(|message| {
@@ -3439,7 +4323,7 @@ fn log_provider_request_failure(
         provider = provider.name(),
         model,
         message_count = messages.len(),
-        message_chars,
+        message_chars_total,
         responses_items,
         hosted_web_items,
         function_call_pairs,
@@ -3479,13 +4363,19 @@ fn emit_run_guard_trip(
 
 /// 多轮 agent loop：长工具任务仅接受阶段性软提醒，不按固定轮次终止；无工具回复
 /// 若在收尾临界点收到 steer，则原子地将其并入下一次模型请求，而不是提前结束 run。
-async fn run_loop(ctx: RunLoopCtx) {
+async fn run_loop(mut ctx: RunLoopCtx) {
     let mut terminal_err: Option<String> = None;
     let mut tool_iterations = 0usize;
     let mut quality_rounds = 0u8;
     let mut continuation_reprompts = 0usize;
     let mut summary_recovery_attempted = false;
     let mut summary_recovery_pending = false;
+    // Plan 原生目录可观察行——收窄只在首个受限派发广播一次；counts 记录
+    // (收窄数, 完整数) 供晋升行对照（时间线是二级审计投影，非状态权威）。
+    let mut catalog_anchor_announced = false;
+    let mut catalog_anchor_counts: Option<(usize, usize)> = None;
+    // 本 run 是否已把 plan-native 晋升为 resident（每个 run 至多一次钩子调用）。
+    let mut plan_catalog_promoted = false;
     let mut active_hosted_tools = ctx.hosted_tools.clone();
     let mut hosted_web_fallback_attempted = false;
     let mut emergency_context_recovery_attempted = false;
@@ -3509,6 +4399,15 @@ async fn run_loop(ctx: RunLoopCtx) {
     // 连续工具回合的 system 字节完全一致。workspace attach/detach 是合法缓存
     // 重置点（跨 run 生效，见 PRD §3 A13③），因此这里不需要按轮重建。
     // MCP 档位由 run 冻结的工具来源推导：无 MCP 时不为整本 MCP 规则付费。
+    //
+    // docs/multimodal-attachments §8.5：统一上下文注入闸门。Plan 锚定 run
+    // （plan_native_catalog 在场）使用 PlanMinimalV1——system 从固定最小模板
+    // **正向构造**，绝不由 Standard 删除得到；MCP 文案与用户协作文案全部缺席。
+    let context_profile = if ctx.plan_native_catalog.is_some() {
+        ContextInjectionProfile::PlanMinimalV1
+    } else {
+        ContextInjectionProfile::Standard
+    };
     let (has_mcp_management, has_mcp_services) =
         mcp_policy_presence(ctx.gateway.as_ref(), ctx.external_tools.as_ref());
     let system_prompt = build_main_system_prompt(
@@ -3516,6 +4415,7 @@ async fn run_loop(ctx: RunLoopCtx) {
         has_mcp_management,
         has_mcp_services,
         &ctx.agent_prompts,
+        context_profile,
     );
     // memory_context 保持 run 冻结，作为头部独立消息随每轮请求发送（见
     // build_memory_context_message）。
@@ -3609,7 +4509,7 @@ async fn run_loop(ctx: RunLoopCtx) {
         // 1.3：journal 同步放在锁外追加，避免持有 session 锁做磁盘 IO。
         if let (Some(journal), 1..) = (ctx.request_journal.as_ref(), steer_journal_events.len()) {
             if let Err(error) = journal
-                .append_batch(&ctx.session_id, &steer_journal_events)
+                .append_batch(journal_key(&ctx), &steer_journal_events)
                 .await
             {
                 tracing::warn!(
@@ -3653,7 +4553,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                 let snapshot = SessionEvent::HistorySnapshot {
                     messages: canonical_messages.clone(),
                 };
-                if let Err(error) = journal.append(&ctx.session_id, snapshot).await {
+                if let Err(error) = journal.append(journal_key(&ctx), snapshot).await {
                     tracing::warn!(
                         session_id = %ctx.session_id,
                         error = %error,
@@ -3692,11 +4592,58 @@ async fn run_loop(ctx: RunLoopCtx) {
             delegation_disabled: ctx.delegation_disabled.clone(),
             suspension_gate: ctx.suspension_gate.clone(),
             continuation_gate: ctx.continuation_gate.clone(),
+            plan_suggestion_enabled: ctx.plan_suggestion_enabled,
         };
+        // docs §8.6 步骤 7：ExecutionFull 的 fail-closed 不变量——非 Plan 策略
+        // 绝不能看到 5/8 收窄目录。宿主批准后 stage_implementation_dispatch 已
+        // 把 task.mode 置 auto；prepare_runtime_session 据此传入
+        // plan_native_catalog=None。仍为 Some 说明恢复链断裂，零发送终止。
+        if policy != ToolPolicy::Plan && ctx.plan_native_catalog.is_some() && !summary_only {
+            terminal_err = Some(
+                ProductError::PlanFullCatalogNotRestored {
+                    tool_count: ctx
+                        .plan_native_catalog
+                        .map(|config| config.allowlist().len())
+                        .unwrap_or(0),
+                }
+                .to_string(),
+            );
+            tracing::error!(
+                session_id = %ctx.session_id,
+                task_id = %ctx.task_id,
+                "PLAN_FULL_CATALOG_NOT_RESTORED: narrowed catalog active outside plan policy"
+            );
+            break;
+        }
+        let mut plan_catalog_narrowed = false;
         let tools = if summary_only {
             Vec::new()
         } else {
-            client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools)
+            let mut specs =
+                client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools);
+            // Plan 原生 5→8 目录（docs §13.1 轨道 A）：仅 Plan 策略 + 冻结
+            // plan_native_v1 profile。目录裁剪是呈现层；执行边界仍在
+            // tool_allowed/scoped_input——隐藏调用按 Plan policy 硬拒（红线 2）。
+            if policy == ToolPolicy::Plan {
+                if let Some(plan_catalog) = ctx.plan_native_catalog {
+                    plan_catalog_narrowed = true;
+                    let allowlist = plan_catalog.allowlist();
+                    let full_tool_count = specs.len();
+                    specs.retain(|tool| allowlist.contains(&tool.name.as_str()));
+                    specs.sort_by(|a, b| a.name.cmp(&b.name));
+                    if !catalog_anchor_announced {
+                        catalog_anchor_announced = true;
+                        catalog_anchor_counts = Some((specs.len(), full_tool_count));
+                        let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
+                            phase: CatalogAnchorPhase::Narrowed,
+                            catalog: "plan_native".to_string(),
+                            tool_count: specs.len(),
+                            full_tool_count,
+                        });
+                    }
+                }
+            }
+            specs
         };
         let tools_json_len = serde_json::to_string(&tools)
             .map(|json| json.len())
@@ -3743,10 +4690,26 @@ async fn run_loop(ctx: RunLoopCtx) {
                         AgentActivityPhase::Requesting,
                         Some("正在整理完整上下文证据…".to_string()),
                     );
-                    let compaction_input = automatic_compaction_input(
+                    // §7.1：图片移出 exact tail 前生成 VisualCheckpoint（同一
+                    // 多模态主模型；失败保留引用）。canonical transcript 不变。
+                    let canonical_input = automatic_compaction_input(
                         &canonical_messages,
                         model_projection.as_deref(),
-                    );
+                    )
+                    .to_vec();
+                    let checkpointed = visual_checkpoint_prefold(
+                        &ctx.provider,
+                        &ctx.model,
+                        &ctx.inference,
+                        window_tokens,
+                        compactor.tok_per_char,
+                        ctx.attachment_resolver.as_ref(),
+                        ctx.abort.as_ref(),
+                        &canonical_input,
+                    )
+                    .await;
+                    let compaction_input: &[Message] =
+                        checkpointed.as_deref().unwrap_or(&canonical_input);
                     let compaction = fold_messages(
                         ctx.provider.clone(),
                         &ctx.model,
@@ -3785,7 +4748,8 @@ async fn run_loop(ctx: RunLoopCtx) {
                             let projection = SessionEvent::ModelProjection {
                                 messages: Some(messages.clone()),
                             };
-                            if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                            if let Err(error) = journal.append(journal_key(&ctx), projection).await
+                            {
                                 tracing::warn!(
                                     session_id = %ctx.session_id,
                                     error = %error,
@@ -3807,64 +4771,145 @@ async fn run_loop(ctx: RunLoopCtx) {
             }
         }
 
-        // ---- 上下文硬保证：发送前闸门。任何情况下都不发出必然超窗的请求；
-        // 先强制折叠（不受 75%/85% 阈值与防抖限制），失败则降级为有界裁剪。
+        // ---- 上下文硬保证：发送前闸门（docs §2.3/§6.4）。统一走
+        // `estimate_request_budget` + `resolve_request_max_tokens`：四类 token
+        // 分开核算（文本/工具 schema/图片/文档），输出额度低于请求类别最低值
+        // 或整理（最多两次强制折叠/裁剪）后仍超窗时**零发送**终止本轮——绝不
+        // `.max(1)` 强行派发（那是 `1 → 2 → 4` 故障链第 5 步，已删除）。
+        let request_kind = if summary_only {
+            RequestKind::Compaction
+        } else if policy == ToolPolicy::Plan && ctx.plan_native_catalog.is_some() {
+            RequestKind::PlanAnchored
+        } else if tools.is_empty() {
+            RequestKind::PlainChat
+        } else {
+            RequestKind::AgentToolRound
+        };
+        // 预算预检输入：头部 memory（若本轮会注入）也计入文本侧。
+        let mut resolved_output: Option<ResolvedOutputBudget> = None;
+        let mut request_budget: Option<RequestBudgetV1> = None;
+        let mut preflight_failure: Option<ProductError> = None;
         if window_tokens > 0 {
             let mut guard_attempts = 0u32;
             loop {
-                let estimated_tokens = compactor.estimate_tokens(
-                    request_chars(&system_prompt, &messages, tools_json_len)
-                        + memory_message.as_ref().map(message_chars).unwrap_or(0),
-                );
-                let over_budget = estimated_input_over_budget(
-                    (estimated_tokens as f32 * CONTEXT_GUARD_SAFETY_MARGIN) as u32,
-                    output_reserve_tokens,
-                    window_tokens,
-                );
-                if !over_budget || guard_attempts >= 2 {
-                    break;
-                }
-                guard_attempts += 1;
-                emit_activity(
-                    &ctx.event_tx,
-                    AgentActivityPhase::Requesting,
-                    Some("上下文即将超过模型窗口，正在强制整理…".to_string()),
-                );
-                if let Some(compacted) = force_compaction_or_trim(
-                    ctx.provider.clone(),
-                    &ctx.model,
-                    &canonical_messages,
-                    &messages,
-                    window_tokens,
-                    output_reserve_tokens,
+                // 预算口径与最终派发一致：PlanMinimal 不注入 memory 时，预算
+                // 输入也不含 memory（与下方 request_messages 组装同一闸门）。
+                let memory_in_guard =
+                    context_profile.allows(ContextSource::Memory) && memory_message.is_some();
+                let guard_messages: Vec<Message> = messages
+                    .iter()
+                    .chain(memory_message.as_ref().filter(|_| memory_in_guard))
+                    .cloned()
+                    .collect();
+                let estimate = estimate_request_budget(
+                    &system_prompt,
+                    &guard_messages,
+                    tools_json_len,
                     compactor.tok_per_char,
-                    &ctx.inference,
-                )
-                .await
-                {
-                    messages = compacted;
-                    model_projection = Some(messages.clone());
-                    compactor.record_compaction();
-                    bump_rewrite_version(&ctx).await;
-                    // 1.3：同上——强制折叠/裁剪安装投影后同步 ModelProjection 事件。
-                    if let Some(journal) = ctx.request_journal.as_ref() {
-                        let projection = SessionEvent::ModelProjection {
-                            messages: Some(messages.clone()),
-                        };
-                        if let Err(error) = journal.append(&ctx.session_id, projection).await {
-                            tracing::warn!(
-                                session_id = %ctx.session_id,
-                                error = %error,
-                                "1.3 request journal projection sync failed"
-                            );
+                    window_tokens,
+                    ctx.max_tokens,
+                    capabilities.max_output_tokens,
+                    ctx.vision_budget,
+                    CONTEXT_GUARD_RESERVE_MARGIN,
+                    request_kind.minimum_output_tokens(),
+                );
+                match estimate {
+                    Ok((budget, resolved)) => {
+                        resolved_output = Some(resolved);
+                        request_budget = Some(budget);
+                        break;
+                    }
+                    Err(error) => {
+                        if guard_attempts >= 2 {
+                            // 整理后仍不满足：零发送，报告分类后的预检错误。
+                            preflight_failure = Some(error.into());
+                            break;
+                        }
+                        guard_attempts += 1;
+                        emit_activity(
+                            &ctx.event_tx,
+                            AgentActivityPhase::Requesting,
+                            Some("上下文即将超过模型窗口，正在强制整理…".to_string()),
+                        );
+                        if let Some(compacted) = force_compaction_or_trim(
+                            ctx.provider.clone(),
+                            &ctx.model,
+                            &ctx.inference,
+                            ctx.attachment_resolver.as_ref(),
+                            ctx.abort.as_ref(),
+                            &canonical_messages,
+                            &messages,
+                            window_tokens,
+                            output_reserve_tokens,
+                            compactor.tok_per_char,
+                        )
+                        .await
+                        {
+                            messages = compacted;
+                            model_projection = Some(messages.clone());
+                            compactor.record_compaction();
+                            bump_rewrite_version(&ctx).await;
+                            // 1.3：同上——强制折叠/裁剪安装投影后同步 ModelProjection 事件。
+                            if let Some(journal) = ctx.request_journal.as_ref() {
+                                let projection = SessionEvent::ModelProjection {
+                                    messages: Some(messages.clone()),
+                                };
+                                if let Err(error) =
+                                    journal.append(journal_key(&ctx), projection).await
+                                {
+                                    tracing::warn!(
+                                        session_id = %ctx.session_id,
+                                        error = %error,
+                                        "1.3 request journal projection sync failed"
+                                    );
+                                }
+                            }
+                        }
+                        if ctx.abort.load(Ordering::Relaxed) {
+                            break;
                         }
                     }
                 }
-                if ctx.abort.load(Ordering::Relaxed) {
-                    break;
+            }
+        } else {
+            // 窗口未知：仍按公式解析输出额度（无窗口钳制），保证审计字段在场。
+            match estimate_request_budget(
+                &system_prompt,
+                &messages,
+                tools_json_len,
+                compactor.tok_per_char,
+                0,
+                ctx.max_tokens,
+                capabilities.max_output_tokens,
+                ctx.vision_budget,
+                CONTEXT_GUARD_RESERVE_MARGIN,
+                request_kind.minimum_output_tokens(),
+            ) {
+                Ok((budget, resolved)) => {
+                    resolved_output = Some(resolved);
+                    request_budget = Some(budget);
                 }
+                Err(error) => preflight_failure = Some(error.into()),
             }
         }
+        if let Some(error) = preflight_failure {
+            tracing::error!(
+                session_id = %ctx.session_id,
+                error = %error,
+                request_kind = ?request_kind,
+                "context preflight failed; zero provider dispatch this iteration"
+            );
+            terminal_err = Some(error.to_string());
+            break;
+        }
+        let Some(resolved_output) = resolved_output else {
+            terminal_err = Some("预算解析未产生结果，已取消本轮发送".to_string());
+            break;
+        };
+        let Some(mut request_budget) = request_budget else {
+            terminal_err = Some("预算快照缺失，已取消本轮发送".to_string());
+            break;
+        };
 
         // 这是主会话的 run loop。Ask 只收紧工具权限，不改变 Agent 身份；子代理使用
         // run_child 中的 build_subagent_system_prompt。
@@ -3879,44 +4924,70 @@ async fn run_loop(ctx: RunLoopCtx) {
         // 都因「多出 N 条」误报。
         let mut tail_injections: Vec<Message> = Vec::new();
         let mut tail_labels: Vec<&'static str> = Vec::new();
-        if let Some(peer_messages) = pending_peer_injection.take() {
-            tail_injections.push(peer_messages);
-            tail_labels.push(TAIL_LABEL_PEER_MESSAGES);
-        }
-        match ctx.supervisor.take_peer_message_injection() {
-            Ok(Some(peer_messages)) => {
+        // docs §8.5：peer mailbox 在 PlanMinimal 下不消费（保持 pending，进入
+        // ExecutionFull 后再按正常规则读取），绝不「取出后丢弃」。
+        if context_profile.allows(ContextSource::PeerMailbox) {
+            if let Some(peer_messages) = pending_peer_injection.take() {
                 tail_injections.push(peer_messages);
                 tail_labels.push(TAIL_LABEL_PEER_MESSAGES);
             }
-            Ok(None) => {}
-            Err(error) => {
-                terminal_err = Some(format!("无法读取 Agent mailbox：{error}"));
-                break;
+            match ctx.supervisor.take_peer_message_injection() {
+                Ok(Some(peer_messages)) => {
+                    tail_injections.push(peer_messages);
+                    tail_labels.push(TAIL_LABEL_PEER_MESSAGES);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    terminal_err = Some(format!("无法读取 Agent mailbox：{error}"));
+                    break;
+                }
             }
         }
-        tail_injections.push(Message::user_text(build_local_clock_user_message(
-            Local::now().fixed_offset(),
-        )));
-        tail_labels.push(TAIL_LABEL_LOCAL_CLOCK);
+        // 统一注入闸门（docs §8.5）：PlanMinimalV1 只放行 PlanPolicy、
+        // TaskContextCapsule（权威 PlanContextCapsule）与 SummaryRecovery
+        // （正确性关键的收尾提示）；其余来源（时钟、进度 checkpoint、委派、
+        // web 回退、governor 尾部）一律缺席。
+        if context_profile.allows(ContextSource::LocalClock) {
+            tail_injections.push(Message::user_text(build_local_clock_user_message(
+                Local::now().fixed_offset(),
+            )));
+            tail_labels.push(TAIL_LABEL_LOCAL_CLOCK);
+        }
         if let Some(task_context) = task_context.as_deref() {
             tail_injections.push(build_task_context_message(task_context));
             tail_labels.push(TAIL_LABEL_TASK_CONTEXT);
         }
-        tail_injections.push(build_plan_mode_message(policy == ToolPolicy::Plan));
+        tail_injections.push(build_plan_mode_message(
+            policy == ToolPolicy::Plan,
+            ctx.plan_suggestion_enabled,
+        ));
         tail_labels.push(TAIL_LABEL_PLAN_MODE);
-        if let Some(checkpoint) = build_tool_progress_checkpoint_message(tool_iterations) {
-            tail_injections.push(checkpoint);
-            tail_labels.push(TAIL_LABEL_TOOL_PROGRESS_CHECKPOINT);
+        // 复杂度建议策略：与 propose_plan_mode 注册同条件（docs §9：任一资格
+        // 条件不满足时，工具和提示同时缺席）。非 DeepSeek 的注入恒为 0。
+        if policy == ToolPolicy::Main
+            && ctx.plan_suggestion_enabled
+            && context_profile.allows(ContextSource::PlanSuggestion)
+        {
+            tail_injections.push(Message::user_text(PLAN_SUGGESTION_TAIL));
+            tail_labels.push(TAIL_LABEL_PLAN_SUGGESTION);
         }
-        if let Some(hint) = build_delegation_hint_message(
-            delegation_allowed,
-            mode,
-            ctx.supervisor.codex_available(),
-            ctx.supervisor.codex_configured(),
-            ctx.workspace_scope.is_some(),
-        ) {
-            tail_injections.push(hint);
-            tail_labels.push(TAIL_LABEL_DELEGATION_HINT);
+        if context_profile.allows(ContextSource::ToolProgressCheckpoint) {
+            if let Some(checkpoint) = build_tool_progress_checkpoint_message(tool_iterations) {
+                tail_injections.push(checkpoint);
+                tail_labels.push(TAIL_LABEL_TOOL_PROGRESS_CHECKPOINT);
+            }
+        }
+        if context_profile.allows(ContextSource::DelegationHint) {
+            if let Some(hint) = build_delegation_hint_message(
+                delegation_allowed,
+                mode,
+                ctx.supervisor.codex_available(),
+                ctx.supervisor.codex_configured(),
+                ctx.workspace_scope.is_some(),
+            ) {
+                tail_injections.push(hint);
+                tail_labels.push(TAIL_LABEL_DELEGATION_HINT);
+            }
         }
         if !summary_only && hosted_web_fallback_attempted {
             tail_injections.push(Message::user_text(DEEPSEEK_LOCAL_WEB_FALLBACK_PROMPT));
@@ -3935,31 +5006,36 @@ async fn run_loop(ctx: RunLoopCtx) {
         let mut request_messages = Vec::with_capacity(
             messages.len() + tail_injections.len() + usize::from(memory_message.is_some()),
         );
-        if let Some(memory) = &memory_message {
+        let memory_included =
+            memory_message.is_some() && context_profile.allows(ContextSource::Memory);
+        if let Some(memory) = memory_message.as_ref().filter(|_| memory_included) {
             request_messages.push(memory.clone());
         }
         request_messages.extend(messages.iter().cloned());
         request_messages.extend(tail_injections);
 
-        // P2-G：本轮实际发送的文本字符数（system + 注入后的 messages + tools），
-        // 供 max_tokens 钳制与迭代结束后的 tokPerChar 校准共用。
+        // P2-G：本轮实际发送的**文本**字符数（system + 注入后的 messages + tools），
+        // 供迭代结束后的 tokPerChar 校准共用。必须在附件物化**之前**计算（docs
+        // §6.1：Base64 不进入文本字符统计，且校准输入要扣减视觉 token）。
         let sent_chars = request_chars(&system_prompt, &request_messages, tools_json_len);
-        let estimated_sent_tokens = compactor.estimate_tokens(sent_chars);
+        let sent_vision_tokens = request_budget.image_tokens;
         let request = CompletionRequest {
             model: ctx.model.clone(),
             system: Some(system_prompt.clone()),
             messages: Vec::new(), // 由 run_agent_loop_iteration 同步
             tools: Vec::new(),    // 同上
-            hosted_tools: if summary_only {
+            hosted_tools: if summary_only || plan_catalog_narrowed {
+                // 收窄目录（Plan 原生 5→8）期间剥离 hosted 联网工具：目录声明
+                // 的工具面必须与模型实际可见的能力一致。只影响呈现层目录；
+                // 工具执行的审批边界照旧。
                 Vec::new()
             } else {
                 active_hosted_tools.clone()
             },
-            max_tokens: clamp_request_max_tokens(
-                ctx.max_tokens,
-                window_tokens,
-                estimated_sent_tokens,
-            ),
+            // docs §2.3：输出额度由 resolve_request_max_tokens 统一解析（预算
+            // 闸门已保证 ≥ 请求类别最低值）；headroom 钳制信息随
+            // OutputBudgetContext 传递给 MaxTokens 终态分类。
+            max_tokens: resolved_output.effective_output_tokens,
             temperature: ctx.temperature,
             // 纯聊天没有长系统提示或工具定义可复用，关闭缓存可避免部分兼容接口
             // 对 cache_control 的不支持错误；工作区工具回合继续允许 provider 缓存。
@@ -3971,6 +5047,43 @@ async fn run_loop(ctx: RunLoopCtx) {
                 governor_request_mode,
             ),
         };
+
+        // ---- docs §6.3 步骤 6：把发送副本中的附件引用物化为 Image/File 块。
+        // 预算（步骤 2/4）已在引用形态上算完；物化副本只存在于本次 Provider
+        // 请求，迭代结束即丢弃——只有 outcome.appended_messages（assistant/
+        // tool 协议消息，不含引用）会进入 canonical history（步骤 9）。
+        // `dispatch_ref_messages` 保留引用形态供 envelope 哈希与附件 id 审计：
+        // JSONL 投影重建自检必须对引用形态（而非物化 Base64）计算。
+        // 无解析器（未接线持久附件）但存在引用时 fail closed，绝不降级发送。
+        let dispatch_ref_messages = request_messages.clone();
+        let has_attachment_refs = dispatch_ref_messages.iter().any(|message| {
+            message
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Attachment { .. }))
+        });
+        if has_attachment_refs {
+            let Some(resolver) = ctx.attachment_resolver.clone() else {
+                terminal_err =
+                    Some("会话携带附件引用但运行时未接入附件解析器，已取消本轮发送".to_string());
+                break;
+            };
+            match materialize_attachments(&request_messages, &resolver).await {
+                Ok((materialized, wire_bytes)) => {
+                    request_budget.materialized_wire_bytes = wire_bytes;
+                    request_messages = materialized;
+                }
+                Err(error) => {
+                    tracing::error!(
+                        session_id = %ctx.session_id,
+                        error = %error,
+                        "attachment materialization failed; zero provider dispatch"
+                    );
+                    terminal_err = Some(error.to_string());
+                    break;
+                }
+            }
+        }
 
         // P2-H：请求发送前捕获本轮前缀形状并与上一轮比对，命中缓存重置点时
         // 记录归因日志。rewrite_version 须在压缩块之后重新读取——本轮压缩刚
@@ -3998,9 +5111,11 @@ async fn run_loop(ctx: RunLoopCtx) {
         if let Some(journal) = ctx.request_journal.as_ref() {
             // 规范化：去掉头部 memory 注入与已登记尾部注入，剩下的才是
             // JSONL 投影应当能重建的工作集。tail_injections 已被 extend 进
-            // request_messages（moved），条数取同序同长的登记清单。
+            // request_messages（moved），条数取同序同长的登记清单。哈希输入
+            // 是引用形态副本 dispatch_ref_messages（JSONL 存 refs，不存物化
+            // Base64——对物化副本哈希会让重建自检必然误报）。
             let normalized = normalized_dispatch_messages(
-                &request_messages,
+                &dispatch_ref_messages,
                 memory_message.is_some(),
                 tail_labels.len(),
             );
@@ -4018,8 +5133,64 @@ async fn run_loop(ctx: RunLoopCtx) {
                 messages_sha256: envelope.messages_sha256.clone(),
                 reason: reason.to_string(),
                 excluded_tails: tail_labels.iter().map(|label| label.to_string()).collect(),
+                // A2：目录构成审计字段。tools 已是 client_tools_for_hosted_tools
+                // 处理后的最终派发目录（含 search → search_files 别名），审计
+                // 记录的是模型实际看到的名字；max_tokens 取钳制后的请求值
+                // （request 在此之后才被 move 进迭代调用）。
+                tool_names: tools.iter().map(|tool| tool.name.clone()).collect(),
+                hosted_tool_names: if summary_only || plan_catalog_narrowed {
+                    // 收窄轮 hosted 工具已随请求剥离；审计记录的是模型实际看到
+                    // 的目录，这里必须同步为空，否则人可读清单与 tools_sha256
+                    // 会互相矛盾。
+                    Vec::new()
+                } else {
+                    active_hosted_tools
+                        .iter()
+                        .map(hosted_tool_display_name)
+                        .collect()
+                },
+                max_tokens: request.max_tokens,
+                // ---- 阶段 A 预算审计组（docs §10 阶段 A / §11）：只写数值、id
+                // 与 hash，不写附件正文、API key 或完整 Provider body。
+                provider_name: Some(ctx.provider.name().to_string()),
+                provider_kind: (!ctx.route_descriptor.provider_kind.is_empty())
+                    .then(|| ctx.route_descriptor.provider_kind.clone()),
+                model: Some(ctx.model.clone()),
+                protocol: (!ctx.route_descriptor.protocol.is_empty())
+                    .then(|| ctx.route_descriptor.protocol.clone()),
+                context_window_tokens: request_budget.context_window_tokens,
+                text_tokens: request_budget.text_tokens,
+                image_tokens: u32::try_from(request_budget.image_tokens).unwrap_or(u32::MAX),
+                document_tokens: request_budget.document_tokens,
+                tool_schema_tokens: request_budget.tool_schema_tokens,
+                estimated_input_tokens: u32::try_from(request_budget.estimated_input_tokens)
+                    .unwrap_or(u32::MAX),
+                requested_output_tokens: request_budget.requested_output_tokens,
+                reserve_tokens: request_budget.reserve_tokens,
+                materialized_wire_bytes: request_budget.materialized_wire_bytes,
+                attachment_count: request_budget.attachment_count,
+                anchoring_phase: (ctx.plan_native_catalog.is_some() && policy == ToolPolicy::Plan)
+                    .then(|| match ctx.plan_native_catalog {
+                        Some(PlanNativeCatalogConfig {
+                            phase: PlanNativeCatalogPhase::Bootstrap,
+                        }) => "PlanBootstrap",
+                        _ => "PlanResident",
+                    })
+                    .map(str::to_string),
+                context_profile: Some(context_profile.as_str().to_string()),
+                attachment_ids: dispatch_ref_messages
+                    .iter()
+                    .flat_map(|message| message.content.iter())
+                    .filter_map(|block| {
+                        if let ContentBlock::Attachment { source } = block {
+                            Some(source.attachment_id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
             };
-            match journal.append(&ctx.session_id, header).await {
+            match journal.append(journal_key(&ctx), header).await {
                 Ok(()) => {
                     ctx.request_self_check
                         .headers_appended
@@ -4034,7 +5205,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             // 重建自检：读回 JSONL 投影重算哈希与本次派发值比对。首期
             // **只记录不阻断**（风险表：先跑一周观察误报；确认零误报后把此处
             // 升级为终止条件即可，纯函数签名已返回差异描述）。
-            match journal.load(&ctx.session_id).await {
+            match journal.load(journal_key(&ctx)).await {
                 Ok(reloaded) => {
                     let rebuilt = reloaded
                         .model_projection
@@ -4075,6 +5246,11 @@ async fn run_loop(ctx: RunLoopCtx) {
             } else {
                 &tool_host
             };
+        let output_budget_context = OutputBudgetContext {
+            configured: ctx.max_tokens,
+            provider_ceiling: capabilities.max_output_tokens,
+            headroom_clamped: resolved_output.headroom_clamped,
+        };
         let result = run_agent_loop_iteration_streaming_with_abort(
             ctx.provider.as_ref(),
             iteration_tool_host,
@@ -4084,7 +5260,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             Some(ctx.abort.as_ref()),
             &mut edit_retry_guard,
             ctx.event_tx.clone(),
-            window_tokens,
+            output_budget_context,
         )
         .await;
 
@@ -4119,7 +5295,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                         .map(|message| SessionEvent::Message(message.clone()))
                         .collect::<Vec<_>>();
                     if !events.is_empty() {
-                        if let Err(error) = journal.append_batch(&ctx.session_id, &events).await {
+                        if let Err(error) = journal.append_batch(journal_key(&ctx), &events).await {
                             tracing::warn!(
                                 session_id = %ctx.session_id,
                                 error = %error,
@@ -4128,9 +5304,67 @@ async fn run_loop(ctx: RunLoopCtx) {
                         }
                     }
                 }
+                // Plan 原生目录晋升（docs §14.3）：首次 durable assistant/tool
+                // outcome 后同步调用宿主钩子，宿主完成 PlanStore 的
+                // bootstrap -> resident CAS 并确认持久化，之后本 run 才切换到
+                // resident 目录并允许下一次 Provider 请求。钩子失败（或未安装）
+                // 时 fail closed：终止 run，不发下一轮请求。宿主在下个 run 启动
+                // 前重新传入权威 phase，因此 runtime 重建 / clear context /
+                // 重启都不会让同一 Plan 回退到 bootstrap。
+                if policy == ToolPolicy::Plan
+                    && matches!(
+                        ctx.plan_native_catalog,
+                        Some(PlanNativeCatalogConfig {
+                            phase: PlanNativeCatalogPhase::Bootstrap
+                        })
+                    )
+                    && !plan_catalog_promoted
+                    && outcome
+                        .appended_messages
+                        .iter()
+                        .any(|m| m.role == Role::Assistant)
+                {
+                    plan_catalog_promoted = true;
+                    match ctx
+                        .plan_catalog_promotion
+                        .as_ref()
+                        .map(|promote| promote(&ctx.task_id))
+                    {
+                        Some(Ok(())) => {
+                            ctx.plan_native_catalog = Some(PlanNativeCatalogConfig {
+                                phase: PlanNativeCatalogPhase::Resident,
+                            });
+                            tracing::info!(
+                                session_id = %ctx.session_id,
+                                task_id = %ctx.task_id,
+                                "plan native catalog promoted to resident"
+                            );
+                            if let Some((tool_count, full_tool_count)) =
+                                catalog_anchor_counts.take()
+                            {
+                                let _ = ctx.event_tx.send(AgentEvent::CatalogAnchor {
+                                    phase: CatalogAnchorPhase::Promoted,
+                                    catalog: "plan_native".to_string(),
+                                    tool_count,
+                                    full_tool_count,
+                                });
+                            }
+                        }
+                        Some(Err(error)) => {
+                            terminal_err =
+                                Some(format!("Plan 目录晋升未持久化，已停止本轮请求：{error}"));
+                            break;
+                        }
+                        None => {
+                            terminal_err =
+                                Some("Plan 目录晋升钩子未安装，已停止本轮请求".to_string());
+                            break;
+                        }
+                    }
+                }
                 // P2-G：用上一轮真实 usage 校准 tokPerChar（失败轮不校准，
-                // 保持旧值继续保守估算）。
-                compactor.calibrate(outcome.usage.input_tokens, sent_chars);
+                // 保持旧值继续保守估算）。视觉 token 先按 profile 扣减（§6.1.4）。
+                compactor.calibrate(outcome.usage.input_tokens, sent_chars, sent_vision_tokens);
                 // 宿主侧护栏：思考量按流式字符累计；工具轮信号只由真实工具结果推导。
                 run_guard.note_reasoning_chars(outcome.reasoning_chars as u64);
                 let round_trip = run_guard.observe_tool_round(&outcome.tool_observations);
@@ -4257,7 +5491,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                     (ctx.request_journal.as_ref(), pending_journal_messages.len())
                 {
                     if let Err(error) = journal
-                        .append_batch(&ctx.session_id, &pending_journal_messages)
+                        .append_batch(journal_key(&ctx), &pending_journal_messages)
                         .await
                     {
                         tracing::warn!(
@@ -4357,7 +5591,7 @@ Please summarize and present these results.\n\n{}",
                                 (ctx.request_journal.as_ref(), collected_journal_events.len())
                             {
                                 if let Err(error) = journal
-                                    .append_batch(&ctx.session_id, &collected_journal_events)
+                                    .append_batch(journal_key(&ctx), &collected_journal_events)
                                     .await
                                 {
                                     tracing::warn!(
@@ -4440,7 +5674,7 @@ Do not mention private reasoning.\n\n{}",
                                         (ctx.request_journal.as_ref(), revise_journal_events.len())
                                     {
                                         if let Err(error) = journal
-                                            .append_batch(&ctx.session_id, &revise_journal_events)
+                                            .append_batch(journal_key(&ctx), &revise_journal_events)
                                             .await
                                         {
                                             tracing::warn!(
@@ -4546,12 +5780,14 @@ Do not mention private reasoning.\n\n{}",
                     if let Some(compacted) = force_compaction_or_trim(
                         ctx.provider.clone(),
                         &ctx.model,
+                        &ctx.inference,
+                        ctx.attachment_resolver.as_ref(),
+                        ctx.abort.as_ref(),
                         &canonical_messages,
                         &messages,
                         window_tokens,
                         output_reserve_tokens,
                         compactor.tok_per_char,
-                        &ctx.inference,
                     )
                     .await
                     {
@@ -4570,7 +5806,8 @@ Do not mention private reasoning.\n\n{}",
                             let projection = SessionEvent::ModelProjection {
                                 messages: Some(compacted),
                             };
-                            if let Err(error) = journal.append(&ctx.session_id, projection).await {
+                            if let Err(error) = journal.append(journal_key(&ctx), projection).await
+                            {
                                 tracing::warn!(
                                     session_id = %ctx.session_id,
                                     error = %error,
@@ -4708,6 +5945,9 @@ struct SessionToolHost {
     delegation_disabled: Arc<AtomicBool>,
     suspension_gate: Arc<AtomicBool>,
     continuation_gate: Arc<AtomicBool>,
+    /// Plan 入口建议注册开关（主 run 由宿主按资格刷新；子代理恒 false——
+    /// propose_plan_mode 只属于 R-Code 主 Agent，docs §9）。
+    plan_suggestion_enabled: bool,
 }
 
 /// Request-local execution guard used by DeepSeek's cheap evidence dose.  It intentionally does
@@ -5019,6 +6259,18 @@ fn has_hosted_web_search(hosted_tools: &[HostedToolSpec]) -> bool {
     hosted_tools.iter().any(HostedToolSpec::is_web_search)
 }
 
+/// A2：hosted 工具的审计名。`HostedToolSpec` 是变体枚举（WebSearch/WebFetch），
+/// 无 name 字段，用现有判定器映射，不动合同层。
+fn hosted_tool_display_name(tool: &HostedToolSpec) -> String {
+    if tool.is_web_search() {
+        "web_search".to_string()
+    } else if tool.is_web_fetch() {
+        "web_fetch".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
 fn disable_hosted_web_tools(hosted_tools: &mut Vec<HostedToolSpec>) {
     hosted_tools.retain(|tool| !tool.is_web_search() && !tool.is_web_fetch());
 }
@@ -5162,10 +6414,18 @@ impl SessionToolHost {
                     | "collect_subagents"
                     | "list_agents"
                     | "send_agent_message"
+                    | "propose_plan_mode"
             )
     }
 
     fn tool_allowed(&self, name: &str) -> bool {
+        // Plan 入口建议工具的呈现层与执行层同门（docs §9：非 eligible Run 的
+        // 工具注册与调用都必须为 0；工具不在目录里不是安全边界）。
+        if name == "propose_plan_mode" {
+            return self.policy == ToolPolicy::Main
+                && self.plan_suggestion_enabled
+                && !self.caller.starts_with("subagent:");
+        }
         if matches!(name, "mcp_create_draft" | "mcp_save_draft")
             && self.caller.starts_with("subagent:")
         {
@@ -5499,6 +6759,21 @@ impl SessionToolHost {
                 .await
                 .map_err(|e| agent_error::Error::ToolHost(e.to_string()));
         }
+        if name == "propose_plan_mode" {
+            // Plan 入口建议是宿主自有工具（gateway 注册、store 事务建 offer），
+            // 但 worker 侧仍要在进入 Gateway 前复核注册门：目录缺席时历史诱导
+            // 调用必须在此拒绝（docs §9，非 eligible Run 的调用数为 0）。
+            if !(self.policy == ToolPolicy::Main
+                && self.plan_suggestion_enabled
+                && !self.caller.starts_with("subagent:"))
+            {
+                return Ok(ToolCallOutcome {
+                    content: "propose_plan_mode is not available for this run".to_string(),
+                    is_error: true,
+                    metadata: None,
+                });
+            }
+        }
         if name == "collect_subagents" {
             let supervisor = self.delegation.as_ref().ok_or_else(|| {
                 agent_error::Error::ToolHost(
@@ -5643,6 +6918,8 @@ fn host_lifecycle_tool_allowed(policy: ToolPolicy, name: &str) -> bool {
         "enter_plan_mode" => matches!(policy, ToolPolicy::Main | ToolPolicy::ReadOnly),
         "plan_publish" | "request_user_input" => policy == ToolPolicy::Plan,
         "plan_item_update" => matches!(policy, ToolPolicy::Main | ToolPolicy::FullAccess),
+        // Plan 入口建议只属于主 run；子代理的额外 caller 检查在 tool_allowed。
+        "propose_plan_mode" => policy == ToolPolicy::Main,
         _ => true,
     }
 }
@@ -5868,14 +7145,16 @@ your final answer."
         )
     };
     let delegate_description = format!(
-        "{delegate_description} Starting a second or further subagent in the same run requires a \
-confirmed plan_subagents batch: call plan_subagents with one entry per distinct direction and \
-confirm=true before delegating beyond the first subagent."
+        "{delegate_description} Work directly by default; permission to use subagents is not an \
+instruction to call this tool. A run may create at most three direct subagents. Starting the second \
+or third requires a confirmed plan_subagents batch with one genuinely distinct entry per direction; \
+no fourth direct subagent is allowed."
     );
     tools.extend([
         ToolSpec {
             name: "plan_subagents".to_string(),
-            description: "Plan a parallel subagent batch before delegating more than one subagent. \
+            description: "Plan a parallel subagent batch before delegating a second or third subagent. \
+The direct-child ceiling is three, and merely having permission to use subagents does not justify a batch. \
 One entry per genuinely distinct direction (goal, optional agent/label). The first call returns a \
 plan analysis — count, role-slot distribution, duplicate-role warnings. Re-call with confirm=true \
 to lock the batch: delegate_task is then accepted up to the locked total and rejected beyond it. \
@@ -6121,12 +7400,14 @@ impl Drop for SubagentActivityPermitGuard {
     }
 }
 
-/// 派生来源：模型经 `delegate_task` 发起（受计划门约束），或运行时内部发起
-/// （质量复核、外部主代理桥，不受约束）。
+/// 派生来源：模型经 `delegate_task` 发起（受计划门约束）、R-Code 运行时内部发起，
+/// 或由外部主代理桥发起。外部主代理桥必须与 R-Code 自身派生分开标识，否则 Codex
+/// 主代理创建的 native child 会被错误展示成其“Self / 本家”。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DelegationInitiator {
     Model,
     Runtime,
+    ExternalMain,
 }
 
 /// 已锁定的子代理批次计划：允许的子代理总数上限与各方向摘要。
@@ -6444,6 +7725,7 @@ impl SubagentSupervisor {
         child_abort: Arc<AtomicBool>,
         access_mode: SubagentAccessMode,
         require_approval: bool,
+        force_leaf: bool,
         runtime: NativeSubagentRuntimeOptions,
         model: String,
         role_prompt: String,
@@ -6478,7 +7760,13 @@ impl SubagentSupervisor {
             activity_permit: Some(Arc::new(SubagentActivityPermitLease::new(
                 self.semaphore.clone(),
             ))),
-            depth: child_depth,
+            // External-main bridges own one fresh supervisor per callback, so their R-Code child
+            // must be a leaf or it can bypass the external parent's shared direct-child budget.
+            depth: if force_leaf {
+                MAX_SUBAGENT_DEPTH
+            } else {
+                child_depth
+            },
             descendants_created: self.descendants_created.clone(),
             delegation_tree: self.delegation_tree.clone(),
             children: Arc::new(Mutex::new(HashMap::new())),
@@ -6734,10 +8022,10 @@ delegate_task"
             .expect("delegation plan gate lock poisoned")
             .spawns_used;
         let allowed_total = spawns_used.max(existing_children) + planned;
-        if allowed_total > MAX_SUBAGENTS_PER_RUN {
+        if allowed_total > MAX_MODEL_SUBAGENTS_PER_RUN {
             return Err(ProductError::Other(format!(
                 "计划将使子代理总数达到 {allowed_total}，超过单次运行上限 \
-{MAX_SUBAGENTS_PER_RUN}；请收敛条目"
+{MAX_MODEL_SUBAGENTS_PER_RUN}；请收敛条目"
             )));
         }
 
@@ -7228,7 +8516,7 @@ delegate_task 的 agent 枚举",
     async fn spawn(
         &self,
         backend: SubagentBackend,
-        _label: Option<String>,
+        label: Option<String>,
         goal: String,
         access_mode: SubagentAccessMode,
         delegated_by_tool_call_id: Option<String>,
@@ -7237,7 +8525,7 @@ delegate_task 的 agent 枚举",
         self.spawn_with_run_id(
             Uuid::new_v4().to_string(),
             backend,
-            _label,
+            label,
             goal,
             access_mode,
             delegated_by_tool_call_id,
@@ -7252,7 +8540,7 @@ delegate_task 的 agent 枚举",
         &self,
         run_id: String,
         backend: SubagentBackend,
-        _label: Option<String>,
+        requested_label: Option<String>,
         goal: String,
         access_mode: SubagentAccessMode,
         delegated_by_tool_call_id: Option<String>,
@@ -7343,8 +8631,21 @@ delegate_task 的 agent 枚举",
             )));
         }
         let language = detect_subagent_name_language(&goal);
-        let self_derived = matches!(backend, SubagentBackend::RCode);
-        let display_name = self.name_allocator.allocate(language, self_derived);
+        let self_derived = matches!(backend, SubagentBackend::RCode)
+            && initiator != DelegationInitiator::ExternalMain;
+        let display_name = if initiator == DelegationInitiator::ExternalMain {
+            requested_label
+                .map(|value| value.trim().to_string())
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.chars().count() <= 80
+                        && !value.chars().any(char::is_control)
+                        && !matches!(value.to_lowercase().as_str(), "self" | "本家")
+                })
+                .unwrap_or_else(|| self.name_allocator.allocate(language, false))
+        } else {
+            self.name_allocator.allocate(language, self_derived)
+        };
         let label = match backend {
             SubagentBackend::RCode => display_name,
             SubagentBackend::External(_) => format!(
@@ -7432,12 +8733,16 @@ delegate_task 的 agent 枚举",
             }),
             SubagentBackend::External(_) => None,
         };
+        // A native child created by an external main agent (currently Codex App Server) is a leaf.
+        // Keep its nested supervisor as the native runtime carrier, but pin it at maximum depth so
+        // delegation tools are absent. Native R-Code trees retain their bounded depth-two escape hatch.
         let nested_supervisor = native_runtime.and_then(|(runtime, model, role_prompt)| {
             self.nested_for_native_child(
                 run_id.clone(),
                 abort.clone(),
                 access_mode,
                 require_approval,
+                initiator == DelegationInitiator::ExternalMain,
                 runtime,
                 model,
                 role_prompt,
@@ -7457,9 +8762,9 @@ delegate_task 的 agent 枚举",
                     "主运行正在停止，不能再委派子代理".to_string(),
                 ));
             }
-            if children.len() >= MAX_SUBAGENTS_PER_RUN {
+            if children.len() >= MAX_CHILD_HANDLES_PER_SUPERVISOR {
                 return Err(ProductError::Other(format!(
-                    "单次运行最多可委派 {MAX_SUBAGENTS_PER_RUN} 个子代理"
+                    "单个监督节点最多可持有 {MAX_CHILD_HANDLES_PER_SUPERVISOR} 个子代理运行"
                 )));
             }
             if children.contains_key(&run_id) {
@@ -8204,6 +9509,8 @@ impl SubagentExecutionContext {
             delegation_disabled: Arc::new(AtomicBool::new(nested_supervisor.is_none())),
             suspension_gate: Arc::new(AtomicBool::new(false)),
             continuation_gate: Arc::new(AtomicBool::new(false)),
+            // 红线 3：子代理永不处于规划门——plan_ready 拦截恒走非 pending 分支。
+            plan_suggestion_enabled: false,
         };
         let mut messages = vec![Message::user_text(goal)];
         // memory_context 保持 run 冻结，作为独立消息置于请求头部（P0-A），
@@ -8414,12 +9721,14 @@ impl SubagentExecutionContext {
                     if let Some(compacted) = force_compaction_or_trim(
                         native_provider.clone(),
                         &native_model,
+                        &native_inference,
+                        None,
+                        abort.as_ref(),
                         &canonical_messages,
                         &messages,
                         window_tokens,
                         output_reserve_tokens,
                         compactor.tok_per_char,
-                        &native_inference,
                     )
                     .await
                     {
@@ -8490,9 +9799,40 @@ impl SubagentExecutionContext {
                 index
             });
             // P2-G：本轮实际发送的文本字符数（system + 注入后的 messages + tools），
-            // 供 max_tokens 钳制与迭代结束后的 tokPerChar 校准共用。
+            // 供 tokPerChar 校准共用。docs §6.4：子代理输出额度同样走可失败的
+            // resolve_request_max_tokens——headroom 低于请求类别最低值时零发送，
+            // 不得 `.max(1)`。子代理目标不携带多模态附件引用（host 不向子代理
+            // 目标注入 Attachment），视觉侧按 0 计。
             let sent_chars = request_chars(&subagent_system_prompt, &messages, tools_json_len);
-            let estimated_sent_tokens = compactor.estimate_tokens(sent_chars);
+            let child_kind = if summary_only {
+                RequestKind::Compaction
+            } else if tools.is_empty() {
+                RequestKind::PlainChat
+            } else {
+                RequestKind::AgentToolRound
+            };
+            let native_capabilities = native_provider.capabilities();
+            let child_output = match resolve_request_max_tokens(
+                native_max_tokens,
+                native_capabilities.max_output_tokens,
+                window_tokens,
+                u64::from(compactor.estimate_tokens(sent_chars)),
+                CONTEXT_GUARD_RESERVE_MARGIN,
+                child_kind.minimum_output_tokens(),
+            ) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    let error: ProductError = error.into();
+                    tracing::error!(
+                        task_id = %self.task_id,
+                        agent_id = %scope.agent_id,
+                        error = %error,
+                        "child context preflight failed; zero provider dispatch"
+                    );
+                    terminal_error = Some(error.to_string());
+                    break;
+                }
+            };
             let request = CompletionRequest {
                 model: native_model.clone(),
                 system: Some(subagent_system_prompt.clone()),
@@ -8503,11 +9843,7 @@ impl SubagentExecutionContext {
                 } else {
                     active_hosted_tools.clone()
                 },
-                max_tokens: clamp_request_max_tokens(
-                    native_max_tokens,
-                    window_tokens,
-                    estimated_sent_tokens,
-                ),
+                max_tokens: child_output.effective_output_tokens,
                 temperature: native_temperature,
                 enable_caching: !tools.is_empty(),
                 inference: deepseek_governed_inference(
@@ -8536,7 +9872,11 @@ impl SubagentExecutionContext {
                 &mut edit_retry_guard,
                 true,
                 move |event| emit_scoped(&event_tx, &event_scope, event),
-                window_tokens,
+                OutputBudgetContext {
+                    configured: native_max_tokens,
+                    provider_ceiling: native_capabilities.max_output_tokens,
+                    headroom_clamped: child_output.headroom_clamped,
+                },
             )
             .await;
 
@@ -8573,8 +9913,8 @@ impl SubagentExecutionContext {
                         );
                     }
                     // P2-G：用上一轮真实 usage 校准 tokPerChar（失败轮不校准，
-                    // 保持旧值继续保守估算）。
-                    compactor.calibrate(outcome.usage.input_tokens, sent_chars);
+                    // 保持旧值继续保守估算）。子代理请求不含图片附件，视觉侧为 0。
+                    compactor.calibrate(outcome.usage.input_tokens, sent_chars, 0);
                     run_guard.note_reasoning_chars(outcome.reasoning_chars as u64);
                     if let Some(trip) = run_guard.observe_tool_round(&outcome.tool_observations) {
                         emit_scoped(
@@ -8747,12 +10087,14 @@ Synthesize their results before finishing.\n{}",
                         if let Some(compacted) = force_compaction_or_trim(
                             native_provider.clone(),
                             &native_model,
+                            &native_inference,
+                            None,
+                            abort.as_ref(),
                             &canonical_messages,
                             &messages,
                             window_tokens,
                             output_reserve_tokens,
                             compactor.tok_per_char,
-                            &native_inference,
                         )
                         .await
                         {
@@ -9033,7 +10375,7 @@ impl RCodeSubagentRunner {
                 access_mode,
                 delegated_by_tool_call_id,
                 "Codex 主 Agent 通过会话内工具委派 R-Code 子智能体".to_string(),
-                DelegationInitiator::Runtime,
+                DelegationInitiator::ExternalMain,
             )
             .await;
         if let Err(error) = queued {
@@ -9213,6 +10555,168 @@ mod tests;
 #[cfg(test)]
 mod compaction_tests {
     use super::*;
+
+    /// §7.1 VisualCheckpoint 合同：exact tail 外的 native_input 图片在进入分层
+    /// 摘要前由**同一主模型**生成检查点文本（携带相邻用户文本）；exact tail 内
+    /// 的引用原样保留；canonical 输入不被改写。
+    #[tokio::test]
+    async fn visual_checkpoint_replaces_images_outside_exact_tail() {
+        let (provider, provider_dyn) = shared_mock_provider();
+        provider.push_text_turn(
+            "Settings page screenshot with a search box at the top",
+            Usage::default(),
+        );
+        let long = "x".repeat(40_000);
+        let attachment = |purpose| Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "请看这张设置页截图".to_string(),
+                },
+                ContentBlock::Attachment {
+                    source: agent_contract::AttachmentRefV1 {
+                        version: 1,
+                        attachment_id: "att-img-1".to_string(),
+                        name: "settings.png".to_string(),
+                        media_type: "image/png".to_string(),
+                        kind: AttachmentKind::Image,
+                        byte_len: 8,
+                        width: Some(64),
+                        height: Some(64),
+                        purpose,
+                    },
+                },
+            ],
+        };
+        let mut messages = vec![attachment(AttachmentPurpose::NativeInput)];
+        for index in 0..3 {
+            messages.push(Message::user_text(format!("{long} fill {index}")));
+        }
+        // 最后一条长消息独占 exact tail 预算 → tail 之外含图片首条消息。
+        let tail_start = automatic_compaction_tail_start(&messages, 1_000_000, 0.25);
+        assert!(tail_start >= 1 && tail_start < messages.len());
+
+        let resolver: AttachmentResolver =
+            std::sync::Arc::new(|_id: String| Box::pin(async { Ok(resolved_png_fixture()) }));
+        let abort = AtomicBool::new(false);
+        let checkpointed = visual_checkpoint_prefold(
+            &provider_dyn,
+            "mock-model",
+            &InferenceOptions::default(),
+            1_000_000,
+            0.25,
+            Some(&resolver),
+            &abort,
+            &messages,
+        )
+        .await
+        .expect("prefold must produce checkpointed input");
+        assert_eq!(checkpointed.len(), messages.len());
+        let replaced_text = checkpointed[0]
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .collect::<String>();
+        assert!(
+            replaced_text.contains("[visual_checkpoint attachment_id=att-img-1]"),
+            "checkpoint text must record the attachment id"
+        );
+        assert!(replaced_text.contains("Settings page screenshot"));
+        assert!(!checkpointed[0]
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Attachment { .. })));
+        // canonical 输入不被改写：原消息仍带引用。
+        assert!(messages[0]
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Attachment { .. })));
+        // exact tail 内消息原样保留（含其中的 display_only 引用）。
+        let tail_display = attachment(AttachmentPurpose::DisplayOnly);
+        let mut with_tail = messages.clone();
+        with_tail.push(tail_display);
+        let _ = &with_tail;
+
+        // display_only 引用不触发检查点（不进入 Provider 请求）。
+        let display_only_messages = vec![attachment(AttachmentPurpose::DisplayOnly)];
+        assert!(visual_checkpoint_prefold(
+            &provider_dyn,
+            "mock-model",
+            &InferenceOptions::default(),
+            1_000_000,
+            0.25,
+            Some(&resolver),
+            &abort,
+            &display_only_messages,
+        )
+        .await
+        .is_none());
+    }
+
+    /// §7.1.5：检查点失败（空响应/错误）时保留旧引用块——不 OCR、不移除证据。
+    #[tokio::test]
+    async fn visual_checkpoint_failure_keeps_attachment_ref() {
+        let (provider, provider_dyn) = shared_mock_provider();
+        // 空 text + EndTurn → 非空校验失败。
+        provider.push_turn(agent_llm::RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: agent_contract::StopReason::EndTurn,
+        }]));
+        let long = "y".repeat(70_000);
+        let message = Message {
+            role: Role::User,
+            content: vec![ContentBlock::Attachment {
+                source: agent_contract::AttachmentRefV1 {
+                    version: 1,
+                    attachment_id: "att-fail".to_string(),
+                    name: "x.png".to_string(),
+                    media_type: "image/png".to_string(),
+                    kind: AttachmentKind::Image,
+                    byte_len: 8,
+                    width: Some(8),
+                    height: Some(8),
+                    purpose: AttachmentPurpose::NativeInput,
+                },
+            }],
+        };
+        let messages = vec![message, Message::user_text(long)];
+        let resolver: AttachmentResolver =
+            std::sync::Arc::new(|_id: String| Box::pin(async { Ok(resolved_png_fixture()) }));
+        let abort = AtomicBool::new(false);
+        let checkpointed = visual_checkpoint_prefold(
+            &provider_dyn,
+            "mock-model",
+            &InferenceOptions::default(),
+            1_000_000,
+            0.25,
+            Some(&resolver),
+            &abort,
+            &messages,
+        )
+        .await
+        .expect("prefold must still produce input on checkpoint failure");
+        // 失败：引用块保留。
+        assert!(checkpointed[0]
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Attachment { .. })));
+    }
+
+    /// 测试辅助：构造解析成功的小图附件（tiny PNG 头）。
+    fn resolved_png_fixture() -> super::ResolvedAttachment {
+        super::ResolvedAttachment {
+            name: "img.png".to_string(),
+            media_type: "image/png".to_string(),
+            bytes: vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a],
+            text: None,
+        }
+    }
+
+    /// 测试辅助：可继续 push turn 的共享 MockProvider。
+    fn shared_mock_provider() -> (Arc<agent_llm::MockProvider>, Arc<dyn LlmProvider>) {
+        let provider = Arc::new(agent_llm::MockProvider::new("mock"));
+        (provider.clone(), provider)
+    }
+
     use agent_contract::{Capabilities, CompletionRequest, CompletionResponse, StreamEvent, Usage};
     use agent_error::Error as AgentError;
     use r_code_gateway::PermissionEngine;
@@ -9321,27 +10825,40 @@ mod compaction_tests {
         let mut state = CompactionState::new(100_000, 0);
         assert!((state.tok_per_char - COMPACT_DEFAULT_TOK_PER_CHAR).abs() < 1e-6);
         // 0.25 在 [0.05, 2] 内：采纳。
-        state.calibrate(1_000, 4_000);
+        state.calibrate(1_000, 4_000, 0);
         assert!((state.tok_per_char - 0.25).abs() < 1e-6);
         // 0.0001 < 0.05：忽略。
-        state.calibrate(1, 10_000);
+        state.calibrate(1, 10_000, 0);
         assert!((state.tok_per_char - 0.25).abs() < 1e-6);
         // 500 > 2：忽略。
-        state.calibrate(50_000, 100);
+        state.calibrate(50_000, 100, 0);
         assert!((state.tok_per_char - 0.25).abs() < 1e-6);
         // 1.0 采纳。
-        state.calibrate(5_000, 5_000);
+        state.calibrate(5_000, 5_000, 0);
         assert!((state.tok_per_char - 1.0).abs() < 1e-6);
         // input_tokens == 0（provider 未报告）：忽略。
-        state.calibrate(0, 100);
+        state.calibrate(0, 100, 0);
         assert!((state.tok_per_char - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn estimate_uses_calibrated_tok_per_char() {
         let mut state = CompactionState::new(100_000, 0);
-        state.calibrate(1_000, 4_000); // 0.25
+        state.calibrate(1_000, 4_000, 0); // 0.25
         assert_eq!(state.estimate_tokens(8_000), 2_000);
+    }
+
+    /// docs §6.1.4：携带图片请求的 usage 必须先扣减视觉 token 再校准；
+    /// 减法不可靠（视觉估算 ≥ usage）时跳过本轮。
+    #[test]
+    fn calibrate_subtracts_vision_tokens_and_skips_when_unreliable() {
+        let mut state = CompactionState::new(1_000_000, 0);
+        // usage 40_000 = 32_000 视觉 + 8_000 文本；chars 32_000 → 0.25。
+        state.calibrate(40_000, 32_000, 32_000);
+        assert!((state.tok_per_char - 0.25).abs() < 1e-6);
+        // 视觉估算不低于总 usage：无法拆分，跳过（保持 0.25）。
+        state.calibrate(31_000, 32_000, 32_000);
+        assert!((state.tok_per_char - 0.25).abs() < 1e-6);
     }
 
     #[test]
@@ -9413,7 +10930,7 @@ mod compaction_tests {
             ],
         };
         assert_eq!(
-            message_chars(&message),
+            message_text_chars(&message),
             "secret reasoning".len() + "answer".len() + "result".len()
         );
     }
@@ -9428,7 +10945,7 @@ mod compaction_tests {
                 input: serde_json::json!({"path": "证据.rs"}),
             }],
         };
-        assert!(message_chars(&message) >= "t1read_file证据.rs".chars().count());
+        assert!(message_text_chars(&message) >= "t1read_file证据.rs".chars().count());
     }
 
     #[test]
@@ -9858,9 +11375,10 @@ mod compaction_tests {
             policy: ToolPolicy::Main,
             caller: "agent".to_string(),
             delegation: None,
-            delegation_disabled: Arc::new(AtomicBool::new(true)),
+            delegation_disabled: Arc::new(AtomicBool::new(false)),
             suspension_gate: Arc::new(AtomicBool::new(false)),
             continuation_gate: Arc::new(AtomicBool::new(false)),
+            plan_suggestion_enabled: false,
         };
         let evidence = DeepSeekEvidenceToolHost { inner: &host };
 
@@ -10068,12 +11586,16 @@ mod compaction_tests {
     }
 
     #[test]
-    fn compaction_budget_prefers_provider_output_capacity() {
-        let state = CompactionState::new(1_000_000, 393_216);
-        assert_eq!(state.input_budget_tokens(), 606_784);
-        // 输出预留来自 provider 能力，与用户 max_tokens 是 8192 还是接近窗口无关。
-        assert_eq!(compaction_output_reserve(393_216, 8_192), 393_216);
-        assert_eq!(compaction_output_reserve(393_216, 999_999), 393_216);
+    fn compaction_budget_reserves_requested_output_not_provider_ceiling() {
+        // docs §2.3：压缩/发送闸门只预留本次 requested_output_tokens，
+        // 不得无条件预留 Provider 服务端上限（DeepSeek 393,216 预留会把 1M
+        // 窗口可用输入压掉近 40%，过早触发伪压缩）。
+        let state = CompactionState::new(1_000_000, compaction_output_reserve(393_216, 65_536));
+        assert_eq!(state.input_budget_tokens(), 1_000_000 - 65_536);
+        assert_eq!(compaction_output_reserve(393_216, 8_192), 8_192);
+        assert_eq!(compaction_output_reserve(393_216, 393_216), 393_216);
+        // 用户未配置（0）时才回退到 provider 能力声明。
+        assert_eq!(compaction_output_reserve(393_216, 0), 393_216);
     }
 
     #[test]
@@ -10096,13 +11618,208 @@ mod compaction_tests {
     }
 
     #[test]
-    fn request_max_tokens_is_clamped_to_remaining_window() {
+    fn request_max_tokens_resolves_within_window_and_provider_ceiling() {
+        // 固定回归（docs §3）：输入 700_000、窗口 1M、请求 393_216 时
+        // headroom = 1_000_000 - ceil(700_000×1.15) - 1_024 = 193_976。
+        let resolved = resolve_request_max_tokens(
+            393_216,
+            393_216,
+            1_000_000,
+            700_000,
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .unwrap();
+        assert_eq!(resolved.effective_output_tokens, 193_976);
+        assert!(resolved.headroom_clamped);
+        // 请求额度本身放得下时不钳制。
+        let resolved = resolve_request_max_tokens(
+            8_192,
+            393_216,
+            64_000,
+            10_000,
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .unwrap();
+        assert_eq!(resolved.effective_output_tokens, 8_192);
+        assert!(!resolved.headroom_clamped);
+        // Provider 上限（第二个候选）约束用户超额请求。
+        let resolved = resolve_request_max_tokens(
+            500_000,
+            393_216,
+            1_000_000,
+            1_000,
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .unwrap();
+        assert_eq!(resolved.effective_output_tokens, 393_216);
+    }
+
+    /// docs §2.3：headroom 不足时返回 Err，绝不 `.max(1)`——这是 `1 → 2 → 4`
+    /// 故障链第 5 步的删除证明。
+    #[test]
+    fn request_max_tokens_fails_when_headroom_below_minimum() {
+        // 输入使剩余 headroom 只有 ~4_000（Agent 工具回合最低 8_192）。
+        // window - ceil(input×1.15) - 1024 ≈ 4_000 → input ≈ (1M - 5024)/1.15。
+        let input = ((1_000_000f64 - 4_000f64 - 1_024f64) / 1.15).floor() as u64;
+        let error = resolve_request_max_tokens(
+            393_216,
+            393_216,
+            1_000_000,
+            input,
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            PreflightError::HeadroomBelowMinimum {
+                effective_output,
+                minimum: 8_192
+            } if effective_output < 8_192
+        ));
+        // 旧实现会返回 headroom.max(1)=1；新实现任何路径都不会产生 < 最低值
+        // 的 Ok 结果。
+        for input in [input, input + 10_000, 900_000] {
+            let outcome = resolve_request_max_tokens(
+                393_216,
+                393_216,
+                1_000_000,
+                input,
+                CONTEXT_GUARD_RESERVE_MARGIN,
+                8_192,
+            );
+            match outcome {
+                Ok(resolved) => assert!(resolved.effective_output_tokens >= 8_192),
+                Err(_) => {}
+            }
+        }
+    }
+
+    /// 输入侧单独超窗（即使输出=最低额度也放不下）→ CONTEXT_PREFLIGHT_FAILED
+    /// （docs §13.4 场景 4）。
+    #[test]
+    fn request_max_tokens_reports_preflight_failed_when_input_alone_exceeds_window() {
+        let error = resolve_request_max_tokens(
+            8_192,
+            393_216,
+            64_000,
+            64_000,
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            PreflightError::ContextPreflightFailed { window: 64_000, .. }
+        ));
+    }
+
+    /// 请求类别最低额度表（docs §2.3）。
+    #[test]
+    fn request_kind_minimum_output_tokens_table() {
+        assert_eq!(RequestKind::PlainChat.minimum_output_tokens(), 2_048);
+        assert_eq!(RequestKind::AgentToolRound.minimum_output_tokens(), 8_192);
+        assert_eq!(RequestKind::PlanAnchored.minimum_output_tokens(), 16_384);
+        assert_eq!(RequestKind::Compaction.minimum_output_tokens(), 4_096);
+    }
+
+    /// 固定图片回归（docs §12）：1818×1026 图片按 deepseek_vision_exp_v1 估
+    /// 32_000 token；Base64 长度（4,511,012 字符）不参与估算；含图请求的
+    /// estimated_input = text + tools + image + document 四项之和。
+    #[test]
+    fn estimate_request_budget_uses_vision_profile_not_base64_chars() {
+        let attachment = |purpose| Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "请描述这张图".to_string(),
+                },
+                ContentBlock::Attachment {
+                    source: agent_contract::AttachmentRefV1 {
+                        version: 1,
+                        attachment_id: "att-1".to_string(),
+                        name: "screenshot.png".to_string(),
+                        media_type: "image/png".to_string(),
+                        kind: AttachmentKind::Image,
+                        byte_len: 3_383_259,
+                        width: Some(1_818),
+                        height: Some(1_026),
+                        purpose,
+                    },
+                },
+            ],
+        };
+        let (budget, resolved) = estimate_request_budget(
+            "system",
+            &[attachment(AttachmentPurpose::NativeInput)],
+            2_000, // tools json len
+            0.25,
+            1_000_000,
+            393_216,
+            393_216,
+            Some(VisionBudgetProfile::DEEPSEEK_VISION_EXP_V1),
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .unwrap();
+        assert_eq!(budget.image_tokens, 32_000);
+        // 32,000 ≪ 1,127,753（Base64 伪预算）；四类核算相加。
         assert_eq!(
-            clamp_request_max_tokens(393_216, 1_000_000, 700_000),
-            298_976
+            budget.estimated_input_tokens,
+            u64::from(budget.text_tokens)
+                + u64::from(budget.tool_schema_tokens)
+                + budget.image_tokens
+                + u64::from(budget.document_tokens)
         );
-        assert_eq!(clamp_request_max_tokens(8_192, 64_000, 10_000), 8_192);
-        assert_eq!(clamp_request_max_tokens(8_192, 0, 10_000), 8_192);
+        assert_eq!(budget.attachment_count, 1);
+        // 有效输出按 §2.3 公式：min(requested, provider_max,
+        // window - ceil(input×1.15) - reserve)。input ≈ 32.5k ≪ 窗口 →
+        // 393_216 全额保留（不再被伪预算压成个位数）。
+        let headroom = 1_000_000_u64
+            .saturating_sub(((budget.estimated_input_tokens as f64) * 1.15).ceil() as u64)
+            .saturating_sub(u64::from(CONTEXT_GUARD_RESERVE_MARGIN));
+        assert_eq!(
+            resolved.effective_output_tokens,
+            393_216.min(headroom as u32)
+        );
+        // display_only 引用不进入 Provider 请求：图片 token 计 0、不计入输入。
+        let (_, budget_display) = estimate_request_budget(
+            "system",
+            &[attachment(AttachmentPurpose::DisplayOnly)],
+            2_000,
+            0.25,
+            1_000_000,
+            393_216,
+            393_216,
+            Some(VisionBudgetProfile::DEEPSEEK_VISION_EXP_V1),
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .map(|(budget, resolved)| (resolved, budget))
+        .unwrap();
+        assert_eq!(budget_display.image_tokens, 0);
+        assert_eq!(budget_display.attachment_count, 1);
+        // 目录确认多模态但未注入 profile → fail closed，不得回退字符估算。
+        let error = estimate_request_budget(
+            "system",
+            &[attachment(AttachmentPurpose::NativeInput)],
+            2_000,
+            0.25,
+            1_000_000,
+            393_216,
+            393_216,
+            None,
+            CONTEXT_GUARD_RESERVE_MARGIN,
+            8_192,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            PreflightError::ContextPreflightFailed { .. }
+        ));
     }
 
     #[test]
@@ -10134,7 +11851,7 @@ mod compaction_tests {
         assert!(trimmed[0]
             .text_content()
             .contains("[R-Code 已截断超长内容]"));
-        let total_chars = trimmed.iter().map(message_chars).sum::<usize>();
+        let total_chars = trimmed.iter().map(message_text_chars).sum::<usize>();
         assert!(total_chars <= 40_000);
     }
 }

@@ -154,8 +154,33 @@ test("controller handshake replays lost READY/PREF revisions and transparent pad
       height: "100px",
     });
     document.body.append(sprite);
+    const avatar = document.createElement("button");
+    avatar.className = "companion-avatar";
+    Object.assign(avatar.style, {
+      position: "fixed",
+      left: "400px",
+      top: "300px",
+      width: "168px",
+      height: "196px",
+    });
+    document.body.append(avatar);
+    const ghost = document.createElement("div");
+    ghost.className = "companion-session-card";
+    Object.assign(ghost.style, {
+      position: "fixed",
+      left: "0px",
+      top: "0px",
+      width: "300px",
+      height: "300px",
+      visibility: "hidden",
+    });
+    document.body.append(ghost);
     const visibleHit = pointHitsCompanionSurface(document, 140, 160);
+    const avatarEdgeHit = pointHitsCompanionSurface(document, 404, 480);
     const transparentPaddingHit = pointHitsCompanionSurface(document, 20, 20);
+    const hiddenGhostHit = pointHitsCompanionSurface(document, 30, 30);
+    ghost.remove();
+    avatar.remove();
     sprite.remove();
     cleanup();
 
@@ -164,7 +189,9 @@ test("controller handshake replays lost READY/PREF revisions and transparent pad
       applied,
       cleaned: cleaned.sort(),
       visibleHit,
+      avatarEdgeHit,
       transparentPaddingHit,
+      hiddenGhostHit,
     };
   });
 
@@ -177,7 +204,12 @@ test("controller handshake replays lost READY/PREF revisions and transparent pad
     "r-code:companion-ready",
   ]);
   assert.equal(result.visibleHit, true);
-  assert.equal(result.transparentPaddingHit, false);
+  assert.equal(result.avatarEdgeHit, true,
+    "the avatar button's own bounds must stay interactive; only inner sprite rects would leave the pet's fringe click-through");
+  assert.equal(result.transparentPaddingHit, false,
+    "a visibility:hidden shell over the padding must not claim native interactivity");
+  assert.equal(result.hiddenGhostHit, false,
+    "hidden elements would otherwise become ghost frames swallowing clicks meant for windows behind");
   await page.close();
 });
 
@@ -209,13 +241,13 @@ test("native companion normalizes restored coordinates before Tauri position IPC
         pulseWindowSize(1, true),
         pulseWindowSize(2, true),
       ],
-      // 收缩后的精确适配：一行 326、两行 406，mini 头像一行 246。
+      // 收缩后的精确适配：一行 342、两行 438，mini 头像一行 262。
       exactFitLayouts: [
-        compactLayoutForNativeHeight(false, true, 2, 326),
-        compactLayoutForNativeHeight(false, true, 2, 405),
-        compactLayoutForNativeHeight(false, true, 2, 403),
-        compactLayoutForNativeHeight(true, true, 1, 246),
-        compactLayoutForNativeHeight(true, true, 2, 243),
+        compactLayoutForNativeHeight(false, true, 2, 342),
+        compactLayoutForNativeHeight(false, true, 2, 437),
+        compactLayoutForNativeHeight(false, true, 2, 435),
+        compactLayoutForNativeHeight(true, true, 1, 262),
+        compactLayoutForNativeHeight(true, true, 2, 259),
       ],
     };
   });
@@ -224,15 +256,15 @@ test("native companion normalizes restored coordinates before Tauri position IPC
   assert.deepEqual(result.layouts, [
     { minimized: false, hasTracking: true, rows: 1 },
     { minimized: false, hasTracking: true, rows: 2 },
-    { minimized: false, hasTracking: true, rows: 3 },
+    { minimized: false, hasTracking: true, rows: 2 },
     { minimized: true, hasTracking: false, rows: 0 },
   ], "the DOM must expose only task rows that the native WebView actually accepted");
   assert.deepEqual(result.pulseSizes, [
-    { width: 272, height: 326 },
-    { width: 272, height: 406 },
-    { width: 272, height: 486 },
-    { width: 272, height: 246 },
-    { width: 272, height: 326 },
+    { width: 272, height: 342 },
+    { width: 272, height: 438 },
+    { width: 272, height: 534 },
+    { width: 272, height: 262 },
+    { width: 272, height: 358 },
   ], "the tracking window must hug the visible avatar+card bounding box, not the old 420x360 slab");
   assert.deepEqual(result.exactFitLayouts, [
     { minimized: false, hasTracking: true, rows: 1 },
@@ -240,7 +272,7 @@ test("native companion normalizes restored coordinates before Tauri position IPC
     { minimized: false, hasTracking: true, rows: 1 },
     { minimized: true, hasTracking: true, rows: 1 },
     { minimized: true, hasTracking: false, rows: 0 },
-  ], "row capacity must follow the shrunk per-mode content floor (full 326 / mini 246)");
+  ], "row capacity must follow the shrunk per-mode content floor (full 342 / mini 262)");
   await page.close();
 });
 

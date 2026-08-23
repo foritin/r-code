@@ -1,0 +1,8 @@
+{
+  "id": "bugfix-timezone-render",
+  "category": "bugfix",
+  "task": "修复时间渲染缺陷：`lib/dates.js` 使用本地时区解析 UTC 时间戳，`lib/schedule.js` 的跨日边界判断随之漂移。统一以 UTC 计算并保持输出格式不变。",
+  "expected_signals": [
+    "multi_subsystem"
+  ]
+}

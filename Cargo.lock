@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-compaction"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "agent-config"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-error",
  "dirs 5.0.1",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "agent-contract"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-error",
  "async-trait",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "agent-error"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "serde_json",
  "serde_yaml",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "agent-ipc"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "agent-llm"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "agent-mcp"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "agent-store"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "agent-tauri"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-config",
  "agent-contract",
@@ -3509,13 +3509,15 @@ dependencies = [
 
 [[package]]
 name = "r-code-agent-worker"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
+ "agent-config",
  "agent-contract",
  "agent-error",
  "agent-llm",
  "agent-store",
  "async-trait",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "futures",
@@ -3534,7 +3536,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-core"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-compaction",
  "agent-config",
@@ -3564,7 +3566,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-gateway"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -3588,7 +3590,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-host"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-config",
  "agent-contract",
@@ -3650,7 +3652,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-installer"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "dirs 5.0.1",
  "serde",
@@ -3665,7 +3667,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-mcp"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -3690,7 +3692,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-store"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",
@@ -3712,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-terminal"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "agent-contract",
  "agent-error",

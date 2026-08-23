@@ -1,0 +1,9 @@
+{
+  "id": "migration-key-rotation",
+  "category": "migration",
+  "task": "实现密钥轮换迁移：新增 `lib/keystore.js`（v1 明文密钥迁移为 v2 salted 摘要存储，保留 legacy 校验路径直到全部轮换），`lib/auth.js` 的 verify 同时接受旧明文等值与新摘要。",
+  "expected_signals": [
+    "migration_or_data",
+    "expensive_rollback"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "bugfix-cache-invalidation",
+  "category": "bugfix",
+  "task": "修复缓存失效缺陷：`lib/cache.js` 在 key 更新后未写入正确条目，`lib/session.js` 读取到空会话。要求写入同 key 时替换并让新值立即可见、旧值不可达。",
+  "expected_signals": [
+    "multi_subsystem"
+  ]
+}

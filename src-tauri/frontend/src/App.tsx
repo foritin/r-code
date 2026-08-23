@@ -13,6 +13,7 @@ import { HomeScene } from "./components/scenes/HomeScene";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
 import { CompanionWindowController } from "./components/companion/CompanionWindowController";
 import { OnboardingCampaign } from "./components/onboarding/OnboardingCampaign";
+import { GuideSheet } from "./components/settings/GuideSheet";
 import { clearSyncFailure, reportSyncFailure } from "./store/sync-health";
 
 const DashboardScene = lazy(() =>
@@ -146,6 +147,25 @@ export default function App() {
       <CompanionWindowController />
       <SyncHealthBanner />
       <OnboardingCampaign />
+      {/* 全局指引手册（Help 菜单跨场景入口；docs §6.3）。没有 offer 上下文，
+          关闭时把焦点还给原入口，不创建或改变任何 Plan 入口建议。 */}
+      <GlobalGuideSheetHost />
     </div>
+  );
+}
+
+function GlobalGuideSheetHost() {
+  const guideSheetId = useAppStore((s) => s.guideSheetId);
+  const closeGuideSheet = useAppStore((s) => s.closeGuideSheet);
+  const setSettingsPane = useAppStore((s) => s.setSettingsPane);
+  return (
+    <GuideSheet
+      guideId={guideSheetId}
+      onClose={closeGuideSheet}
+      onAction={(action) => {
+        if (action === "open-request-audit") setSettingsPane("diagnostics");
+        if (action === "open-image-understanding") setSettingsPane("providers");
+      }}
+    />
   );
 }

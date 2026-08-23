@@ -8,6 +8,7 @@
 //! [doc-08] [agent-contracts/12 §6] [agent-contracts/10]
 
 pub mod app_paths;
+pub mod attachment_migration;
 pub mod codex_app_server;
 pub mod codex_mcp;
 pub mod codex_permissions;
@@ -25,7 +26,10 @@ pub mod mcp_server;
 pub mod mcp_settings;
 pub mod memory_runtime;
 pub mod migration;
+pub mod model_capabilities;
 pub mod packaging;
+pub mod plan_entry_commands;
+pub mod plan_policy;
 pub mod plan_review_tools;
 pub mod plan_tools;
 pub mod provider_catalog;

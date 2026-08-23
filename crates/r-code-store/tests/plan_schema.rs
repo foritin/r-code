@@ -17,6 +17,9 @@ use rusqlite::{params, Connection};
 
 const PLAN_TABLES: &[&str] = &[
     "plans",
+    "origin_requests",
+    "plan_entry_offers",
+    "plan_suggestion_branch_states",
     "plan_items",
     "plan_item_dependencies",
     "plan_question_sets",
@@ -194,7 +197,12 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
     {
         let conn = v18.conn().unwrap();
         conn.execute_batch(
-            "DROP TABLE plan_tool_receipts;
+            "DROP TABLE plan_entry_offers;
+             DROP TABLE plan_suggestion_branch_states;
+             DROP TABLE origin_requests;
+             DROP INDEX idx_queued_messages_request_key;
+             ALTER TABLE queued_messages DROP COLUMN request_key;
+             DROP TABLE plan_tool_receipts;
              DROP TABLE plan_reject_operation_files;
              DROP TABLE plan_reject_operations;
              DROP TABLE plan_review_decisions;
@@ -217,7 +225,7 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
              ALTER TABLE agent_runs DROP COLUMN checkpoint_sha;
              ALTER TABLE agent_runs DROP COLUMN checkpoint_base_head;
              ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31);",
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33);",
         )
         .unwrap();
         conn.execute(
@@ -391,7 +399,7 @@ fn latest_schema_declares_every_check_and_foreign_key_contract() {
         }
     }
     let expected_check_counts = [
-        ("plans", 8),
+        ("plans", 9),
         ("plan_items", 6),
         ("plan_item_dependencies", 2),
         ("plan_question_sets", 8),

@@ -19,6 +19,7 @@
 //! - `provider_max_output_tokens()` 用 [`preset_for`] 取 `max_output_tokens` 钳制
 //! - IPC 命令 `cmd_provider_catalog` 把 [`catalog_dto`] 吐给前端的"新建服务"表单
 
+use agent_contract::VisionBudgetProfile;
 use serde::Serialize;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +158,15 @@ pub struct HostedWebRoute {
     pub docs_label: &'static str,
 }
 
+/// 预设候选模型及其能力标注。
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct PresetModel {
+    pub id: &'static str,
+    /// 是否接受图片输入。预设目录是人工核对的一手信息，视为权威：命中即覆盖
+    /// 前端的名称启发式；未命中目录的模型（同步/手填）能力为未知三态。
+    pub vision: bool,
+}
+
 /// 一条预设。
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Preset {
@@ -184,8 +194,9 @@ pub struct Preset {
     pub reasoning_replay: bool,
     /// 默认模型。
     pub model: &'static str,
-    /// 候选模型。填补 `lib/provider.ts` 里注释提到的"后端没有可用模型列表"这一层。
-    pub models: &'static [&'static str],
+    /// 候选模型（含能力标注）。填补 `lib/provider.ts` 里注释提到的"后端没有可用
+    /// 模型列表"这一层；默认模型 `model` 也必须出现在此列表中。
+    pub models: &'static [PresetModel],
     pub category: Category,
     pub website_url: &'static str,
     /// 领 key 的页面，和官网不是一个地址时才填。
@@ -196,6 +207,10 @@ pub struct Preset {
     pub template_vars: &'static [TemplateVar],
     /// 单次输出上限（不是上下文窗口）。填了会在保存时钳制 `max_tokens`。
     pub max_output_tokens: Option<u32>,
+    /// 未显式配置 `max_tokens` 时的单轮默认输出（docs §6.4）。Provider 服务端
+    /// 上限只作为上界展示；默认值不得自动采用服务端上限（393,216 预留会挤压
+    /// 可用输入）。None = 沿用全局默认 8,192。
+    pub recommended_output_tokens: Option<u32>,
     /// 上下文窗口，仅供 UI 展示与压缩策略参考。
     pub context_window: Option<u32>,
     /// 给用户看的注意事项，主要是计费陷阱和已知不兼容。
@@ -233,9 +248,9 @@ pub const PRESETS: &[Preset] = &[
         reasoning_replay: false,
         model: "claude-sonnet-5",
         models: &[
-            "claude-sonnet-5",
-            "claude-opus-4-8",
-            "claude-haiku-4-5-20251001",
+            PresetModel { id: "claude-sonnet-5", vision: true },
+            PresetModel { id: "claude-opus-4-8", vision: true },
+            PresetModel { id: "claude-haiku-4-5-20251001", vision: true },
         ],
         category: Category::Official,
         website_url: "https://www.anthropic.com/claude-code",
@@ -243,6 +258,7 @@ pub const PRESETS: &[Preset] = &[
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(128_000),
+        recommended_output_tokens: None,
         context_window: Some(200_000),
         note: None,
     },
@@ -257,11 +273,11 @@ pub const PRESETS: &[Preset] = &[
         reasoning_replay: true,
         model: "gpt-5.6-sol",
         models: &[
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "gpt-5.3-codex",
-            "gpt-5.5",
+            PresetModel { id: "gpt-5.6-sol", vision: true },
+            PresetModel { id: "gpt-5.6-terra", vision: true },
+            PresetModel { id: "gpt-5.6-luna", vision: true },
+            PresetModel { id: "gpt-5.3-codex", vision: false },
+            PresetModel { id: "gpt-5.5", vision: true },
         ],
         category: Category::Official,
         website_url: "https://openai.com/api",
@@ -269,6 +285,7 @@ pub const PRESETS: &[Preset] = &[
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(128_000),
+        recommended_output_tokens: None,
         context_window: Some(1_050_000),
         note: Some("走 Responses；Chat Completions 未弃用但调不到 codex 系列"),
     },
@@ -282,13 +299,14 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.x.ai/v1",
         reasoning_replay: true,
         model: "grok-4.5",
-        models: &["grok-4.5"],
+        models: &[PresetModel { id: "grok-4.5", vision: true }],
         category: Category::Official,
         website_url: "https://x.ai/api",
         api_key_url: Some("https://console.x.ai"),
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(500_000),
         note: Some("支持 store:false + reasoning.encrypted_content，可无状态回传思维链"),
     },
@@ -303,7 +321,7 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://${RESOURCE_NAME}.openai.azure.com/openai/v1",
         reasoning_replay: false,
         model: "gpt-5.5",
-        models: &["gpt-5.5"],
+        models: &[PresetModel { id: "gpt-5.5", vision: true }],
         category: Category::CloudProvider,
         website_url: "https://learn.microsoft.com/azure/foundry/openai/",
         api_key_url: None,
@@ -314,6 +332,7 @@ pub const PRESETS: &[Preset] = &[
             placeholder: "my-openai-resource",
         }],
         max_output_tokens: Some(128_000),
+        recommended_output_tokens: None,
         context_window: None,
         note: Some(
             "v1 GA 路径下 api-version 已是可选参数。⚠️ Azure 用 api-key 头或 Entra token，\
@@ -330,9 +349,9 @@ pub const PRESETS: &[Preset] = &[
         reasoning_replay: false,
         model: "global.anthropic.claude-sonnet-5",
         models: &[
-            "global.anthropic.claude-sonnet-5",
-            "global.anthropic.claude-opus-4-8",
-            "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            PresetModel { id: "global.anthropic.claude-sonnet-5", vision: true },
+            PresetModel { id: "global.anthropic.claude-opus-4-8", vision: true },
+            PresetModel { id: "global.anthropic.claude-haiku-4-5-20251001-v1:0", vision: true },
         ],
         category: Category::CloudProvider,
         website_url: "https://aws.amazon.com/bedrock/",
@@ -344,6 +363,7 @@ pub const PRESETS: &[Preset] = &[
             placeholder: "us-west-2",
         }],
         max_output_tokens: Some(128_000),
+        recommended_output_tokens: None,
         context_window: Some(200_000),
         note: Some("需要 SigV4 签名；用长期 API Key 模式才能走现有的 Bearer 分支"),
     },
@@ -359,7 +379,15 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.deepseek.com",
         reasoning_replay: false,
         model: "deepseek-v4-flash",
-        models: &["deepseek-v4-flash", "deepseek-v4-pro"],
+        models: &[
+            PresetModel { id: "deepseek-v4-flash", vision: false },
+            PresetModel { id: "deepseek-v4-pro", vision: false },
+            // 官方唯一支持图片输入的实验模型（api-docs.deepseek.com 图像理解）。
+            PresetModel {
+                id: "deepseek-v4-flash-vision-exp",
+                vision: true,
+            },
+        ],
         category: Category::CnOfficial,
         website_url: "https://platform.deepseek.com",
         api_key_url: Some("https://platform.deepseek.com/api_keys"),
@@ -372,9 +400,13 @@ pub const PRESETS: &[Preset] = &[
         template_vars: &[],
         // V4 单次输出上限 384K，填上下文窗口会被服务端 400
         max_output_tokens: Some(393_216),
+        // docs §6.4：未显式配置时的单轮默认；不得自动采用服务端 393,216
+        // （无条件预留近 40% 窗口会过早触发伪压缩）。
+        recommended_output_tokens: Some(65_536),
         context_window: Some(1_000_000),
         note: Some(
-            "Responses 已支持 V4-Flash（0731）与 V4-Pro；也可使用 Chat 或 Anthropic 兼容口",
+            "Responses 已支持 V4-Flash（0731）与 V4-Pro；也可使用 Chat 或 Anthropic 兼容口；
+             图片理解用实验模型 deepseek-v4-flash-vision-exp",
         ),
     },
     // 旧版曾把 Anthropic 口展示成第二个 Provider。保留这条只为读取已有配置；
@@ -388,13 +420,17 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.deepseek.com/anthropic",
         reasoning_replay: false,
         model: "deepseek-v4-pro",
-        models: &["deepseek-v4-pro", "deepseek-v4-flash"],
+        models: &[
+            PresetModel { id: "deepseek-v4-pro", vision: false },
+            PresetModel { id: "deepseek-v4-flash", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://api-docs.deepseek.com/guides/anthropic_api/",
         api_key_url: Some("https://platform.deepseek.com/api_keys"),
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(393_216),
+        recommended_output_tokens: None,
         context_window: Some(1_000_000),
         note: Some("system 必须走顶层字段，塞进 messages 会 400"),
     },
@@ -407,7 +443,11 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.moonshot.cn/anthropic",
         reasoning_replay: false,
         model: "kimi-k2.7-code",
-        models: &["kimi-k2.7-code", "kimi-k3", "kimi-k2.6"],
+        models: &[
+            PresetModel { id: "kimi-k2.7-code", vision: false },
+            PresetModel { id: "kimi-k3", vision: false },
+            PresetModel { id: "kimi-k2.6", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://platform.kimi.com",
         api_key_url: Some("https://platform.kimi.com/console/api-keys"),
@@ -419,6 +459,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(262_144),
+        recommended_output_tokens: None,
         context_window: Some(262_144),
         note: Some("模型名里的方括号后缀是上下文档位语法（如 kimi-k3[1m]），不要剥掉"),
     },
@@ -432,10 +473,10 @@ pub const PRESETS: &[Preset] = &[
         reasoning_replay: false,
         model: "k3-256k",
         models: &[
-            "k3",
-            "k3-256k",
-            "kimi-for-coding",
-            "kimi-for-coding-highspeed",
+            PresetModel { id: "k3", vision: false },
+            PresetModel { id: "k3-256k", vision: false },
+            PresetModel { id: "kimi-for-coding", vision: false },
+            PresetModel { id: "kimi-for-coding-highspeed", vision: false },
         ],
         category: Category::CnOfficial,
         website_url: "https://www.kimi.com/code/",
@@ -449,6 +490,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(32_768),
+        recommended_output_tokens: None,
         context_window: Some(262_144),
         note: Some(
             "thinking 仅支持 enabled（模型默认持续思考）；k3/k3-256k 推理强度为 low/high/max；该模型固定 temperature，客户端不会发送 temperature",
@@ -463,13 +505,22 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://open.bigmodel.cn/api/anthropic",
         reasoning_replay: false,
         model: "glm-5.2",
-        models: &["glm-5.2", "glm-5.1", "glm-4.7"],
+        models: &[
+            PresetModel { id: "glm-5.2", vision: false },
+            PresetModel { id: "glm-5.1", vision: false },
+            PresetModel { id: "glm-4.7", vision: false },
+            // GLM 多模态线（docs.bigmodel.cn/cn/guide/models/vlm/glm-4.6v）。
+            PresetModel { id: "glm-4.6v", vision: true },
+            PresetModel { id: "glm-4.6v-flashx", vision: true },
+            PresetModel { id: "glm-4.6v-flash", vision: true },
+        ],
         category: Category::CnOfficial,
         website_url: "https://open.bigmodel.cn",
         api_key_url: Some("https://www.bigmodel.cn/usercenter/apikeys"),
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(131_072),
+        recommended_output_tokens: None,
         context_window: Some(200_000),
         note: None,
     },
@@ -483,13 +534,17 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://open.bigmodel.cn/api/coding/paas/v4",
         reasoning_replay: false,
         model: "glm-5.2",
-        models: &["glm-5.2", "glm-5.1"],
+        models: &[
+            PresetModel { id: "glm-5.2", vision: false },
+            PresetModel { id: "glm-5.1", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
         api_key_url: None,
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(131_072),
+        recommended_output_tokens: None,
         context_window: Some(200_000),
         note: Some("路径以 /v4 结尾，OpenAiProvider 的补 /v1 逻辑会拼错，需按原样透传"),
     },
@@ -502,7 +557,13 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.z.ai/api/anthropic",
         reasoning_replay: false,
         model: "glm-5.2",
-        models: &["glm-5.2", "glm-5.1", "glm-4.7"],
+        models: &[
+            PresetModel { id: "glm-5.2", vision: false },
+            PresetModel { id: "glm-5.1", vision: false },
+            PresetModel { id: "glm-4.7", vision: false },
+            PresetModel { id: "glm-4.6v", vision: true },
+            PresetModel { id: "glm-4.6v-flash", vision: true },
+        ],
         category: Category::CnOfficial,
         website_url: "https://z.ai",
         api_key_url: Some("https://z.ai/manage-apikey/apikey-list"),
@@ -514,6 +575,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(131_072),
+        recommended_output_tokens: None,
         context_window: Some(200_000),
         note: None,
     },
@@ -527,7 +589,7 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://ark.cn-beijing.volces.com/api/coding",
         reasoning_replay: false,
         model: "ark-code-latest",
-        models: &["ark-code-latest"],
+        models: &[PresetModel { id: "ark-code-latest", vision: false }],
         category: Category::CnOfficial,
         website_url: "https://www.volcengine.com/docs/82379/2373740",
         api_key_url: Some("https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"),
@@ -539,6 +601,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(256_000),
         note: Some("必须走 /api/coding 才计入套餐；走 /api/v3 会静默转成按量计费。thinking 支持 enabled/disabled/auto，adaptive 亦可透传"),
     },
@@ -551,13 +614,14 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://ark.cn-beijing.volces.com/api/coding/v3",
         reasoning_replay: false,
         model: "ark-code-latest",
-        models: &["ark-code-latest"],
+        models: &[PresetModel { id: "ark-code-latest", vision: false }],
         category: Category::CnOfficial,
         website_url: "https://www.volcengine.com/docs/82379/2556056",
         api_key_url: Some("https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"),
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(256_000),
         note: Some("套餐网关同址支持 Chat 与 Responses；thinking 支持 enabled/disabled/auto，adaptive 亦可透传"),
     },
@@ -573,18 +637,18 @@ pub const PRESETS: &[Preset] = &[
         reasoning_replay: false,
         model: "ark-code-latest",
         models: &[
-            "ark-code-latest",
-            "doubao-seed-2.0-mini",
-            "doubao-seed-2.0-lite",
-            "doubao-seed-2.1-pro",
-            "deepseek-v4-flash",
-            "doubao-seed-2.1-turbo",
-            "doubao-seed-evolving",
-            "minimax-m3",
-            "glm-5.2",
-            "kimi-k2.7-code",
-            "deepseek-v4-pro",
-            "kimi-k3",
+            PresetModel { id: "ark-code-latest", vision: false },
+            PresetModel { id: "doubao-seed-2.0-mini", vision: true },
+            PresetModel { id: "doubao-seed-2.0-lite", vision: true },
+            PresetModel { id: "doubao-seed-2.1-pro", vision: true },
+            PresetModel { id: "deepseek-v4-flash", vision: false },
+            PresetModel { id: "doubao-seed-2.1-turbo", vision: true },
+            PresetModel { id: "doubao-seed-evolving", vision: true },
+            PresetModel { id: "minimax-m3", vision: false },
+            PresetModel { id: "glm-5.2", vision: false },
+            PresetModel { id: "kimi-k2.7-code", vision: false },
+            PresetModel { id: "deepseek-v4-pro", vision: false },
+            PresetModel { id: "kimi-k3", vision: false },
         ],
         category: Category::CnOfficial,
         website_url: "https://www.volcengine.com/docs/82379/2366394",
@@ -599,6 +663,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some(
             "官方现名 Agent Plan；Token 套餐必须走 /api/plan（Anthropic 口），Chat / Responses 走 /api/plan/v3。模型以套餐实际开通列表为准，也支持手填 ep-xxx 接入点",
@@ -614,9 +679,9 @@ pub const PRESETS: &[Preset] = &[
         reasoning_replay: false,
         model: "doubao-seed-2-1-pro-260628",
         models: &[
-            "doubao-seed-2-1-pro-260628",
-            "doubao-seed-1-8-251228",
-            "doubao-seed-code-preview-latest",
+            PresetModel { id: "doubao-seed-2-1-pro-260628", vision: true },
+            PresetModel { id: "doubao-seed-1-8-251228", vision: true },
+            PresetModel { id: "doubao-seed-code-preview-latest", vision: false },
         ],
         category: Category::CnOfficial,
         website_url: "https://www.volcengine.com/docs/82379/1298459",
@@ -629,6 +694,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(256_000),
+        recommended_output_tokens: None,
         context_window: Some(262_144),
         note: Some(
             "按量计费，不走套餐。同址有 /responses，但 Ark 的 Responses 不支持 include \
@@ -644,7 +710,7 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://ark.ap-southeast.bytepluses.com/api/coding",
         reasoning_replay: false,
         model: "ark-code-latest",
-        models: &["ark-code-latest"],
+        models: &[PresetModel { id: "ark-code-latest", vision: false }],
         category: Category::CnOfficial,
         website_url: "https://www.byteplus.com/en/product/modelark",
         api_key_url: None,
@@ -656,6 +722,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(256_000),
         note: None,
     },
@@ -668,13 +735,22 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://dashscope.aliyuncs.com/apps/anthropic",
         reasoning_replay: false,
         model: "qwen3-coder-plus",
-        models: &["qwen3-coder-plus", "qwen3-coder-next", "qwen3.7-max"],
+        models: &[
+            PresetModel { id: "qwen3-coder-plus", vision: false },
+            PresetModel { id: "qwen3-coder-next", vision: false },
+            PresetModel { id: "qwen3.7-max", vision: false },
+            // Qwen 多模态线（help.aliyun.com/zh/model-studio/vision）。
+            PresetModel { id: "qwen-vl-max", vision: true },
+            PresetModel { id: "qwen-vl-plus", vision: true },
+            PresetModel { id: "qwen3-vl-plus", vision: true },
+        ],
         category: Category::CnOfficial,
         website_url: "https://bailian.console.aliyun.com",
         api_key_url: Some("https://bailian.console.aliyun.com/#/api-key"),
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(65_536),
+        recommended_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some("百炼 Anthropic 口还转发 glm / deepseek 等第三方模型"),
     },
@@ -687,13 +763,17 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
         reasoning_replay: false,
         model: "qwen3-coder-plus",
-        models: &["qwen3-coder-plus", "qwen3-coder-next"],
+        models: &[
+            PresetModel { id: "qwen3-coder-plus", vision: false },
+            PresetModel { id: "qwen3-coder-next", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://help.aliyun.com/zh/model-studio/claude-code",
         api_key_url: Some("https://bailian.console.aliyun.com/#/api-key"),
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(65_536),
+        recommended_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some("套餐走 coding. 子域名，按量走 dashscope. 主域名，配错不计入套餐"),
     },
@@ -706,13 +786,22 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         reasoning_replay: false,
         model: "qwen3-coder-plus",
-        models: &["qwen3-coder-plus", "qwen3-coder-next", "qwen3.7-max"],
+        models: &[
+            PresetModel { id: "qwen3-coder-plus", vision: false },
+            PresetModel { id: "qwen3-coder-next", vision: false },
+            PresetModel { id: "qwen3.7-max", vision: false },
+            // Qwen 多模态线（help.aliyun.com/zh/model-studio/vision）。
+            PresetModel { id: "qwen-vl-max", vision: true },
+            PresetModel { id: "qwen-vl-plus", vision: true },
+            PresetModel { id: "qwen3-vl-plus", vision: true },
+        ],
         category: Category::CnOfficial,
         website_url: "https://help.aliyun.com/zh/model-studio/compatibility-with-openai-responses-api",
         api_key_url: Some("https://bailian.console.aliyun.com/#/api-key"),
         endpoint_candidates: &[],
         template_vars: &[],
         max_output_tokens: Some(65_536),
+        recommended_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some("同一 base_url 下原生支持 /responses，SSE 事件名与 OpenAI 一致；previous_response_id 有效期 7 天"),
     },
@@ -725,7 +814,10 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.minimaxi.com/anthropic",
         reasoning_replay: false,
         model: "MiniMax-M2.7",
-        models: &["MiniMax-M2.7", "MiniMax-M3"],
+        models: &[
+            PresetModel { id: "MiniMax-M2.7", vision: false },
+            PresetModel { id: "MiniMax-M3", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://platform.minimaxi.com",
         api_key_url: Some("https://platform.minimaxi.com/subscribe/coding-plan"),
@@ -737,6 +829,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(204_800),
+        recommended_output_tokens: None,
         context_window: Some(1_000_000),
         note: Some("忽略 top_k / stop_sequences；1M 档位模型名写作 MiniMax-M3[1m]"),
     },
@@ -749,7 +842,10 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.minimax.io/anthropic",
         reasoning_replay: false,
         model: "MiniMax-M2.7",
-        models: &["MiniMax-M2.7", "MiniMax-M3"],
+        models: &[
+            PresetModel { id: "MiniMax-M2.7", vision: false },
+            PresetModel { id: "MiniMax-M3", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://platform.minimax.io",
         api_key_url: Some("https://platform.minimax.io/subscribe/coding-plan"),
@@ -761,6 +857,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(204_800),
+        recommended_output_tokens: None,
         context_window: Some(1_000_000),
         note: None,
     },
@@ -773,7 +870,7 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://qianfan.baidubce.com/anthropic/coding",
         reasoning_replay: false,
         model: "qianfan-code-latest",
-        models: &["qianfan-code-latest"],
+        models: &[PresetModel { id: "qianfan-code-latest", vision: false }],
         category: Category::CnOfficial,
         website_url: "https://cloud.baidu.com/product/qianfan_modelbuilder",
         api_key_url: Some(
@@ -787,6 +884,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(131_072),
         note: None,
     },
@@ -799,7 +897,11 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.stepfun.com/step_plan",
         reasoning_replay: false,
         model: "step-3.7-flash",
-        models: &["step-3.7-flash", "step-3.5-flash-2603", "step-3.5-flash"],
+        models: &[
+            PresetModel { id: "step-3.7-flash", vision: false },
+            PresetModel { id: "step-3.5-flash-2603", vision: false },
+            PresetModel { id: "step-3.5-flash", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://platform.stepfun.com/step-plan",
         api_key_url: Some("https://platform.stepfun.com/interface-key"),
@@ -819,6 +921,7 @@ pub const PRESETS: &[Preset] = &[
         ],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(262_144),
         note: None,
     },
@@ -831,7 +934,7 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.longcat.chat/anthropic",
         reasoning_replay: false,
         model: "LongCat-2.0",
-        models: &["LongCat-2.0"],
+        models: &[PresetModel { id: "LongCat-2.0", vision: false }],
         category: Category::CnOfficial,
         website_url: "https://longcat.chat/platform",
         api_key_url: Some("https://longcat.chat/platform/api_keys"),
@@ -843,6 +946,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(131_072),
+        recommended_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some("OpenAI 口（/openai/v1）原生支持 Responses"),
     },
@@ -855,7 +959,10 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.xiaomimimo.com/anthropic",
         reasoning_replay: false,
         model: "mimo-v2.5-pro",
-        models: &["mimo-v2.5-pro", "mimo-v2.5"],
+        models: &[
+            PresetModel { id: "mimo-v2.5-pro", vision: false },
+            PresetModel { id: "mimo-v2.5", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://platform.xiaomimimo.com",
         api_key_url: Some("https://platform.xiaomimimo.com/#/console/api-keys"),
@@ -867,6 +974,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(131_072),
+        recommended_output_tokens: None,
         context_window: Some(1_048_576),
         note: Some("OpenAI 口官方声明原生支持 Responses"),
     },
@@ -879,7 +987,10 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://token-plan-cn.xiaomimimo.com/anthropic",
         reasoning_replay: false,
         model: "mimo-v2.5-pro",
-        models: &["mimo-v2.5-pro", "mimo-v2.5"],
+        models: &[
+            PresetModel { id: "mimo-v2.5-pro", vision: false },
+            PresetModel { id: "mimo-v2.5", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://platform.xiaomimimo.com/#/token-plan",
         api_key_url: Some("https://platform.xiaomimimo.com/#/console/plan-manage"),
@@ -891,6 +1002,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: Some(131_072),
+        recommended_output_tokens: None,
         context_window: Some(1_048_576),
         note: None,
     },
@@ -903,7 +1015,10 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://api.tbox.cn/api/anthropic",
         reasoning_replay: false,
         model: "Ling-2.6-1T",
-        models: &["Ling-2.6-1T", "Ling-2.5-1T"],
+        models: &[
+            PresetModel { id: "Ling-2.6-1T", vision: false },
+            PresetModel { id: "Ling-2.5-1T", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://ling.tbox.cn/open",
         api_key_url: Some("https://ling.tbox.cn/open"),
@@ -915,6 +1030,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: Some(262_144),
         note: None,
     },
@@ -927,7 +1043,10 @@ pub const PRESETS: &[Preset] = &[
         base_url: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/claude-code-proxy",
         reasoning_replay: false,
         model: "KAT-Coder-Pro V1",
-        models: &["KAT-Coder-Pro V1", "KAT-Coder-Air V1"],
+        models: &[
+            PresetModel { id: "KAT-Coder-Pro V1", vision: false },
+            PresetModel { id: "KAT-Coder-Air V1", vision: false },
+        ],
         category: Category::CnOfficial,
         website_url: "https://console.streamlake.ai",
         api_key_url: Some("https://console.streamlake.ai/console/api-key"),
@@ -938,6 +1057,7 @@ pub const PRESETS: &[Preset] = &[
             placeholder: "ep-xxx-xxx",
         }],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: None,
         note: None,
     },
@@ -952,9 +1072,9 @@ pub const PRESETS: &[Preset] = &[
         reasoning_replay: false,
         model: "anthropic/claude-sonnet-5",
         models: &[
-            "anthropic/claude-sonnet-5",
-            "anthropic/claude-opus-4.8",
-            "anthropic/claude-haiku-4.5",
+            PresetModel { id: "anthropic/claude-sonnet-5", vision: true },
+            PresetModel { id: "anthropic/claude-opus-4.8", vision: true },
+            PresetModel { id: "anthropic/claude-haiku-4.5", vision: true },
         ],
         category: Category::Aggregator,
         website_url: "https://openrouter.ai",
@@ -967,6 +1087,7 @@ pub const PRESETS: &[Preset] = &[
         }],
         template_vars: &[],
         max_output_tokens: None,
+        recommended_output_tokens: None,
         context_window: None,
         note: Some("模型名带厂商前缀，不要做归一化；Server Tools 目前为 Beta，联网调用可能另行计费"),
     },
@@ -1262,6 +1383,42 @@ fn matched_endpoint(id: &str, base_url: &str) -> Option<(&'static Preset, Protoc
 pub fn preset_for(id: &str, base_url: &str) -> Option<&'static Preset> {
     matched_endpoint(id, base_url).map(|(preset, _)| preset)
 }
+
+/// 目录确认多模态的模型所附带的视觉预算 profile（docs §6.2）。
+///
+/// - `deepseek-v4-flash-vision-exp` 携带首版 `deepseek_vision_exp_v1`
+///   （保守、确定性的 512 tile 上界；1818×1026 恰为 32,000 token）；
+/// - 其余 `vision=true` 模型使用同样保守的通用 tile 上界
+///   `generic_vision_v1`——目录声明必须可预算。
+///
+/// 目录中 `vision=true` 但解析不到 profile 的情况由单测拦截（新增多模态模型
+/// 必须同步可预算），运行时遇到缺失返回 `VISION_BUDGET_PROFILE_MISSING`，
+/// 绝不回退 Base64 字符估算或 OCR。
+pub fn vision_budget_for(preset: &Preset, model: &str) -> Option<VisionBudgetProfile> {
+    let model = model.trim().to_ascii_lowercase();
+    let entry = preset.models.iter().find(|entry| entry.id == model)?;
+    if !entry.vision {
+        return None;
+    }
+    match preset.id {
+        "deepseek" | "deepseek_anthropic" if model == "deepseek-v4-flash-vision-exp" => {
+            Some(VisionBudgetProfile::DEEPSEEK_VISION_EXP_V1)
+        }
+        _ => Some(GENERIC_VISION_BUDGET_V1),
+    }
+}
+
+/// 非厂商特化多模态模型的通用保守 tile 上界。
+pub const GENERIC_VISION_BUDGET_V1: VisionBudgetProfile = VisionBudgetProfile {
+    profile_id: "generic_vision_v1",
+    tile_width: 512,
+    tile_height: 512,
+    base_tokens: 1_024,
+    tokens_per_tile: 2_048,
+    safety_multiplier: 1.25,
+    max_request_edge: 4_096,
+    max_request_pixels: 16_777_216,
+};
 
 /// 该地址允许用户选哪些协议。`None` = 目录管不到，不设限。
 ///
@@ -1588,11 +1745,89 @@ mod tests {
     fn default_model_is_in_model_list() {
         for preset in PRESETS {
             assert!(
-                preset.models.contains(&preset.model),
+                preset.models.iter().any(|model| model.id == preset.model),
                 "{} 的默认模型不在候选列表里",
                 preset.id
             );
+            let mut seen = HashSet::new();
+            for model in preset.models {
+                assert!(
+                    seen.insert(model.id),
+                    "{} 有重复的候选模型 {}",
+                    preset.id,
+                    model.id
+                );
+            }
         }
+    }
+
+    /// C1 一致性：候选模型必须有明确的能力标注，且序列化形状对前端稳定
+    ///（`{ id, vision }`，vision 为布尔）。快照以结构断言锁定，防止字段漂移。
+    #[test]
+    fn preset_models_carry_vision_flags_and_stable_json_shape() {
+        let payload = serde_json::to_value(catalog_dto()).unwrap();
+        let presets = payload["presets"].as_array().unwrap();
+        assert!(!presets.is_empty());
+        for preset in presets {
+            let models = preset["models"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} 的 models 不是数组", preset["id"]));
+            for model in models {
+                assert!(model.get("id").is_some_and(|v| v.is_string()));
+                assert!(
+                    model.get("vision").is_some_and(|v| v.is_boolean()),
+                    "{} 的 {} 缺少 vision 布尔标注",
+                    preset["id"],
+                    model["id"]
+                );
+            }
+        }
+        // 抽查人工核对的标注：多模态家族与纯文本家族各一。
+        let anthropic = find("anthropic").unwrap();
+        assert!(anthropic.models.iter().all(|m| m.vision));
+        // DeepSeek：V4 正式模型都是纯文本；官方唯一的图片输入模型是实验版
+        // deepseek-v4-flash-vision-exp（api-docs.deepseek.com 图像理解）。
+        let deepseek = find("deepseek").unwrap();
+        assert!(deepseek
+            .models
+            .iter()
+            .filter(|m| matches!(m.id, "deepseek-v4-flash" | "deepseek-v4-pro"))
+            .all(|m| !m.vision));
+        assert!(deepseek
+            .models
+            .iter()
+            .any(|m| m.id == "deepseek-v4-flash-vision-exp" && m.vision));
+        // GLM-4.6V 与 Qwen-VL 视觉线已入目录（2026-08 官方文档核对）。
+        for preset_id in ["zhipu", "zai"] {
+            let preset = find(preset_id).unwrap();
+            assert!(
+                preset.models.iter().any(|m| m.id == "glm-4.6v" && m.vision),
+                "{preset_id} 缺少 glm-4.6v"
+            );
+        }
+        for preset_id in ["bailian", "dashscope"] {
+            let preset = find(preset_id).unwrap();
+            assert!(
+                preset
+                    .models
+                    .iter()
+                    .any(|m| m.id == "qwen-vl-max" && m.vision),
+                "{preset_id} 缺少 qwen-vl-max"
+            );
+        }
+        // OpenAI 的 codex 代码模型是文本模型，其余 gpt-5.x 支持图片。
+        let openai = find("openai").unwrap();
+        let codex = openai
+            .models
+            .iter()
+            .find(|m| m.id == "gpt-5.3-codex")
+            .unwrap();
+        assert!(!codex.vision);
+        assert!(openai
+            .models
+            .iter()
+            .filter(|m| m.id != "gpt-5.3-codex")
+            .all(|m| m.vision));
     }
 
     #[test]
@@ -1600,15 +1835,18 @@ mod tests {
         let preset = find("kimi_coding").unwrap();
         assert_eq!(preset.auth, AuthStyle::XApiKey);
         assert_eq!(preset.model, "k3-256k");
+        let model_ids: Vec<&str> = preset.models.iter().map(|model| model.id).collect();
         assert_eq!(
-            preset.models,
-            &[
+            model_ids,
+            [
                 "k3",
                 "k3-256k",
                 "kimi-for-coding",
-                "kimi-for-coding-highspeed",
+                "kimi-for-coding-highspeed"
             ]
         );
+        // Kimi For Coding 的全部候选都是纯文本代码模型。
+        assert!(preset.models.iter().all(|model| !model.vision));
         assert_eq!(preset.context_window, Some(262_144));
     }
 
@@ -1807,6 +2045,59 @@ mod tests {
         assert_eq!(allowed_protocols("my_relay", gateway), None);
     }
 
+    /// docs §6.2：目录中每个 `vision=true` 模型都必须能解析出视觉预算
+    /// profile——缺失时运行时只会 `VISION_BUDGET_PROFILE_MISSING`，绝不允许
+    /// 回退 Base64 字符估算。新增多模态模型时该测试强制同步登记。
+    #[test]
+    fn every_vision_capable_catalog_model_has_a_budget_profile() {
+        for preset in PRESETS {
+            for model in preset.models {
+                if model.vision {
+                    assert!(
+                        vision_budget_for(preset, model.id).is_some(),
+                        "preset {} 的多模态模型 {} 缺少视觉预算 profile",
+                        preset.id,
+                        model.id
+                    );
+                } else {
+                    assert!(
+                        vision_budget_for(preset, model.id).is_none(),
+                        "preset {} 的纯文本模型 {} 不应携带 profile",
+                        preset.id,
+                        model.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// 固定回归（docs §3/§12）：deepseek-v4-flash-vision-exp 的 1818×1026
+    /// 图片预算精确为 32,000 token；其余两个 V4 模型没有 vision 能力。
+    #[test]
+    fn deepseek_vision_truth_and_regression_budget() {
+        let deepseek = find("deepseek").unwrap();
+        let profile = vision_budget_for(deepseek, "deepseek-v4-flash-vision-exp")
+            .expect("vision exp model must carry the deepseek profile");
+        assert_eq!(profile.profile_id, "deepseek_vision_exp_v1");
+        assert_eq!(profile.image_tokens(1_818, 1_026), 32_000);
+        assert!(vision_budget_for(deepseek, "deepseek-v4-flash").is_none());
+        assert!(vision_budget_for(deepseek, "deepseek-v4-pro").is_none());
+        // 与 agent-llm 的能力真值互锁：目录 vision 标注与 Provider adapter 声明
+        // 一致（能力声明漂移的根源修复，docs §5.1）。
+        assert!(agent_llm::deepseek::deepseek_model_supports_vision(
+            "deepseek-v4-flash-vision-exp"
+        ));
+        assert!(!agent_llm::deepseek::deepseek_model_supports_vision(
+            "deepseek-v4-flash"
+        ));
+        assert!(!agent_llm::deepseek::deepseek_model_supports_vision(
+            "deepseek-v4-pro"
+        ));
+        // 未显式配置时的推荐单轮输出（§6.4）：DeepSeek 65,536，不是 393,216。
+        assert_eq!(deepseek.recommended_output_tokens, Some(65_536));
+        assert_eq!(deepseek.max_output_tokens, Some(393_216));
+    }
+
     #[test]
     fn deepseek_is_one_visible_provider_with_three_protocol_routes() {
         let visible = catalog_dto();
@@ -1850,8 +2141,25 @@ mod tests {
             candidate.protocol == Protocol::OpenAiResponses
                 && candidate.url.contains("/api/plan/v3")
         }));
-        assert!(agent.models.contains(&"ark-code-latest"));
-        assert!(agent.models.contains(&"deepseek-v4-pro"));
+        assert!(agent
+            .models
+            .iter()
+            .any(|model| model.id == "ark-code-latest"));
+        assert!(agent
+            .models
+            .iter()
+            .any(|model| model.id == "deepseek-v4-pro"));
+        // Agent Plan 中转的多家模型按各自家族标注：豆包支持图片，DeepSeek/Kimi/GLM 不支持。
+        assert!(agent
+            .models
+            .iter()
+            .find(|model| model.id == "doubao-seed-2.1-pro")
+            .is_some_and(|model| model.vision));
+        assert!(agent
+            .models
+            .iter()
+            .find(|model| model.id == "deepseek-v4-pro")
+            .is_some_and(|model| !model.vision));
         assert!(catalog_dto()
             .presets
             .iter()

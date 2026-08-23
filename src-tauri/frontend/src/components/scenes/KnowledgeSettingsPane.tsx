@@ -74,7 +74,7 @@ export function KnowledgeSettingsPane() {
   const workspacePath = selectedWorkspace?.canonical_path ?? null;
 
   return (
-    <section className="knowledge-settings" aria-label="知识与指令">
+    <section className="knowledge-settings" id="knowledge-block" aria-label="知识与指令">
       <div className="knowledge-settings-meta">
         <span><IconShield width={14} height={14} />配置与正文仅保存在本机</span>
         <p>全局内容自动提供给每个项目；项目内容只在对应工作区生效。</p>

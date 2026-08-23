@@ -1,0 +1,16 @@
+diff --git a/lib/quota.js b/lib/quota.js
+index 291ebe6..20ede94 100644
+--- a/lib/quota.js
++++ b/lib/quota.js
+@@ -1,3 +1,10 @@
++export const QUOTA_MIN = 0;
++export const QUOTA_MAX = 10000;
++
+ export function setQuota(current, next) {
+-  return { ...current, quota: next };
++  if (typeof next !== "number" || !Number.isFinite(next)) {
++    throw new Error("quota must be a finite number");
++  }
++  const clamped = Math.min(QUOTA_MAX, Math.max(QUOTA_MIN, Math.trunc(next)));
++  return { ...current, quota: clamped };
+ }

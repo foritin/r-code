@@ -1,0 +1,9 @@
+{
+  "id": "migration-legacy-ids",
+  "category": "migration",
+  "task": "把字符串 ID 迁移为数字 ID：新增 `lib/idmap.js`（字符串→数字稳定映射），`lib/refs.js` 的 rebindEdges 把引用旧 ID 的边列表改写为新 ID；未登记的旧 ID 保留原样并收集到 unresolved。",
+  "expected_signals": [
+    "migration_or_data",
+    "expensive_rollback"
+  ]
+}

@@ -13,6 +13,7 @@
 //!
 //! [doc-06 §2-8] [agent-contracts/12 §2,§5]
 
+pub mod attachment_store;
 pub mod backup;
 pub mod change_service;
 pub mod database;
@@ -22,6 +23,7 @@ pub mod lifecycle_purge;
 pub mod memory_store;
 pub mod migrations;
 pub mod patch_engine;
+pub mod plan_entry_store;
 pub mod plan_review;
 pub mod plan_store;
 pub mod repositories;
@@ -31,6 +33,7 @@ pub mod verification;
 pub mod workspace_service;
 
 // 重新导出核心类型
+pub use attachment_store::{AttachmentRecord, AttachmentState, AttachmentStore, StageAttachment};
 pub use backup::BackupManager;
 pub use change_service::{
     ChangeService, ChangeSet, ChangeSetEntry, NewRunWorkspaceSnapshot, RollbackResult,
@@ -50,6 +53,7 @@ pub use memory_store::{
     MemoryReviewClaim, MemoryReviewJobView, MemoryStore,
 };
 pub use patch_engine::{apply_patch, hash_content, PatchError};
+pub use plan_entry_store::{CreatePlanEntryOfferInput, PlanEntryDecisionOutcome, PlanEntryStore};
 pub use plan_review::{
     CoordinatedWriteGuard, EnhancedReviewEventView, EnhancedReviewFileView,
     EnhancedReviewGroupView, EnhancedReviewTarget, EnhancedReviewView, FinishPlanWriteInput,

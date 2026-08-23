@@ -404,6 +404,9 @@ impl ReplayService {
                 }
                 ContentBlock::Image { .. } => Some("[image]".to_string()),
                 ContentBlock::File { source } => Some(format!("[file: {}]", source.name)),
+                ContentBlock::Attachment { source } => {
+                    Some(format!("[attachment: {}]", source.name))
+                }
                 ContentBlock::Custom { type_name, .. } => Some(format!("[{type_name}]")),
                 // Thinking 块被过滤 -- 永不展示 chain-of-thought
                 ContentBlock::Thinking { .. } => None,

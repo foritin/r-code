@@ -158,10 +158,49 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
       },
     };
   });
+
+  const queuedSteerText = "从队列引导当前运行的验收条件";
+  await page.evaluate(async ({ text }) => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    await browserMockInvoke("cmd_agent_send", {
+      taskId: "mock-task-queue",
+      message: text,
+      mode: "queue",
+      attachments: [],
+    });
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    await useTasksStore.getState().refreshDetail("mock-task-queue");
+  }, { text: queuedSteerText });
+  const queuedSteer = page.getByRole("button", {
+    name: `引导当前运行：${queuedSteerText}`,
+  });
+  await queuedSteer.waitFor({ state: "visible" });
+  await queuedSteer.click();
+  await page.waitForFunction(
+    ({ text }) => {
+      const matches = [...document.querySelectorAll(".you")]
+        .filter((element) => element.textContent?.includes(text));
+      return matches.length === 1
+        && matches[0].classList.contains("user-mode-steer")
+        && matches[0].querySelector(".user-send-mode")?.textContent === "引导";
+    },
+    { text: queuedSteerText },
+  );
+  assert.equal(
+    await page.locator(".you", { hasText: queuedSteerText }).count(),
+    1,
+    "queue → steer must transition the existing user bubble instead of duplicating it",
+  );
+  assert.equal(await queuedSteer.count(), 0, "the accepted item must leave the queue controls");
+
   await composer.fill("补充当前运行的验收条件");
   await send.click();
   await page.waitForFunction(() => globalThis.__rCodeObservedSendModes?.length === 1);
   assert.deepEqual(await page.evaluate(() => globalThis.__rCodeObservedSendModes), ["steer"]);
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll(".you.user-mode-steer")]
+      .some((element) => element.textContent?.includes("补充当前运行的验收条件")),
+  );
   await page.close();
 });
 

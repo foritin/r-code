@@ -262,6 +262,7 @@ Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会�
 - Steer 消息在下一次模型请求前合入，而不是篡改已发出的 Provider 请求。
 - 编排策略包含委派路由、是否允许跨引擎、质量循环模式、Reviewer 和最大轮数。
 - 质量循环可以关闭、自动或总是运行；Reviewer 返回 `PASS` 或 `REVISE`，修订意见会进入下一轮可见草稿。
+- 首轮工具清单锚定（固定每次请求携带的 tools 清单的首轮形状，与项目文件夹无关）是 opt-in 实验（`orchestration.first_round_catalog` / `first_round_promote_on`，默认 `full`/`either` 即现状）：非默认值时主代理首轮只看到受限清单，首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单；会话级粘性保证每会话至多一次清单变化，两个旋钮纳入 runtime 重建指纹。清单裁剪只是呈现层，工具执行与审批边界不变（`docs/request-audit-and-anchoring.md`）。两个旋钮可在「设置 → Agent 编排」的「首轮工具清单锚定（实验）」卡片中调整（经通用 `settings_set` 逐键写入并做类型化校验）。规划门为其 opt-in 扩展：`plan_gate` 档（零工作工具）+ `plan_complete` 晋升信号下，收窄目录注入唯一门铃工具 `plan_ready`（worker 侧拦截执行，不转发网关），工具剥夺跨回合持续至模型调用 plan_ready 声明规划完成才恢复完整目录；设置卡片以总开关滑纽控制整个实验的开/关。
 
 ### 6.3 DeepSeek 前缀缓存与请求字节稳定
 
@@ -350,6 +351,7 @@ flowchart TD
 - SQLite 是产品状态 source of truth，承担列表、筛选、权限、通知、审核和审计查询。
 - Blob 以 BLAKE3 hash 为 key，用引用计数保存基线、大输出等内容。
 - 启动恢复先扫描 JSONL/未结束 Run，再读取 SQLite 状态；孤儿 Run 和待审批请求会出现在恢复页。
+- 请求信封审计（`diagnostics.request_audit`，默认关闭）开启时，agent runtime 在每轮模型派发前向旁路文件 `sessions/request-audit/{storage_id}.jsonl` 追加 `RequestHeader` 快照（system/tools/messages 指纹、工具清单名单与输出预算）并做重建自检（只记录不阻断）。该文件由 runtime 单写、子目录隔离，不参与会话枚举/恢复/导出，canonical JSONL 与其读者零改动；只读命令 `request_audit_counters` 暴露（追加数, 不一致数）计数（`docs/request-audit-and-anchoring.md`）。开关位于「设置 → 诊断」的「请求构成审计」卡片。
 
 ### 9.1 SQLite migration
 
@@ -466,7 +468,7 @@ DeepSeek 线路的字节级前缀缓存设计见 §6.3：`deepseek.rs` 声明 `s
 Codex 主 Agent 通过 App Server 动态工具 `rcode_delegate_subagent` 把有界任务委派给 R-Code 子代理：
 
 - **同树语义**：child 复用当前 task、parent run 与宿主生成的 child run，不调用 `task_create`；一次性 Codex 子代理不获得反向委派入口，R-Code child 也禁用递归委派。
-- **路由不变量**：hosted App Server 只覆盖并禁用 legacy `mcp_servers.r-code`，旧全局 `r_code_delegate*` 不进入该运行的工具目录；用户其他 Codex MCP 保持可用。提示词说明链接与委派格式，但不承担这条硬隔离。
+- **路由不变量**：hosted App Server 只覆盖并禁用 legacy `mcp_servers.r-code`，旧全局 `r_code_delegate*` 不进入该运行的工具清单；用户其他 Codex MCP 保持可用。提示词说明链接与委派格式，但不承担这条硬隔离。
 - **能力协商**：动态工具要求实际启动的 Codex CLI ≥ `0.145.0` 且 R-Code Provider 已就绪；否则隐藏该工具并让 Codex 主任务继续，不能把能力缺失误报成整轮失败。
 - **权限模型**：`inherit` 继承父预设——父为完全访问时 child 全权；父为只读时 child 保持只读；审批类父运行的 child 使用 `ToolPolicy::RequestApproval`，写入与命令经 Gateway 审批。显式 `read_only` 永不升级；Plan/严格只读不暴露 generic `mcp_call`，审批模式下 generic MCP 固定为 R2，不信任第三方 `readOnlyHint`。
 - **Registry 与预热**：`task_prepare` 在真实用户消息前只完成进程 spawn 和 App Server `initialize`，不发送用户内容，也不创建 `thread/start`、`turn/start` 或 `AgentRun`。prepare 与首次 acquire 共用同一 Task slot 和 single-flight lease；创建页面可以先显示新对话并在后台预热，首次发送即使抢先也会安全复用或接管初始化。

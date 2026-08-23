@@ -931,6 +931,7 @@ mod tests {
             "timeout_ms": 60_000,
         });
         let context = ToolExecutionContext {
+            origin_request_key: None,
             task_id: "task-cancel-bash".to_string(),
             run_id: "run-cancel-bash".to_string(),
             tool_call_id: "call-cancel-bash".to_string(),

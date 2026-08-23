@@ -1,0 +1,8 @@
+{
+  "id": "bugfix-offbyone-pagination",
+  "category": "bugfix",
+  "task": "修复分页偏移缺陷：`lib/pager.js` 的 pageToOffset 对第 1 页多减了一页，导致列表页首条丢失；`lib/report.js` 依赖该函数输出报表区间。补齐两处行为并让验收断言通过。",
+  "expected_signals": [
+    "multi_subsystem"
+  ]
+}

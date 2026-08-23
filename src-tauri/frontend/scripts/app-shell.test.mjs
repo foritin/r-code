@@ -530,6 +530,82 @@ test("attachment image preview closes from either side of the dialog", async () 
   await page.close();
 });
 
+test("multimodal main models send images directly instead of using the assist engines", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const originalEngine = await page.evaluate(async () => {
+    const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+    const previous = structuredClone(browserMockSettings.config.image_understanding ?? null);
+    // 默认引擎保持 OCR：即便如此，多模态主模型（openai gpt-5.6-sol）也必须直发。
+    browserMockSettings.config.image_understanding = { engine: "ocr" };
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setScene("home");
+    return previous;
+  });
+  await page.locator("#app.scene-home").waitFor({ state: "visible" });
+
+  await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+  await page.getByRole("dialog", { name: "添加到任务", exact: true })
+    .locator('input[type="file"]').first().setInputFiles({
+      name: "screen.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X2NDWQAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    });
+
+  // 主模型目录确认多模态：chip 标注「多模态直发」，不打 OCR 转换标记。
+  const chip = page.locator(".attachment-chip.kind-image").first();
+  await chip.waitFor({ state: "visible" });
+  assert.match(await chip.innerText(), /多模态直发/);
+  assert.doesNotMatch(await chip.innerText(), /本机 OCR/);
+  assert.match(await chip.getAttribute("title"), /原图将直接发送/);
+
+  // 发送载荷不打 nativeOcr：原图直接进入主模型上下文。
+  const payload = await page.evaluate(async () => {
+    const { sendableAttachmentInputs } = await import("/src/components/Attachments.tsx");
+    const { platformCapabilities } = await import("/src/lib/ipc.ts");
+    const { browserMockProviderCatalog } = await import("/src/lib/mock-data.ts");
+    const preset = browserMockProviderCatalog.presets.find((item) => item.id === "openai");
+    const draft = [{
+      id: "direct-image",
+      name: "screen.png",
+      mediaType: "image/png",
+      data: "iVBORw0KGgo=",
+      kind: "image",
+      size: 8,
+    }];
+    const provider = {
+      name: "openai",
+      label: "OpenAI",
+      model: "gpt-5.6-sol",
+      models: [],
+      ready: true,
+      presetModels: preset?.models ?? [],
+    };
+    const { resolveEffectiveImageEngine, DEFAULT_IMAGE_ENGINE } = await import("/src/components/Attachments.tsx");
+    const { mainModelVisionConfirmed } = await import("/src/components/room/model-capabilities.ts");
+    const engine = resolveEffectiveImageEngine(
+      DEFAULT_IMAGE_ENGINE,
+      mainModelVisionConfirmed({ agentEngine: "r_code", provider, model: "gpt-5.6-sol" }),
+    );
+    const capabilityFor = () => ({ state: "supported", modelLabel: "gpt-5.6-sol", reason: "" });
+    return {
+      engine: engine.engine,
+      sendable: sendableAttachmentInputs(draft, capabilityFor, await platformCapabilities(), engine),
+    };
+  });
+  assert.equal(payload.engine, "direct");
+  assert.equal(payload.sendable.length, 1);
+  assert.notEqual(payload.sendable[0].nativeOcr, true, "direct send must not flag native OCR");
+  await page.evaluate(async (restore) => {
+    const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+    browserMockSettings.config.image_understanding = restore;
+  }, originalEngine);
+  await page.close();
+});
+
 test("macOS and Windows offer local OCR for images rejected by a text-only model", async () => {
   const attachment = {
     id: "ocr-image",
@@ -1040,17 +1116,22 @@ test("Codex one-click setup resumes automatically after browser login", async ()
     useAppStore.getState().setScene("settings");
     return useAppStore.getState().settingsPane;
   });
-  assert.equal(normalizedLegacyPane, "subagents", "legacy codex settings key must normalize to the subagents module");
+  assert.equal(normalizedLegacyPane, "agents", "legacy codex settings key must normalize to Agent orchestration");
 
-  const subagentSettings = page.getByRole("button", { name: "子代理配置", exact: true });
-  await subagentSettings.waitFor({ state: "visible" });
-  assert.equal(await subagentSettings.getAttribute("aria-current"), "page");
+  const agentSettings = page.getByRole("button", { name: "Agent 编排", exact: true });
+  await agentSettings.waitFor({ state: "visible" });
+  assert.equal(await agentSettings.getAttribute("aria-current"), "page");
   assert.equal(
     await page.getByRole("navigation", { name: "设置分类" }).getByRole("button", { name: "Codex CLI", exact: true }).count(),
     0,
     "Codex CLI may be a candidate source, never the top-level settings module",
   );
-  assert.equal(await page.getByRole("heading", { name: "子代理配置", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("heading", { name: "Agent 编排", exact: true }).count(), 1);
+  assert.equal(await page.getByText("AGENT", { exact: true }).count(), 1);
+  assert.equal(await page.locator(".settings-orchestration-sheet").count(), 1);
+  for (const heading of ["主 Agent", "Codex 运行时", "委派路由", "质量复核", "运行护栏", "内置编排能力"]) {
+    assert.equal(await page.getByRole("heading", { name: heading, exact: true }).count(), 1, `missing Agent section: ${heading}`);
+  }
   assert.equal(await page.locator(".local-integrations-panel").count(), 0);
   assert.equal(await page.getByText("其他 Agent 与开发工具", { exact: true }).count(), 0);
 
@@ -1062,9 +1143,46 @@ test("Codex one-click setup resumes automatically after browser login", async ()
   await gate.getByRole("button", { name: "使用浏览器登录" }).click();
 
   await gate.waitFor({ state: "detached", timeout: 10_000 });
-  await setup.locator(".codex-setup-status-copy strong", { hasText: "Codex 已就绪" })
+  await setup.getByText("R-Code 协作已连接", { exact: true })
     .waitFor({ state: "visible", timeout: 10_000 });
-  assert.equal(await setup.locator(".codex-setup-steps li.done").count(), 3);
+  assert.equal(await setup.getByRole("heading", { name: "运行偏好", exact: true }).count(), 1);
+  assert.equal(await setup.locator(".codex-runtime-overview > .codex-runtime-card").count(), 3);
+  assert.equal(await setup.locator(".codex-runtime-card.is-ready").count(), 3);
+
+  await page.getByRole("button", { name: "子代理配置", exact: true }).click();
+  assert.equal(await page.locator(".codex-setup").count(), 0, "Codex runtime configuration must not remain in the candidate-pool module");
+  await page.close();
+});
+
+test("entering Codex runtime settings automatically upgrades an installed CLI", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { browserMockAuthenticateCodex, setBrowserMockCodexVersion } = await import("/src/lib/mock-data.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    setBrowserMockCodexVersion("codex-cli 0.145.0");
+    browserMockAuthenticateCodex();
+    globalThis.__rCodeCodexSyncCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command) => {
+      if (command === "cmd_codex_sync_cli") globalThis.__rCodeCodexSyncCalls.push(command);
+    };
+    useAppStore.getState().setSettingsPane("agents");
+    useAppStore.getState().setScene("settings");
+  });
+
+  const setup = page.locator(".codex-setup");
+  await setup.getByText(/已自动更新：codex-cli 0\.145\.0 → codex-cli 0\.149\.0/)
+    .waitFor({ state: "visible", timeout: 10_000 });
+  assert.match(await setup.getByTestId("codex-runtime-card").textContent(), /codex-cli 0\.149\.0/);
+  assert.match(await setup.getByTestId("codex-auth-card").textContent(), /已登录 · ChatGPT/);
+  assert.deepEqual(await page.evaluate(() => globalThis.__rCodeCodexSyncCalls), ["cmd_codex_sync_cli"]);
+  if (process.env.R_CODE_CODEX_SETTINGS_SHOT) {
+    await page.screenshot({ path: process.env.R_CODE_CODEX_SETTINGS_SHOT, fullPage: true });
+  }
+  await page.evaluate(() => {
+    delete globalThis.__rCodePerformanceIpcProbe;
+    delete globalThis.__rCodeCodexSyncCalls;
+  });
   await page.close();
 });
 
@@ -1077,16 +1195,20 @@ test("Codex subagent switch persists immediately and remains reversible", async 
     await codexInstallCli();
     await codexStartLogin();
     await codexSetupCollaboration();
-    useAppStore.getState().setSettingsPane("subagents");
+    useAppStore.getState().setSettingsPane("agents");
     useAppStore.getState().setScene("settings");
   });
 
-  const toggle = page.locator("#codex-subagent-enabled");
+  const toggle = page.locator("#set-cross-agent");
   await toggle.waitFor({ state: "visible" });
+  assert.equal(await page.getByText("允许 Codex 子代理", { exact: true }).count(), 1);
+  assert.equal(await page.locator("#codex-subagent-enabled").count(), 0, "runtime preferences must not duplicate the delegation switch");
   assert.equal(await toggle.isChecked(), true);
   await toggle.click();
-  await page.getByText("Codex 子代理已关闭；之后的新委派会自动改用 R-Code。", { exact: true })
-    .waitFor({ state: "visible" });
+  await page.waitForFunction(async () => {
+    const { settingsGet } = await import("/src/lib/ipc.ts");
+    return (await settingsGet()).config.orchestration?.allow_cross_engine_delegation === false;
+  });
   assert.equal(await toggle.isChecked(), false);
   assert.equal(await page.evaluate(async () => {
     const { settingsGet } = await import("/src/lib/ipc.ts");
@@ -1094,9 +1216,87 @@ test("Codex subagent switch persists immediately and remains reversible", async 
   }), false);
 
   await toggle.click();
-  await page.getByText("Codex 子代理已开启；之后的新委派可以使用 Codex。", { exact: true })
-    .waitFor({ state: "visible" });
+  await page.waitForFunction(async () => {
+    const { settingsGet } = await import("/src/lib/ipc.ts");
+    return (await settingsGet()).config.orchestration?.allow_cross_engine_delegation === true;
+  });
   assert.equal(await toggle.isChecked(), true);
+  await page.close();
+});
+
+test("Agent orchestration keeps status and guardrails flat and responsive", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { codexInstallCli, codexSetupCollaboration, codexStartLogin } = await import("/src/lib/ipc.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    await codexInstallCli();
+    await codexStartLogin();
+    await codexSetupCollaboration();
+    useAppStore.getState().setSettingsPane("agents");
+    useAppStore.getState().setScene("settings");
+  });
+
+  const sheet = page.locator(".settings-orchestration-sheet");
+  await sheet.waitFor({ state: "visible" });
+  await page.getByRole("heading", { name: "运行偏好", exact: true }).waitFor({ state: "visible" });
+  const desktop = await page.evaluate(() => {
+    const status = document.querySelector(".codex-runtime-overview");
+    const budget = document.querySelector(".orchestration-budget-grid");
+    const orchestrationSheet = document.querySelector(".settings-orchestration-sheet");
+    if (!(status instanceof HTMLElement) || !(budget instanceof HTMLElement) || !(orchestrationSheet instanceof HTMLElement)) {
+      throw new Error("missing Agent orchestration layout");
+    }
+    return {
+      statusColumns: getComputedStyle(status).gridTemplateColumns.split(/\s+/).length,
+      budgetColumns: getComputedStyle(budget).gridTemplateColumns.split(/\s+/).length,
+      sheetBorderWidth: getComputedStyle(orchestrationSheet).borderTopWidth,
+    };
+  });
+  assert.deepEqual(desktop, { statusColumns: 3, budgetColumns: 2, sheetBorderWidth: "0px" });
+  assert.equal(await page.getByText("允许 Codex 子代理", { exact: true }).count(), 1);
+
+  const shotDir = process.env.R_CODE_AGENT_SETTINGS_SHOT_DIR;
+  if (shotDir) {
+    fs.mkdirSync(shotDir, { recursive: true });
+    await page.locator(".settings-agent-detail .settings-detail-head").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(shotDir, "agent-header-desktop.png") });
+    await page.locator("#orchestration-run-budget").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(shotDir, "agent-guardrails-desktop.png") });
+  }
+
+  await page.setViewportSize({ width: 680, height: 840 });
+  await page.waitForFunction(() => {
+    const status = document.querySelector(".codex-runtime-overview");
+    const budget = document.querySelector(".orchestration-budget-grid");
+    return status instanceof HTMLElement
+      && budget instanceof HTMLElement
+      && getComputedStyle(status).gridTemplateColumns.split(/\s+/).length === 1
+      && getComputedStyle(budget).gridTemplateColumns.split(/\s+/).length === 1;
+  });
+  const narrow = await page.evaluate(() => {
+    const scroll = document.querySelector(".scene-scroll");
+    if (!(scroll instanceof HTMLElement)) throw new Error("missing settings scroll container");
+    return {
+      scrollWidth: scroll.scrollWidth,
+      clientWidth: scroll.clientWidth,
+    };
+  });
+  assert.ok(narrow.scrollWidth <= narrow.clientWidth + 1, `unexpected horizontal overflow: ${JSON.stringify(narrow)}`);
+
+  if (shotDir) {
+    await page.locator(".settings-agent-detail .settings-detail-head").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(shotDir, "agent-header-narrow.png") });
+    await page.locator(".codex-runtime-overview").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(shotDir, "agent-runtime-narrow.png") });
+    await page.locator("#orchestration-run-budget").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(shotDir, "agent-guardrails-narrow.png") });
+  }
+
+  const delegationSwitch = page.locator("#set-cross-agent");
+  await delegationSwitch.scrollIntoViewIfNeeded();
+  await delegationSwitch.focus();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "set-cross-agent");
   await page.close();
 });
 
@@ -1129,11 +1329,19 @@ test("subagent configuration supports repeatable weighted slots, editable prompt
     assert.equal(await panel.getByText("OpenCode", { exact: false }).count(), 0);
     assert.equal(await panel.getByText("Gemini CLI", { exact: false }).count(), 0);
 
-    await panel.getByRole("button", { name: "全部测试", exact: true }).click();
-    await panel.getByText(/批量测试完成：2\/3 项已连通/).waitFor({ state: "visible" });
     const deepseek = panel.locator('[data-source-key="api:deepseek"]');
     const openai = panel.locator('[data-source-key="api:openai"]');
     const codex = panel.locator('[data-source-key="codex_cli"]');
+    await panel.getByText(/已自动测试 2 项：1 项连通，1 项失败/)
+      .waitFor({ state: "visible", timeout: 10_000 });
+    assert.doesNotMatch(await codex.innerText(), /未配置模型/);
+    assert.match(await codex.innerText(), /gpt-5\.6-sol/);
+    assert.match(await codex.innerText(), /已连通/);
+    assert.match(await codex.innerText(), /远端目录验证/);
+    assert.equal(await codex.getByRole("button", { name: "测试连接", exact: true }).isDisabled(), false);
+
+    await panel.getByRole("button", { name: "全部测试", exact: true }).click();
+    await panel.getByText(/批量测试完成：2\/3 项已连通/).waitFor({ state: "visible" });
     assert.match(await deepseek.innerText(), /连接失败/);
     assert.match(await openai.innerText(), /已连通/);
     assert.match(await codex.innerText(), /已连通/);
@@ -1550,6 +1758,49 @@ test("user send mode markers apply to the preceding user message, not the next o
   await page.close();
 });
 
+test("first-round catalog anchor rows surface from journal events and live stream", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const contract = await page.evaluate(async () => {
+    const { applyAgentEvent, buildTimeline } = await import("/src/components/room/model.ts");
+    const anchorSystem = (id, payload) => ({
+      kind: "system",
+      id,
+      role: null,
+      text: "r_code_catalog_anchor",
+      output_json: JSON.stringify(payload),
+    });
+    const history = buildTimeline(
+      [
+        { kind: "message", id: "u1", role: "user", text: "任务目标" },
+        anchorSystem("anchor-1", { phase: "narrowed", catalog: "plan_native", tool_count: 5, full_tool_count: 18 }),
+        { kind: "message", id: "a1", role: "assistant", text: "先看一下再动手" },
+        anchorSystem("anchor-2", { phase: "promoted", catalog: "plan_native", tool_count: 8, full_tool_count: 18 }),
+      ],
+      [], [], new Date().toISOString(),
+    );
+    const live = applyAgentEvent([], {
+      type: "catalog_anchor",
+      phase: "narrowed",
+      catalog: "plan_native",
+      tool_count: 5,
+      full_tool_count: 18,
+    }, 1, () => "live-anchor");
+    return {
+      history: history.filter((item) => item.kind === "context").map((item) => [item.label, item.detail]),
+      live: live.filter((item) => item.kind === "context").map((item) => [item.label, item.detail]),
+    };
+  });
+  assert.deepEqual(contract.history, [
+    ["Plan 原生目录已收敛", "Plan 原生目录 · 仅 5 / 18 个工具"],
+    ["Plan 目录晋升 resident", "此后 8 / 18 个工具（只读，不恢复完整目录）"],
+  ], "journal 回放路径必须渲染 plan_native 收敛与晋升两行");
+  assert.deepEqual(contract.live, [
+    ["Plan 原生目录已收敛", "Plan 原生目录 · 仅 5 / 18 个工具"],
+  ], "实时事件路径必须立即出现收敛行");
+  await page.close();
+});
+
 test("active run duration refreshes on the shared second tick and isolates renders", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -1593,12 +1844,18 @@ test("active run duration refreshes on the shared second tick and isolates rende
     return { name, rows };
   });
   assert.deepEqual(otherContent, { name: "处理中", rows: 1 });
-  assert.equal(
-    await page.locator(".timeline-process-disclosure").count(),
-    0,
-    "an active run must keep its live activity trace visible instead of archiving it",
-  );
-  await page.locator(".timeline-turn-trace.has-activity").first().waitFor({ state: "visible" });
+  const liveProcess = page.locator(".timeline-process-disclosure.is-live").first();
+  await liveProcess.waitFor({ state: "visible" });
+  const liveToggle = liveProcess.locator(".timeline-process-toggle");
+  assert.equal(await liveToggle.getAttribute("aria-expanded"), "true");
+  assert.match(await liveToggle.getAttribute("aria-label"), /^正在执行(?: · |$)/);
+  await liveProcess.locator(".timeline-process-body .timeline-turn-trace.has-activity")
+    .waitFor({ state: "visible" });
+  await liveToggle.click();
+  assert.equal(await liveToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(await liveProcess.locator(".timeline-process-body").count(), 0);
+  await liveToggle.click();
+  assert.equal(await liveToggle.getAttribute("aria-expanded"), "true");
   await page.close();
 });
 
@@ -3679,6 +3936,394 @@ test("agent coordination prompts can be edited, saved, and restored", async () =
     await page.close();
   }
 });
+
+test("planning suggestion switch is gated by deepseek availability and emergency off only", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const original = await page.evaluate(async () => {
+    const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+    return structuredClone({
+      planning: browserMockSettings.config.planning,
+    });
+  });
+
+  try {
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("button", { name: "Agent 编排", exact: true }).click();
+
+    // 证据门已移除：存在可用 DeepSeek 服务时开关即可用，卡片始终可见。
+    await page.getByRole("heading", { name: "复杂任务先建议制定计划", exact: true })
+      .waitFor({ state: "visible" });
+    assert.equal(await page.locator("#set-planning-suggest").isDisabled(), false,
+      "a configured deepseek provider must enable the customer switch without any evidence manifest");
+    assert.match(
+      await page
+        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator(".hint")
+        .textContent(),
+      /开 = 复杂任务先询问/);
+    // docs/multimodal-attachments §9：DeepSeek Plan 锚定滑钮与建议滑钮同卡展示、
+    // 独立保存；默认关闭。
+    const anchoringSwitch = page.locator("#set-planning-anchoring");
+    assert.equal(await anchoringSwitch.count(), 1, "deepseek configured: anchoring card visible");
+    assert.equal(await anchoringSwitch.isChecked(), false, "anchoring defaults to off");
+    assert.equal(await anchoringSwitch.isDisabled(), false, "anchoring switch is operable");
+    assert.match(await page.locator(".anchoring-hint").textContent(), /关：DeepSeek Plan/);
+
+    await page.locator("#planning-suggestion-block .guide-link").click();
+    await page.getByRole("dialog", { name: "Plan 模式与复杂任务建议" }).waitFor({ state: "visible" });
+    // 手册说明按任务生效；不再出现"验证中"类证据门措辞，也不泄露内部术语。
+    const guideText = await page.locator(".guide-dialog").textContent();
+    assert.ok(guideText.includes("无需把 DeepSeek 设为默认服务"), "guide must explain per-task routing");
+    assert.ok(!guideText.includes("经过验证的 DeepSeek"), "evidence-gate wording must be gone");
+    for (const banned of ["catalog", "plan_ready", "bootstrap", "resident", "profile version", "manifest"]) {
+      assert.ok(!guideText.includes(banned), `guide copy must not leak internal term: ${banned}`);
+    }
+    await page.keyboard.press("Escape");
+    await page.locator(".guide-dialog").waitFor({ state: "detached" });
+
+    // 开关可用即可持久化到 planning.suggest_complex_tasks。
+    await page.locator("#set-planning-suggest").check();
+    await page.waitForFunction(async () => {
+      const { settingsGet } = await import("/src/lib/ipc.ts");
+      const { config } = await settingsGet(true);
+      return config.planning?.suggest_complex_tasks === true;
+    });
+
+    // 未配置可用的 DeepSeek 服务：卡片仍在，开关禁用并说明原因（与默认服务无关）。
+    await page.evaluate(async () => {
+      const { setBrowserMockPlanningStatus } = await import("/src/lib/browser-mock-runtime.ts");
+      setBrowserMockPlanningStatus({
+        release_state: "open",
+        emergency_off: false,
+        deepseek_configured: false,
+        customer_switch_enabled: false,
+      });
+      window.dispatchEvent(new Event("r-code:planning-status-changed"));
+    });
+    await page.waitForFunction(() => {
+      const input = document.querySelector("#set-planning-suggest");
+      return input instanceof HTMLInputElement && input.disabled;
+    });
+    await page.locator("#planning-suggestion-block").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#set-planning-suggest").isChecked(), true,
+      "temporarily unavailable routes must not disguise the saved preference as off");
+    assert.match(
+      await page
+        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator(".hint")
+        .textContent(),
+      /尚未配置可用的 DeepSeek 服务/);
+
+    // 急停开关：全局暂停并说明仍可手动使用 Plan 模式。
+    await page.evaluate(async () => {
+      const { setBrowserMockPlanningStatus } = await import("/src/lib/browser-mock-runtime.ts");
+      setBrowserMockPlanningStatus({
+        release_state: "off",
+        emergency_off: true,
+        deepseek_configured: true,
+        customer_switch_enabled: false,
+      });
+      window.dispatchEvent(new Event("r-code:planning-status-changed"));
+    });
+    await page.waitForFunction(() => {
+      const input = document.querySelector("#set-planning-suggest");
+      return input instanceof HTMLInputElement && input.disabled;
+    });
+    assert.match(
+      await page
+        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator(".hint")
+        .textContent(),
+      /功能当前已暂停/);
+    // 急停下锚定滑钮同步禁用并说明原因（docs §9 交互合同）。
+    assert.equal(await page.locator("#set-planning-anchoring").isDisabled(), true,
+      "emergency off must disable the anchoring switch");
+    assert.match(await page.locator(".anchoring-hint").textContent(), /急停/);
+  } finally {
+    await page.evaluate(async (snapshot) => {
+      const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+      browserMockSettings.config.planning = snapshot.planning;
+      const { setBrowserMockPlanningStatus } = await import("/src/lib/browser-mock-runtime.ts");
+      setBrowserMockPlanningStatus({
+        release_state: "open",
+        emergency_off: false,
+        deepseek_configured: true,
+        customer_switch_enabled: true,
+      });
+    }, original);
+    await page.close();
+  }
+});
+
+test("image understanding section configures engine, vision provider, and persists round trips", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const original = await page.evaluate(async () => {
+    const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+    return structuredClone({ config: browserMockSettings.config.image_understanding });
+  });
+
+  try {
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await page.locator("#image-understanding-block").waitFor({ state: "visible" });
+
+    // 默认 OCR 引擎：radio 选中且无服务/模型下拉。
+    const ocrRadio = page.locator('.image-engine-option[role="radio"]').first();
+    await ocrRadio.waitFor({ state: "visible" });
+    assert.equal(await ocrRadio.getAttribute("aria-checked"), "true");
+    assert.equal(await page.locator("#set-image-provider").count(), 0);
+
+    // 切到视觉模型：服务下拉列出全部已配置服务（能力标注下沉到模型级）。
+    await page.locator(".image-engine-option", { hasText: "视觉模型" }).click();
+    await page.locator("#set-image-provider").waitFor({ state: "visible" });
+    const providerOptions = await page.locator("#set-image-provider option").allTextContents();
+    assert.ok(providerOptions.some((label) => label.includes("OpenAI")), "openai provider listed");
+    assert.ok(providerOptions.some((label) => label.includes("DeepSeek")), "deepseek provider listed too");
+
+    // 选 OpenAI：模型自动预选第一个多模态模型，候选带能力徽标。
+    await page.locator("#set-image-provider").selectOption({ label: "OpenAI" });
+    await page.locator("#set-image-model").waitFor({ state: "visible" });
+    const modelOptions = await page.locator("#set-image-model option").allTextContents();
+    assert.ok(modelOptions.some((label) => label.includes("gpt-5.6-sol [多模态]")), "vision model badged");
+    assert.equal(await page.locator("#set-image-model").inputValue(), "gpt-5.6-sol",
+      "provider switch auto-picks the first vision model");
+
+    // 切到 DeepSeek：目录已收录实验视觉模型，自动预选它；文本模型带徽标仍可选。
+    await page.locator("#set-image-provider").selectOption({ label: "DeepSeek" });
+    await page.waitForFunction(async () => {
+      const { settingsGet } = await import("/src/lib/ipc.ts");
+      const { config } = await settingsGet(true);
+      return config.image_understanding?.model_provider === "deepseek";
+    });
+    const deepseekModels = await page.locator("#set-image-model option").allTextContents();
+    assert.ok(deepseekModels.some((label) => label.includes("deepseek-v4-flash [文本]")), "text models badged");
+    assert.ok(deepseekModels.some((label) => label.includes("deepseek-v4-flash-vision-exp [多模态]")),
+      "deepseek experimental vision model listed with badge");
+    assert.equal(await page.locator("#set-image-model").inputValue(), "deepseek-v4-flash-vision-exp",
+      "vision model wins the auto-pick over text models");
+
+    // 切回 OpenAI 并显式选择一个模型完成持久化断言。
+    await page.locator("#set-image-provider").selectOption({ label: "OpenAI" });
+    await page.waitForFunction(async () => {
+      const { settingsGet } = await import("/src/lib/ipc.ts");
+      const { config } = await settingsGet(true);
+      return config.image_understanding?.engine === "model"
+        && config.image_understanding?.model_provider === "openai"
+        && Boolean(config.image_understanding?.model);
+    });
+
+    // 指引手册 → 动作直接定位回本区块；手册可打开并包含两引擎说明。
+    await page.locator("#image-understanding-block .guide-link").click();
+    const guide = page.getByRole("dialog", { name: "图片理解引擎：本机 OCR 与视觉模型" });
+    await guide.waitFor({ state: "visible" });
+    assert.ok((await guide.textContent()).includes("失败降级链"));
+    await page.locator(".guide-foot .btn.accent").click();
+
+    // 切回 OCR：引擎回写 ocr 且模型字段被清空。
+    await page.locator(".image-engine-option", { hasText: "本机 OCR" }).click();
+    await page.waitForFunction(async () => {
+      const { settingsGet } = await import("/src/lib/ipc.ts");
+      const { config } = await settingsGet(true);
+      return config.image_understanding?.engine === "ocr"
+        && config.image_understanding?.model_provider == null;
+    });
+  } finally {
+    await page.evaluate(async (snapshot) => {
+      const { browserMockSettings } = await import("/src/lib/mock-data.ts");
+      browserMockSettings.config.image_understanding = snapshot.config;
+    }, original);
+    await page.close();
+  }
+});
+
+test("info tips float on an opaque popover layer instead of overlapping the text behind", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const tipButton = page.locator(".provider-form-field", { hasText: "模型" })
+    .locator(".info-tip").first();
+  await tipButton.waitFor({ state: "visible" });
+  await tipButton.hover();
+
+  const surface = page.locator(".info-tip-popover");
+  await surface.waitFor({ state: "visible" });
+  const styles = await surface.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    const color = computed.backgroundColor;
+    const alpha = color.startsWith("rgba") ? Number(color.split(",")[3].replace(")", "")) : 1;
+    return { alpha, zIndex: computed.zIndex, background: color };
+  });
+  assert.equal(styles.alpha, 1, `tip background must be fully opaque, got ${styles.background}`);
+  const popoverZ = await page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.className = "popover";
+    document.body.append(probe);
+    const z = getComputedStyle(probe).zIndex;
+    probe.remove();
+    return z;
+  });
+  assert.equal(styles.zIndex, popoverZ, "tip must sit on the popover layer above form inputs");
+  await page.mouse.move(0, 0);
+  await page.close();
+});
+
+test("settings search deep-links across panes", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".settings-search-input").waitFor({ state: "visible" });
+
+  // 关键词命中跨面板区块；空结果有提示。
+  await page.locator(".settings-search-input").fill("默认服务");
+  const results = page.locator(".settings-search-results button");
+  await results.first().waitFor({ state: "visible" });
+  assert.ok((await results.first().textContent()).includes("对话模型"));
+
+  await page.locator(".settings-search-input").fill("子代理 权重");
+  await page.locator(".settings-search-results button", { hasText: "候选来源与路由池" })
+    .first().waitFor({ state: "visible" });
+
+  // 点击深链切换到子代理面板并定位到候选池区块。
+  await page.locator(".settings-search-results button", { hasText: "候选来源与路由池" }).first().click();
+  await page.locator("#subagent-pool-block").waitFor({ state: "visible" });
+  assert.equal(await page.locator(".settings-search-input").inputValue(), "", "jump clears the query");
+
+  await page.locator(".settings-search-input").fill("不存在的关键词xyzq");
+  await page.locator(".settings-search-empty").waitFor({ state: "visible" });
+  await page.close();
+});
+
+test("saved providers auto-sync models on open; manual sync stays in the new-provider flow", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  try {
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    // 隔离同步快照缓存，保证本测试确实触发一次自动同步。
+    await page.evaluate(() => window.localStorage.removeItem("r-code.provider.synced"));
+
+    // 点开已保存的 DeepSeek：自动发起模型同步，无需点任何按钮。
+    await page.locator(".provider-list .provider-row").filter({ hasText: "DeepSeek" }).click();
+    await page.locator(".provider-field-success").waitFor({ state: "visible" });
+    const syncMessage = await page.locator(".provider-field-success").textContent();
+    assert.match(syncMessage, /服务返回 \d+ 个可用模型/, "opening a saved provider auto-syncs its model list");
+    // 同步结果已持久化到本机快照。
+    const persisted = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("r-code.provider.synced");
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed.deepseek ?? null;
+    });
+    assert.ok(persisted && Array.isArray(persisted.models) && persisted.models.length > 0,
+      "auto-sync result is persisted locally");
+    assert.ok(persisted.models.includes("deepseek-v4-pro"));
+
+    // 已保存服务：手动同步按钮隐藏（自动同步已覆盖）。
+    assert.equal(await page.locator(".provider-model-refresh").count(), 0,
+      "manual sync button is hidden for saved providers");
+
+    // 新建服务（草稿）：手动同步按钮保留。
+    await page.getByRole("button", { name: "新建服务" }).click();
+    await page.locator(".provider-model-refresh").waitFor({ state: "visible" });
+    // 草稿密钥为空、地址来自预设，按钮可用。
+    assert.equal(await page.locator(".provider-model-refresh").isDisabled(), false);
+  } finally {
+    await page.evaluate(() => window.localStorage.removeItem("r-code.provider.synced"));
+    await page.close();
+  }
+});
+
+test("plan entry dialog stays two-action, swaps guide without stacking, and escapes like continue", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  // 打开演示任务房间
+  const firstTaskId = await page.evaluate(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const tasks = useTasksStore.getState().tasks;
+    return tasks.length > 0 ? tasks[0].id : "mock-task-queue";
+  });
+  await page.evaluate(async (taskId) => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().openRoom(taskId);
+  }, firstTaskId);
+  await page.getByRole("textbox", { name: "给 Agent 的消息" }).waitFor({ state: "visible" });
+
+  // 注入待决建议（mock 决定后自动清空）。
+  await page.evaluate(async () => {
+    const { setBrowserMockPlanEntryOffer } = await import("/src/lib/browser-mock-runtime.ts");
+    setBrowserMockPlanEntryOffer({
+      id: "offer-test-1",
+      task_id: "mock-task-queue",
+      revision: 1,
+      state: "pending",
+      customer_copy: {
+        lead: "它涉及多个相互关联的改动。",
+        suffix: "先制定计划可以让你确认范围和顺序，再开始修改。",
+        quiet_note: "选择直接继续后，本任务不再主动弹出；你仍可随时手动选择 Plan。",
+        version: 1,
+      },
+      notice: null,
+      continuation_state: "none",
+    });
+  });
+  const dialog = page.getByRole("dialog", { name: "这个任务适合先列个计划" });
+  await dialog.waitFor({ state: "visible" });
+
+  // 客户文案只来自固定模板：不得出现内部 signal / 工具 / 目录 / reason 词。
+  const dialogText = await dialog.textContent();
+  for (const banned of ["multi_subsystem", "plan_ready", "catalog", "reason", "offer", "revision"]) {
+    assert.ok(!dialogText.includes(banned), `customer dialog must not leak internal term: ${banned}`);
+  }
+  // 初始焦点在推荐主动作「先制定计划」。
+  await page.waitForFunction(() => document.activeElement instanceof HTMLButtonElement
+    && document.activeElement.textContent?.trim() === "先制定计划");
+
+  // 打开手册：替换而非叠加（同一时刻只有一个 aria-modal）。
+  await dialog.getByRole("button", { name: "Plan 模式会做什么？" }).click();
+  const guide = page.getByRole("dialog", { name: "Plan 模式与复杂任务建议" });
+  await guide.waitFor({ state: "visible" });
+  await dialog.waitFor({ state: "detached", timeout: 2000 }).catch(() => {});
+  const modalCount = await page.locator('[aria-modal="true"]').count();
+  assert.equal(modalCount, 1, "guide replaces the decision dialog instead of stacking");
+
+  // 手册 Escape 只关闭手册，不代表拒绝；焦点回到「Plan 模式会做什么？」。
+  await page.keyboard.press("Escape");
+  await guide.waitFor({ state: "detached" });
+  await dialog.waitFor({ state: "visible" });
+  await page.waitForFunction(() => document.activeElement instanceof HTMLButtonElement
+    && document.activeElement.textContent?.includes("Plan 模式会做什么"));
+
+  // 决策弹窗 Escape 等价于「直接继续」：offer 清空、弹窗消失。
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  const cleared = await page.evaluate(async () => {
+    const { taskDetail } = await import("/src/lib/ipc.ts");
+    const detail = await taskDetail("mock-task-queue").catch(() => null);
+    return detail?.pending_plan_entry_offer ?? null;
+  });
+  assert.equal(cleared, null, "escape must decide (continue) instead of leaving an ambiguous pending state");
+
+  await page.evaluate(async () => {
+    const { setBrowserMockPlanEntryOffer } = await import("/src/lib/browser-mock-runtime.ts");
+    setBrowserMockPlanEntryOffer(null);
+  });
+  await page.close();
+});
+
+test("help menu opens the plan guide from anywhere and closes back", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "帮助", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Plan 模式与复杂任务建议" }).click();
+  const guide = page.getByRole("dialog", { name: "Plan 模式与复杂任务建议" });
+  await guide.waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await guide.waitFor({ state: "detached" });
+  await page.close();
+});
+
 
 test("project prompts merge explicitly and project Skills promote into inherited global Skills", async () => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });

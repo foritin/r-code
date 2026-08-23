@@ -1,0 +1,36 @@
+diff --git a/lib/account.js b/lib/account.js
+index 4c7d4c0..646fa2c 100644
+--- a/lib/account.js
++++ b/lib/account.js
+@@ -1,10 +1,13 @@
++import { audit } from "./audit.js";
++
+ export function makeAccount(balance) {
+   return { balance };
+ }
+ 
+-export function transfer(from, to, amount) {
++export function transfer(from, to, amount, at) {
+   if (from.balance < amount) throw new Error("insufficient");
+   from.balance -= amount;
+   to.balance += amount;
++  audit.record({ action: "transfer", from: from.id ?? "?", to: to.id ?? "?", amount, at });
+   return true;
+ }
+diff --git a/lib/audit.js b/lib/audit.js
+new file mode 100644
+index 0000000..fe4f440
+--- /dev/null
++++ b/lib/audit.js
+@@ -0,0 +1,11 @@
++const entries = [];
++
++export const audit = {
++  record(entry) {
++    entries.push({ ...entry, at: entry.at ?? new Date().toISOString() });
++  },
++  byAction(action) {
++    return entries.filter((entry) => entry.action === action).map((entry) => ({ ...entry }));
++  },
++  size() { return entries.length; },
++};

@@ -16,5 +16,25 @@ export default defineConfig({
     target: "es2021",
     minify: "esbuild",
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(moduleId) {
+          const normalizedId = moduleId.replaceAll("\\", "/");
+          if (
+            normalizedId.includes("/node_modules/react/")
+            || normalizedId.includes("/node_modules/react-dom/")
+            || normalizedId.includes("/node_modules/scheduler/")
+            || normalizedId.includes("/node_modules/zustand/")
+            || normalizedId.includes("/node_modules/use-sync-external-store/")
+          ) {
+            return "react-vendor";
+          }
+          if (normalizedId.includes("/node_modules/@tauri-apps/api/")) {
+            return "tauri-vendor";
+          }
+          return undefined;
+        },
+      },
+    },
   },
 });

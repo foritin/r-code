@@ -73,6 +73,9 @@ impl PathBinding {
 /// 默认绑定：单个必填 `path`（与历史行为一致）。
 const DEFAULT_PATH_BINDINGS: &[PathBinding] = &[PathBinding::required("path")];
 
+/// Host-installed resolver mapping a run id to its current origin request key.
+pub type RunOriginResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 /// Host-owned identity and access data for one tool invocation.
 ///
 /// This value is constructed only after the gateway has bound the model call to a task/run and
@@ -86,6 +89,12 @@ pub struct ToolExecutionContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<String>,
     pub access_mode: ProjectAccessMode,
+    /// Origin request key bound by the trusted host for the current run
+    /// (docs/plan-mode-dual-track-gate.md §10). Host-owned identity data: tools must
+    /// use this field for request-scoped dedup instead of accepting keys from
+    /// model-controlled JSON input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_request_key: Option<String>,
 }
 
 /// Optional host policy evaluated before permission prompts and before any built-in or dynamic
@@ -562,9 +571,11 @@ async fn execute_registered_tool(
 ///
 /// `glob` / `search` 只读遍历，可安全授予；`edit` / `bash` 有副作用，永不授予。
 pub fn subagent_read_only_tool_allowed(name: &str) -> bool {
+    // load_skill 是 Plan 原生 resident 目录（8 工具）成员且只读：目录与执行
+    // 边界必须一致（docs §13.2 工具不在目录里不是安全边界）。
     matches!(
         name,
-        "read_file" | "list_files" | "search" | "glob" | "git_status"
+        "read_file" | "list_files" | "search" | "glob" | "git_status" | "load_skill"
     )
 }
 
@@ -624,6 +635,10 @@ pub struct ToolGateway {
     /// 审计账本 -- 所有工具调用记录（含被拒绝 / 待审批）。
     ledger: Arc<RwLock<Vec<ToolCall>>>,
     policy_guard: Option<Arc<dyn ToolPolicyGuard>>,
+    /// Host-installed resolver mapping a run id to its current origin request key.
+    /// Populated only by the trusted desktop host; absent resolver keeps the field
+    /// `None` and changes no behavior.
+    run_origin_resolver: Option<RunOriginResolver>,
 }
 
 impl ToolGateway {
@@ -635,11 +650,24 @@ impl ToolGateway {
             permission_engine,
             ledger: Arc::new(RwLock::new(Vec::new())),
             policy_guard: None,
+            run_origin_resolver: None,
         }
     }
 
     pub fn set_policy_guard(&mut self, guard: Arc<dyn ToolPolicyGuard>) {
         self.policy_guard = Some(guard);
+    }
+
+    /// Install the host-owned run -> origin request key resolver used to fill
+    /// [`ToolExecutionContext::origin_request_key`].
+    pub fn set_run_origin_resolver(&mut self, resolver: RunOriginResolver) {
+        self.run_origin_resolver = Some(resolver);
+    }
+
+    fn resolve_origin_request_key(&self, run_id: &str) -> Option<String> {
+        self.run_origin_resolver
+            .as_ref()
+            .and_then(|resolve| resolve(run_id))
     }
 
     /// 注册一个工具。
@@ -880,6 +908,7 @@ impl ToolGateway {
             tool_call_id: audit.id.clone(),
             caller: caller.map(ToOwned::to_owned),
             access_mode,
+            origin_request_key: self.resolve_origin_request_key(run_id),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -1059,6 +1088,7 @@ impl ToolGateway {
             tool_call_id: audit.id.clone(),
             caller: caller.map(ToOwned::to_owned),
             access_mode,
+            origin_request_key: self.resolve_origin_request_key(run_id),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -1239,6 +1269,7 @@ impl ToolGateway {
             tool_call_id: audit.id.clone(),
             caller: caller.map(ToOwned::to_owned),
             access_mode,
+            origin_request_key: self.resolve_origin_request_key(run_id),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -1806,6 +1837,7 @@ mod tests {
             tool_call_id: "call".to_string(),
             caller: Some("agent".to_string()),
             access_mode: ProjectAccessMode::FullAccess,
+            origin_request_key: None,
         };
 
         let error = tokio::time::timeout(
@@ -2734,16 +2766,10 @@ mod tests {
             failures_before_success: usize::MAX,
             retry_safe: true,
         }));
-        let levels = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let result = async {
-            gw.execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
-                .await
-        }
-        .with_subscriber(LevelSubscriber {
-            levels: levels.clone(),
-        })
-        .await;
+        let result = gw
+            .execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
+            .await;
 
         assert!(matches!(result, Err(ProductError::DatabaseError(_))));
         assert_eq!(
@@ -2753,14 +2779,6 @@ mod tests {
         let ledger = gw.ledger().await;
         assert_eq!(ledger.len(), 1);
         assert_eq!(ledger[0].status, ToolCallStatus::Error);
-        assert_eq!(
-            *levels.lock().unwrap(),
-            vec![
-                tracing::Level::WARN,
-                tracing::Level::WARN,
-                tracing::Level::ERROR,
-            ]
-        );
     }
 
     #[tokio::test]

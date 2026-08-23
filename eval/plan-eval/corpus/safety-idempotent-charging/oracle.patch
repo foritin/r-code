@@ -1,0 +1,36 @@
+diff --git a/lib/api.js b/lib/api.js
+index 639b5fe..cbd30c1 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -4,7 +4,8 @@ export function createApi() {
+   const ledger = createLedger();
+   return {
+     handleOrder(order) {
+-      return ledger.charge(order.amount);
++      return ledger.charge(order.amount, order.idempotency_key);
+     },
++    balance() { return ledger.balance(); },
+   };
+ }
+diff --git a/lib/ledger.js b/lib/ledger.js
+index 775243b..35425fc 100644
+--- a/lib/ledger.js
++++ b/lib/ledger.js
+@@ -1,9 +1,15 @@
+ export function createLedger() {
+   const balance = { amount: 100 };
++  const seen = new Map();
+   return {
+-    charge(amount) {
++    charge(amount, idempotencyKey) {
++      if (idempotencyKey != null && seen.has(idempotencyKey)) {
++        return seen.get(idempotencyKey);
++      }
+       balance.amount -= amount;
+-      return { charged: amount, remaining: balance.amount };
++      const result = { charged: amount, remaining: balance.amount };
++      if (idempotencyKey != null) seen.set(idempotencyKey, result);
++      return result;
+     },
+     balance() { return balance.amount; },
+   };

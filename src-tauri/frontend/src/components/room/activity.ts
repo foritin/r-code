@@ -215,6 +215,9 @@ function applyEvent(state: ActivityTraceState, event: AgentEvent, at: number): A
     case "subagent_lifecycle":
       // 生命周期事件必须带 scoped 包装才会影响某一张子代理卡；裸事件只保留为审计兼容。
       return base;
+    case "catalog_anchor":
+      // 锚定只进时间线（收窄/恢复完整两行），不改运行活动条。
+      return state;
     case "guard_trip":
       return { ...base, phase: "finalizing", label: "护栏触发，正在收尾总结" };
     case "checkpoint":

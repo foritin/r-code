@@ -1,0 +1,9 @@
+{
+  "id": "feature-feature-flags",
+  "category": "feature",
+  "task": "实现功能开关：新增 `lib/flags.js`（分层默认 → 用户覆盖 → 会话覆盖），并在 `lib/page.js` 的 render 中根据开关启用新版页头；未知开关回落 false。",
+  "expected_signals": [
+    "design_decision",
+    "multi_subsystem"
+  ]
+}

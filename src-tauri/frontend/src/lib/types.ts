@@ -26,6 +26,18 @@ export interface AttachmentInput {
   nativeOcr?: boolean;
 }
 
+/** cmd_attachment_stage 返回的 Blob 引用（docs/multimodal-attachments §4.4）。
+ * 发送 IPC 只携带 attachmentId 列表；Base64 仅存在于 staging 的一次性载荷。 */
+export interface AttachmentRefDto {
+  attachmentId: string;
+  name: string;
+  mediaType: string;
+  kind: "image" | "text" | "pdf" | string;
+  byteLen: number;
+  width?: number | null;
+  height?: number | null;
+}
+
 export interface PlatformCapabilities {
   platform: "macos" | "windows" | "linux" | "other";
   nativeOcr: boolean;
@@ -426,6 +438,34 @@ export interface TaskDetail {
   permissions: PermissionRequest[];
   verifications: VerificationRecord[];
   queued_messages: QueuedMessage[];
+  /** Plan 入口建议的待决决定；无建议或已决定时为 null。 */
+  pending_plan_entry_offer?: PlanEntryOfferView | null;
+}
+
+/** Plan 入口建议的客户可见视图（不含模型 reason / 信号枚举等内部词）。 */
+export interface PlanEntryOfferView {
+  id: string;
+  task_id: string;
+  revision: number;
+  state: "pending" | "accepted" | "declined" | "superseded_provider_changed" | "expired";
+  customer_copy: {
+    lead: string;
+    suffix: string;
+    quiet_note: string;
+    version: number;
+  };
+  notice?: string | null;
+  continuation_state: "none" | "queued" | "dispatching" | "sent" | "failed";
+}
+
+/** cmd_planning_status：内部发布控制与客户开关可用性。证据门已移除（A3）：
+ * `release_state` 只剩 off（急停）/ open 两值；是否启用由客户滑钮决定。 */
+export interface PlanningStatusView {
+  release_state: "off" | "open" | string;
+  emergency_off: boolean;
+  /** 任一已配置且就绪的服务是 DeepSeek（不限默认服务）。 */
+  deepseek_configured: boolean;
+  customer_switch_enabled: boolean;
 }
 
 /** cmd_task_detail_batch：每项与单任务详情完全一致。 */
@@ -812,6 +852,17 @@ export type AgentEvent =
       content_chars?: number;
     }
   | { type: "subagent_lifecycle"; state: SubagentState; detail?: string }
+  | {
+      type: "catalog_anchor";
+      /** narrowed：会话首个请求以收窄清单派发；promoted：首轮结束恢复完整清单。 */
+      phase: "narrowed" | "promoted";
+      /** 收窄档位名（readonly / editor_pair）。 */
+      catalog: string;
+      /** 收窄清单的工具数。 */
+      tool_count: number;
+      /** 完整清单的工具数。 */
+      full_tool_count: number;
+    }
   | { type: "state"; state: TaskState }
   | { type: "guard_trip"; reason: GuardTripReason; detail: string }
   | { type: "checkpoint"; sha: string; base_head?: string };
@@ -1075,6 +1126,14 @@ export interface ProviderEndpoint {
   label: string;
 }
 
+/** 预设候选模型及其能力标注（后端 PresetModel 镜像）。
+ * `vision` 来自人工核对的预设目录，视为权威；同步/手填模型的能力为未知三态。 */
+export interface PresetModelInfo {
+  id: string;
+  /** true = 接受图片输入；false = 纯文本模型。 */
+  vision: boolean | null;
+}
+
 /** 后端 `cmd_provider_catalog` 下发的一条预设，字段与 provider_catalog.rs 对应。 */
 export interface ProviderPreset {
   id: string;
@@ -1085,13 +1144,15 @@ export interface ProviderPreset {
   base_url: string;
   reasoning_replay: boolean;
   model: string;
-  models: string[];
+  models: PresetModelInfo[];
   category: ProviderCategory;
   website_url: string;
   api_key_url: string | null;
   endpoint_candidates: ProviderEndpoint[];
   template_vars: ProviderTemplateVar[];
   max_output_tokens: number | null;
+  /** 未显式配置时的单轮默认输出（docs §6.4）；服务端上限只作上界展示。 */
+  recommended_output_tokens?: number | null;
   context_window: number | null;
   note: string | null;
 }
@@ -1314,6 +1375,15 @@ export interface CodexIntegrationStatus {
   wire_api: "responses" | string;
 }
 
+export interface CodexCliSyncResult {
+  update_state: "not_installed" | "up_to_date" | "updated" | "failed" | string;
+  previous_version?: string | null;
+  current_version?: string | null;
+  /** 脱敏后的更新诊断；失败不代表当前 CLI 或登录失效。 */
+  update_error?: string | null;
+  status: CodexIntegrationStatus;
+}
+
 export interface CodexReasoningOption {
   effort: string;
   description: string;
@@ -1363,10 +1433,31 @@ export interface AppConfig {
   storage?: Record<string, unknown>;
   compaction?: Record<string, unknown>;
   orchestration?: OrchestrationConfig;
+  /** 诊断开关段；旧配置缺失时由后端回填默认值（全部关闭）。 */
+  diagnostics?: DiagnosticsConfig;
+  /** 图片理解引擎配置（默认 OCR；docs D2）。旧配置缺失该段时后端回填默认值。 */
+  image_understanding?: ImageUnderstandingConfig;
+  /** Plan 入口建议客户偏好；默认关闭。 */
+  planning?: PlanningConfig;
   /** 用户级协作提示，保存在 R-Code AppData，不进入任何项目。 */
   agent_prompts?: AgentPromptConfig;
   tauri?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export interface DiagnosticsConfig {
+  /** 请求构成审计旁路：把每次派发的请求信封写入 sessions/request-audit/。 */
+  request_audit?: boolean;
+}
+
+/** 图片理解引擎（docs D2；serde snake_case 与 agent-config 对齐）。 */
+export interface ImageUnderstandingConfig {
+  /** "ocr"（默认）| "model"。 */
+  engine?: "ocr" | "model" | string;
+  /** engine == "model" 时必填：config.providers 的 key。 */
+  model_provider?: string | null;
+  /** engine == "model" 时必填：该服务下的模型 id。 */
+  model?: string | null;
 }
 
 export interface ReviewPathStatus {
@@ -1484,6 +1575,16 @@ export interface OrchestrationConfig {
   subagent_pool?: SubagentPoolConfig;
   /** 长任务循环护栏预算；旧配置缺失时由后端回填默认值。 */
   run_budget?: RunBudgetConfig;
+  /** 已下线的未发布实验档位：仅作 legacy 解析保留，客户设置不再读写。 */
+  first_round_catalog?: "full" | "readonly" | "editor_pair" | "plan_gate";
+  first_round_promote_on?: "either" | "tool_call" | "plan_complete";
+}
+
+/** Plan 入口建议客户偏好。两个开关互不替代：建议只控制是否主动询问；
+ * 锚定控制进入 DeepSeek Plan 后是否启用最小轨迹与完整恢复。 */
+export interface PlanningConfig {
+  suggest_complex_tasks?: boolean;
+  deepseek_plan_anchoring?: boolean;
 }
 
 export interface RunBudgetConfig {

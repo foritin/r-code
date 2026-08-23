@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R-Code plan-eval corpus case",
+  "type": "object",
+  "required": ["id", "category", "task", "expected_signals"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "category": { "enum": ["bugfix", "feature", "migration", "performance", "safety"] },
+    "task": { "type": "string", "description": "发给模型的自然语言任务指令", "minLength": 20 },
+    "expected_signals": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["multi_subsystem", "migration_or_data", "design_decision", "expensive_rollback", "multi_stage_verification"] }
+    },
+    "notes": { "type": "string" }
+  },
+  "additionalProperties": false
+}

@@ -97,6 +97,12 @@ impl PlanStore {
         self.projection_root.as_path()
     }
 
+    /// Canonical projection path for host-side transactions that create Plan rows
+    /// (Plan 入口建议 accept 事务)。布局只在此处定义，避免第二份路径约定漂移。
+    pub fn projection_path_for_plan(&self, plan_id: &str) -> Result<PathBuf, ProductError> {
+        self.canonical_projection_path(plan_id)
+    }
+
     fn canonical_projection_path(&self, plan_id: &str) -> Result<PathBuf, ProductError> {
         let parsed = Uuid::parse_str(plan_id)
             .map_err(|_| invalid(format!("Plan id is not a valid UUID: {plan_id}")))?;
@@ -142,6 +148,20 @@ impl PlanStore {
 
     /// Creates a new current Plan. A task may have only one non-terminal Plan.
     pub fn create_plan(&self, input: &CreatePlanInput) -> Result<PlanView, ProductError> {
+        self.create_plan_with_profile(
+            input,
+            &r_code_core::plan_entry::ResolvedPlanRuntimeProfile::baseline(),
+        )
+    }
+
+    /// Creates a new current Plan with the host-resolved frozen runtime profile. All Plan
+    /// creation paths must pass through a host resolver; the store never reads Provider
+    /// settings or evidence files itself (docs §14.2).
+    pub fn create_plan_with_profile(
+        &self,
+        input: &CreatePlanInput,
+        profile: &r_code_core::plan_entry::ResolvedPlanRuntimeProfile,
+    ) -> Result<PlanView, ProductError> {
         if input.task_id.trim().is_empty() {
             return Err(invalid("task_id cannot be blank"));
         }
@@ -185,9 +205,20 @@ impl PlanStore {
                 )));
             }
             tx.execute(
-                "INSERT INTO plans (id, task_id, revision, state, projection_path, created_at, updated_at) \
-                 VALUES (?1, ?2, 1, 'draft', ?3, ?4, ?4)",
-                params![plan_id, input.task_id, projection_path, now],
+                "INSERT INTO plans (id, task_id, revision, state, projection_path, created_at, updated_at, \
+                 runtime_profile_json, catalog_phase, profile_version) \
+                 VALUES (?1, ?2, 1, 'draft', ?3, ?4, ?4, ?5, ?6, ?7)",
+                params![
+                    plan_id,
+                    input.task_id,
+                    projection_path,
+                    now,
+                    serde_json::to_string(profile).map_err(|error| invalid(format!(
+                        "serialize Plan runtime profile: {error}"
+                    )))?,
+                    initial_catalog_phase(profile),
+                    profile.profile_version as i64,
+                ],
             )
             .map_err(db_err)?;
             tx.commit().map_err(db_err)?;
@@ -206,6 +237,26 @@ impl PlanStore {
         task_id: &str,
         branch_id: &str,
         message: &str,
+    ) -> Result<PlanView, ProductError> {
+        self.enter_plan_mode_and_stage_continuation_with_profile(
+            task_id,
+            branch_id,
+            message,
+            &r_code_core::plan_entry::ResolvedPlanRuntimeProfile::baseline(),
+            None,
+        )
+    }
+
+    /// Profile-carrying variant used by consented Plan entry (explicit selection or
+    /// `enter_plan_mode` after user consent). The staged continuation inherits the origin
+    /// request key so the resumed Plan run keeps the same real-request identity.
+    pub fn enter_plan_mode_and_stage_continuation_with_profile(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+        message: &str,
+        profile: &r_code_core::plan_entry::ResolvedPlanRuntimeProfile,
+        request_key: Option<&str>,
     ) -> Result<PlanView, ProductError> {
         if task_id.trim().is_empty() || branch_id.trim().is_empty() {
             return Err(invalid("task_id and branch_id cannot be blank"));
@@ -280,16 +331,27 @@ impl PlanStore {
             }
 
             tx.execute(
-                "INSERT INTO plans (id, task_id, revision, state, projection_path, created_at, updated_at) \
-                 VALUES (?1, ?2, 1, 'draft', ?3, ?4, ?4)",
-                params![plan_id, task_id, projection_path, now],
+                "INSERT INTO plans (id, task_id, revision, state, projection_path, created_at, updated_at, \
+                 runtime_profile_json, catalog_phase, profile_version) \
+                 VALUES (?1, ?2, 1, 'draft', ?3, ?4, ?4, ?5, ?6, ?7)",
+                params![
+                    plan_id,
+                    task_id,
+                    projection_path,
+                    now,
+                    serde_json::to_string(profile).map_err(|error| invalid(format!(
+                        "serialize Plan runtime profile: {error}"
+                    )))?,
+                    initial_catalog_phase(profile),
+                    profile.profile_version as i64,
+                ],
             )
             .map_err(db_err)?;
             tx.execute(
                 "INSERT INTO queued_messages \
-                 (id, task_id, branch_id, message, state, priority, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, 'queued', 1000000, ?5, ?5)",
-                params![queue_id, task_id, branch_id, message.trim(), now],
+                 (id, task_id, branch_id, message, state, priority, created_at, updated_at, request_key) \
+                 VALUES (?1, ?2, ?3, ?4, 'queued', 1000000, ?5, ?5, ?6)",
+                params![queue_id, task_id, branch_id, message.trim(), now, request_key],
             )
             .map_err(db_err)?;
             let changed = tx
@@ -307,6 +369,74 @@ impl PlanStore {
 
         self.sync_projection_locked(&plan_id)?;
         self.require_view(task_id, &plan_id)
+    }
+
+    /// 当前任务的冻结运行 profile 与权威 catalog phase。无活动 Plan 或 baseline Plan
+    /// 返回 None（宿主据此让 worker 保持现状目录）。
+    pub fn current_runtime_profile_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<
+        Option<(
+            r_code_core::plan_entry::ResolvedPlanRuntimeProfile,
+            r_code_core::plan_entry::PlanCatalogPhase,
+        )>,
+        ProductError,
+    > {
+        let conn = self.db.conn()?;
+        let Some(plan) = require_current_plan(&conn, task_id)? else {
+            return Ok(None);
+        };
+        let Some(profile) = plan.runtime_profile else {
+            return Ok(None);
+        };
+        if profile.catalog_profile != r_code_core::plan_entry::PlanCatalogProfile::PlanNativeV1 {
+            return Ok(None);
+        }
+        Ok(Some((profile, plan.catalog_phase.unwrap_or_default())))
+    }
+
+    /// `bootstrap -> resident` 的唯一权威晋升点（docs §14.3）。CAS 只在 profile 仍是
+    /// 冻结版本时生效；任何失败都向上传播，调用方必须 fail closed 不发下一轮请求。
+    pub fn promote_catalog_phase(
+        &self,
+        task_id: &str,
+    ) -> Result<r_code_core::plan_entry::PlanCatalogPhase, ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let Some(plan) = require_current_plan(&tx, task_id)? else {
+            return Err(invalid("task has no active Plan"));
+        };
+        let Some(profile) = plan.runtime_profile.clone() else {
+            return Err(invalid("baseline Plan has no catalog phase to promote"));
+        };
+        if profile.catalog_profile != r_code_core::plan_entry::PlanCatalogProfile::PlanNativeV1 {
+            return Err(invalid("baseline Plan has no catalog phase to promote"));
+        }
+        match plan.catalog_phase.unwrap_or_default() {
+            r_code_core::plan_entry::PlanCatalogPhase::Resident => {
+                tx.commit().map_err(db_err)?;
+                Ok(r_code_core::plan_entry::PlanCatalogPhase::Resident)
+            }
+            r_code_core::plan_entry::PlanCatalogPhase::Bootstrap => {
+                let changed = tx
+                    .execute(
+                        "UPDATE plans SET catalog_phase = 'resident', updated_at = ?1 \
+                         WHERE id = ?2 AND catalog_phase = 'bootstrap'",
+                        params![Utc::now().to_rfc3339(), plan.id],
+                    )
+                    .map_err(db_err)?;
+                if changed != 1 {
+                    return Err(invalid(
+                        "Plan catalog phase changed while promotion was staged",
+                    ));
+                }
+                tx.commit().map_err(db_err)?;
+                Ok(r_code_core::plan_entry::PlanCatalogPhase::Resident)
+            }
+        }
     }
 
     /// Persists a scope decision raised while the task is still in Agent mode. It creates the
@@ -2285,7 +2415,8 @@ fn load_plan(conn: &Connection, plan_id: &str) -> Result<Option<Plan>, ProductEr
             "SELECT id, task_id, revision, state, approved_revision, projection_path, \
              projection_revision, projection_error, created_at, updated_at, approved_at, \
              implementation_dispatch_state, implementation_dispatch_error, \
-             implementation_queue_message_id, implementation_dispatched_at \
+             implementation_queue_message_id, implementation_dispatched_at, \
+             runtime_profile_json, catalog_phase \
              FROM plans WHERE id = ?1",
         )
         .map_err(db_err)?;
@@ -2302,6 +2433,16 @@ fn load_plan(conn: &Connection, plan_id: &str) -> Result<Option<Plan>, ProductEr
     let approved_at: Option<String> = row.get(10).map_err(db_err)?;
     let implementation_dispatch_state: String = row.get(11).map_err(db_err)?;
     let implementation_dispatched_at: Option<String> = row.get(14).map_err(db_err)?;
+    let runtime_profile_json: Option<String> = row.get(15).map_err(db_err)?;
+    let catalog_phase_text: Option<String> = row.get(16).map_err(db_err)?;
+    let catalog_phase = match catalog_phase_text.as_deref() {
+        None => None,
+        Some(value) => Some(
+            r_code_core::plan_entry::PlanCatalogPhase::try_from_str(value).ok_or_else(|| {
+                ProductError::DatabaseError(format!("invalid Plan catalog phase: {value}"))
+            })?,
+        ),
+    };
     Ok(Some(Plan {
         id: row.get(0).map_err(db_err)?,
         task_id: row.get(1).map_err(db_err)?,
@@ -2329,7 +2470,47 @@ fn load_plan(conn: &Connection, plan_id: &str) -> Result<Option<Plan>, ProductEr
             .as_deref()
             .map(parse_ts)
             .transpose()?,
+        runtime_profile: runtime_profile_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| {
+                ProductError::DatabaseError(format!("invalid Plan runtime profile: {error}"))
+            })?,
+        catalog_phase,
     }))
+}
+
+/// 冻结 profile 对应的初始 catalog phase。只有 plan_native_v1 起步于 bootstrap；
+/// baseline/旧 Plan 保持 NULL（读侧映射为 None = baseline）。
+fn initial_catalog_phase(
+    profile: &r_code_core::plan_entry::ResolvedPlanRuntimeProfile,
+) -> Option<&'static str> {
+    match profile.catalog_profile {
+        r_code_core::plan_entry::PlanCatalogProfile::PlanNativeV1 if profile.enabled => {
+            Some("bootstrap")
+        }
+        _ => None,
+    }
+}
+
+/// 当前活动（非终态）Plan；不存在时返回 None。
+fn require_current_plan(conn: &Connection, task_id: &str) -> Result<Option<Plan>, ProductError> {
+    let plan_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM plans WHERE task_id = ?1 AND state NOT IN ('completed', 'cancelled') \
+             ORDER BY updated_at DESC LIMIT 1",
+            params![task_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_err)?;
+    Ok(plan_id
+        .as_deref()
+        .map(|plan_id| load_plan(conn, plan_id))
+        .transpose()?
+        .flatten()
+        .filter(|plan| plan.task_id == task_id))
 }
 
 fn load_goal(conn: &Connection, task_id: &str) -> Result<PlanGoal, ProductError> {

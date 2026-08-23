@@ -23,6 +23,8 @@ const MAX_LINE_QUEUE: usize = 2;
 const MAX_WRITER_QUEUE: usize = 64;
 const MAX_DEFERRED_BYTES: usize = 64 * 1024 * 1024;
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const CODEX_DISABLE_R_CODE_MCP_OVERRIDE: &str =
+    "mcp_servers.r-code={enabled=false,command='r-code-disabled'}";
 const _: () = assert!(MAX_LINE_BYTES * MAX_LINE_QUEUE <= 64 * 1024 * 1024);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -822,7 +824,7 @@ pub(crate) fn codex_app_server_command(
     }
     command
         .arg("-c")
-        .arg("mcp_servers.r-code={enabled=false,command='r-code-disabled'}")
+        .arg(CODEX_DISABLE_R_CODE_MCP_OVERRIDE)
         .current_dir(workspace)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

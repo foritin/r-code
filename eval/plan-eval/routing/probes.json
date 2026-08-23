@@ -1,0 +1,202 @@
+[
+  {
+    "id": "simple-01",
+    "label": "simple",
+    "prompt": "把这个函数改名为 buildUrl，并更新它的两处调用点。"
+  },
+  {
+    "id": "simple-02",
+    "label": "simple",
+    "prompt": "帮我把 README 里的安装命令改成 pnpm。"
+  },
+  {
+    "id": "simple-03",
+    "label": "simple",
+    "prompt": "解释这段递归函数在做什么。"
+  },
+  {
+    "id": "simple-04",
+    "label": "simple",
+    "prompt": "把按钮文案从「提交」改成「保存」。"
+  },
+  {
+    "id": "simple-05",
+    "label": "simple",
+    "prompt": "修复这个拼写错误：recieve → receive。"
+  },
+  {
+    "id": "simple-06",
+    "label": "simple",
+    "prompt": "给这个接口加一个可选的 timeout 参数，默认不传行为不变。"
+  },
+  {
+    "id": "simple-07",
+    "label": "simple",
+    "prompt": "这个报错是什么意思？TypeError: cannot read property of undefined"
+  },
+  {
+    "id": "simple-08",
+    "label": "simple",
+    "prompt": "把这两行日志删掉。"
+  },
+  {
+    "id": "simple-09",
+    "label": "simple",
+    "prompt": "给 User 模型加一个 nickname 字段的读取方法。"
+  },
+  {
+    "id": "simple-10",
+    "label": "simple",
+    "prompt": "把这个常量从 10 改成 25。"
+  },
+  {
+    "id": "simple-11",
+    "label": "simple",
+    "prompt": "查看这个文件的前 50 行并总结结构。"
+  },
+  {
+    "id": "simple-12",
+    "label": "simple",
+    "prompt": "把这个测试里的断言从 equal 改成 deepEqual。"
+  },
+  {
+    "id": "simple-13",
+    "label": "simple",
+    "prompt": "帮我把这个函数的参数名从 data 改成 payload。"
+  },
+  {
+    "id": "simple-14",
+    "label": "simple",
+    "prompt": "解释这个正则表达式的含义。"
+  },
+  {
+    "id": "simple-15",
+    "label": "simple",
+    "prompt": "把这个 CSS 的颜色从 #fff 改成 #fafafa。"
+  },
+  {
+    "id": "simple-16",
+    "label": "simple",
+    "prompt": "给这个模块补一行文件头注释。"
+  },
+  {
+    "id": "simple-17",
+    "label": "simple",
+    "prompt": "这个配置文件里 server.port 是多少？"
+  },
+  {
+    "id": "simple-18",
+    "label": "simple",
+    "prompt": "把这个函数的返回值改成数组形式。"
+  },
+  {
+    "id": "simple-19",
+    "label": "simple",
+    "prompt": "把这个目录下的图片文件列出来。"
+  },
+  {
+    "id": "simple-20",
+    "label": "simple",
+    "prompt": "把这段代码的缩进统一为两个空格。"
+  },
+  {
+    "id": "complex-01",
+    "label": "complex",
+    "prompt": "把认证系统从 session 迁移到 JWT：涉及网关、用户服务、前端鉴权拦截与存量会话回收。"
+  },
+  {
+    "id": "complex-02",
+    "label": "complex",
+    "prompt": "重构订单与库存两个服务共享的扣减逻辑，改成事件驱动的最终一致，保留回滚路径。"
+  },
+  {
+    "id": "complex-03",
+    "label": "complex",
+    "prompt": "把单机任务队列迁移到分布式队列，处理重复投递、失败重试与死信，并兼容旧队列数据。"
+  },
+  {
+    "id": "complex-04",
+    "label": "complex",
+    "prompt": "为整个应用引入多租户隔离：数据库 schema、缓存键、审计日志都要按租户划分。"
+  },
+  {
+    "id": "complex-05",
+    "label": "complex",
+    "prompt": "把构建产物从 CommonJS 迁移到 ESM，处理循环依赖、动态 require 与第三方兼容。"
+  },
+  {
+    "id": "complex-06",
+    "label": "complex",
+    "prompt": "设计并实现统一的通知中心：邮件、短信、站内信三通道，失败降级与幂等去重。"
+  },
+  {
+    "id": "complex-07",
+    "label": "complex",
+    "prompt": "实现文件存储从本地磁盘到对象存储的迁移，包含增量同步、校验与回切方案。"
+  },
+  {
+    "id": "complex-08",
+    "label": "complex",
+    "prompt": "把同步导出改成异步任务：队列、进度查询、取消与部分失败恢复，跨三个模块。"
+  },
+  {
+    "id": "complex-09",
+    "label": "complex",
+    "prompt": "重构权限模型从角色制到 RBAC+ABAC 混合，迁移存量数据并保持 API 兼容。"
+  },
+  {
+    "id": "complex-10",
+    "label": "complex",
+    "prompt": "为支付链路添加对账系统：三方流水拉取、差异检测、自动申诉与人工兜底。"
+  },
+  {
+    "id": "complex-11",
+    "label": "complex",
+    "prompt": "把配置中心从环境变量迁移到远程配置：热更新、灰度、回滚与启动兜底。"
+  },
+  {
+    "id": "complex-12",
+    "label": "complex",
+    "prompt": "实现全链路追踪接入：SDK 封装、采样策略、跨服务上下文透传与存储成本控制。"
+  },
+  {
+    "id": "complex-13",
+    "label": "complex",
+    "prompt": "把单体里的搜索模块抽成独立服务：索引同步、查询代理、降级与数据回填。"
+  },
+  {
+    "id": "complex-14",
+    "label": "complex",
+    "prompt": "重构缓存层：多级缓存一致性、防击穿/穿透/雪崩，并下线旧的旁路缓存。"
+  },
+  {
+    "id": "complex-15",
+    "label": "complex",
+    "prompt": "把定时任务调度迁移到分布式调度器：分片、失败转移、幂等与监控告警。"
+  },
+  {
+    "id": "complex-16",
+    "label": "complex",
+    "prompt": "实现灰度发布系统：流量分桶、指标观测、自动回滚，涉及网关与部署链路。"
+  },
+  {
+    "id": "complex-17",
+    "label": "complex",
+    "prompt": "把用户反馈系统与工单系统合并：数据迁移、去重合并规则与双写过渡期。"
+  },
+  {
+    "id": "complex-18",
+    "label": "complex",
+    "prompt": "为 API 网关实现限流与配额：多维度计数、平滑放量、超卖保护与审计。"
+  },
+  {
+    "id": "complex-19",
+    "label": "complex",
+    "prompt": "把日志系统从文件迁移到流式采集：采集器、传输保障、脱敏与存储分层。"
+  },
+  {
+    "id": "complex-20",
+    "label": "complex",
+    "prompt": "重构前端状态管理：从混用多方案收敛到单一方案，保持组件 API 不变。"
+  }
+]

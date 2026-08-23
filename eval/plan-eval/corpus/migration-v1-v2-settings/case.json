@@ -1,0 +1,8 @@
+{
+  "id": "migration-v1-v2-settings",
+  "category": "migration",
+  "task": "把用户设置从 v1 平面结构迁移到 v2 嵌套结构：新增 `lib/migrate.js` 的 migrateSettings(v1)，v1 的 notify_email/notify_push 映射到 v2 的 notify.email/push；`lib/store.js` 的 load 读取旧数据时透明迁移。旧字段必须不再出现在输出。",
+  "expected_signals": [
+    "migration_or_data"
+  ]
+}
