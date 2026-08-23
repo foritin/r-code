@@ -6,6 +6,8 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-23
+
 ### Added
 
 - DeepSeek Plan 锚定（独立滑钮，默认关闭）：进入 DeepSeek Plan 后可选择最小规划轨迹——规划期仅保留 5→8 项只读工具与最小上下文注入（无 memory、时钟、MCP 文案、peer、进度与 governor 尾部），批准实施后自动恢复该任务全部可用能力（RestoredFull 审计事件 + fail-closed 断言）。与「复杂任务先建议制定计划」互不替代；开关与 Provider 路由在 Plan 创建时冻结，运行中切换只影响新计划。
@@ -346,5 +348,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.3.2]: https://github.com/foritin/r-code/releases/tag/v0.3.2
 [0.3.3]: https://github.com/foritin/r-code/releases/tag/v0.3.3
 [0.9.0]: https://github.com/foritin/r-code/releases/tag/v0.9.0
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.9.1...HEAD
 [0.9.1]: https://github.com/foritin/r-code/releases/tag/v0.9.1
+[Unreleased]: https://github.com/foritin/r-code/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/foritin/r-code/releases/tag/v1.0.0
