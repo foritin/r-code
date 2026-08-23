@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { errText } from "../../lib/format";
 import { useAppStore, type SettingsPane } from "../../store/app";
 import { usePoll } from "../../lib/poll";
@@ -9,6 +9,7 @@ import {
   codexSetupCollaboration,
   codexStartDeviceLogin,
   codexStartLogin,
+  codexSyncCli,
   companionEnsure,
   logsTail,
   providerModels,
@@ -21,10 +22,12 @@ import {
   supportBundleChoose,
   supportPreview,
 } from "../../lib/ipc";
+import { reloadImageUnderstandingEngine } from "../../lib/image-understanding";
 import type { PlanningStatusView } from "../../lib/types";
 import type {
   AppConfig,
   CodexCliPreferences,
+  CodexCliSyncResult,
   CodexIntegrationStatus,
   CodexModelOption,
   HostedWebRoute,
@@ -45,12 +48,18 @@ import {
   loadCatalog,
   presetOf,
   providerLabel,
+  rememberedModelsFor,
   rememberModel,
+  rememberSyncedModels,
+  syncedModelsFor,
+  PROVIDER_SYNC_TTL_MS,
 } from "../../lib/provider";
 import { useCodexCliGate } from "../codex/CodexCliGate";
 import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/login-watcher";
 import { IconCheck, IconChevronDown, IconRefresh, IconSearch } from "../icons";
+import { modalityLabel, resolveImageCapability } from "../room/model-capabilities";
 import { Menu, MenuEmpty, MenuItem } from "../ui/Menu";
+import { InfoTip } from "../ui/InfoTip";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pushToast } from "../../store/toast";
 import { useCompanionStore, type CompanionMotion } from "../../store/companion";
@@ -73,12 +82,12 @@ const SETTINGS_PANES: Array<{
   description: string;
 }> = [
   { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
-  { key: "agents", label: "Agent 编排", description: "选择主 Agent、委派路由和可观察的质量复核。" },
+  { key: "agents", label: "Agent 编排", description: "选择主 Agent、管理 Codex 运行时、委派路由和质量复核。" },
   { key: "tools", label: "工具与连接", description: "管理内置工具、RTK 加速、MCP 服务、凭据和扩展市场。" },
   { key: "knowledge", label: "知识与指令", description: "管理公共与项目记忆、协作 Prompt 和可复用 Skills。" },
   { key: "preferences", label: "外观与小助手", description: "选择界面主题，并管理桌面小助手的反馈方式。" },
   { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
-  { key: "subagents", label: "子代理配置", description: "组合 API Provider 与 Codex CLI 来源，配置子代理槽位、权重、Prompt 与连通性。" },
+  { key: "subagents", label: "子代理配置", description: "管理候选来源、路由槽位、权重、Prompt 与连通测试。" },
 ];
 
 const CATEGORY_LABELS: Record<ProviderCategory, string> = {
@@ -87,6 +96,46 @@ const CATEGORY_LABELS: Record<ProviderCategory, string> = {
   cloud_provider: "云厂商托管",
   aggregator: "路由 / 聚合",
 };
+
+/** E4 设置搜索索引：按区块标题 + 字段关键词 + 手册关键词过滤，命中跨面板时
+ * 经 setSettingsPane + scrollIntoView + flash-target 深链定位。 */
+interface SettingsSearchEntry {
+  pane: SettingsPane;
+  blockId: string;
+  title: string;
+  keywords: string[];
+}
+
+const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  { pane: "providers", blockId: "providers-block", title: "对话模型（模型服务）", keywords: ["服务", "provider", "默认服务", "设为默认", "密钥", "api key", "凭据", "预设", "模型", "协议", "线路", "多模态", "同步模型", "新建服务", "openai", "anthropic", "deepseek", "kimi", "glm", "火山", "百炼", "openrouter"] },
+  { pane: "providers", blockId: "image-understanding-block", title: "图片理解", keywords: ["图片", "ocr", "视觉模型", "多模态", "截图", "贴图", "附件", "图片理解引擎"] },
+  { pane: "agents", blockId: "orchestration-main-agent", title: "主 Agent", keywords: ["主 agent", "引擎", "r-code", "codex", "新会话默认"] },
+  { pane: "agents", blockId: "orchestration-delegation", title: "委派路由", keywords: ["委派", "路由", "子代理", "复杂度", "跨引擎"] },
+  { pane: "agents", blockId: "orchestration-quality", title: "质量复核", keywords: ["复核", "质量", "review", "轮次", "修订"] },
+  { pane: "agents", blockId: "planning-suggestion-block", title: "复杂任务先建议制定计划", keywords: ["plan", "计划", "规划建议", "deepseek", "复杂任务", "先询问"] },
+  { pane: "agents", blockId: "orchestration-run-budget", title: "运行护栏", keywords: ["护栏", "预算", "轮数", "时长", "思考量", "同错", "零进展", "变更范围", "测试连败", "checkpoint", "回滚"] },
+  { pane: "agents", blockId: "orchestration-skills", title: "内置编排能力", keywords: ["任务拆解", "路由", "codex 子代理", "质量复核循环"] },
+  { pane: "agents", blockId: "codex-setup-block", title: "Codex 运行时", keywords: ["codex", "登录", "认证", "协作", "cli", "更新", "升级", "mcp", "安装", "权限", "模型"] },
+  { pane: "tools", blockId: "mcp-panel-block", title: "工具与连接（MCP）", keywords: ["mcp", "工具", "连接", "市场", "扩展", "rtk"] },
+  { pane: "knowledge", blockId: "knowledge-block", title: "知识与指令", keywords: ["记忆", "prompt", "提示词", "skills", "技能", "知识库", "指令"] },
+  { pane: "preferences", blockId: "appearance-block", title: "界面主题", keywords: ["主题", "外观", "亮色", "暗色", "跟随系统"] },
+  { pane: "preferences", blockId: "companion-block", title: "桌面小助手", keywords: ["小助手", "悬浮", "提示音", "动效", "形态"] },
+  { pane: "diagnostics", blockId: "request-audit-block", title: "请求构成审计", keywords: ["审计", "请求信封", "旁路", "request audit"] },
+  { pane: "diagnostics", blockId: "log-level-block", title: "日志记录", keywords: ["日志", "级别", "log", "debug", "info", "warn", "error"] },
+  { pane: "diagnostics", blockId: "log-section", title: "诊断日志", keywords: ["日志", "诊断", "实时", "过滤"] },
+  { pane: "diagnostics", blockId: "support-block", title: "支持包", keywords: ["支持包", "导出", "脱敏", "诊断", "反馈"] },
+  { pane: "subagents", blockId: "subagent-pool-block", title: "候选来源与路由池", keywords: ["子代理", "候选池", "槽位", "权重", "连通", "测试", "prompt", "codex cli"] },
+];
+
+function searchSettingsEntries(query: string): SettingsSearchEntry[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [];
+  return SETTINGS_SEARCH_INDEX.filter((entry) => {
+    const haystack = [entry.title, ...entry.keywords, entry.pane].join(" ").toLowerCase();
+    // 空格分词：每个词都要命中（AND），支持"默认 服务"这类组合。
+    return normalized.split(/\s+/).every((token) => haystack.includes(token));
+  }).slice(0, 12);
+}
 
 const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {
   anthropic_messages: "Anthropic Messages",
@@ -499,26 +548,41 @@ export function SettingsScene() {
   // 手册页脚动作请求的跨页定位目标（如诊断页的审计卡）：页签渲染完成后闪烁并聚焦。
   const pendingPaneFocus = useRef<string | null>(null);
 
-  const handleGuideAction = useCallback((action: GuideAction) => {
-    if (action !== "open-request-audit") return;
-    setOpenGuide(null);
-    pendingPaneFocus.current = "request-audit-block";
-    setActivePane("diagnostics");
-  }, [setActivePane]);
-
-  useEffect(() => {
-    if (!pendingPaneFocus.current) return;
-    const targetId = pendingPaneFocus.current;
+  const focusSettingsBlock = useCallback((targetId: string) => {
     const block = document.getElementById(targetId);
-    if (!block) return;
-    pendingPaneFocus.current = null;
+    if (!block) return false;
     block.scrollIntoView({ block: "center" });
     // 重启动画：先移除类再强制 reflow，保证连续两次跳转也能看到定位闪烁。
     block.classList.remove("flash-target");
     void block.offsetWidth;
     block.classList.add("flash-target");
     block.querySelector<HTMLElement>(".switch, .input, button")?.focus({ preventScroll: true });
-  }, [activePane, config]);
+    return true;
+  }, []);
+
+  const handleGuideAction = useCallback((action: GuideAction) => {
+    if (action === "open-request-audit") {
+      setOpenGuide(null);
+      pendingPaneFocus.current = "request-audit-block";
+      setActivePane("diagnostics");
+      return;
+    }
+    if (action === "open-image-understanding") {
+      setOpenGuide(null);
+      if (activePane === "providers") {
+        focusSettingsBlock("image-understanding-block");
+        return;
+      }
+      pendingPaneFocus.current = "image-understanding-block";
+      setActivePane("providers");
+    }
+  }, [activePane, focusSettingsBlock, setActivePane]);
+
+  useEffect(() => {
+    if (!pendingPaneFocus.current) return;
+    // 目标区块可能要等 config 异步到达后才渲染；未命中时保留目标等下一次重试。
+    if (focusSettingsBlock(pendingPaneFocus.current)) pendingPaneFocus.current = null;
+  }, [activePane, config, focusSettingsBlock]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -563,11 +627,68 @@ export function SettingsScene() {
 
   const pane = SETTINGS_PANES.find((item) => item.key === activePane) ?? SETTINGS_PANES[0];
 
+  // E4 设置搜索：命中跨面板区块时经既有深链机制定位（切换页签 + 闪烁聚焦）。
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchResults = useMemo(() => searchSettingsEntries(searchQuery), [searchQuery]);
+  const jumpToBlock = useCallback((entry: SettingsSearchEntry) => {
+    setSearchQuery("");
+    if (entry.pane === activePane) {
+      // 同面板命中：zustand 不会触发重渲染，直接定位。
+      focusSettingsBlock(entry.blockId);
+      return;
+    }
+    pendingPaneFocus.current = entry.blockId;
+    setActivePane(entry.pane);
+  }, [activePane, focusSettingsBlock, setActivePane]);
+
   return (
     <div className="scene">
       <div className="scene-scroll">
         <div className="page-head">
           <h1>设置</h1>
+          <div className="settings-search">
+            <IconSearch width={14} height={14} aria-hidden="true" />
+            <input
+              className="input settings-search-input"
+              type="search"
+              value={searchQuery}
+              placeholder="搜索设置项（如：默认服务、OCR、子代理）"
+              aria-label="搜索设置项"
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="quiet-link"
+                aria-label="清空搜索"
+                onClick={() => setSearchQuery("")}
+              >
+                清空
+              </button>
+            )}
+            {searchResults.length > 0 && (
+              <ul className="settings-search-results" role="listbox" aria-label="搜索结果">
+                {searchResults.map((entry) => (
+                  <li key={`${entry.pane}:${entry.blockId}`}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      onClick={() => jumpToBlock(entry)}
+                    >
+                      <span className="settings-search-title">{entry.title}</span>
+                      <span className="settings-search-pane">
+                        {SETTINGS_PANES.find((item) => item.key === entry.pane)?.label ?? entry.pane}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {searchQuery.trim() && searchResults.length === 0 && (
+              <p className="settings-search-empty" role="status">没有匹配的设置项；可换个关键词试试。</p>
+            )}
+          </div>
         </div>
 
         <div className="settings-layout">
@@ -584,8 +705,9 @@ export function SettingsScene() {
             ))}
           </nav>
 
-          <div className="settings-detail">
+          <div className={`settings-detail${activePane === "agents" ? " settings-agent-detail" : ""}`}>
             <header className="settings-detail-head">
+              {activePane === "agents" && <span className="settings-detail-eyebrow">AGENT</span>}
               <h2>{pane.label}</h2>
               <p>{pane.description}</p>
             </header>
@@ -609,7 +731,10 @@ export function SettingsScene() {
             {activePane === "providers" && (
               <div className="settings-sheet">
                 {config ? (
-                  <ProviderSection config={config} providerStatus={providerStatus} reload={loadConfig} />
+                  <>
+                    <ProviderSection config={config} providerStatus={providerStatus} reload={loadConfig} onOpenGuide={setOpenGuide} />
+                    <ImageUnderstandingSection config={config} providerStatus={providerStatus} reload={loadConfig} onOpenGuide={setOpenGuide} />
+                  </>
                 ) : (
                   !configErr && <div className="settings-loading">正在读取模型服务…</div>
                 )}
@@ -632,9 +757,16 @@ export function SettingsScene() {
             {activePane === "knowledge" && <KnowledgeSettingsPane />}
 
             {activePane === "agents" && (
-              <div className="settings-sheet">
+              <div className="settings-sheet settings-orchestration-sheet">
                 {config ? (
-                  <OrchestrationSection config={config} reload={loadConfig} onOpenGuide={setOpenGuide} />
+                  <OrchestrationSection
+                    config={config}
+                    reload={loadConfig}
+                    onOpenGuide={setOpenGuide}
+                    codexRuntime={(
+                      <CodexIntegrationSection onStatusChange={handleCodexStatusChange} />
+                    )}
+                  />
                 ) : (
                   !configErr && <div className="settings-loading">正在读取 Agent 编排策略…</div>
                 )}
@@ -652,8 +784,11 @@ export function SettingsScene() {
 
             {activePane === "subagents" && (
               <div className="settings-sheet subagent-configuration-sheet">
-                <SubagentProvidersPanel providerKinds={providerKinds} refreshSignal={subagentRefreshSignal} />
-                <CodexIntegrationSection config={config} reloadConfig={loadConfig} onStatusChange={handleCodexStatusChange} />
+                <SubagentProvidersPanel
+                  providerKinds={providerKinds}
+                  refreshSignal={subagentRefreshSignal}
+                  onOpenGuide={setOpenGuide}
+                />
               </div>
             )}
           </div>
@@ -674,10 +809,12 @@ function ProviderSection({
   config,
   providerStatus,
   reload,
+  onOpenGuide,
 }: {
   config: AppConfig;
   providerStatus: Record<string, ProviderStatus>;
   reload: () => Promise<void>;
+  onOpenGuide: (id: GuideId) => void;
 }) {
   const configDefault = config.default_provider ?? "";
   const providers = config.providers ?? EMPTY_PROVIDERS;
@@ -807,11 +944,36 @@ function ProviderSection({
     setModelsBusy(false);
   }, [selectedProvider, presetName, fields.base_url, fields.protocol]);
 
+  // 已保存服务：点开详情即自动同步模型并持久化（手动同步只保留给新建流程）。
+  // 必须等表单同步到所选服务之后再触发（profileName 对齐）：选中后的第一帧
+  // 字段仍是上一个服务的旧值，用旧闭包发请求会把结果算错对象。
+  // 新鲜度窗口内不重复请求；失败退避 30 秒，避免反复点击/同步失败时打爆接口。
+  const lastSyncAttemptRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!selectedProvider || drafting || busy || modelsBusy) return;
+    if (profileName.trim() !== selectedProvider) return;
+    if (!providers[selectedProvider]) return;
+    if (!providerStatus[selectedProvider]?.ready) return;
+    if (!fields.base_url.trim()) return;
+    const cached = syncedModelsFor(selectedProvider);
+    if (cached && Date.now() - cached.at < PROVIDER_SYNC_TTL_MS) return;
+    const lastAttempt = lastSyncAttemptRef.current[selectedProvider] ?? 0;
+    if (Date.now() - lastAttempt < 30_000) return;
+    lastSyncAttemptRef.current[selectedProvider] = Date.now();
+    void fetchModels();
+    // fetchModels 每次渲染重建；此 effect 只由下方依赖驱动，按需触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProvider, drafting, busy, modelsBusy, providers, providerStatus, profileName, fields.base_url]);
+
   const activePreset = presetOf(presetName);
   const pendingVars = unresolvedTemplateVars(activePreset, fields.base_url);
   const modelChoices = Array.from(
     new Set(
-      [fields.model, ...remoteModels, ...(activePreset?.models ?? [])]
+      [
+        fields.model,
+        ...remoteModels,
+        ...(activePreset?.models ?? []).map((entry) => entry.id),
+      ]
         .map((model) => model.trim())
         .filter(Boolean)
     )
@@ -835,6 +997,12 @@ function ProviderSection({
       setRemoteModels(response.models);
       if (!fields.model.trim() && response.models[0]) {
         setFields((value) => ({ ...value, model: response.models[0] }));
+      }
+      // 已保存服务：同步结果持久化（供模型胶囊、图片理解下拉等跨页消费）。
+      // 按本次请求的服务名记账，避免选中切换瞬间的过期闭包把清单记到别的服务上。
+      const requestedName = profileName.trim();
+      if (requestedName && providers[requestedName]) {
+        rememberSyncedModels(requestedName, response.models);
       }
       setModelsMessage(`服务返回 ${response.models.length} 个可用模型`);
     } catch (cause) {
@@ -881,10 +1049,10 @@ function ProviderSection({
       setDrafting(false);
       setPendingSelect(null);
       setKeyInput("");
-    }, activate ? "已保存，并用于后续新对话" : "配置已保存");
+    }, activate ? "已保存，并设为默认服务" : "配置已保存");
 
   const selectProvider = (name: string) =>
-    void run(() => settingsSelectProvider(name), "已切换，新对话将使用这项服务");
+    void run(() => settingsSelectProvider(name), "已设为默认，新对话将使用这项服务");
 
   const deleteProvider = (name: string) => {
     if (!window.confirm(`删除“${providerLabel(name)}”及其本机凭据？此操作无法撤销。`)) return;
@@ -925,9 +1093,18 @@ function ProviderSection({
     : "尚未保存";
   const deepSeekV4 = isDeepSeekV4(fields.base_url, fields.model, presetName);
   const outputValue = Number(fields.max_tokens.trim());
-  // 预设声明了厂商单次输出上限时锁定该字段，避免把上下文窗口误填成输出上限。
-  const maxOutputLocked = activePreset?.max_output_tokens != null;
-  const outputExceedsDeepSeekLimit = deepSeekV4 && Number.isFinite(outputValue) && outputValue > 393_216;
+  // docs/multimodal-attachments §6.4：本字段是「每轮最大输出」（用户可编辑，
+  // 范围 2,048 到厂商上限）；Provider 的服务端上限只作为上界展示，不再锁死
+  // 输入框。未填写时后端采用目录 recommended_output_tokens（如 DeepSeek 65,536）。
+  const providerMaxOutput = activePreset?.max_output_tokens ?? null;
+  const recommendedOutput = activePreset?.recommended_output_tokens ?? null;
+  const maxOutputLocked = false;
+  const outputBelowMinimum =
+    Number.isFinite(outputValue) && fields.max_tokens.trim() !== "" && outputValue < 2_048;
+  const outputExceedsProviderLimit = providerMaxOutput != null
+    && Number.isFinite(outputValue)
+    && fields.max_tokens.trim() !== ""
+    && outputValue > providerMaxOutput;
   const deepSeekResponsesModelUnsupported =
     activePreset?.id === "deepseek" &&
     normalizeUrl(fields.base_url) === normalizeUrl(activePreset.base_url) &&
@@ -949,29 +1126,40 @@ function ProviderSection({
     pendingVars.length > 0 ||
     protocolMismatch ||
     deepSeekResponsesModelUnsupported ||
-    outputExceedsDeepSeekLimit;
+    outputExceedsProviderLimit;
   // 占位符没替换就保存 = 一个必然 404 的地址进了配置
   const saveBlocked =
     busy
     || protocolMismatch
-    || outputExceedsDeepSeekLimit
+    || outputExceedsProviderLimit
+    || outputBelowMinimum
     || deepSeekResponsesModelUnsupported
     || pendingVars.length > 0;
 
   return (
-    <section className="settings-block provider-settings">
+    <section className="settings-block provider-settings" id="providers-block">
       <div className="section-heading">
         <div>
           <h3>对话模型</h3>
           <p className="desc">R-Code 对话使用的模型服务。访问密钥只保存在当前设备的安全凭据存储中，界面不会回显已保存内容。</p>
         </div>
-        <button
-          className="btn"
-          disabled={busy}
-          onClick={startNewProvider}
-        >
-          新建服务
-        </button>
+        <div className="section-heading-actions">
+          <button
+            type="button"
+            className="guide-link"
+            aria-haspopup="dialog"
+            onClick={() => onOpenGuide("providers")}
+          >
+            指引手册 <span aria-hidden="true">→</span>
+          </button>
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={startNewProvider}
+          >
+            新建服务
+          </button>
+        </div>
       </div>
 
       {err && <div className="errbar" role="alert">{err}</div>}
@@ -1001,22 +1189,34 @@ function ProviderSection({
               const status = providerStatus[name];
               const icon = providerIconFor(profile.provider_kind ?? presetOf(name)?.id ?? name);
               return (
-                <button
-                  key={name}
-                  className={`provider-row${name === selectedProvider ? " selected" : ""}`}
-                  disabled={busy}
-                  onClick={() => (drafting ? setPendingSelect(name) : setSelectedProvider(name))}
-                >
-                  <span className={`provider-icon-tile${icon ? "" : " is-fallback"}`} aria-hidden="true">
-                    {icon ? <img src={icon} alt="" /> : providerInitial(providerLabel(name))}
-                  </span>
-                  <span className="provider-row-title">
-                    {providerLabel(name)}
-                    {active && <em>正在使用</em>}
-                  </span>
-                  <span className="provider-row-model">{profile.model || "尚未设置模型"}</span>
-                  <span className={`provider-row-state${status?.ready ? " ready" : ""}`}>{providerStateLabel(status)}</span>
-                </button>
+                <div key={name} className={`provider-row-wrap${name === selectedProvider ? " selected" : ""}`}>
+                  <button
+                    className={`provider-row${name === selectedProvider ? " selected" : ""}`}
+                    disabled={busy}
+                    onClick={() => (drafting ? setPendingSelect(name) : setSelectedProvider(name))}
+                  >
+                    <span className={`provider-icon-tile${icon ? "" : " is-fallback"}`} aria-hidden="true">
+                      {icon ? <img src={icon} alt="" /> : providerInitial(providerLabel(name))}
+                    </span>
+                    <span className="provider-row-title">
+                      {providerLabel(name)}
+                      {active && <em>默认</em>}
+                    </span>
+                    <span className="provider-row-model">{profile.model || "尚未设置模型"}</span>
+                    <span className={`provider-row-state${status?.ready ? " ready" : ""}`}>{providerStateLabel(status)}</span>
+                  </button>
+                  {!active && !drafting && (
+                    <button
+                      type="button"
+                      className="provider-row-quick-default quiet-link"
+                      disabled={busy || !status?.ready}
+                      title="设为默认后，新对话将使用这项服务；已开始的对话不受影响"
+                      onClick={() => selectProvider(name)}
+                    >
+                      设为默认
+                    </button>
+                  )}
+                </div>
               );
             })
           )}
@@ -1097,7 +1297,7 @@ function ProviderSection({
               </div>
 
               <div className="provider-form-field provider-form-field-wide">
-                <label htmlFor="set-model">模型</label>
+                <label htmlFor="set-model">模型 <InfoTip label="模型与多模态说明">候选来自预设目录与接口同步；[多模态] 模型可直接接收图片，[文本] 模型不支持图片输入，未标注的模型能力未确认。</InfoTip></label>
                 <div className="provider-model-input">
                   {/* 输入框保留自由输入；候选列表改用 Menu 弹层——原生 datalist 只会显示与当前值前缀匹配的选项，预填默认模型后其余候选会被过滤掉。 */}
                   <input id="set-model"
@@ -1134,33 +1334,44 @@ function ProviderSection({
                           {modelChoices.length === 0 ? (
                             <MenuEmpty>没有候选模型，先同步模型列表或手动输入</MenuEmpty>
                           ) : (
-                            modelChoices.map((modelName) => (
-                              <MenuItem
-                                key={modelName}
-                                close={close}
-                                checked={fields.model.trim() === modelName}
-                                onSelect={() => {
-                                  setFields((value) => ({ ...value, model: modelName }));
-                                  rememberModel(profileName.trim() || activePreset?.id || "", modelName);
-                                }}
-                              >
-                                <span className="model-name" title={modelName}>{modelName}</span>
-                              </MenuItem>
-                            ))
+                            modelChoices.map((modelName) => {
+                              // C3：预设目录命中的模型加能力徽标；未确认能力的模型不加标。
+                              const modality = modalityLabel(
+                                resolveImageCapability(modelName, {
+                                  presetModels: activePreset?.models,
+                                }),
+                              );
+                              return (
+                                <MenuItem
+                                  key={modelName}
+                                  close={close}
+                                  checked={fields.model.trim() === modelName}
+                                  onSelect={() => {
+                                    setFields((value) => ({ ...value, model: modelName }));
+                                    rememberModel(profileName.trim() || activePreset?.id || "", modelName);
+                                  }}
+                                >
+                                  <span className="model-name" title={modelName}>{modelName}</span>
+                                  {modality && <span className="model-modality-badge">{modality}</span>}
+                                </MenuItem>
+                              );
+                            })
                           )}
                         </>
                       )}
                     </Menu>
-                    <button
-                      className={`provider-model-refresh${modelsBusy ? " loading" : ""}`}
-                      type="button"
-                      disabled={busy || modelsBusy || pendingVars.length > 0 || !fields.base_url.trim()}
-                      title="从当前接口同步模型列表"
-                      onClick={() => void fetchModels()}
-                    >
-                      <IconRefresh width={15} height={15} />
-                      {modelsBusy ? "同步中" : "同步模型"}
-                    </button>
+                    {!editing && (
+                      <button
+                        className={`provider-model-refresh${modelsBusy ? " loading" : ""}`}
+                        type="button"
+                        disabled={busy || modelsBusy || pendingVars.length > 0 || !fields.base_url.trim()}
+                        title="填好密钥后从当前接口同步模型列表（已保存的服务会在点开时自动同步）"
+                        onClick={() => void fetchModels()}
+                      >
+                        <IconRefresh width={15} height={15} />
+                        {modelsBusy ? "同步中" : "同步模型"}
+                      </button>
+                    )}
                   </div>
                 </div>
                 {modelsMessage && <span className="provider-field-success" role="status">{modelsMessage}</span>}
@@ -1289,7 +1500,7 @@ function ProviderSection({
                 </div>
 
                 <div className="provider-form-field provider-form-field-wide">
-                  <label htmlFor="set-protocol">线路协议</label>
+                  <label htmlFor="set-protocol">线路协议 <InfoTip label="线路协议说明">协议决定请求体形状与计费线路：同一厂商的不同入口常是不同协议（如火山 /api/coding 是 Anthropic、/api/coding/v3 是 OpenAI）。切换接口线路时协议会一起切换。</InfoTip></label>
                   <select id="set-protocol"
                     className="input"
                     disabled={busy}
@@ -1329,7 +1540,7 @@ function ProviderSection({
                 </div>
 
                 <div className="provider-form-field">
-                  <label htmlFor="set-max-tokens">最大输出</label>
+                  <label htmlFor="set-max-tokens">每轮最大输出</label>
                   <input id="set-max-tokens"
                     className="input"
                     inputMode="numeric"
@@ -1338,16 +1549,23 @@ function ProviderSection({
                     onChange={(event) => setFields((value) => ({ ...value, max_tokens: event.target.value }))}
                   />
                   <span className="provider-field-meta">
-                    {maxOutputLocked
-                      ? `已按厂商上限固定为 ${Number(fields.max_tokens).toLocaleString()}`
-                      : deepSeekV4 ? "V4 最大 393,216" : "通常建议 8,192"}
+                    {providerMaxOutput != null
+                      ? recommendedOutput != null
+                        ? `自动 ${Number(recommendedOutput).toLocaleString()} / 服务上限 ${Number(providerMaxOutput).toLocaleString()}`
+                        : `服务上限 ${Number(providerMaxOutput).toLocaleString()}`
+                      : "通常建议 8,192"}
                   </span>
-                  {outputExceedsDeepSeekLimit && (
+                  {outputExceedsProviderLimit && (
                     <span className="provider-field-warning" role="alert">
-                      当前值超出限制，请
-                      <button className="quiet-link" type="button" onClick={() => setFields((value) => ({ ...value, max_tokens: OUTPUT_DEFAULT }))}>
-                        恢复为 8,192
+                      当前值超出服务上限，请
+                      <button className="quiet-link" type="button" onClick={() => setFields((value) => ({ ...value, max_tokens: String(providerMaxOutput ?? OUTPUT_DEFAULT) }))}>
+                        恢复为 {Number(providerMaxOutput ?? OUTPUT_DEFAULT).toLocaleString()}
                       </button>
+                    </span>
+                  )}
+                  {outputBelowMinimum && (
+                    <span className="provider-field-warning" role="alert">
+                      每轮输出不能低于 2,048
                     </span>
                   )}
                 </div>
@@ -1368,15 +1586,20 @@ function ProviderSection({
 
           <div className="footbar provider-actions">
             {editing && selectedProvider && selectedProvider !== configDefault && (
-              <button className="btn" disabled={busy || !providerStatus[selectedProvider]?.ready} onClick={() => selectProvider(selectedProvider)}>
-                用于新对话
+              <button
+                className="btn"
+                disabled={busy || !providerStatus[selectedProvider]?.ready}
+                title="设为默认后，新对话将使用这项服务；已开始的对话不受影响"
+                onClick={() => selectProvider(selectedProvider)}
+              >
+                设为默认服务
               </button>
             )}
             {drafting && (
               <button className="btn" disabled={busy} onClick={cancelDraft}>取消</button>
             )}
             <span className="spacer" />
-            <button className="btn accent" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并用于新对话</button>
+            <button className="btn accent" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并设为默认</button>
           </div>
         </div>
       </div>
@@ -1388,6 +1611,253 @@ function ProviderSection({
         onConfirm={commitPendingSelect}
         onCancel={() => setPendingSelect(null)}
       />
+    </section>
+  );
+}
+
+// ---------- 图片理解（docs D3） ----------
+
+/** 服务下的模型候选（C2 元数据）：预设候选 + 配置中的当前模型（能力未知）。
+ * `vision`：true = 目录标注多模态；false = 目录标注纯文本；null = 能力未确认。 */
+interface ImageModelOption {
+  id: string;
+  vision: boolean | null;
+}
+
+function imageModelsOfProvider(name: string, provider: ProviderConfig | undefined): ImageModelOption[] {
+  const preset = presetOf(provider?.provider_kind ?? name);
+  const options: ImageModelOption[] = [...(preset?.models ?? [])];
+  const seen = new Set(options.map((entry) => entry.id));
+  // 配置中的当前模型与用户用过并记住的模型（同步/手填）一并合并；这些模型
+  // 不在人工核对的目录里，能力按未知三态展示（不加徽标）。
+  for (const id of [
+    (provider?.model ?? "").trim(),
+    ...rememberedModelsFor(name),
+    ...(syncedModelsFor(name)?.models ?? []),
+  ]) {
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      options.push({ id, vision: null });
+    }
+  }
+  return options;
+}
+
+/** 视觉模型的默认首选：第一个目录标注多模态的模型，否则第一个候选。 */
+function preferredImageModel(models: ImageModelOption[]): string {
+  return models.find((entry) => entry.vision === true)?.id ?? models[0]?.id ?? "";
+}
+
+function ImageUnderstandingSection({
+  config,
+  providerStatus,
+  reload,
+  onOpenGuide,
+}: {
+  config: AppConfig;
+  providerStatus: Record<string, ProviderStatus>;
+  reload: () => Promise<void>;
+  onOpenGuide: (id: GuideId) => void;
+}) {
+  const engine = config.image_understanding?.engine === "model" ? "model" : "ocr";
+  const configuredProvider = config.image_understanding?.model_provider?.trim() ?? "";
+  const configuredModel = config.image_understanding?.model?.trim() ?? "";
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  // 全部已配置服务（不过滤多模态能力：能力在模型级展示，服务级保持完整可见）。
+  // 未就绪（缺密钥等）的条目在下拉中禁用并标注原因。
+  const providers = Object.entries(config.providers ?? {})
+    .map(([name, provider]) => {
+      const profile = provider as ProviderConfig;
+      return {
+        name,
+        label: providerLabel(name),
+        ready: Boolean(providerStatus[name]?.ready),
+        models: imageModelsOfProvider(name, profile),
+      };
+    })
+    .sort((left, right) => left.label.localeCompare(right.label));
+
+  const selected = providers.find((entry) => entry.name === configuredProvider);
+  // 配置指向的服务已被删除：保留显示 + 明确提示，不静默清除。
+  const providerDeleted = engine === "model" && Boolean(configuredProvider) && !selected;
+  const modelOptions = selected?.models ?? [];
+  const modelValue = configuredModel && modelOptions.some((entry) => entry.id === configuredModel)
+    ? configuredModel
+    : "";
+
+  const save = async (field: "engine" | "model_provider" | "model", value: unknown) => {
+    setBusy(field);
+    setErr(null);
+    try {
+      await settingsSet(`image_understanding.${field}`, value);
+      await reload();
+      // 立即刷新共享引擎快照：输入区 chip 与发送标记据此分派，不等下一次挂载。
+      void reloadImageUnderstandingEngine();
+    } catch (cause) {
+      setErr(errText(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const chooseEngine = (next: "ocr" | "model") => {
+    if (next === "ocr") {
+      // 切回 OCR 时清空模型字段，配置不残留指向已删服务的悬空引用。
+      void (async () => {
+        setBusy("engine");
+        setErr(null);
+        try {
+          await settingsSet("image_understanding.engine", "ocr");
+          await settingsSet("image_understanding.model_provider", null);
+          await settingsSet("image_understanding.model", null);
+          await reload();
+          void reloadImageUnderstandingEngine();
+        } catch (cause) {
+          setErr(errText(cause));
+        } finally {
+          setBusy(null);
+        }
+      })();
+      return;
+    }
+    void save("engine", "model");
+  };
+
+  const selectProvider = (nextProvider: string) => {
+    const next = providers.find((entry) => entry.name === nextProvider);
+    void (async () => {
+      setBusy("model_provider");
+      setErr(null);
+      try {
+        await settingsSet("image_understanding.model_provider", nextProvider);
+        // 服务切换后旧模型大概率不在新服务中：直接预选首选模型（优先多模态）。
+        await settingsSet(
+          "image_understanding.model",
+          next ? preferredImageModel(next.models) || null : null,
+        );
+        await reload();
+        void reloadImageUnderstandingEngine();
+      } catch (cause) {
+        setErr(errText(cause));
+      } finally {
+        setBusy(null);
+      }
+    })();
+  };
+
+  return (
+    <section className="settings-block image-understanding-block" id="image-understanding-block">
+      <div className="block-title-row">
+        <h3>图片理解 <InfoTip label="图片理解说明">辅助引擎只服务文本主模型：主模型目录确认多模态时原图直发，不经本机 OCR 或视觉模型。OCR 只提取文字（离线免费）；视觉模型理解整张图并生成描述（消耗调用）。</InfoTip></h3>
+        <button
+          type="button"
+          className="guide-link"
+          aria-haspopup="dialog"
+          onClick={() => onOpenGuide("image-understanding")}
+        >
+          指引手册 <span aria-hidden="true">→</span>
+        </button>
+      </div>
+      <p className="desc">
+        决定发送的图片如何被模型理解：本机 OCR 只提取文字；视觉模型会理解整张图片并生成
+        结构化描述。切换后对新发送的图片生效；原图仅本地留存预览。
+        <strong>主模型本身支持图片输入（目录确认多模态）时，原图直接发送、不经过引擎</strong>——
+        这里选择的引擎只对文本主模型生效。
+      </p>
+      {err && <div className="errbar" role="alert">{err}</div>}
+      <div className="image-understanding-engines" role="radiogroup" aria-label="图片理解引擎">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={engine === "ocr"}
+          className={`image-engine-option${engine === "ocr" ? " is-selected" : ""}`}
+          disabled={busy != null}
+          onClick={() => chooseEngine("ocr")}
+        >
+          <span className="image-engine-copy">
+            <strong>本机 OCR（默认）</strong>
+            <small>文本主模型的辅助：离线、免费，仅提取图片中的文字（PNG/JPEG）注入上下文。</small>
+          </span>
+          <span className="image-engine-check" aria-hidden="true">
+            {engine === "ocr" && <IconCheck width={15} height={15} />}
+          </span>
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={engine === "model"}
+          className={`image-engine-option${engine === "model" ? " is-selected" : ""}`}
+          disabled={busy != null}
+          onClick={() => chooseEngine("model")}
+        >
+          <span className="image-engine-copy">
+            <strong>视觉模型</strong>
+            <small>文本主模型的辅助：由指定的多模态模型理解整张图片并生成描述；多图并发理解，每次消耗该服务的调用。</small>
+          </span>
+          <span className="image-engine-check" aria-hidden="true">
+            {engine === "model" && <IconCheck width={15} height={15} />}
+          </span>
+        </button>
+      </div>
+      {engine === "model" && (
+        <div className="image-understanding-target">
+          {providers.length === 0 ? (
+            <p className="provider-field-warning" role="alert">
+              先在上方配置模型服务并填好密钥，再选择视觉模型。
+            </p>
+          ) : (
+            <>
+              <div className="field">
+                <label htmlFor="set-image-provider">服务</label>
+                <select
+                  id="set-image-provider"
+                  className="input"
+                  value={configuredProvider}
+                  disabled={busy != null}
+                  onChange={(event) => selectProvider(event.target.value)}
+                >
+                  <option value="" disabled>选择服务</option>
+                  {providerDeleted && (
+                    <option value={configuredProvider} disabled>
+                      {configuredProvider}（服务已被删除，请重新选择）
+                    </option>
+                  )}
+                  {providers.map((entry) => (
+                    <option key={entry.name} value={entry.name} disabled={!entry.ready}>
+                      {entry.label}{entry.ready ? "" : "（未就绪，先补全密钥）"}
+                    </option>
+                  ))}
+                </select>
+                <span className="hint">列出全部已配置服务；未就绪的服务需先在上方补全密钥。</span>
+              </div>
+              <div className="field">
+                <label htmlFor="set-image-model">模型</label>
+                <select
+                  id="set-image-model"
+                  className="input"
+                  value={modelValue}
+                  disabled={busy != null || !selected}
+                  onChange={(event) => void save("model", event.target.value || null)}
+                >
+                  <option value="" disabled>{selected ? "选择模型" : "先选择服务"}</option>
+                  {modelOptions.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.id}
+                      {entry.vision === true ? " [多模态]" : entry.vision === false ? " [文本]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <span className="hint">
+                  优先选择标注 [多模态] 的模型；[文本] 模型不支持图片输入，未标注的模型能力未确认
+                  （失败时 PNG/JPEG 会自动降级本机 OCR，其余返回错误）。
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -1415,9 +1885,9 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
   },
 };
 
-/** DeepSeek 复杂任务建议卡（docs §6.4）：普通客户只看到一个开关；证据状态、
- * profile version、experiment 与 emergency off 留在诊断/开发者层。只有当前默认
- * Provider 符合资格时显示该卡；证据未通过时开关不可启用。 */
+/** DeepSeek 复杂任务建议卡：证据门已移除，客户滑钮是唯一开关。开关可用性只
+ * 取决于「是否存在可用的 DeepSeek 服务」与全局急停；运行时按任务实际绑定的
+ * 服务生效，无需把 DeepSeek 设为默认服务。 */
 function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
   config: AppConfig;
   reload: () => Promise<void>;
@@ -1440,7 +1910,7 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
         });
     };
     load();
-    // 宿主推送/测试钩子：状态变化时重查（诊断层证据状态更新）。
+    // 宿主推送/测试钩子：状态变化时重查（服务配置变化、急停开关）。
     window.addEventListener("r-code:planning-status-changed", load);
     return () => {
       cancelled = true;
@@ -1448,11 +1918,14 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
     };
   }, []);
 
-  if (!status?.customer_card_visible) {
-    // 非 DeepSeek 默认 Provider：不显示一组无效的禁用控件。
-    return null;
-  }
-  const evidencePending = !status.evidence_validated;
+  const switchEnabled = status?.customer_switch_enabled ?? false;
+  const availabilityHint = !status
+    ? "暂时无法读取功能状态，仍可手动使用 Plan 模式。"
+    : status.emergency_off
+      ? "功能当前已暂停，仍可手动使用 Plan 模式。"
+      : !status.deepseek_configured
+        ? "此功能只对使用 DeepSeek 的任务生效；尚未配置可用的 DeepSeek 服务。"
+        : "开 = 复杂任务先询问；关 = 全部直接执行。";
 
   const toggle = async (value: boolean) => {
     setBusy(true);
@@ -1481,33 +1954,92 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
         </button>
       </div>
       <p className="desc">
-        仅在 DeepSeek 识别到复杂任务时询问；每个任务最多一次。选择直接继续后本任务不再
-        主动弹出，仍可随时手动选择 Plan 模式。
+        仅在 DeepSeek 识别到复杂任务时询问（每个任务最多一次）。选择直接继续后本任务不再
+        主动弹出，仍可随时手动选择 Plan 模式。只对使用 DeepSeek 服务的任务生效，
+        无需把 DeepSeek 设为默认服务。
       </p>
       <div className="field">
-        <label htmlFor="set-planning-suggest">复杂任务先建议制定计划</label>
+        <label htmlFor="set-planning-suggest">复杂任务先建议制定计划 <InfoTip label="开关效果说明">开启后 DeepSeek 在识别到复杂任务时询问一次"先列计划还是直接继续"；每个任务最多一次，拒绝后本任务不再弹出。按任务实际使用的服务生效，无需把 DeepSeek 设为默认。</InfoTip></label>
         <input
           id="set-planning-suggest"
           className="switch"
           type="checkbox"
           role="switch"
-          checked={enabled && !evidencePending}
-          disabled={busy || evidencePending}
+          checked={enabled}
+          disabled={busy || !switchEnabled}
           onChange={(event) => void toggle(event.target.checked)}
         />
-        <span className="hint">
-          {evidencePending ? "功能仍在验证中，暂不可启用。" : "开 = 复杂任务先询问；关 = 全部直接执行。"}
-        </span>
+        <span className="hint">{availabilityHint}</span>
       </div>
       {err ? <p className="field-error" role="alert">{err}</p> : null}
+      <AnchoringToggle config={config} reload={reload} status={status} busy={busy} setBusy={setBusy} />
     </section>
   );
 }
 
-function OrchestrationSection({ config, reload, onOpenGuide }: {
+/** DeepSeek Plan 锚定滑钮（docs/multimodal-attachments §9）。与建议开关互不
+ * 替代：锚定控制实际进入 DeepSeek Plan 后是否启用最小轨迹与批准后的完整恢复；
+ * 开关值在 Plan 创建时冻结，运行中切换只影响之后新建的 Plan。 */
+function AnchoringToggle({ config, reload, status, busy, setBusy }: {
+  config: AppConfig;
+  reload: () => Promise<void>;
+  status: PlanningStatusView | null;
+  busy: boolean;
+  setBusy: (value: boolean) => void;
+}) {
+  const [err, setErr] = useState<string | null>(null);
+  // 只有至少存在一个 ready 的 deepseek 配置时显示该卡（cmd_planning_status
+  // 的稳定状态；前端不按 provider 名称猜 DeepSeek）。
+  if (!status?.deepseek_configured) return null;
+  const anchoring = config.planning?.deepseek_plan_anchoring ?? false;
+  const switchEnabled = status.customer_switch_enabled && !status.emergency_off;
+  const hint = status.emergency_off
+    ? "功能已全局急停（R_CODE_PLANNING_EMERGENCY_OFF），锚定暂不可用。"
+    : !status.customer_switch_enabled
+      ? "当前不可更改锚定设置。"
+      : anchoring
+        ? "开：规划期仅保留必要的只读工具与上下文，批准实施后恢复全部可用能力。"
+        : "关：DeepSeek Plan 使用标准目录与上下文。";
+
+  const toggle = async (value: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await settingsSet("planning.deepseek_plan_anchoring", value);
+      await reload();
+    } catch (cause) {
+      setErr(errText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="field" id="planning-anchoring-field">
+      <label htmlFor="set-planning-anchoring">
+        DeepSeek Plan 锚定
+        <InfoTip label="锚定效果说明">规划时仅保留必要的只读工具和上下文；批准实施后恢复当前任务的全部可用能力。开关只影响之后创建的计划；活动计划的设置在创建时已冻结。</InfoTip>
+      </label>
+      <input
+        id="set-planning-anchoring"
+        className="switch"
+        type="checkbox"
+        role="switch"
+        checked={anchoring}
+        disabled={busy || !switchEnabled}
+        onChange={(event) => void toggle(event.target.checked)}
+      />
+      <span className="hint anchoring-hint">{hint}</span>
+      {err ? <p className="field-error" role="alert">{err}</p> : null}
+    </div>
+  );
+}
+
+function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
   config: AppConfig;
   reload: () => Promise<void>;
   onOpenGuide: (id: GuideId) => void;
+  codexRuntime?: ReactNode;
 }) {
   const policy = config.orchestration ?? DEFAULT_ORCHESTRATION;
   const budget: RunBudgetConfig = policy.run_budget ?? DEFAULT_ORCHESTRATION.run_budget!;
@@ -1551,7 +2083,7 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
 
   return (
     <>
-      <section className="settings-block">
+      <section className="settings-block" id="orchestration-main-agent">
         <h3>主 Agent</h3>
         <p className="desc">默认值只影响新会话。每个会话都能在输入区单独切换，运行中不会静默换引擎。</p>
         {err && <div className="errbar" role="alert">保存编排策略失败：{err}</div>}
@@ -1571,8 +2103,11 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
         </div>
       </section>
 
-      <section className="settings-block">
+      {codexRuntime}
+
+      <section className="settings-block" id="orchestration-delegation">
         <h3>委派路由</h3>
+        <p className="desc">选择不同复杂度任务的首选执行者；Codex 不可用时仍会保留清晰的回退原因。</p>
         <div className="field">
           <label htmlFor="set-delegation-router">复杂度策略</label>
           <select
@@ -1603,7 +2138,7 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
         </div>
       </section>
 
-      <section className="settings-block">
+      <section className="settings-block" id="orchestration-quality">
         <h3>质量复核</h3>
         <p className="desc">默认关闭以避免额外延迟和模型消耗；开启后，运行阶段、复核者和轮次都会明确显示。</p>
         <div className="field">
@@ -1652,14 +2187,20 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
 
       <PlanningSuggestionCard config={config} reload={reload} onOpenGuide={onOpenGuide} />
 
-      <section className="settings-block">
+      <section className="settings-block" id="orchestration-run-budget">
         <h3>运行护栏</h3>
         <p className="desc">
           宿主侧硬上限与停止信号：工具轮数、运行时长、思考量、同错连败、零进展、变更范围发散和测试连败
           任一触发后，run 会先做一次总结再进入审核，工作区改动保留、绝不自动回滚。
         </p>
-        <div className="field">
-          <label htmlFor="set-budget-rounds">工具轮数上限</label>
+        <div className="orchestration-budget-grid">
+          <div className="orchestration-budget-group" role="group" aria-labelledby="orchestration-budget-execution">
+            <h4 id="orchestration-budget-execution">执行上限</h4>
+            <div className="field">
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-rounds">工具轮数上限</label>
+            <InfoTip label="工具轮数上限说明">默认 60；模型回合产出工具调用即计 1 轮。</InfoTip>
+          </div>
           <input
             id="set-budget-rounds"
             className="input"
@@ -1671,10 +2212,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.max_tool_rounds", Number(event.target.value))}
           />
-          <span className="hint">默认 60；模型回合产出工具调用即计 1 轮。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-seconds">运行时长上限（秒）</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-seconds">运行时长上限（秒）</label>
+            <InfoTip label="运行时长上限说明">默认 14400（4 小时）；超时前仍会先做收尾总结。</InfoTip>
+          </div>
           <input
             id="set-budget-seconds"
             className="input"
@@ -1686,10 +2229,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.max_run_seconds", Number(event.target.value))}
           />
-          <span className="hint">默认 14400（4 小时）；超时前仍会先做收尾总结。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-reasoning">思考量上限（字符）</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-reasoning">思考量上限（字符）</label>
+            <InfoTip label="思考量上限说明">默认 120000；无流式用量时按 4 字符/token 估算。</InfoTip>
+          </div>
           <input
             id="set-budget-reasoning"
             className="input"
@@ -1701,10 +2246,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.reasoning_budget_chars", Number(event.target.value))}
           />
-          <span className="hint">默认 120000；无流式用量时按 4 字符/token 估算。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-same-error">同一错误连败上限</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-same-error">同一错误连败上限</label>
+            <InfoTip label="同一错误连败上限说明">默认 3；按「工具名 + 稳定参数 + 错误码」识别同一错误，成功即清零。</InfoTip>
+          </div>
           <input
             id="set-budget-same-error"
             className="input"
@@ -1716,10 +2263,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.same_error_limit", Number(event.target.value))}
           />
-          <span className="hint">默认 3；按「工具名 + 稳定参数 + 错误码」识别同一错误，成功即清零。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-no-progress">零进展轮数上限</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-no-progress">零进展轮数上限</label>
+            <InfoTip label="零进展轮数上限说明">默认 24；连续没有成功修改或通过测试的轮次达到上限即停。</InfoTip>
+          </div>
           <input
             id="set-budget-no-progress"
             className="input"
@@ -1731,10 +2280,15 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.no_progress_rounds", Number(event.target.value))}
           />
-          <span className="hint">默认 24；连续没有成功修改或通过测试的轮次达到上限即停。</span>
-        </div>
-        <div className="field">
-          <label htmlFor="set-budget-diff-files">修改文件数上限</label>
+            </div>
+          </div>
+          <div className="orchestration-budget-group" role="group" aria-labelledby="orchestration-budget-scope">
+            <h4 id="orchestration-budget-scope">范围与恢复</h4>
+            <div className="field">
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-diff-files">修改文件数上限</label>
+            <InfoTip label="修改文件数上限说明">默认 60；超过即视为变更范围发散并停止。</InfoTip>
+          </div>
           <input
             id="set-budget-diff-files"
             className="input"
@@ -1746,10 +2300,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.diff_file_limit", Number(event.target.value))}
           />
-          <span className="hint">默认 60；超过即视为变更范围发散并停止。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-diff-bytes">累计变更字节上限</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-diff-bytes">累计变更字节上限</label>
+            <InfoTip label="累计变更字节上限说明">默认 262144（256 KiB）；按 old+new 内容长度累计。</InfoTip>
+          </div>
           <input
             id="set-budget-diff-bytes"
             className="input"
@@ -1761,10 +2317,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.diff_byte_limit", Number(event.target.value))}
           />
-          <span className="hint">默认 262144（256 KiB）；按 old+new 内容长度累计。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-test-fails">测试连败上限</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-test-fails">测试连败上限</label>
+            <InfoTip label="测试连败上限说明">默认 3；覆盖 cargo/pytest/npm/pnpm/yarn/go/dotnet 测试命令。</InfoTip>
+          </div>
           <input
             id="set-budget-test-fails"
             className="input"
@@ -1776,10 +2334,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.test_fail_limit", Number(event.target.value))}
           />
-          <span className="hint">默认 3；覆盖 cargo/pytest/npm/pnpm/yarn/go/dotnet 测试命令。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-replay">循环重放检测</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-replay">循环重放检测</label>
+            <InfoTip label="循环重放检测说明">连续 3 轮工具调用与成败形态完全一致时停止。失败重试由同错连败统计；触发后先做一次无工具收尾总结再结束，改动保留。</InfoTip>
+          </div>
           <input
             id="set-budget-replay"
             className="switch"
@@ -1789,10 +2349,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.replay_detection", event.target.checked)}
           />
-          <span className="hint">连续 3 轮工具调用与成败形态完全一致时停止。失败重试不计入（由同错连败统计）；触发后先做一次无工具收尾总结再结束，改动保留。</span>
         </div>
         <div className="field">
-          <label htmlFor="set-budget-checkpoint">绿灯 git checkpoint</label>
+          <div className="orchestration-budget-label">
+            <label htmlFor="set-budget-checkpoint">绿灯 git checkpoint</label>
+            <InfoTip label="绿灯 git checkpoint 说明">测试全绿后用 git stash 快照；审核页可一键回滚到最近绿灯，untracked 文件不回滚。</InfoTip>
+          </div>
           <input
             id="set-budget-checkpoint"
             className="switch"
@@ -1802,11 +2364,12 @@ function OrchestrationSection({ config, reload, onOpenGuide }: {
             disabled={busy != null}
             onChange={(event) => void save("run_budget.checkpoint_enabled", event.target.checked)}
           />
-          <span className="hint">测试全绿后用 git stash 快照；审核页可一键回滚到最近绿灯，untracked 文件不回滚。</span>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section className="settings-block">
+      <section className="settings-block" id="orchestration-skills">
         <h3>内置编排能力</h3>
         <div className="orchestration-cards">
           {skills.map((skill) => (
@@ -1874,13 +2437,14 @@ function LogLevelSection({ config, reload }: { config: AppConfig; reload: () => 
     try {
       await settingsSet("log_level", v);
       await reload();
+      pushToast({ kind: "success", title: "日志级别已保存", timeout: 2_500 });
     } catch (e) {
       setErr(errText(e));
     }
   };
 
   return (
-    <section className="settings-block">
+      <section className="settings-block" id="log-level-block">
       <h3>日志记录</h3>
       {err && <div className="errbar" role="alert">{err}</div>}
       <div className="field">
@@ -1914,7 +2478,7 @@ function AppearanceSection() {
   ];
 
   return (
-    <section className="preference-section preference-appearance" aria-labelledby="appearance-heading">
+    <section className="preference-section preference-appearance" id="appearance-block" aria-labelledby="appearance-heading">
       <div className="preference-section-heading">
         <div>
           <h3 id="appearance-heading">界面主题</h3>
@@ -1986,7 +2550,7 @@ function CompanionSection() {
   };
 
   return (
-    <section className="preference-section preference-companion" aria-labelledby="companion-heading">
+    <section className="preference-section preference-companion" id="companion-block" aria-labelledby="companion-heading">
       <header className="companion-preference-head">
         <div>
           <h3 id="companion-heading">R-Code 初音小助手</h3>
@@ -2122,7 +2686,7 @@ function LogSection() {
   }, [logs]);
 
   return (
-    <section className="settings-block">
+    <section className="settings-block" id="log-section">
       <h3>诊断日志</h3>
       <p className="desc">当前进程与近期历史会实时汇合；日志按日滚动，固定保留最近 7 天。</p>
       <div className="field">
@@ -2194,7 +2758,7 @@ function SupportSection() {
   };
 
   return (
-    <section className="settings-block">
+    <section className="settings-block" id="support-block">
       <h3>支持包</h3>
       <p className="desc">导出近 7 天脱敏后的 warning/error 明细、版本、平台和本地统计；预览不会写入文件。</p>
       {err && <div className="errbar" role="alert">{err}</div>}
@@ -2321,13 +2885,7 @@ function uniqueReasoningOptions(models: CodexModelOption[]) {
   });
 }
 
-function CodexRuntimePreferences({
-  codexDelegationEnabled,
-  reloadConfig,
-}: {
-  codexDelegationEnabled: boolean | null;
-  reloadConfig: () => Promise<void>;
-}) {
+function CodexRuntimePreferences() {
   const [preferences, setPreferences] = useState<CodexCliPreferences | null>(null);
   const [draft, setDraft] = useState<CodexPreferenceDraft>({
     model: "",
@@ -2337,14 +2895,8 @@ function CodexRuntimePreferences({
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [delegationSaving, setDelegationSaving] = useState(false);
-  const [delegationEnabled, setDelegationEnabled] = useState(codexDelegationEnabled ?? true);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (codexDelegationEnabled != null) setDelegationEnabled(codexDelegationEnabled);
-  }, [codexDelegationEnabled]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2412,27 +2964,6 @@ function CodexRuntimePreferences({
     }
   };
 
-  const toggleCodexDelegation = async (enabled: boolean) => {
-    if (delegationSaving || codexDelegationEnabled == null) return;
-    const previous = delegationEnabled;
-    setDelegationEnabled(enabled);
-    setDelegationSaving(true);
-    setErr(null);
-    setNotice(null);
-    try {
-      await settingsSet("orchestration.allow_cross_engine_delegation", enabled);
-      await reloadConfig();
-      setNotice(enabled
-        ? "Codex 子代理已开启；之后的新委派可以使用 Codex。"
-        : "Codex 子代理已关闭；之后的新委派会自动改用 R-Code。");
-    } catch (e) {
-      setDelegationEnabled(previous);
-      setErr(errText(e));
-    } finally {
-      setDelegationSaving(false);
-    }
-  };
-
   return (
     <div className="codex-runtime-preferences">
       <div className="codex-runtime-head">
@@ -2443,24 +2974,6 @@ function CodexRuntimePreferences({
         <button className="quiet-link" disabled={loading || saving} onClick={() => void load()}>
           重新读取
         </button>
-      </div>
-
-      <div className="settings-control-list codex-delegation-list">
-        <label className="settings-control-row" htmlFor="codex-subagent-enabled">
-          <span>
-            <strong>允许 Codex 子代理</strong>
-            <small>关闭后仅阻止新的 Codex 委派，并自动改用 R-Code；已启动的 Codex 子代理不会被中断。</small>
-          </span>
-          <input
-            id="codex-subagent-enabled"
-            className="switch"
-            type="checkbox"
-            role="switch"
-            checked={delegationEnabled}
-            disabled={delegationSaving || codexDelegationEnabled == null}
-            onChange={(event) => void toggleCodexDelegation(event.target.checked)}
-          />
-        </label>
       </div>
 
       {loading && <div className="settings-loading">正在读取 Codex 可用模型…</div>}
@@ -2590,12 +3103,8 @@ function CodexRuntimePreferences({
 }
 
 function CodexIntegrationSection({
-  config,
-  reloadConfig,
   onStatusChange,
 }: {
-  config: AppConfig | null;
-  reloadConfig: () => Promise<void>;
   /** Codex 状态每次刷新都会回调；用于联动子代理候选来源面板。 */
   onStatusChange?: (status: CodexIntegrationStatus) => void;
 }) {
@@ -2603,6 +3112,8 @@ function CodexIntegrationSection({
   const [status, setStatus] = useState<CodexIntegrationStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(true);
+  const [syncingCli, setSyncingCli] = useState(false);
+  const [updateResult, setUpdateResult] = useState<CodexCliSyncResult | null>(null);
   const [awaitingLogin, setAwaitingLogin] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -2626,9 +3137,38 @@ function CodexIntegrationSection({
   }, [onStatusChange]);
 
   useEffect(() => {
-    // 初次进入设置复用 Home/Room 已完成的应用级探测；手动刷新和登录轮询会强制重查。
-    void refresh(false, false);
-  }, [refresh]);
+    let active = true;
+    const loadAndSync = async () => {
+      // 进入页面先强制读取真实认证状态，不能沿用 Home/Room 可能较早的未登录快照。
+      const initial = await refresh(false, true);
+      if (!active || !initial?.cli_available) return;
+      setSyncingCli(true);
+      setUpdateResult(null);
+      try {
+        const result = await codexSyncCli();
+        if (!active) return;
+        setUpdateResult(result);
+        setStatus(result.status);
+        onStatusChange?.(result.status);
+      } catch (e) {
+        if (!active) return;
+        // 自动更新是增强项；失败时保留刚刚确认可用的 CLI 与认证状态。
+        setUpdateResult({
+          update_state: "failed",
+          previous_version: initial.cli_version,
+          current_version: initial.cli_version,
+          update_error: `自动更新检查失败：${errText(e)}。当前版本仍可使用。`,
+          status: initial,
+        });
+      } finally {
+        if (active) setSyncingCli(false);
+      }
+    };
+    void loadAndSync();
+    return () => {
+      active = false;
+    };
+  }, [onStatusChange, refresh]);
 
   useEffect(() => {
     if (!awaitingLogin) return;
@@ -2729,14 +3269,29 @@ function CodexIntegrationSection({
   const authReady = status?.auth_status === "authenticated";
   const collaborationReady = Boolean(skillReady && status?.mcp_server_configured);
   const copy = codexSetupCopy(status, setupState);
+  const cliUpdateLabel = syncingCli
+    ? "正在检查更新并自动升级…"
+    : updateResult?.update_state === "updated"
+      ? `已自动更新${updateResult.previous_version && updateResult.current_version
+        ? `：${updateResult.previous_version} → ${updateResult.current_version}`
+        : "到最新版本"}`
+      : updateResult?.update_state === "up_to_date"
+        ? "已是最新版本"
+        : updateResult?.update_state === "failed"
+          ? updateResult.update_error || "自动更新未完成，当前版本仍可使用。"
+          : status?.cli_available
+            ? "每次进入本页都会自动检查更新"
+            : "安装后会在进入本页时自动检查更新";
   const mainDisabled = busy
     || checking
+    || syncingCli
     || awaitingLogin
     || !status
     || setupState === "ready"
     || (setupState === "install_cli" && status.installer_available === false);
   const loginDisabled = busy
     || checking
+    || syncingCli
     || awaitingLogin
     || !status?.cli_available
     || status.auth_status !== "not_authenticated";
@@ -2749,87 +3304,96 @@ function CodexIntegrationSection({
         : undefined;
 
   return (
-    <section className="settings-block codex-setup">
+    <section className="settings-block codex-setup" id="codex-setup-block">
       <div className="codex-setup-heading">
         <div>
           <h3 className="codex-setup-title">
             <span className="provider-icon-tile" aria-hidden="true"><img src={providerIconFor("codex_cli") ?? undefined} alt="" /></span>
-            Codex 协作
+            Codex 运行时
           </h3>
-          <p className="desc">连接本机 Codex CLI，权限预设会在每次委派子代理时自动读取。登录凭据始终由 Codex 管理。</p>
+          <p className="desc">管理本机 Codex CLI 的版本、认证与编排接入。登录凭据始终由 Codex 管理，R-Code 不读取认证文件。</p>
         </div>
         <button
-          className={`codex-status-refresh${checking ? " checking" : ""}`}
-          disabled={busy || checking || awaitingLogin}
+          className={`codex-status-refresh${checking || syncingCli ? " checking" : ""}`}
+          disabled={busy || checking || syncingCli || awaitingLogin}
           onClick={() => void refresh()}
           aria-label="重新检测 Codex 状态"
           title="重新检测 Codex 状态"
         >
           <IconRefresh width={16} height={16} />
+          <span>{checking || syncingCli ? "检测中…" : "重新检测"}</span>
         </button>
       </div>
       {err && <div className="errbar" role="alert">{err}</div>}
-      <div className={`codex-setup-status state-${setupState}`} role="status" aria-live="polite">
-        <div className="codex-setup-status-copy">
-          <span className="codex-status-dot" aria-hidden="true" />
-          <div>
-            <strong>{copy.title}</strong>
-            <p>{copy.detail}</p>
+      <div className="codex-runtime-overview" aria-label="Codex 运行时状态">
+        <article className={`codex-runtime-card${status?.cli_available ? " is-ready" : " is-attention"}`} data-testid="codex-runtime-card">
+          <div className="codex-runtime-card-head">
+            <span>运行时</span>
+            <span className="codex-runtime-state">{status?.cli_available ? "可用" : checking ? "检测中" : "未安装"}</span>
           </div>
-        </div>
-        <button
-          className={`btn codex-primary-action${setupState === "ready" ? "" : " accent"}`}
-          disabled={mainDisabled}
-          onClick={() => void completeSetup()}
-        >
-          {busy ? "正在处理…" : awaitingLogin ? "等待登录…" : copy.action}
-        </button>
-      </div>
+          <strong>{status?.cli_available ? status.cli_version || "Codex CLI" : "需要 Codex CLI"}</strong>
+          <p className={updateResult?.update_state === "failed" ? "is-warning" : ""}>{cliUpdateLabel}</p>
+          {status && !status.cli_available && (
+            <button className="btn sm accent" disabled={mainDisabled} onClick={() => void completeSetup()}>
+              {busy ? "正在处理…" : copy.action}
+            </button>
+          )}
+        </article>
 
-      <ol className="codex-setup-steps" aria-label="Codex 设置进度">
-        <li className={status?.cli_available ? "done" : setupState === "install_cli" ? "current" : "pending"}>
-          <span className="codex-step-mark">{status?.cli_available && <IconCheck width={12} height={12} />}</span>
-          <div><strong>Codex CLI</strong><small>{status?.cli_available ? `可运行${status.cli_source_label ? ` · ${status.cli_source_label}` : ""}` : "待安装"}</small></div>
-        </li>
-        <li className={authReady ? "done" : setupState === "login" || setupState === "check" ? "current" : "pending"}>
-          <span className="codex-step-mark">{authReady && <IconCheck width={12} height={12} />}</span>
-          <div><strong>登录</strong><small>{loginLabel}</small></div>
-        </li>
-        <li className={collaborationReady ? "done" : setupState === "configure" ? "current" : "pending"}>
-          <span className="codex-step-mark">{collaborationReady && <IconCheck width={12} height={12} />}</span>
-          <div><strong>R-Code 协作</strong><small>{collaborationReady ? "Skill 与 MCP 已连接" : "待配置"}</small></div>
-        </li>
-      </ol>
+        <article className={`codex-runtime-card${authReady ? " is-ready" : " is-attention"}`} data-testid="codex-auth-card">
+          <div className="codex-runtime-card-head">
+            <span>认证</span>
+            <span className="codex-runtime-state">{authReady ? "已确认" : setupState === "check" ? "待确认" : "待登录"}</span>
+          </div>
+          <strong>{loginLabel}</strong>
+          <p>{authReady ? <>认证状态来自官方 <code>codex login status</code>。</> : "浏览器登录优先；回调受阻时使用设备码。"}</p>
+          {!authReady && status?.cli_available && (
+            <div className="codex-runtime-card-actions">
+              {setupState === "check" ? (
+                <button className="btn sm" disabled={busy || checking || syncingCli} onClick={() => void refresh()}>
+                  重新检测
+                </button>
+              ) : (
+                <>
+                  <button className="btn sm accent" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("browser")}>
+                    浏览器登录
+                  </button>
+                  <button className="btn sm ghost" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("device")}>
+                    设备码
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </article>
+
+        <article className={`codex-runtime-card${collaborationReady ? " is-ready" : ""}`} data-testid="codex-collaboration-card">
+          <div className="codex-runtime-card-head">
+            <span>编排接入</span>
+            <span className="codex-runtime-state">{collaborationReady ? "已连接" : authReady ? "待配置" : "等待认证"}</span>
+          </div>
+          <strong>{collaborationReady ? "R-Code 协作已连接" : "Skill 与 MCP"}</strong>
+          <p>{collaborationReady ? "可用于跨引擎委派与 Codex 子代理。" : `Skill：${skillLabel} · MCP：${status?.mcp_server_configured ? "已启用" : "尚未启用"}`}</p>
+          {authReady && !collaborationReady && (
+            <button className="btn sm accent" disabled={mainDisabled} onClick={() => void completeSetup()}>
+              {busy ? "正在配置…" : "完成协作配置"}
+            </button>
+          )}
+        </article>
+      </div>
 
       {notice && <p className="codex-inline-note" role="status"><IconCheck width={14} height={14} />{notice}</p>}
       {status?.cli_error && setupState === "install_cli" && <p className="codex-inline-warning">{status.cli_error}</p>}
 
 
-      {setupState === "ready" && (
-        <CodexRuntimePreferences
-          codexDelegationEnabled={config?.orchestration?.allow_cross_engine_delegation ?? null}
-          reloadConfig={reloadConfig}
-        />
+      {authReady && !syncingCli && (
+        <CodexRuntimePreferences />
       )}
 
       {status && (
         <details className="codex-advanced">
-          <summary>高级选项 <span>登录方式与配置详情</span></summary>
+          <summary>路径与配置详情</summary>
           <div className="codex-advanced-body">
-            <div className="codex-login-options">
-              <div>
-                <strong>登录方式</strong>
-                <small>{authReady ? "当前已登录，按钮已停用。" : "浏览器登录优先；设备码用于远程或回调受阻环境。"}</small>
-              </div>
-              <div>
-                <button className="btn sm" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("browser")}>
-                  浏览器登录
-                </button>
-                <button className="btn sm ghost" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("device")}>
-                  设备码（备用）
-                </button>
-              </div>
-            </div>
             <dl className="codex-details-list">
               <dt>CLI</dt>
               <dd>{status.cli_available ? `${status.cli_version || "可运行"}${status.cli_source_label ? ` · ${status.cli_source_label}` : ""}` : "不可用"}</dd>

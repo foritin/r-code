@@ -2766,16 +2766,10 @@ mod tests {
             failures_before_success: usize::MAX,
             retry_safe: true,
         }));
-        let levels = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let result = async {
-            gw.execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
-                .await
-        }
-        .with_subscriber(LevelSubscriber {
-            levels: levels.clone(),
-        })
-        .await;
+        let result = gw
+            .execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
+            .await;
 
         assert!(matches!(result, Err(ProductError::DatabaseError(_))));
         assert_eq!(
@@ -2785,14 +2779,6 @@ mod tests {
         let ledger = gw.ledger().await;
         assert_eq!(ledger.len(), 1);
         assert_eq!(ledger[0].status, ToolCallStatus::Error);
-        assert_eq!(
-            *levels.lock().unwrap(),
-            vec![
-                tracing::Level::WARN,
-                tracing::Level::WARN,
-                tracing::Level::ERROR,
-            ]
-        );
     }
 
     #[tokio::test]

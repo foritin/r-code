@@ -242,6 +242,15 @@ pub struct ResolvedPlanRuntimeProfile {
     pub provider_kind: String,
     pub model_id: String,
     pub endpoint_class: String,
+    /// v2（docs/multimodal-attachments §8.2）：用户显式选择的协议标识。
+    #[serde(default)]
+    pub protocol: String,
+    /// v2：冻结 route revision（route 漂移按此比较，§8.7）。
+    #[serde(default)]
+    pub provider_route_revision: String,
+    /// v2：创建时冻结的 `planning.deepseek_plan_anchoring` 偏好。
+    #[serde(default)]
+    pub anchoring_preference: bool,
 }
 
 impl ResolvedPlanRuntimeProfile {
@@ -252,11 +261,14 @@ impl ResolvedPlanRuntimeProfile {
             enabled: false,
             catalog_profile: PlanCatalogProfile::Baseline,
             context_profile: PlanContextProfile::Default,
-            profile_version: 1,
+            profile_version: 2,
             evidence_version: String::new(),
             provider_kind: String::new(),
             model_id: String::new(),
             endpoint_class: String::new(),
+            protocol: String::new(),
+            provider_route_revision: String::new(),
+            anchoring_preference: false,
         }
     }
 }

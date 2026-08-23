@@ -8,12 +8,38 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ### Added
 
-- DeepSeek 复杂任务 Plan 建议（Phase 0，默认关闭、证据门控）：DeepSeek 主代理识别到复杂请求时可调用新工具 `propose_plan_mode` 提交受控信号（multi_subsystem / migration_or_data / design_decision / expensive_rollback / multi_stage_verification），宿主按固定本地化模板生成客户弹窗——「直接继续 / 先制定计划」二选一，拒绝（含关闭与 Escape）后同任务分支持久安静、仍可手动选择 Plan；建议以 SQLite `plan_entry_offers` 聚合持久化（同请求键唯一、同分支一次预算、revision CAS、Provider 快照比对 supersede、崩溃窗口显式重试），接受事务原子完成建 Plan、切模式与续接。同一真实请求获得稳定 `origin_request_key`（direct/queued/steer/host-continuation 全路径），普通客户设置只新增一个 DeepSeek 专属开关 `planning.suggest_complex_tasks`；「Plan 模式会做什么」指引手册可从弹窗、DeepSeek 设置卡与 Help 菜单打开（替换决策弹窗而非叠加）。
-- Plan 原生双轨（DeepSeek 证据门控）：符合条件的 DeepSeek Plan 冻结 5→8 只读目录（bootstrap：glob/plan_publish/read_file/request_user_input/search_files；resident 追加 git_status/list_files/load_skill）与最小上下文（不注入本地时钟、委派说明与 memory），目录阶段以 `plans.catalog_phase` 为权威、经宿主 CAS 确认持久化后才允许下一轮请求，clear context/fork/重启不回退；执行硬门保持原生状态机（只读调查 → plan_publish → 用户批准 → 实施），隐藏的 edit/Shell/MCP/委派调用在副作用前硬拒。Plan 运行 profile 在创建时冻结（UI plan_create / 显式 enter_plan_mode / 建议接受共用同一 resolver），其他 Provider 与子代理不受影响。
-- 真实 DeepSeek 三臂评估基建（`eval/plan-eval/`）：25 个冻结 case（5 类 × 5，初始测试红 / oracle patch 绿）+ 40 个路由 probe（20 simple + 20 complex），预注册发布门与 corpus sha256 锁；`plan_eval` 二进制提供 eval-only 自动 accept/approve 的三臂/路由运行器（非 dry-run 只认原生 DeepSeek，dry-run 记录不得作为证据）；`score.mjs` 只消费 raw results 生成 manifest，`verify-manifest.mjs` 独立重算每个数字；manifest 经 `build.rs` 嵌入并由 `plan_policy` 运行时重验，未通过前 validated 恒为关闭。
+- DeepSeek Plan 锚定（独立滑钮，默认关闭）：进入 DeepSeek Plan 后可选择最小规划轨迹——规划期仅保留 5→8 项只读工具与最小上下文注入（无 memory、时钟、MCP 文案、peer、进度与 governor 尾部），批准实施后自动恢复该任务全部可用能力（RestoredFull 审计事件 + fail-closed 断言）。与「复杂任务先建议制定计划」互不替代；开关与 Provider 路由在 Plan 创建时冻结，运行中切换只影响新计划。
+- 附件 Blob 引用链路：粘贴/选择文件即刻写入内容寻址 BlobStore（同一图片多任务只存一份物理副本），发送 IPC 只携带附件 id；会话 JSONL、排队消息与模型投影不再持久化 Base64。新增「删除草稿附件立即释放引用」与 24 小时租约回收。
+- 旧会话数据自动迁移：启动时按会话逐个把历史 JSONL/排队消息中的 Base64 附件原子迁移为 Blob 引用（源/目标 SHA-256 状态机，崩溃可恢复、可重复执行且不重复计数；损坏会话保留原文件并在日志报告），迁移完成后清理旧图片预览目录；过期草稿附件按 24 小时租约回收（回收前扫描活动会话与队列引用，防止崩溃窗口误删）。
+- 长会话图片视觉检查点：图片移出精确保留区进入压缩摘要前，由当前同一多模态主模型生成结构化描述替代旧图参与摘要（失败保留原图引用，绝不改走 OCR）。- 请求预算四类分离审计：request-audit 记录文本/工具 schema/图片/文档 token 分项、请求与有效输出额度、wire bytes、附件计数与锚定阶段；图片按确定性 tile 上界核算（deepseek-v4-flash-vision-exp 的 1818×1026 图片为 32,000 token）。
+- 「每轮最大输出」可编辑：范围 2,048 到服务上限；未显式配置时采用目录推荐值（DeepSeek V4 为 65,536），服务端上限只作上界展示，输入框不再锁死。
 
 ### Changed
 
+- 修复图片 Base64 造成的伪超窗与 `1 → 2 → 4` 输出预算错误链：Base64 字符不再参与任何 token 估算；发送前预算闸门（resolve_request_max_tokens）在有效输出低于请求类别最低额度（聊天 2,048 / 工具回合 8,192 / Plan 16,384 / 压缩 4,096）或整理两次后仍超窗时零发送（OUTPUT_HEADROOM_BELOW_MINIMUM / CONTEXT_PREFLIGHT_FAILED），绝不把额度强制改成 1；MaxTokens 空回合不再自动 ×2 升档重放（输出预算耗尽按钳制状态分类报错）。
+- 图片路由改为后端按冻结能力产生：目录确认多模态的主模型原图直发（OCR/辅助视觉调用数为 0），服务拒图返回能力漂移错误（VISION_CAPABILITY_DRIFT）；文本主模型按显式引擎分派，视觉模型失败不再自动降级 OCR。
+- 压缩与发送闸门只预留本次请求的单轮输出，不再无条件预留 Provider 服务端上限（DeepSeek 393,216 预留会把 1M 窗口可用输入压掉近 40%）。
+- Provider 能力真值统一：deepseek-v4-flash-vision-exp 的 supports_vision 在全部三条协议线（Chat/Responses/Anthropic 口）与目录标注一致；能力解析统一经后端单一入口（provider_kind + model + protocol 为能力键）。
+
+
+### Added
+
+- 图片理解引擎配置（设置 → 模型服务 → 图片理解）：图片如何被模型理解从隐式降级升级为显式配置，本机 OCR（默认）或视觉模型二选一。视觉模型引擎由指定的多模态模型理解整张图片并生成结构化中文描述注入主对话（原图仅本地留存预览），失败时 PNG/JPEG 在 Windows/macOS 自动降级本机 OCR 并在文本头标注；配置缺失、服务被删或未就绪时发送返回可读错误，不再静默剔除图片。
+- Provider 模型能力标注：预设目录的候选模型全部携带人工核对的 `vision` 标注（多模态/文本），前端以统一三态出口 `resolveImageCapability` 判定（预设目录 > Codex 目录 > 名称启发式 > unknown）；设置页模型候选菜单显示 [多模态] / [文本] 徽标；目录补入官方核对的多模态模型——DeepSeek `deepseek-v4-flash-vision-exp`（V4 正式模型均为纯文本）、GLM-4.6V 系列（zhipu/zai）与 Qwen-VL 系列（bailian/dashscope）——图片理解的模型下拉列出该服务全部候选（预设 + 配置模型 + 本地记忆模型）并逐项带徽标，切换服务自动预选第一个多模态模型。
+- 子代理面板自动连通测试覆盖已保存槽位：进入面板的自动探测合并目录条目与槽位（按 来源+模型 精确键控去重），槽位使用非默认模型且回执过期后无需手动点击即可恢复 connected 并保存；面板顶部新增常驻状态行显示本次自动测试结果（失败不弹错误、可手动重测）。
+- 设置页顶部搜索：按区块标题与字段关键词（含手册关键词）跨 7 个面板过滤，命中后深链定位并闪烁聚焦目标区块。
+- 指引手册扩展：「模型服务 / 子代理候选池 / 图片理解」新增离线手册条目（服务 vs 默认服务、权重合计 100%、连通回执 TTL、OCR 与视觉模型取舍等），帮助菜单新增「设置与模型服务指引」入口；新增 InfoTip 轻量说明组件（`?` 图标 focus/hover 展开），用于规划建议卡、协议选择、权重与候选模型等关键字段。
+
+### Changed
+
+- **规划建议证据门移除（行为变化）**：预注册评估 manifest、构建期嵌入与实验环境变量不再是启用前提，客户滑钮「复杂任务先建议制定计划」成为唯一开关、打开即生效（`R_CODE_PLANNING_EMERGENCY_OFF=1` 急停保留为唯一兜底）。开关可用性改为「存在任一已配置且就绪的 DeepSeek 服务」，按任务实际使用的服务生效、无需把 DeepSeek 设为默认服务；`eval/plan-eval/` 降级为可选的事后质量回归工具。
+- **图片理解引擎只服务文本主模型（重要语义）**：主模型目录确认多模态（Claude、GPT、豆包、GLM-4.6V、Qwen-VL、DeepSeek vision-exp 等）时图片**原图直发**，不经过本机 OCR 或视觉模型（附件标签显示「多模态直发」）；Codex 主 Agent 的图片也回归其自身目录处理。引擎只对文本主模型（DeepSeek V4 正式模型、代码模型等）生效；能力未知（中转/手填模型）仍按所选引擎分派。Linux 无系统 OCR 时发送图片会返回包含切换指引的明确错误。
+- 图片转换的等待可见且更短：视觉模型引擎改为**多图并发**（等待时间为最慢一张而非逐张累加）；文本主模型带图发送期间，输入区显示「正在理解图片…，完成后自动开始对话」。
+- 「默认服务」语义显性化：`用于新对话` 按钮改名 `设为默认服务`（title 说明"设为默认后，新对话将使用这项服务；已开始的对话不受影响"），`保存并用于新对话` 改名 `保存并设为默认`，服务列表徽标 `正在使用` 改为 `默认` 并支持 hover 快捷设为默认（仍受服务就绪约束）。
+
+- DeepSeek 复杂任务 Plan 建议（Phase 0，默认关闭、证据门控）：DeepSeek 主代理识别到复杂请求时可调用新工具 `propose_plan_mode` 提交受控信号（multi_subsystem / migration_or_data / design_decision / expensive_rollback / multi_stage_verification），宿主按固定本地化模板生成客户弹窗——「直接继续 / 先制定计划」二选一，拒绝（含关闭与 Escape）后同任务分支持久安静、仍可手动选择 Plan；建议以 SQLite `plan_entry_offers` 聚合持久化（同请求键唯一、同分支一次预算、revision CAS、Provider 快照比对 supersede、崩溃窗口显式重试），接受事务原子完成建 Plan、切模式与续接。同一真实请求获得稳定 `origin_request_key`（direct/queued/steer/host-continuation 全路径），普通客户设置只新增一个 DeepSeek 专属开关 `planning.suggest_complex_tasks`；「Plan 模式会做什么」指引手册可从弹窗、DeepSeek 设置卡与 Help 菜单打开（替换决策弹窗而非叠加）。
+- Plan 原生双轨（DeepSeek 证据门控）：符合条件的 DeepSeek Plan 冻结 5→8 只读目录（bootstrap：glob/plan_publish/read_file/request_user_input/search_files；resident 追加 git_status/list_files/load_skill）与最小上下文（不注入本地时钟、委派说明与 memory），目录阶段以 `plans.catalog_phase` 为权威、经宿主 CAS 确认持久化后才允许下一轮请求，clear context/fork/重启不回退；执行硬门保持原生状态机（只读调查 → plan_publish → 用户批准 → 实施），隐藏的 edit/Shell/MCP/委派调用在副作用前硬拒。Plan 运行 profile 在创建时冻结（UI plan_create / 显式 enter_plan_mode / 建议接受共用同一 resolver），其他 Provider 与子代理不受影响。
+- 真实 DeepSeek 三臂评估基建（`eval/plan-eval/`）：25 个冻结 case（5 类 × 5，初始测试红 / oracle patch 绿）+ 40 个路由 probe（20 simple + 20 complex），预注册发布门与 corpus sha256 锁；`plan_eval` 二进制提供 eval-only 自动 accept/approve 的三臂/路由运行器（非 dry-run 只认原生 DeepSeek，dry-run 记录不得作为证据）；`score.mjs` 只消费 raw results 生成 manifest，`verify-manifest.mjs` 独立重算每个数字；评估工具链已降级为可选的事后质量回归（manifest 不再嵌入构建，不阻塞功能启用）。
 - 自动复杂度路由不再调用 `enter_plan_mode`：该工具只保留给用户显式选择 Plan 或明确要求先做结构化计划的路径；Agent 模式提示词按建议资格分档（eligible DeepSeek 注入建议策略，其余保持显式入口）。
 - 旧 `first_round_*` 实验档位从客户设置移除：`orchestration.first_round_catalog` / `first_round_promote_on` 仍可解析但写入时返回明确诊断警告，不再映射为新语义；首轮工具清单锚定实验（含 `plan_ready` 规划门）整体下线，Plan 原生目录取而代之。
 

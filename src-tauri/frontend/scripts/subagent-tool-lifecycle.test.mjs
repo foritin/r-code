@@ -234,6 +234,16 @@ test("main and child activity use semantic collapsed groups and runtime-specific
       .flatMap((turn) => turn.items)
       .filter((entry) => entry.kind === "tool_group")
       .map((entry) => [entry.groupKind, entry.tools.length]);
+    const interleavedCodexCommands = buildTimelineTurns([
+      timelineTools[2],
+      { kind: "context", id: "reasoning-between", t: 3, label: "Codex 思考摘要", detail: "继续核对", collapsible: true },
+      timelineTools[3],
+    ])[0].items.map((entry) => ({
+      kind: entry.kind,
+      groupKind: entry.kind === "tool_group" ? entry.groupKind : null,
+      count: entry.kind === "tool_group" ? entry.tools.length : 1,
+      label: entry.kind === "context" ? entry.label : null,
+    }));
     const narratedTurn = buildTimelineTurns([
       { kind: "agent", id: "narration-a", t: 1, text: "现在修改文件。", streaming: false },
       { kind: "agent", id: "file-result", t: 1, text: "已定位 [实现文件](src/main.rs#L2C3)。", streaming: false },
@@ -283,6 +293,7 @@ test("main and child activity use semantic collapsed groups and runtime-specific
     return {
       childGroups,
       mainGroups,
+      interleavedCodexCommands,
       narratedTurn,
       identities,
       activeGroup,
@@ -303,6 +314,10 @@ test("main and child activity use semantic collapsed groups and runtime-specific
     { kind: "tool_group", groupKind: "file", count: 2 },
   ]);
   assert.deepEqual(result.mainGroups, [["file", 1], ["lookup", 1], ["command", 2]]);
+  assert.deepEqual(result.interleavedCodexCommands, [
+    { kind: "tool_group", groupKind: "command", count: 2, label: null },
+    { kind: "context", groupKind: null, count: 1, label: "Codex 思考摘要" },
+  ], "public reasoning rows stay available without splitting one Codex command run");
   assert.deepEqual(result.narratedTurn.filter((entry) => entry.kind === "context"), []);
   assert.deepEqual(
     result.narratedTurn.map((entry) => entry.kind === "agent" ? entry.text : `${entry.kind}:${entry.groupKind}`),

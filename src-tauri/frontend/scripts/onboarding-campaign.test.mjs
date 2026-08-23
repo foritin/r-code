@@ -422,13 +422,13 @@ test("an empty provider form applies the complete first preset and keeps the pri
   await page.locator("#set-model").fill("deepseek-v4-pro");
   assert.equal(await webCapability.getAttribute("data-search-state"), "hosted");
   await webCapability.getByText("DeepSeek 托管", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "保存并用于新对话", exact: true }).isDisabled(), false);
+  assert.equal(await page.getByRole("button", { name: "保存并设为默认", exact: true }).isDisabled(), false);
 
   await page.locator("#set-model").fill("deepseek-v4-unknown");
   await page.getByText(/Responses 支持 deepseek-v4-flash.*deepseek-v4-pro/).waitFor({ state: "visible" });
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
   await webCapability.getByText("需切换线路", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "保存并用于新对话", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "保存并设为默认", exact: true }).isDisabled(), true);
   await page.close();
 });
 
@@ -455,10 +455,17 @@ test("model candidate menu lists every preset model while the input is prefilled
   const menu = page.getByRole("menu", { name: "候选模型", exact: true });
   const options = page.locator(`[role="menuitemradio"]`);
   await options.first().waitFor({ state: "visible" });
-  assert.equal(await options.count(), 2, "both preset candidates must be listed while the input keeps its value");
-  for (const name of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
-    await page.locator(`[role="menuitemradio"]`, { hasText: name }).waitFor({ state: "visible" });
+  assert.equal(await options.count(), 3, "every preset candidate must be listed while the input keeps its value");
+  for (const name of ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]) {
+    // 前缀会撞上 vision-exp：按 .model-name 全文精确匹配。
+    await page.locator(".model-name", { hasText: new RegExp(`^${name}$`) })
+      .waitFor({ state: "visible" });
   }
+  // C3 徽标：文本模型与视觉实验模型各自带正确标注。
+  assert.ok(await page.locator(`[role="menuitemradio"]`, { hasText: "deepseek-v4-flash-vision-exp" })
+    .locator(".model-modality-badge", { hasText: "多模态" }).isVisible());
+  assert.ok(await page.locator(`[role="menuitemradio"]`, { hasText: "deepseek-v4-pro" })
+    .locator(".model-modality-badge", { hasText: "文本" }).isVisible());
 
   // A captured window scroll listener used to re-measure the portal on every wheel
   // tick. WebView2 then reset the menu's scrollTop to zero, so the scrollbar was
@@ -489,7 +496,10 @@ test("model candidate menu lists every preset model while the input is prefilled
   assert.ok(scrollMetrics.scrollHeight > scrollMetrics.clientHeight, "long model choices must overflow inside the menu");
   assert.ok(scrollMetrics.scrollTop > 0, "mouse wheel scrolling must persist instead of snapping back to the first model");
 
-  await page.locator(`[role="menuitemradio"]`, { hasText: "deepseek-v4-flash" }).click();
+  // 点击精确的 deepseek-v4-flash（前缀会撞上 vision-exp，文本拼接无空格）。
+  await page.locator(`[role="menuitemradio"]`).filter({
+    has: page.locator(".model-name", { hasText: /^deepseek-v4-flash$/ }),
+  }).click();
   assert.equal(await page.locator("#set-model").inputValue(), "deepseek-v4-flash");
   await options.first().waitFor({ state: "detached" });
   await page.close();

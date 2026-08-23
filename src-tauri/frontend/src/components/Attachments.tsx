@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClipboardEvent as ReactClipboardEvent } from "react";
+import { attachmentDiscard, attachmentStage } from "../lib/ipc";
 import type { AttachmentInput, AttachmentKind, PlatformCapabilities, SessionAttachmentMeta } from "../lib/types";
 import type { ImageCapability } from "./room/model-capabilities";
 import { ImageLightbox } from "./ImageLightbox";
@@ -67,33 +68,85 @@ export interface DraftAttachment extends AttachmentInput {
   kind: AttachmentKind;
   previewUrl?: string;
   size: number;
+  /** staging 成功后的 Blob 引用 id；有 ref 的草稿发送时不再携带 Base64。 */
+  attachmentId?: string;
 }
 
 export type AttachmentCapabilityResolver = (attachment: DraftAttachment) => ImageCapability;
 
 function nativeOcrReason(platform: PlatformCapabilities["platform"]): string {
   const system = platform === "windows" ? "Windows" : platform === "macos" ? "macOS" : "系统";
-  return `当前模型不接收图片；发送时会用 ${system} OCR 在本机仅提取文字，识别文本仍会随消息发送给模型。图片布局与非文字内容不会发送。`;
+  return `发送时会用 ${system} OCR 在本机仅提取文字，识别文本仍会随消息发送给模型。图片布局与非文字内容不会发送。`;
+}
+
+function visionModelReason(label: string | null): string {
+  const target = label ? `视觉模型 ${label}` : "配置的视觉模型";
+  return `图片会先由${target}理解并转换为结构化文本，随消息发送给当前模型；原图仅本地留存预览。`;
+}
+
+function directReason(): string {
+  return "主模型本身支持图片输入，原图将直接发送给模型，不经本机 OCR 或视觉模型转换。";
+}
+
+/** 图片理解引擎对附件层的投影（docs D4 前端配合）。 */
+export interface ImageEngineInfo {
+  /** direct = 主模型原生读图（原图直发）；ocr = 本机 OCR（默认）；
+   * model = 视觉模型描述注入。direct 优先级最高：辅助引擎只服务文本主模型。 */
+  engine: "direct" | "ocr" | "model";
+  /** engine=model 时的展示标签（`服务/模型`）；读取失败为 null。 */
+  visionModelLabel: string | null;
+}
+
+/** 未传入引擎信息时按默认（本机 OCR）处理，保持旧调用方行为。 */
+export const DEFAULT_IMAGE_ENGINE: ImageEngineInfo = { engine: "ocr", visionModelLabel: null };
+
+/** 主模型目录确认多模态时，引擎整体让位于原图直发（避免本末倒置）。 */
+export function resolveEffectiveImageEngine(
+  base: ImageEngineInfo,
+  mainModelVision: boolean,
+): ImageEngineInfo {
+  return mainModelVision ? { engine: "direct", visionModelLabel: null } : base;
 }
 
 export function attachmentUsesNativeOcr(
   attachment: DraftAttachment,
   capabilityFor: AttachmentCapabilityResolver,
   platformCapabilities: PlatformCapabilities,
+  imageEngine: ImageEngineInfo = DEFAULT_IMAGE_ENGINE,
 ): boolean {
-  return attachment.kind === "image"
-    && platformCapabilities.nativeOcr
-    && platformCapabilities.nativeOcrFormats.includes(attachment.mediaType)
-    && capabilityFor(attachment).state === "unsupported";
+  if (attachment.kind !== "image") return false;
+  if (imageEngine.engine !== "ocr") {
+    // direct：原图直发；model：理解由视觉模型承担。都不打本机 OCR 标记。
+    return false;
+  }
+  // 用户显式选择 OCR 引擎：png/jpeg 一律走系统 OCR，不再依赖"主模型不支持"。
+  return platformCapabilities.nativeOcr
+    && platformCapabilities.nativeOcrFormats.includes(attachment.mediaType);
 }
 
 function effectiveCapability(
   attachment: DraftAttachment,
   capabilityFor: AttachmentCapabilityResolver,
   platformCapabilities: PlatformCapabilities,
+  imageEngine: ImageEngineInfo,
 ): ImageCapability {
+  if (attachment.kind === "image" && imageEngine.engine === "direct") {
+    return {
+      state: "supported",
+      modelLabel: capabilityFor(attachment).modelLabel,
+      reason: directReason(),
+    };
+  }
+  if (attachment.kind === "image" && imageEngine.engine === "model") {
+    // 图片的理解工作由视觉模型承担：即使主模型不支持读图，描述文本仍会进入上下文。
+    return {
+      state: "supported",
+      modelLabel: capabilityFor(attachment).modelLabel,
+      reason: visionModelReason(imageEngine.visionModelLabel),
+    };
+  }
   const capability = capabilityFor(attachment);
-  if (attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities)) {
+  if (attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities, imageEngine)) {
     return {
       state: "supported",
       modelLabel: capability.modelLabel,
@@ -171,7 +224,7 @@ function revokePreview(attachment: DraftAttachment): void {
   if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
 }
 
-export function useAttachments(): UseAttachmentsResult {
+export function useAttachments(taskId?: string): UseAttachmentsResult {
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const attachmentsRef = useRef<DraftAttachment[]>([]);
@@ -195,12 +248,19 @@ export function useAttachments(): UseAttachmentsResult {
   const remove = useCallback((id: string) => {
     setAttachments((current) => {
       const removed = current.find((attachment) => attachment.id === id);
-      if (removed) revokePreview(removed);
+      if (removed) {
+        revokePreview(removed);
+        // 已 stage 的草稿删除时立即 discard（docs §4.4 前端变更位置）；
+        // 失败只记日志——服务端租约 GC 会兜底回收。
+        if (removed.attachmentId && taskId) {
+          void attachmentDiscard(taskId, removed.attachmentId).catch(() => undefined);
+        }
+      }
       const next = current.filter((attachment) => attachment.id !== id);
       attachmentsRef.current = next;
       return next;
     });
-  }, []);
+  }, [taskId]);
 
   const addFiles = useCallback(async (
     files: readonly File[],
@@ -230,6 +290,9 @@ export function useAttachments(): UseAttachmentsResult {
       }
 
       try {
+        // Base64 只存在于 staging 调用的局部变量（docs §2.2 边界 1）：
+        // 有 taskId（真实后端）时立即 stage 换取引用，草稿态只保留引用 +
+        // 本地 Object URL；无法 stage（浏览器 mock/旧后端）时回退内存 Base64。
         const data = base64Part(await readDataUrl(file));
         if (!data) throw new Error("文件内容为空");
         pasteSequence.current += 1;
@@ -237,11 +300,26 @@ export function useAttachments(): UseAttachmentsResult {
         const name = source === "paste" && genericClipboardName
           ? `粘贴的图片 ${pasteSequence.current}`
           : file.name || `附件 ${pasteSequence.current}`;
+        let attachmentId: string | undefined;
+        if (taskId) {
+          try {
+            const staged = await attachmentStage(taskId, {
+              name,
+              mediaType: classified.mediaType,
+              data,
+            });
+            attachmentId = staged.attachmentId;
+          } catch (cause) {
+            issues.push(`${name} 上传失败：${String(cause)}`);
+            continue;
+          }
+        }
         next.push({
           id: `attachment-${Date.now()}-${pasteSequence.current}`,
           name,
           mediaType: classified.mediaType,
-          data,
+          data: attachmentId ? "" : data,
+          attachmentId,
           kind: classified.kind,
           previewUrl: classified.kind === "image" ? URL.createObjectURL(file) : undefined,
           size: file.size,
@@ -254,7 +332,7 @@ export function useAttachments(): UseAttachmentsResult {
     attachmentsRef.current = next;
     setAttachments(next);
     setError(issues.length > 0 ? Array.from(new Set(issues)).join("；") : null);
-  }, []);
+  }, [taskId]);
 
   const onPaste = useCallback((event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.items)
@@ -321,12 +399,14 @@ export function AttachmentTray({
   attachments,
   capabilityFor,
   platformCapabilities,
+  imageEngine = DEFAULT_IMAGE_ENGINE,
   deferredReason,
   onRemove,
 }: {
   attachments: DraftAttachment[];
   capabilityFor: AttachmentCapabilityResolver;
   platformCapabilities: PlatformCapabilities;
+  imageEngine?: ImageEngineInfo;
   deferredReason?: string | null;
   onRemove: (id: string) => void;
 }) {
@@ -339,17 +419,25 @@ export function AttachmentTray({
   }, [attachments, previewing]);
 
   if (attachments.length === 0) return null;
-  const hasNativeOcr = attachments.some((attachment) => attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities));
+  const hasNativeOcr = attachments.some((attachment) => (
+    attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities, imageEngine)
+  ));
+  const usesVisionModel = imageEngine.engine === "model"
+    && attachments.some((attachment) => attachment.kind === "image");
+  const usesDirectImages = imageEngine.engine === "direct"
+    && attachments.some((attachment) => attachment.kind === "image");
   const unsupportedReason = attachments
-    .map((attachment) => effectiveCapability(attachment, capabilityFor, platformCapabilities))
+    .map((attachment) => effectiveCapability(attachment, capabilityFor, platformCapabilities, imageEngine))
     .find((capability) => capability.state === "unsupported")
     ?.reason;
   return (
     <>
       <div className="composer-attachments" role="list" aria-label="消息附件">
         {attachments.map((attachment) => {
-          const capability = effectiveCapability(attachment, capabilityFor, platformCapabilities);
-          const nativeOcr = attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities);
+          const capability = effectiveCapability(attachment, capabilityFor, platformCapabilities, imageEngine);
+          const nativeOcr = attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities, imageEngine);
+          const visionConverted = imageEngine.engine === "model" && attachment.kind === "image";
+          const directConverted = imageEngine.engine === "direct" && attachment.kind === "image";
           const unsupported = capability.state === "unsupported";
           const deferred = Boolean(deferredReason) && !unsupported;
           const reason = unsupported ? capability.reason : deferredReason ?? capability.reason;
@@ -359,7 +447,7 @@ export function AttachmentTray({
               className={
                 `attachment-chip kind-${attachment.kind}`
                 + (unsupported ? " is-unsupported" : capability.state === "unknown" ? " is-unknown" : "")
-                + (nativeOcr ? " is-native-ocr" : "")
+                + (nativeOcr || visionConverted || directConverted ? " is-native-ocr" : "")
                 + (deferred ? " is-deferred" : "")
               }
               role="listitem"
@@ -386,7 +474,15 @@ export function AttachmentTray({
               <span className="attachment-copy">
                 <span className="attachment-label">{attachment.name}</span>
                 <small>
-                  {nativeOcr ? "本机 OCR → 文本" : attachment.kind === "pdf" ? "PDF" : extension || "文本"}
+                  {imageEngine.engine === "direct" && attachment.kind === "image"
+                    ? "多模态直发"
+                    : visionConverted
+                      ? `视觉模型 ${imageEngine.visionModelLabel ?? ""} → 文本`.replace("  ", " ")
+                      : nativeOcr
+                        ? "本机 OCR → 文本"
+                        : attachment.kind === "pdf"
+                          ? "PDF"
+                          : extension || "文本"}
                   {deferred ? " · 暂缓发送" : ""}
                 </small>
               </span>
@@ -405,7 +501,11 @@ export function AttachmentTray({
         <span className="sr-only" aria-live="polite">
           {unsupportedReason ?? deferredReason ?? (hasNativeOcr
             ? nativeOcrReason(platformCapabilities.platform)
-            : "附件会随消息发送；图片可点击预览")}
+            : usesVisionModel
+              ? visionModelReason(imageEngine.visionModelLabel)
+              : usesDirectImages
+                ? directReason()
+                : "附件会随消息发送；图片可点击预览")}
         </span>
       </div>
       {previewing?.previewUrl && (
@@ -420,19 +520,50 @@ export function AttachmentTray({
   );
 }
 
+/**
+ * 引用形态发送：staging 成功的可发送草稿只发送 attachment id 列表（docs §4.4）。
+ * 返回 null 表示存在未 stage 的可发送草稿（浏览器 mock/旧后端），调用方
+ * 应回退旧 Base64 载荷。
+ */
+export function sendableAttachmentIds(
+  attachments: readonly DraftAttachment[],
+  capabilityFor: AttachmentCapabilityResolver,
+  platformCapabilities: PlatformCapabilities,
+  imageEngine: ImageEngineInfo = DEFAULT_IMAGE_ENGINE,
+): string[] | null {
+  const sendable = attachments.filter((attachment) => (
+    effectiveCapability(attachment, capabilityFor, platformCapabilities, imageEngine).state
+      !== "unsupported"
+  ));
+  if (sendable.length === 0) return [];
+  const ids = sendable
+    .map((attachment) => attachment.attachmentId)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  return ids.length === sendable.length ? ids : null;
+}
+
 export function sendableAttachmentInputs(
   attachments: readonly DraftAttachment[],
   capabilityFor: AttachmentCapabilityResolver,
   platformCapabilities: PlatformCapabilities,
+  imageEngine: ImageEngineInfo = DEFAULT_IMAGE_ENGINE,
 ): AttachmentInput[] {
   return attachments
-    .filter((attachment) => effectiveCapability(attachment, capabilityFor, platformCapabilities).state !== "unsupported")
+    .filter((attachment) => (
+      effectiveCapability(attachment, capabilityFor, platformCapabilities, imageEngine).state
+        !== "unsupported"
+    ))
     .map(({ name, mediaType, data, ...attachment }) => ({
       name,
       mediaType,
       data,
       nativeOcr: attachment.kind === "image"
-        && attachmentUsesNativeOcr({ name, mediaType, data, ...attachment }, capabilityFor, platformCapabilities),
+        && attachmentUsesNativeOcr(
+          { name, mediaType, data, ...attachment },
+          capabilityFor,
+          platformCapabilities,
+          imageEngine,
+        ),
     }));
 }
 
@@ -461,9 +592,10 @@ export function firstBlockedAttachmentReason(
   attachments: readonly DraftAttachment[],
   capabilityFor: AttachmentCapabilityResolver,
   platformCapabilities: PlatformCapabilities,
+  imageEngine: ImageEngineInfo = DEFAULT_IMAGE_ENGINE,
 ): string | null {
   for (const attachment of attachments) {
-    const capability = effectiveCapability(attachment, capabilityFor, platformCapabilities);
+    const capability = effectiveCapability(attachment, capabilityFor, platformCapabilities, imageEngine);
     if (capability.state === "unsupported") return capability.reason;
   }
   return null;

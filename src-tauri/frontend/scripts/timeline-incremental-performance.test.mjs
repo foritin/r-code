@@ -195,6 +195,10 @@ test("incremental presentation remains output-equivalent across tail transitions
     }];
     const queuedCache = new TimelinePresentationCache();
     queuedCache.reset(queued);
+    const acceptedSteer = [{
+      kind: "you", id: "accepted-steer", t: 4, text: "改为重新生成", imageCount: 0,
+      imageMediaTypes: [], attachments: [], sendMode: "steer",
+    }];
     return {
       snapshots,
       beforeCount: beforeNewTurn.totalTurns,
@@ -203,6 +207,7 @@ test("incremental presentation remains output-equivalent across tail transitions
       newTurnEquivalent: JSON.stringify(afterNewTurn.turns) === JSON.stringify(buildTimelineTurns(items)),
       queuedCache: queuedCache.window(100),
       queuedFull: buildTimelineTurns(queued),
+      acceptedSteer: buildTimelineTurns(acceptedSteer),
     };
   });
 
@@ -212,5 +217,10 @@ test("incremental presentation remains output-equivalent across tail transitions
   assert.equal(result.newTurnEquivalent, true);
   assert.deepEqual(result.queuedCache, { turns: [], totalTurns: 0 });
   assert.deepEqual(result.queuedFull, []);
+  assert.equal(
+    result.acceptedSteer.at(-1)?.user?.id,
+    "accepted-steer",
+    "an accepted in-flight guidance message must remain visible as a user action",
+  );
   await page.close();
 });

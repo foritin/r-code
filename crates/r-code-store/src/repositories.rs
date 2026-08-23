@@ -2115,12 +2115,47 @@ impl<'a> BlobStore<'a> {
     }
 
     /// 写入内容，返回 blake3 哈希。相同内容去重（不覆盖已存在的文件）。
+    ///
+    /// 原子安装（docs/multimodal-attachments §4.3）：临时文件 + `sync_all()` +
+    /// 同目录 rename。目标已存在时删除临时文件并复用目标。崩溃窗口只会留下
+    /// 无 ledger 的临时/半装文件，由 `prune_unreferenced_files()` 回收——绝无
+    /// 「数据库已提交但 Blob 尚未安装」的顺序。
     pub fn put(&self, content: &[u8]) -> Result<String, ProductError> {
         let hash = blake3::hash(content).to_hex().to_string();
         let blob_path = self.blobs_dir.join(&hash);
         if !blob_path.exists() {
             std::fs::create_dir_all(&self.blobs_dir)?;
-            std::fs::write(&blob_path, content)?;
+            let temp_path =
+                self.blobs_dir
+                    .join(format!(".tmp-{}-{}", hash, uuid::Uuid::new_v4().simple()));
+            let write_result = (|| -> std::io::Result<()> {
+                use std::io::Write;
+                let mut file = std::fs::File::create(&temp_path)?;
+                file.write_all(content)?;
+                file.sync_all()?;
+                drop(file);
+                Ok(())
+            })();
+            match write_result {
+                Ok(()) => {
+                    // rename 已存在目标时语义为替换；并发写入同一 hash 的最终
+                    // 内容相同（内容寻址），替换无副作用。
+                    if let Err(error) = std::fs::rename(&temp_path, &blob_path) {
+                        let _ = std::fs::remove_file(&temp_path);
+                        // 另一个并发写入者可能已安装同 hash 目标——复用它。
+                        if !blob_path.exists() {
+                            return Err(error.into());
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = std::fs::remove_file(&temp_path);
+                    // 写失败但目标可能已由并发方安装。
+                    if !blob_path.exists() {
+                        return Err(error.into());
+                    }
+                }
+            }
         }
         Ok(hash)
     }

@@ -1098,11 +1098,14 @@ mod tests {
                 enabled: true,
                 catalog_profile: r_code_core::plan_entry::PlanCatalogProfile::PlanNativeV1,
                 context_profile: r_code_core::plan_entry::PlanContextProfile::MinimalV1,
-                profile_version: 1,
+                profile_version: 2,
                 evidence_version: "test".to_string(),
                 provider_kind: "deepseek".to_string(),
                 model_id: "deepseek-v4-flash".to_string(),
                 endpoint_class: "official_api".to_string(),
+                protocol: "openai_chat".to_string(),
+                provider_route_revision: "rev-1".to_string(),
+                anchoring_preference: true,
             },
         }
     }

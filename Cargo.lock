@@ -3517,6 +3517,7 @@ dependencies = [
  "agent-llm",
  "agent-store",
  "async-trait",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "futures",

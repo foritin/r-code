@@ -202,7 +202,7 @@ export function McpPanel() {
       {notice && <div className="mcp-banner ok" role="status"><IconCheck width={14} height={14} /><span>{notice}</span></div>}
       {snapshot?.settings_error && <div className="mcp-banner error" role="alert"><strong>MCP 配置文件不可用</strong><span>{snapshot.settings_error}</span></div>}
 
-      <section className="mcp-section">
+      <section className="mcp-section" id="mcp-panel-block">
         <div className="mcp-section-head">
           <div><h3>内置工具</h3><p>无需 MCP、不启动外部服务的本机能力，对所有模型生效。</p></div>
         </div>
@@ -635,4 +635,5 @@ function RtkControl() {
       />
     </div>
   );
-}
+}
+

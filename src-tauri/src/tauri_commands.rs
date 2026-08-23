@@ -483,12 +483,23 @@ pub async fn cmd_agent_send(
     message: String,
     mode: Option<String>,
     attachments: Option<Vec<r_code_host::commands::AttachmentInput>>,
+    attachment_ids: Option<Vec<String>>,
 ) -> Result<(), String> {
     let mode = match mode {
         Some(value) => AgentSendMode::try_from_str(&value)
             .ok_or_else(|| format!("invalid agent send mode: {value}"))?,
         None => AgentSendMode::Auto,
     };
+    // 新引用链路（docs/multimodal-attachments §4.4）：只传 attachment id；
+    // 旧 Base64 载荷仅继续服务尚未迁移的调用方。
+    if let Some(ids) = attachment_ids.as_deref() {
+        if !ids.is_empty() {
+            return r_code_host::commands::agent_send_with_attachment_refs(
+                &state, &task_id, &message, mode, ids,
+            )
+            .await;
+        }
+    }
     r_code_host::commands::agent_send_with_mode_and_attachments(
         &state,
         &task_id,
@@ -497,6 +508,26 @@ pub async fn cmd_agent_send(
         attachments.as_deref().unwrap_or_default(),
     )
     .await
+}
+
+/// 附件 staging（docs §2.2 边界 1）：一次性 IPC Base64 → Blob 引用。
+#[tauri::command]
+pub async fn cmd_attachment_stage(
+    state: State<'_, CommandState>,
+    task_id: String,
+    attachment: r_code_host::commands::AttachmentInput,
+) -> Result<r_code_host::commands::AttachmentRefDto, String> {
+    r_code_host::commands::attachment_stage(&state, &task_id, attachment).await
+}
+
+/// 删除草稿附件：立即释放 staged 引用与 Blob 计数。
+#[tauri::command]
+pub async fn cmd_attachment_discard(
+    state: State<'_, CommandState>,
+    task_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::attachment_discard(&state, &task_id, &attachment_id).await
 }
 
 /// 按引用取回时间线图片附件预览（OCR 落盘原图或会话内联 Image 块）。
@@ -1656,6 +1687,14 @@ pub async fn cmd_codex_install_cli(
     state: State<'_, CommandState>,
 ) -> Result<serde_json::Value, String> {
     r_code_host::commands::codex_install_cli(&state).await
+}
+
+/// 进入 Codex 运行时设置时检查更新；已安装且有新版时由官方 CLI 自动升级。
+#[tauri::command]
+pub async fn cmd_codex_sync_cli(
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::codex_sync_cli(&state).await
 }
 
 /// 在用户可见的终端中发起 Codex CLI 登录。

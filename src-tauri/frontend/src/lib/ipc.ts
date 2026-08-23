@@ -57,6 +57,7 @@ import type {
   SubagentProviderProbeRequest,
   SubagentProviderProbeResponse,
   CodexCliPreferences,
+  CodexCliSyncResult,
   CodexIntegrationStatus,
   RtkStatus,
   ContextCompactionResult,
@@ -96,6 +97,7 @@ import {
   browserMockCodexIntegrationStatus,
   browserMockCodexCliPreferences,
   browserMockInstallCodexCli,
+  browserMockSyncCodexCli,
   browserMockSetupCodexCollaboration,
   browserMockSaveCodexCliPreferences,
   browserMockInstallCodexSkill,
@@ -338,10 +340,25 @@ export const agentSend = (
   message: string,
   mode: AgentSendMode = "auto",
   attachments: AttachmentInput[] = [],
-) => ipc<void>("cmd_agent_send", { taskId, message, mode, attachments }).then((result) => {
+  attachmentIds: string[] = [],
+) => ipc<void>("cmd_agent_send", {
+  taskId,
+  message,
+  mode,
+  attachments,
+  attachmentIds,
+}).then((result) => {
   invalidateSessionMessages(taskId);
   return result;
 });
+
+/** 附件 staging（docs/multimodal-attachments §2.2 边界 1）：一次性 Base64 → Blob 引用。 */
+export const attachmentStage = (taskId: string, attachment: AttachmentInput) =>
+  ipc<import("./types").AttachmentRefDto>("cmd_attachment_stage", { taskId, attachment });
+
+/** 删除草稿附件：立即释放 staged 引用与 Blob 计数。 */
+export const attachmentDiscard = (taskId: string, attachmentId: string) =>
+  ipc<void>("cmd_attachment_discard", { taskId, attachmentId });
 
 export const agentAbort = (taskId: string) => ipc<void>("cmd_agent_abort", { taskId });
 
@@ -1222,6 +1239,24 @@ export const codexInstallCli = async () => {
     invalidateCodexIntegrationStatus();
     codexIntegrationStatusSnapshot = status;
     return status;
+  }
+};
+
+/** 进入 Codex 运行时设置时检查更新，并在官方 CLI 报告有新版时自动升级。 */
+export const codexSyncCli = async () => {
+  invalidateCodexIntegrationStatus();
+  try {
+    const result = await ipc<CodexCliSyncResult>("cmd_codex_sync_cli");
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = result.status;
+    return result;
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    const result = browserMockSyncCodexCli();
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = result.status;
+    return result;
   }
 };
 

@@ -94,14 +94,23 @@ const STREAM_RECOVERY_BASE_MS: u64 = 500;
 const MAX_EMPTY_RESPONSE_RECOVERIES: u32 = 0;
 /// 空响应恢复退避基数（500ms * 2^(n-1)）。
 const EMPTY_RESPONSE_RECOVERY_BASE_MS: u64 = 500;
-/// 思考模型把 reasoning 计入 max_tokens：预算被推理耗尽时流以 MaxTokens 截断且
-/// 无正文。此场景按 ×2 逐次升档重试（如 8192→16384→32768），仅在**无任何可
-/// 持久化输出**的轮次发生——升档重放会整轮重新生成，已产出正文/工具调用的
-/// 轮次不重放，避免重复输出或重复执行工具。
-const MAX_TOKEN_ESCALATIONS: u32 = 2;
-/// 升档时给窗口余量保留的安全边（与 llm_runtime 的 CONTEXT_GUARD_RESERVE_MARGIN
-/// 对齐）；`output_budget_ceiling` 为 0（未知窗口）时不施加钳制。
-const OUTPUT_ESCALATION_RESERVE: u32 = 1_024;
+/// MaxTokens 终态分类上下文（docs/multimodal-attachments §6.5）。
+///
+/// 旧的「任意空 MaxTokens 回合盲目 ×2 升档两次」策略已删除——它会把 headroom
+/// 钳制成 1 的伪预算请求放大成 `1 → 2 → 4` 的无效重试序列。新规则：
+/// - 请求在派发前已因上下文 headroom 被钳制 → `CONTEXT_CONSTRAINED_OUTPUT_EXHAUSTED`，不重放；
+/// - 正常配置上限且无任何正文/工具调用 → `OUTPUT_BUDGET_EXHAUSTED`（记录
+///   attempted/configured/provider ceiling/reasoning effort），不自动翻倍；
+/// - 已有正文或工具调用 → 维持「不得整轮重放」（避免重复输出/重复执行）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OutputBudgetContext {
+    /// 用户/自动配置的单轮输出上限（钳制前）。0 = 未知。
+    pub configured: u32,
+    /// Provider 声明的服务端输出上限；0 = 未声明。
+    pub provider_ceiling: u32,
+    /// 本次请求是否因上下文 headroom 被钳制到 configured 以下。
+    pub headroom_clamped: bool,
+}
 #[cfg(not(test))]
 const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
@@ -735,7 +744,7 @@ pub async fn run_agent_loop_iteration_streaming_with_abort(
     abort: Option<&AtomicBool>,
     retry_guard: &mut EditRetryGuard,
     event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
-    output_budget_ceiling: u32,
+    output_budget: OutputBudgetContext,
 ) -> Result<AgentLoopOutcome, ProductError> {
     run_agent_loop_iteration_with_abort_and_emit_with_retry_guard(
         provider,
@@ -749,7 +758,7 @@ pub async fn run_agent_loop_iteration_streaming_with_abort(
         move |event| {
             let _ = event_tx.send(event);
         },
-        output_budget_ceiling,
+        output_budget,
     )
     .await
 }
@@ -783,7 +792,7 @@ where
         &mut retry_guard,
         emit_activity,
         emit,
-        0,
+        OutputBudgetContext::default(),
     )
     .await
 }
@@ -799,9 +808,9 @@ pub(crate) async fn run_agent_loop_iteration_with_abort_and_emit_with_retry_guar
     retry_guard: &mut EditRetryGuard,
     emit_activity: bool,
     mut emit: F,
-    // 输出预算升档的窗口余量上限（上下文窗口 token 数；0=未知，不钳制）。
-    // MaxTokens 截断且无正文时按 ×2 升档重试，但不允许把请求推超窗口。
-    output_budget_ceiling: u32,
+    // MaxTokens 终态分类所需的输出预算上下文（docs §6.5）。不再用于升档钳制——
+    // 自动 ×2 升档已删除，`1 → 2 → 4` 重试序列不得再出现。
+    output_budget: OutputBudgetContext,
 ) -> Result<AgentLoopOutcome, ProductError>
 where
     F: FnMut(AgentEvent),
@@ -823,12 +832,11 @@ where
     request.tools = tools.to_vec();
 
     // P1-E：冻结请求供流中断重放（重试字节与首试逐字节一致，不破坏前缀缓存）。
-    // 唯一允许改写的路径是 MaxTokens 升档：它同样从空白流状态整轮重放，且
-    // max_tokens 不参与请求前缀的字节构成，不破坏缓存命中。
-    let mut attempt_request = request.clone();
+    // 重放只覆盖「流中断且尚无任何输出」的线路故障场景；MaxTokens 预算终态
+    // 从不重放（docs §6.5），因此冻结请求在本次迭代内不再被改写。
+    let attempt_request = request.clone();
     let mut stream_recoveries: u32 = 0;
     let mut empty_response_recoveries: u32 = 0;
-    let mut max_tokens_escalations: u32 = 0;
 
     // Provider 建连本身也可能卡住；同时跟踪绝对 deadline 和 abort，
     // 取消时直接 drop vendor future，不再被固定 60s 超时窗口阻塞。
@@ -1092,49 +1100,14 @@ where
                         || !tool_calls.is_empty();
                     let retryable_provider_error =
                         provider_error == Some(ProviderStreamErrorDisposition::Retryable);
-                    // MaxTokens 截断：思考模型的推理耗尽了输出预算且本轮没有任何
-                    // 可执行产物（正文/工具调用）——按 ×2 升档后整轮重放。已有可
-                    // 执行产物（哪怕正文被截断）不重放，避免重复输出/重复执行；
-                    // reasoning 在回合失败时不落历史，重放安全。
+                    // MaxTokens 截断（docs/multimodal-attachments §6.5）：不再自动
+                    // ×2 升档重放。空回合的终态分类在迭代收尾处按
+                    // `output_budget.headroom_clamped` 完成——headroom 钳制后推理
+                    // 仍耗尽属于上下文预算问题，重放只会再次超窗；正常上限耗尽
+                    // 属于配置/任务规模问题。已有可执行产物（哪怕正文被截断）
+                    // 的回合保持既有「不整轮重放」规则，避免重复输出/重复执行。
                     if matches!(reason, agent_contract::StopReason::MaxTokens) {
                         stop_reason_max_tokens = true;
-                        let has_actionable_output = !current_text.is_empty()
-                            || !assistant_blocks.is_empty()
-                            || !pending_tools.is_empty()
-                            || !tool_calls.is_empty();
-                        let current_max = attempt_request.max_tokens;
-                        let doubled = current_max.saturating_mul(2);
-                        let escalated = if output_budget_ceiling > 0 {
-                            doubled.min(
-                                output_budget_ceiling
-                                    .saturating_sub(OUTPUT_ESCALATION_RESERVE)
-                                    .max(1),
-                            )
-                        } else {
-                            doubled
-                        };
-                        if !has_actionable_output
-                            && max_tokens_escalations < MAX_TOKEN_ESCALATIONS
-                            && escalated > current_max
-                        {
-                            max_tokens_escalations += 1;
-                            attempt_request.max_tokens = escalated;
-                            tracing::warn!(
-                                from = current_max,
-                                to = escalated,
-                                attempt = max_tokens_escalations,
-                                "output budget exhausted before any actionable output, escalating max_tokens"
-                            );
-                            if emit_activity {
-                                emit(AgentEvent::Activity {
-                                    phase: r_code_core::dto::AgentActivityPhase::Requesting,
-                                    detail: Some(format!(
-                                        "输出预算被推理耗尽，自动升档重试（{current_max}→{escalated}）…"
-                                    )),
-                                });
-                            }
-                            continue 'attempt;
-                        }
                     }
                     if (idle_timeout || retryable_provider_error)
                         && !has_output
@@ -1273,11 +1246,19 @@ where
                 max_tokens_exhausted = stop_reason_max_tokens,
                 "provider stream ended without persistable assistant output"
             );
-            // MaxTokens 截断导致的空回合是预算问题而非线路故障：报准确原因，
-            // 避免把用户引向「检查模型线路配置」的错误排查方向。
+            // MaxTokens 截断导致的空回合是预算问题而非线路故障：按派发前的
+            // 钳制状态分类报准确原因（docs §6.5），不自动重放、不翻倍。
             if stop_reason_max_tokens {
+                if output_budget.headroom_clamped {
+                    return Err(ProductError::ContextConstrainedOutputExhausted {
+                        effective_output: attempt_request.max_tokens,
+                    });
+                }
                 return Err(ProductError::OutputBudgetExhausted {
                     attempted: attempt_request.max_tokens,
+                    configured: output_budget.configured,
+                    provider_ceiling: output_budget.provider_ceiling,
+                    reasoning_effort: attempt_request.inference.reasoning_effort.clone(),
                 });
             }
             return Err(ProductError::EmptyAssistantResponse);
@@ -1455,6 +1436,7 @@ fn map_agent_err(err: agent_error::Error) -> ProductError {
 
 #[cfg(test)]
 mod tests {
+    use super::OutputBudgetContext;
     use super::STREAM_IDLE_TIMEOUT_REASON;
     use agent_contract::{
         Capabilities, CompletionRequest, CompletionResponse, ContentBlock, LlmProvider, Message,
@@ -1685,7 +1667,7 @@ mod tests {
             &mut retry_guard,
             false,
             |event| events.push(event),
-            0,
+            OutputBudgetContext::default(),
         )
         .await
         .unwrap();
@@ -3563,32 +3545,26 @@ mod tests {
         }
     }
 
-    /// 思考模型推理耗尽输出预算（MaxTokens 截断、无正文/工具）→ ×2 升档重放，
-    /// 升档值被窗口余量钳制（12000-1024=10976 < 2×8192）。
+    /// 已有正文时 MaxTokens 截断不重放也不报错（既有规则保留，docs §6.5）：
+    /// 已产出的正文进入历史，恰好一次请求。
     #[tokio::test]
-    async fn max_tokens_exhaustion_before_output_escalates_within_window() {
+    async fn max_tokens_after_actionable_output_keeps_result_without_replay() {
         let (provider, seen) = MaxTokensCaptureProvider::new();
         provider.push_turn(RecordedTurn::ok(vec![
             StreamEvent::ReasoningDelta {
-                text: "思考耗尽了整个输出预算".into(),
+                text: "思考中".into(),
+            },
+            StreamEvent::TextDelta {
+                text: "部分结论".into(),
             },
             StreamEvent::Stop {
                 reason: StopReason::MaxTokens,
-            },
-        ]));
-        provider.push_turn(RecordedTurn::ok(vec![
-            StreamEvent::TextDelta {
-                text: "结论".into(),
-            },
-            StreamEvent::Stop {
-                reason: StopReason::EndTurn,
             },
         ]));
         let tool_host = EchoToolHost::new("");
         let tools = tool_host.list_tools().await.unwrap();
         let mut messages = vec![Message::user_text("hi")];
         let mut retry_guard = EditRetryGuard::default();
-        let mut events = Vec::new();
 
         let outcome = run_agent_loop_iteration_with_abort_and_emit_with_retry_guard(
             &provider,
@@ -3609,8 +3585,12 @@ mod tests {
             None,
             &mut retry_guard,
             true,
-            |event| events.push(event),
-            12_000,
+            |_event| {},
+            OutputBudgetContext {
+                configured: 8_192,
+                provider_ceiling: 12_000,
+                headroom_clamped: false,
+            },
         )
         .await
         .unwrap();
@@ -3618,12 +3598,9 @@ mod tests {
         assert!(!outcome.had_tool_call);
         assert_eq!(
             *seen.lock().expect("max_tokens capture lock poisoned"),
-            vec![8_192, 10_976],
-            "升档值必须 ×2 且被钳制在窗口余量（12000-1024）内"
+            vec![8_192],
+            "已有产物的 MaxTokens 截断回合不得整轮重放"
         );
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, AgentEvent::Activity { .. })));
         let assistant_text = messages
             .iter()
             .filter(|m| m.role == Role::Assistant)
@@ -3631,23 +3608,83 @@ mod tests {
             .filter_map(|b| b.as_text())
             .collect::<Vec<_>>()
             .join("");
-        assert_eq!(assistant_text, "结论");
+        assert_eq!(assistant_text, "部分结论");
     }
 
-    /// 升档耗尽（×2 两次）仍无正文 → 报「输出预算耗尽」，不再误导用户查线路。
+    /// 无产物的 MaxTokens（docs §6.5）：不再 ×2 升档重放——首轮预算耗尽后
+    /// 直接进入终态分类，`1 → 2 → 4` 式放大不再出现。
     #[tokio::test]
-    async fn max_tokens_exhaustion_after_escalations_reports_budget_error() {
+    async fn max_tokens_exhaustion_before_output_does_not_escalate() {
         let (provider, seen) = MaxTokensCaptureProvider::new();
-        for _ in 0..3 {
-            provider.push_turn(RecordedTurn::ok(vec![
-                StreamEvent::ReasoningDelta {
-                    text: "继续思考".into(),
-                },
-                StreamEvent::Stop {
-                    reason: StopReason::MaxTokens,
-                },
-            ]));
-        }
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ReasoningDelta {
+                text: "思考耗尽了整个输出预算".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::MaxTokens,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+        let mut retry_guard = EditRetryGuard::default();
+
+        let error = run_agent_loop_iteration_with_abort_and_emit_with_retry_guard(
+            &provider,
+            &tool_host,
+            CompletionRequest {
+                model: "mock".into(),
+                system: None,
+                messages: messages.clone(),
+                tools: tools.clone(),
+                hosted_tools: vec![],
+                max_tokens: 8_192,
+                temperature: None,
+                enable_caching: false,
+                inference: Default::default(),
+            },
+            &mut messages,
+            &tools,
+            None,
+            &mut retry_guard,
+            true,
+            |_event| {},
+            OutputBudgetContext {
+                configured: 8_192,
+                provider_ceiling: 12_000,
+                headroom_clamped: false,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            r_code_core::error::ProductError::OutputBudgetExhausted {
+                attempted: 8_192,
+                ..
+            }
+        ));
+        assert_eq!(
+            *seen.lock().expect("max_tokens capture lock poisoned"),
+            vec![8_192],
+            "预算耗尽的空回合必须直接终态分类，不得 ×2 升档重放"
+        );
+    }
+
+    /// 正常配置上限下无产物的 MaxTokens → `OUTPUT_BUDGET_EXHAUSTED`，
+    /// 恰好一次请求，不自动翻倍（docs §6.5 / §12「MaxTokens 不再产生 1,2,4」）。
+    #[tokio::test]
+    async fn max_tokens_exhaustion_reports_budget_error_without_escalation() {
+        let (provider, seen) = MaxTokensCaptureProvider::new();
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ReasoningDelta {
+                text: "继续思考".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::MaxTokens,
+            },
+        ]));
         let tool_host = EchoToolHost::new("");
         let tools = tool_host.list_tools().await.unwrap();
         let mut messages = vec![Message::user_text("hi")];
@@ -3663,21 +3700,74 @@ mod tests {
             &mut retry_guard,
             false,
             |_event| {},
-            0,
+            OutputBudgetContext {
+                configured: 128,
+                provider_ceiling: 0,
+                headroom_clamped: false,
+            },
         )
         .await
         .unwrap_err();
 
         assert!(matches!(
             error,
-            r_code_core::error::ProductError::OutputBudgetExhausted { attempted: 512 }
+            r_code_core::error::ProductError::OutputBudgetExhausted { attempted: 128, .. }
         ));
         assert!(error.to_string().contains("输出预算"));
         assert!(!error.to_string().contains("线路"));
-        // 1 次首试 + 2 次升档 = 3 次请求，预算 128→256→512 后放弃。
+        // 恰好一次请求；[1,2,4]/[128,256,512] 式翻倍序列必须消失。
         assert_eq!(
             *seen.lock().expect("max_tokens capture lock poisoned"),
-            vec![128, 256, 512]
+            vec![128]
+        );
+    }
+
+    /// headroom 钳制后的 MaxTokens 空回合 → `CONTEXT_CONSTRAINED_OUTPUT_EXHAUSTED`，
+    /// 不重放：上下文预算问题重放只会再次超窗（docs §6.5）。
+    #[tokio::test]
+    async fn headroom_clamped_max_tokens_reports_context_constraint() {
+        let (provider, seen) = MaxTokensCaptureProvider::new();
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ReasoningDelta {
+                text: "推理耗尽".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::MaxTokens,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+        let mut retry_guard = EditRetryGuard::default();
+
+        let error = run_agent_loop_iteration_with_abort_and_emit_with_retry_guard(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            &mut retry_guard,
+            false,
+            |_event| {},
+            OutputBudgetContext {
+                configured: 128,
+                provider_ceiling: 0,
+                headroom_clamped: true,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            r_code_core::error::ProductError::ContextConstrainedOutputExhausted {
+                effective_output: 128
+            }
+        ));
+        assert_eq!(
+            *seen.lock().expect("max_tokens capture lock poisoned"),
+            vec![128]
         );
     }
 

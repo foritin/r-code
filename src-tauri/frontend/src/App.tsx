@@ -164,6 +164,7 @@ function GlobalGuideSheetHost() {
       onClose={closeGuideSheet}
       onAction={(action) => {
         if (action === "open-request-audit") setSettingsPane("diagnostics");
+        if (action === "open-image-understanding") setSettingsPane("providers");
       }}
     />
   );

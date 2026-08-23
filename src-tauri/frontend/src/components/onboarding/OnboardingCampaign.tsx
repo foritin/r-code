@@ -321,7 +321,7 @@ export function OnboardingCampaign() {
       const nextSettings = await settingsGet();
       setSettings(nextSettings);
       setApiKey("");
-      setProviderNotice(`${selectedPreset.label} 已用于新对话。`);
+      setProviderNotice(`${selectedPreset.label} 已保存并设为默认服务；新对话将使用它，已开始的对话不受影响。`);
     } catch (cause) {
       setError(`保存 Provider 失败：${errText(cause)}`);
     } finally {

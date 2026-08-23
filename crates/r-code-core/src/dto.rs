@@ -1732,6 +1732,9 @@ pub enum CatalogAnchorPhase {
     Narrowed,
     /// 首轮结束，恢复完整清单（会话内此后不再变化）。
     Promoted,
+    /// Plan 批准进入实施：implementation dispatch 事务成功后发出；下一 run
+    /// 验证完整目录已恢复（docs/multimodal-attachments §8.6）。
+    RestoredFull,
 }
 
 /// 计划步骤。

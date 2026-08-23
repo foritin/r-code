@@ -755,6 +755,13 @@ export function RoomScene() {
                   steerInFlightRef.current = null;
                   tlRef.current?.onSent(text, mode, attachments);
                 }}
+                onQueuedSteerAccepted={(queueId, text, outcome) => {
+                  tlRef.current?.onQueuedSteerAccepted(
+                    queueId,
+                    text,
+                    outcome === "steered" ? "steer" : "auto",
+                  );
+                }}
                 onSendFailed={() => {
                   const inFlightId = steerInFlightRef.current;
                   if (inFlightId) {

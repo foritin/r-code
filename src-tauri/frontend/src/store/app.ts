@@ -59,9 +59,9 @@ export interface TaskFileReferenceRequest {
 export type SettingsPane = "providers" | "agents" | "tools" | "knowledge" | "preferences" | "diagnostics" | "subagents";
 export type LegacySettingsPane = "codex";
 
-/** 兼容旧深链/调用方；store 内部不再把 Codex 当作顶级设置模块身份。 */
+/** 兼容旧深链/调用方；Codex 运行时归入 Agent 编排，不再是顶级设置模块。 */
 export function normalizeSettingsPane(pane: SettingsPane | LegacySettingsPane): SettingsPane {
-  return pane === "codex" ? "subagents" : pane;
+  return pane === "codex" ? "agents" : pane;
 }
 export type KnowledgeTab = "memory" | "prompts" | "skills";
 

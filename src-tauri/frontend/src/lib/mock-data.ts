@@ -6,6 +6,7 @@ import type {
   DashboardAttentionItem,
   DashboardTaskSummary,
   CodexCliPreferences,
+  CodexCliSyncResult,
   CodexIntegrationStatus,
   RtkStatus,
   Notification,
@@ -317,6 +318,7 @@ export const browserMockSettings: SettingsResponse = {
     log_level: "info",
     planning: {
       suggest_complex_tasks: false,
+      deepseek_plan_anchoring: false,
     },
     orchestration: {
       default_agent_engine: "r_code",
@@ -364,6 +366,7 @@ let browserMockCodexInstalled = false;
 let browserMockCodexAuthenticated = false;
 let browserMockCodexMcpEnabled = false;
 let browserMockCodexSkillInstalled = false;
+let browserMockCodexVersion = "codex-cli 0.145.0";
 let browserMockCodexModel = "gpt-5.6-sol";
 let browserMockCodexReasoning = "max";
 let browserMockCodexVerbosity = "medium";
@@ -417,7 +420,7 @@ export function browserMockCodexIntegrationStatus(): CodexIntegrationStatus {
   return {
     cli_available: browserMockCodexInstalled,
     cli_path: browserMockCodexInstalled ? "C:/Users/demo/AppData/Roaming/npm/codex.cmd" : null,
-    cli_version: browserMockCodexInstalled ? "codex-cli 0.145.0" : null,
+    cli_version: browserMockCodexInstalled ? browserMockCodexVersion : null,
     cli_source: browserMockCodexInstalled ? "npm_global" : null,
     cli_source_label: browserMockCodexInstalled ? "npm 全局安装" : null,
     cli_error: browserMockCodexInstalled ? null : "未检测到可运行的 Codex CLI。",
@@ -442,7 +445,35 @@ export function browserMockCodexIntegrationStatus(): CodexIntegrationStatus {
 
 export function browserMockInstallCodexCli(): CodexIntegrationStatus {
   browserMockCodexInstalled = true;
+  browserMockCodexVersion = "codex-cli 0.149.0";
   return browserMockCodexIntegrationStatus();
+}
+
+/** 浏览器回归钩子：构造一个已安装的旧版本，验证进入设置后的自动升级。 */
+export function setBrowserMockCodexVersion(version: string): void {
+  browserMockCodexInstalled = true;
+  browserMockCodexVersion = version;
+}
+
+export function browserMockSyncCodexCli(): CodexCliSyncResult {
+  if (!browserMockCodexInstalled) {
+    return {
+      update_state: "not_installed",
+      previous_version: null,
+      current_version: null,
+      update_error: null,
+      status: browserMockCodexIntegrationStatus(),
+    };
+  }
+  const previousVersion = browserMockCodexVersion;
+  browserMockCodexVersion = "codex-cli 0.149.0";
+  return {
+    update_state: previousVersion === browserMockCodexVersion ? "up_to_date" : "updated",
+    previous_version: previousVersion,
+    current_version: browserMockCodexVersion,
+    update_error: null,
+    status: browserMockCodexIntegrationStatus(),
+  };
 }
 
 export function browserMockAuthenticateCodex(): void {
@@ -517,7 +548,12 @@ export const browserMockProviderCatalog: ProviderCatalog = {
       base_url: "https://api.openai.com/v1",
       reasoning_replay: true,
       model: "gpt-5.6-sol",
-      models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+      models: [
+        { id: "gpt-5.6-sol", vision: true },
+        { id: "gpt-5.6-terra", vision: true },
+        { id: "gpt-5.6-luna", vision: true },
+        { id: "gpt-5.5", vision: true },
+      ],
       category: "official",
       website_url: "https://openai.com",
       api_key_url: null,
@@ -536,7 +572,11 @@ export const browserMockProviderCatalog: ProviderCatalog = {
       base_url: "https://api.deepseek.com",
       reasoning_replay: false,
       model: "deepseek-v4-flash",
-      models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+      models: [
+        { id: "deepseek-v4-flash", vision: false },
+        { id: "deepseek-v4-pro", vision: false },
+        { id: "deepseek-v4-flash-vision-exp", vision: true },
+      ],
       category: "cn_official",
       website_url: "https://platform.deepseek.com",
       api_key_url: "https://platform.deepseek.com/api_keys",

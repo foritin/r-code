@@ -608,6 +608,14 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 33,
+            to_version: 34,
+            description: "Attachment reference ledger and session attachment migration state"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
@@ -664,6 +672,16 @@ mod tests {
         (dir, db_path)
     }
 
+    fn table_exists(conn: &Connection, table: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false)
+    }
+
     fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
         let sql = format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1");
         conn.query_row(&sql, [column], |row| row.get::<_, i64>(0))
@@ -672,11 +690,13 @@ mod tests {
     }
 
     fn downgrade_latest_schema_to_previous(conn: &Connection) {
-        // 上一版本边界 = TARGET-1：撤销最后一个迁移的全部痕迹（列 + 版本标记）。
+        // 上一版本边界 = TARGET-1：撤销最后一个迁移的全部痕迹（表/列 + 版本标记）。
         conn.execute_batch(
-            "ALTER TABLE plans DROP COLUMN profile_version;
-             ALTER TABLE plans DROP COLUMN catalog_phase;
-             ALTER TABLE plans DROP COLUMN runtime_profile_json;",
+            "DROP TABLE session_attachment_migrations;
+             DROP INDEX IF EXISTS idx_attachments_staged_lease;
+             DROP INDEX IF EXISTS idx_attachments_blob;
+             DROP INDEX IF EXISTS idx_attachments_task;
+             DROP TABLE attachments;",
         )
         .unwrap();
         conn.execute(
@@ -684,12 +704,21 @@ mod tests {
             [TARGET_VERSION],
         )
         .unwrap();
-        assert!(!column_exists(conn, "plans", "runtime_profile_json"));
-        assert!(!column_exists(conn, "plans", "catalog_phase"));
-        assert!(!column_exists(conn, "plans", "profile_version"));
-        // v32/v31 及更早的迁移保持原样（含 Plan 入口基础设施表）。
+        assert!(
+            !conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'attachments'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap()
+                .gt(&0),
+            "migration 34 的 attachments 表必须被完整撤销"
+        );
+        // v33 及更早的迁移保持原样（含 Plan 入口基础设施表与 profile 列）。
         assert!(column_exists(conn, "plan_entry_offers", "request_key"));
         assert!(column_exists(conn, "agent_runs", "checkpoint_base_head"));
+        assert!(column_exists(conn, "plans", "runtime_profile_json"));
     }
 
     // ── current_version / needs_migration ─────────────────────────
@@ -844,8 +873,8 @@ mod tests {
             "plan_question_sets",
             "restore_mode"
         ));
-        // 上一版本边界 = TARGET-1：v31/v32 迁移已存在（含 guard_trip 与 Plan 入口
-        // 基础设施表），只有最后的 v33 profile 列被回滚。
+        // 上一版本边界 = TARGET-1：v33 迁移已存在（含 profile 列），只有最后的
+        // v34 附件账本表被回滚。
         assert!(column_exists(&restored, "agent_runs", "guard_trip"));
         assert!(column_exists(&restored, "agent_runs", "checkpoint_sha"));
         assert!(column_exists(
@@ -854,8 +883,12 @@ mod tests {
             "checkpoint_base_head"
         ));
         assert!(column_exists(&restored, "plan_entry_offers", "request_key"));
-        assert!(!column_exists(&restored, "plans", "runtime_profile_json"));
-        assert!(!column_exists(&restored, "plans", "catalog_phase"));
+        assert!(
+            !table_exists(&restored, "attachments"),
+            "v34 attachments ledger must be rolled back with the failed migration"
+        );
+        // v33 profile 列在 TARGET-1 边界内，必须保留。
+        assert!(column_exists(&restored, "plans", "catalog_phase"));
     }
 
     #[tokio::test]

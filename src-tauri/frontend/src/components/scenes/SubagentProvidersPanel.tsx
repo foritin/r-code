@@ -6,8 +6,10 @@ import {
   subagentProviderTestBatch,
 } from "../../lib/ipc";
 import { providerIconFor, providerInitial } from "../../lib/provider-icons";
+import { InfoTip } from "../ui/InfoTip";
 import type {
   SubagentPoolSnapshot,
+  SubagentPoolSlotHealth,
   SubagentProviderCatalogEntry,
   SubagentProviderHealthState,
   SubagentProviderProbeRequest,
@@ -107,6 +109,76 @@ function cloneSlots(slots: SubagentProviderSlot[]): SubagentProviderSlot[] {
 // 避免用户在设置页频繁切换时对 provider 造成重复连通性调用。
 const AUTO_PROBE_THROTTLE_MS = 60_000;
 let lastAutoProbeAt = 0;
+/** 最近一次自动探测的汇总（模块级保存：节流窗口内重进面板显示“沿用”而非清空）。 */
+let lastAutoProbeSummary: AutoProbeSummary | null = null;
+
+export interface AutoProbeSummary {
+  tested: number;
+  connected: number;
+  failed: number;
+  /** true = 节流窗口内重复进入，未重新发请求。 */
+  throttled: boolean;
+}
+
+/** 槽位在快照中的健康投影：按 slot_id + source + model 精确匹配。 */
+export function slotHealthOf(
+  slot: SubagentProviderSlot,
+  snapshot: SubagentPoolSnapshot | null,
+): SubagentPoolSlotHealth | undefined {
+  return (snapshot?.slot_health ?? []).find((health) => (
+    health.slot_id === slot.slot_id
+    && sameSource(health.source, slot.source)
+    && health.model === slot.model
+  ));
+}
+
+/** B1：自动探测的请求列表 = 目录条目 ∪ 已保存槽位，按 (source, model) 去重。
+ *
+ * - 目录条目：配置就绪、有模型、未连通（receipt 已连通的跳过）；selectable 是
+ *   连通测试的结果，不能作为首次测试的前置条件；
+ * - 已保存槽位：有模型且当前槽位健康不是 connected——健康回执按 (source, model)
+ *   精确键控，槽位使用非默认模型时目录条目测不到它，必须单独补测；
+ * - 槽位对应来源未就绪（无密钥/未安装）时跳过，等配置补全后再测。 */
+export function buildAutoProbeRequests(
+  snapshot: SubagentPoolSnapshot | null,
+): SubagentProviderProbeRequest[] {
+  if (!snapshot) return [];
+  const catalog = snapshot.catalog?.entries ?? [];
+  const readySources = new Set(
+    catalog.filter((entry) => entry.ready).map((entry) => sourceKey(entry.source)),
+  );
+  const seen = new Set<string>();
+  const requests: SubagentProviderProbeRequest[] = [];
+  const push = (source: SubagentProviderSource, model: string) => {
+    if (!model.trim()) return;
+    const key = candidateKey(source, model);
+    if (seen.has(key)) return;
+    seen.add(key);
+    requests.push({ source: { ...source }, model });
+  };
+  for (const entry of catalog) {
+    if (entry.ready && entry.model && entry.health.state !== "connected") {
+      push(entry.source, entry.model);
+    }
+  }
+  for (const slot of snapshot.pool?.slots ?? []) {
+    const state = slotHealthOf(slot, snapshot)?.health.state ?? "untested";
+    if (state === "connected") continue;
+    if (!readySources.has(sourceKey(slot.source))) continue;
+    push(slot.source, slot.model);
+  }
+  return requests;
+}
+
+/** B2：常驻状态行文案。失败不弹错误条（保持现状不打断配置），只计入状态行。 */
+export function autoProbeStatusLabel(summary: AutoProbeSummary | null): string | null {
+  if (!summary) return null;
+  const outcome = `已自动测试 ${summary.tested} 项：${summary.connected} 项连通`
+    + (summary.failed > 0 ? `，${summary.failed} 项失败（失败项可手动重测）` : "");
+  return summary.throttled
+    ? `一分钟内不重复测试：沿用最近的连通结果（${outcome}）。`
+    : `本次进入${outcome}。`;
+}
 
 function newSlotId(sequence: number): string {
   return `subagent-slot-${Date.now().toString(36)}-${sequence}`;
@@ -115,16 +187,20 @@ function newSlotId(sequence: number): string {
 export function SubagentProvidersPanel({
   providerKinds,
   refreshSignal,
+  onOpenGuide,
 }: {
   /** provider 档案名 → 目录 provider_kind，用于给候选来源匹配厂商图标。 */
   providerKinds?: Record<string, string | undefined>;
   /** 外部就绪信号（如 Codex 登录/协作状态变化）：递增时保留草稿、仅刷新来源目录。 */
   refreshSignal?: number;
+  /** 打开指引手册（E2：子代理面板头部入口）。 */
+  onOpenGuide?: (guideId: "subagents-pool") => void;
 }) {
   const slotSequence = useRef(0);
   const [snapshot, setSnapshot] = useState<SubagentPoolSnapshot | null>(null);
   const [slots, setSlots] = useState<SubagentProviderSlot[]>([]);
   const [probeResults, setProbeResults] = useState<Record<string, SubagentProviderCatalogEntry>>({});
+  const [autoProbe, setAutoProbe] = useState<AutoProbeSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
@@ -161,24 +237,29 @@ export function SubagentProvidersPanel({
     }
   }, [setBusy]);
 
-  // 进入面板即自动探测：只补测"就绪但尚未连通"的来源（已连通的沿用持久化
-  // receipt），槽位状态随后直接同步。模块级节流保证短时间内反复进出设置页
-  // 或刷新信号触发重载时不会重复请求；手动"全部测试"不受节流影响。
+  // 进入面板即自动探测：目录条目 + 已保存槽位合并去重，只补测"尚未连通"的
+  // (source, model) 组合（已连通的沿用持久化 receipt）。模块级节流保证短时间内
+  // 反复进出设置页或刷新信号触发重载时不会重复请求；手动"全部测试"不受节流影响。
   const autoProbeBusy = useRef(false);
-  const autoProbe = useCallback(async (entries: SubagentProviderCatalogEntry[]) => {
+  // 探测响应自带的快照会再次触发 snapshot effect；标记来源避免节流分支
+  // 立即用"沿用"文案覆盖刚写好的本次结果。
+  const probeSnapshotRef = useRef<SubagentPoolSnapshot | null>(null);
+  const runAutoProbe = useCallback(async (next: SubagentPoolSnapshot) => {
     if (autoProbeBusy.current) return;
-    const requests = entries
-      .filter((entry) => entry.ready && entry.selectable && entry.model
-        && entry.health.state !== "connected")
-      .map((entry) => ({ source: entry.source, model: entry.model }));
+    if (probeSnapshotRef.current === next) return;
+    const requests = buildAutoProbeRequests(next);
     if (requests.length === 0) return;
     const now = Date.now();
-    if (now - lastAutoProbeAt < AUTO_PROBE_THROTTLE_MS) return;
+    if (now - lastAutoProbeAt < AUTO_PROBE_THROTTLE_MS) {
+      if (lastAutoProbeSummary) setAutoProbe({ ...lastAutoProbeSummary, throttled: true });
+      return;
+    }
     lastAutoProbeAt = now;
     autoProbeBusy.current = true;
     setBusy("auto-probe", true);
     try {
       const response = await subagentProviderTestBatch(requests);
+      probeSnapshotRef.current = response.snapshot;
       setSnapshot(response.snapshot);
       setProbeResults((current) => {
         const next = { ...current };
@@ -187,6 +268,15 @@ export function SubagentProvidersPanel({
         });
         return next;
       });
+      const connected = response.results.filter((entry) => entry.health.state === "connected").length;
+      const summary: AutoProbeSummary = {
+        tested: response.results.length,
+        connected,
+        failed: response.results.length - connected,
+        throttled: false,
+      };
+      lastAutoProbeSummary = summary;
+      setAutoProbe(summary);
     } catch {
       // 自动探测失败不打断配置流程；用户仍可手动测试。
     } finally {
@@ -202,8 +292,8 @@ export function SubagentProvidersPanel({
   // 快照到达后触发一次自动探测（依赖 snapshot 而非 catalog，保证每次重载都评估）。
   useEffect(() => {
     if (!snapshot) return;
-    void autoProbe(snapshot.catalog?.entries ?? []);
-  }, [snapshot, autoProbe]);
+    void runAutoProbe(snapshot);
+  }, [snapshot, runAutoProbe]);
 
   // Codex 协作状态推进（登录完成、协作配置完成）后，Host 侧候选目录的
   // codex_cli 条目会随之就绪；这里只刷新目录，不清掉用户正在编辑的槽位草稿。
@@ -234,11 +324,7 @@ export function SubagentProvidersPanel({
     if (tested) return tested;
     const direct = catalog.find((entry) => sameSource(entry.source, slot.source) && entry.model === slot.model);
     if (direct) return direct;
-    const persistedHealth = (snapshot?.slot_health ?? []).find((health) => (
-      health.slot_id === slot.slot_id
-      && sameSource(health.source, slot.source)
-      && health.model === slot.model
-    ));
+    const persistedHealth = slotHealthOf(slot, snapshot);
     const base = entryForSource(slot.source);
     if (!base || !persistedHealth) return null;
     return {
@@ -393,13 +479,23 @@ export function SubagentProvidersPanel({
   }, [slots.length, weightTotal]);
 
   return (
-    <section className="settings-block subagent-providers-panel" aria-labelledby="subagent-providers-title">
+    <section className="settings-block subagent-providers-panel" id="subagent-pool-block" aria-labelledby="subagent-providers-title">
       <header className="subagent-providers-heading">
         <div>
           <h3 id="subagent-providers-title">候选来源与路由池</h3>
           <p className="desc">从已配置的 API Provider 与 Codex CLI 组成最多 3 个槽位；同一来源可以重复使用。</p>
         </div>
         <div className="subagent-provider-actions">
+          {onOpenGuide && (
+            <button
+              type="button"
+              className="guide-link"
+              aria-haspopup="dialog"
+              onClick={() => onOpenGuide("subagents-pool")}
+            >
+              指引手册 <span aria-hidden="true">→</span>
+            </button>
+          )}
           <button className="btn sm" disabled={loading || globalBusy || anyTestBusy || catalog.length === 0} onClick={() => void testAll()}>
             {isBusy("batch") ? "正在批量测试…" : "全部测试"}
           </button>
@@ -409,8 +505,13 @@ export function SubagentProvidersPanel({
 
       <details className="subagent-provider-boundary">
         <summary>连通性与保存规则</summary>
-        <p>进入本页会自动探测配置就绪但尚未连通的来源（一分钟内重复进入不会重复请求）。失败、过期或配置已变化的来源会保持不可选；保存时 Host 会再次复核。</p>
+        <p>进入本页会自动探测配置就绪但尚未连通的来源与已保存槽位（一分钟内重复进入不会重复请求）。失败、过期或配置已变化的来源会保持不可选；保存时 Host 会再次复核。</p>
       </details>
+      {autoProbeStatusLabel(autoProbe) && (
+        <p className="subagent-autoprobe-status" role="status" aria-live="polite" data-testid="subagent-autoprobe-status">
+          {autoProbeStatusLabel(autoProbe)}
+        </p>
+      )}
       {loading && !snapshot && <div className="settings-loading">正在读取子代理候选来源…</div>}
       {error && <div className="errbar" role="alert">{error}</div>}
       {notice && <div className="okbar" role="status" aria-live="polite">{notice}</div>}
@@ -551,7 +652,7 @@ export function SubagentProvidersPanel({
                       />
                     </label>
                     <label>
-                      <span>权重</span>
+                      <span>权重 <InfoTip label="权重说明">自动委派子代理时按槽位权重比例分流；全部槽位合计必须等于 100% 才能保存。</InfoTip></span>
                       <div className="subagent-weight-input">
                         <button
                           type="button"

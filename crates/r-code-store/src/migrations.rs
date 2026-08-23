@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 33;
+pub const LATEST_SCHEMA_VERSION: u32 = 34;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -62,6 +62,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(31, MIGRATION_031, false),
     MigrationSpec::new(32, MIGRATION_032, false),
     MigrationSpec::new(33, MIGRATION_033, false),
+    MigrationSpec::new(34, MIGRATION_034, false),
 ];
 
 impl MigrationSpec {
@@ -1603,6 +1604,46 @@ ALTER TABLE plans ADD COLUMN runtime_profile_json TEXT;
 ALTER TABLE plans ADD COLUMN catalog_phase TEXT
     CHECK (catalog_phase IS NULL OR catalog_phase IN ('bootstrap', 'resident'));
 ALTER TABLE plans ADD COLUMN profile_version INTEGER;
+"#;
+
+/// Migration 034: 附件引用账本与 JSONL 迁移状态机（docs/multimodal-attachments §4.2）。
+///
+/// `attachments` 是逻辑引用（同一内容可在多条消息中各有一条记录），物理 Blob
+/// 因内容 hash 相同只存一份——因此 `blob_hash` **不得**加唯一约束。
+/// `session_attachment_migrations` 记录逐 storage_id 的 JSONL 原子迁移状态，
+/// 崩溃恢复按 source/target SHA-256 判定重执行 / 补 commit / fail。
+const MIGRATION_034: &str = r#"
+CREATE TABLE attachments (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    blob_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'text', 'pdf')),
+    byte_len INTEGER NOT NULL CHECK (byte_len > 0),
+    width INTEGER,
+    height INTEGER,
+    state TEXT NOT NULL CHECK (state IN ('staged', 'committed')),
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    committed_at TEXT,
+    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY(blob_hash) REFERENCES blobs(hash) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_attachments_task ON attachments(task_id, created_at);
+CREATE INDEX idx_attachments_blob ON attachments(blob_hash);
+CREATE INDEX idx_attachments_staged_lease
+    ON attachments(state, lease_expires_at);
+
+CREATE TABLE session_attachment_migrations (
+    storage_id TEXT PRIMARY KEY,
+    source_sha256 TEXT NOT NULL,
+    target_sha256 TEXT,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'committed', 'failed')),
+    error TEXT,
+    updated_at TEXT NOT NULL
+);
 "#;
 
 #[cfg(test)]

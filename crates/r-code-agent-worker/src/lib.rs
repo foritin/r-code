@@ -28,16 +28,18 @@ pub use agent_loop::run_agent_loop_iteration;
 pub use cache_shape::{capture, compare, CacheChangeCause, PrefixShape};
 pub use checkpoint::GreenCheckpoint;
 pub use llm_runtime::{
-    native_parent_subagent_access, AgentPromptPolicy, CodexSubagentEventSink, CodexSubagentOutcome,
-    CodexSubagentRequest, CodexSubagentRunner, DelegationLimits, DelegationRouterMode,
-    ExternalAgentDescriptor, ExternalAgentEventSink, ExternalAgentId, ExternalAgentOutcome,
-    ExternalAgentRequest, ExternalAgentRunner, FrozenSubagentCandidatePool, FrozenSubagentSlot,
-    FrozenSubagentSlotDescriptor, LlmAgentRuntime, NativeSubagentRuntimeOptions,
-    OrchestrationPolicy, PlanNativeCatalogConfig, PlanNativeCatalogPhase, QualityLoopMode,
-    QualityReviewer, RCodeSubagentOutcome, RCodeSubagentRequest, RCodeSubagentRunner,
-    SubagentCandidateOutcome, SubagentCandidateRequest, SubagentCandidateRunner,
-    SubagentCandidateSource, SubagentProviderCapabilities, DEFAULT_MAIN_AGENT_PROMPT,
-    DEFAULT_SUBAGENT_PROMPT, MAX_ACTIVE_DESCENDANTS, MAX_DESCENDANTS_PER_TREE, MAX_SUBAGENT_DEPTH,
+    native_parent_subagent_access, AgentPromptPolicy, AttachmentResolver, CodexSubagentEventSink,
+    CodexSubagentOutcome, CodexSubagentRequest, CodexSubagentRunner, DelegationLimits,
+    DelegationRouterMode, ExternalAgentDescriptor, ExternalAgentEventSink, ExternalAgentId,
+    ExternalAgentOutcome, ExternalAgentRequest, ExternalAgentRunner, FrozenSubagentCandidatePool,
+    FrozenSubagentSlot, FrozenSubagentSlotDescriptor, LlmAgentRuntime,
+    NativeSubagentRuntimeOptions, OrchestrationPolicy, PlanNativeCatalogConfig,
+    PlanNativeCatalogPhase, QualityLoopMode, QualityReviewer, RCodeSubagentOutcome,
+    RCodeSubagentRequest, RCodeSubagentRunner, RequestBudgetV1, RequestKind, ResolvedAttachment,
+    ResolvedOutputBudget, RouteDescriptor, SubagentCandidateOutcome, SubagentCandidateRequest,
+    SubagentCandidateRunner, SubagentCandidateSource, SubagentProviderCapabilities,
+    DEFAULT_MAIN_AGENT_PROMPT, DEFAULT_SUBAGENT_PROMPT, MAX_ACTIVE_DESCENDANTS,
+    MAX_DESCENDANTS_PER_TREE, MAX_DIRECT_SUBAGENTS_PER_RUN, MAX_SUBAGENT_DEPTH,
 };
 pub use mock_runtime::MockAgentRuntime;
 pub use recovery::{scan_orphaned_runs, RecoveryState};

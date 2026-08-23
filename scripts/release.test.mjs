@@ -266,6 +266,7 @@ test("development launch and updater stay isolated from production", () => {
     "development must never download a production updater payload",
   );
   assert.match(development.plugins.updater.endpoints[0], /dev-latest\.json$/);
+  assert.match(manifest, /\[package\][\s\S]*?default-run\s*=\s*"r-code-host"/);
   assert.match(manifest, /\[features\][\s\S]*default\s*=\s*\["custom-protocol"\]/);
   assert.match(manifest, /custom-protocol\s*=\s*\["tauri\/custom-protocol"\]/);
   assert.match(windowsLauncher, /cargo tauri dev --config "src-tauri\/tauri\.dev\.conf\.json"/);

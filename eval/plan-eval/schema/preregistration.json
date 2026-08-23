@@ -15,6 +15,13 @@
     "probes_complex": 20,
     "records_expected": 40
   },
+  "evidence": {
+    "retry_count_max_per_record": 2,
+    "non_dry_run_required": true,
+    "positive_tokens_and_rounds_required": true,
+    "frozen_pricing_required": true,
+    "clean_commit_required": true
+  },
   "gates": {
     "net_solved_gain_min": 4,
     "regressions_max": 1,

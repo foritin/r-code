@@ -82,6 +82,18 @@ pub struct PlanningRuntimeState {
 
 impl PlanningRuntimeState {
     pub fn new(db: Arc<Database>, plan_store: Arc<PlanStore>, config_dir: PathBuf) -> Self {
+        Self::new_with_release_control(db, plan_store, config_dir, resolve_release_control())
+    }
+
+    /// 构造冻结了显式发布控制的状态。生产入口始终使用 [`Self::new`]；真实评估器
+    /// 用本入口为 baseline / dual-track 两臂注入互不污染的 off / experiment 控制，
+    /// 避免“先有 validated manifest 才能评估生成 manifest”的自举死锁。
+    pub fn new_with_release_control(
+        db: Arc<Database>,
+        plan_store: Arc<PlanStore>,
+        config_dir: PathBuf,
+        release_control: PlanningReleaseControl,
+    ) -> Self {
         Self {
             plan_entry: Arc::new(PlanEntryStore::new(db.clone())),
             db,
@@ -89,7 +101,7 @@ impl PlanningRuntimeState {
             suggestion_gate: Arc::new(PlanSuggestionGate::default()),
             run_origins: Arc::new(RunOriginRegistry::default()),
             config_dir,
-            release_control: resolve_release_control(),
+            release_control,
         }
     }
 
@@ -153,7 +165,7 @@ impl PlanningRuntimeState {
         {
             return Ok(None);
         }
-        // 冻结 route 的资格：只认稳定 provider_kind 与证据 allowlist。
+        // 冻结 route 的资格：只认稳定 provider_kind 身份（急停时全局判负）。
         let route = self.route_context_for_task(task)?;
         let eligibility = resolve_plan_entry_eligibility(&route, &self.release_control);
         if !eligibility.eligible {
@@ -182,17 +194,30 @@ impl PlanningRuntimeState {
             return Ok(None);
         }
         Ok(Some(ArmedPlanSuggestion {
-            profile: resolve_plan_runtime_profile(&route, &self.release_control, true),
+            // docs §8.1：锚定开关独立于建议开关（suggest_complex_tasks 已在
+            // 上方判定）；accept 时按同一 config 快照冻结 anchoring 偏好。
+            profile: resolve_plan_runtime_profile(
+                &route,
+                &self.release_control,
+                true,
+                config.planning.deepseek_plan_anchoring,
+            ),
             route,
             control: self.release_control.clone(),
         }))
     }
 
     /// 任务的冻结 Plan profile（EnterPlanModeTool / plan_create IPC 用）。
+    /// docs §8.1/§8.2：所有 Plan 创建路径经此冻结 anchoring 偏好与 route；
+    /// 运行中切换设置只影响之后新建的 Plan。
     pub fn resolve_profile_for_task_id(&self, task_id: &str) -> ResolvedPlanRuntimeProfile {
         let Ok(Some(task)) = TaskRepositoryBridge::get(&self.db, task_id) else {
             return ResolvedPlanRuntimeProfile::baseline();
         };
+        let anchoring = crate::settings::SettingsService::new(self.config_dir.clone())
+            .load_global_unvalidated()
+            .map(|config| config.planning.deepseek_plan_anchoring)
+            .unwrap_or(false);
         match self.route_context_for_task(&task) {
             Ok(route) => resolve_plan_runtime_profile(
                 &route,
@@ -200,6 +225,7 @@ impl PlanningRuntimeState {
                 task.workspace_path
                     .as_deref()
                     .is_some_and(|path| !path.trim().is_empty()),
+                anchoring,
             ),
             Err(_) => ResolvedPlanRuntimeProfile::baseline(),
         }
@@ -359,15 +385,36 @@ impl PlanEntryOfferView {
 /// 供 settings / 诊断页消费的规划发布状态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningStatusView {
+    /// `off` 仅在急停开关（`R_CODE_PLANNING_EMERGENCY_OFF=1`）时出现，其余为 `open`。
     pub release_state: String,
     pub emergency_off: bool,
-    pub evidence_version: String,
-    pub eligibility_profile_version: String,
-    /// 客户开关卡片是否可见（默认 Provider 是符合资格的 DeepSeek）。
-    pub customer_card_visible: bool,
-    /// 证据是否已通过（未通过时客户开关不可启用）。
-    pub evidence_validated: bool,
-    pub basis: String,
+    /// 任一已配置且就绪的服务的稳定身份是 DeepSeek（不限默认服务：运行时按
+    /// 任务实际绑定的 route 生效）。
+    pub deepseek_configured: bool,
+    /// 客户滑钮是否可操作：存在可用 DeepSeek 服务且未急停。
+    pub customer_switch_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CustomerPlanningSurface {
+    deepseek_configured: bool,
+    switch_enabled: bool,
+}
+
+fn customer_planning_surface(
+    deepseek_configured: bool,
+    control: &PlanningReleaseControl,
+) -> CustomerPlanningSurface {
+    let switch_enabled = deepseek_configured
+        && !control.emergency_off
+        && !matches!(
+            control.release_state,
+            crate::plan_policy::PlanningReleaseState::Off
+        );
+    CustomerPlanningSurface {
+        deepseek_configured,
+        switch_enabled,
+    }
 }
 
 pub async fn planning_status(
@@ -378,37 +425,22 @@ pub async fn planning_status(
     let config = settings
         .load_global_unvalidated()
         .map_err(|error| error.to_string())?;
-    let provider_name = config.default_provider.clone();
-    let route = config
-        .providers
-        .get(&provider_name)
-        .map(|provider| ProviderRouteContext {
-            provider_name,
-            provider_kind: provider.provider_kind.clone().unwrap_or_default(),
-            model: provider.model.clone(),
-            wire_protocol: crate::commands::resolve_effective_protocol(
-                &config.default_provider,
-                provider,
-            )
-            .as_str()
-            .to_string(),
-            endpoint_class: EndpointClass::classify(&provider.base_url),
-        });
-    let eligibility = route
-        .as_ref()
-        .map(|route| resolve_plan_entry_eligibility(route, &planning.release_control));
-    let customer_card_visible = eligibility
-        .as_ref()
-        .is_some_and(|eligibility| eligibility.eligible);
+    // 证据门已移除（A3）：判定只看「是否存在就绪的 DeepSeek 服务」。默认服务是谁
+    // 不再影响开关可用性——运行时资格按每个任务绑定的 route 解析。
+    let deepseek_configured = config.providers.iter().any(|(name, provider)| {
+        provider
+            .provider_kind
+            .as_deref()
+            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("deepseek"))
+            && crate::commands::provider_readiness_error(name, provider).is_none()
+    });
+    let customer_surface =
+        customer_planning_surface(deepseek_configured, &planning.release_control);
     Ok(PlanningStatusView {
         release_state: planning.release_control.release_state.as_str().to_string(),
         emergency_off: planning.release_control.emergency_off,
-        evidence_version: planning.release_control.evidence_version.clone(),
-        eligibility_profile_version: planning.release_control.eligibility_profile_version.clone(),
-        customer_card_visible,
-        evidence_validated: planning.release_control.release_state
-            == crate::plan_policy::PlanningReleaseState::Validated,
-        basis: planning.release_control.basis.clone(),
+        deepseek_configured: customer_surface.deepseek_configured,
+        customer_switch_enabled: customer_surface.switch_enabled,
     })
 }
 
@@ -572,5 +604,30 @@ mod tests {
         assert!(registry
             .current(&format!("run-fill-{}", RUN_ORIGIN_RETAIN - 1))
             .is_some());
+    }
+
+    #[test]
+    fn planning_customer_surface_requires_ready_deepseek_and_open_release() {
+        let open_control = resolve_release_control();
+        assert_eq!(
+            open_control.release_state,
+            crate::plan_policy::PlanningReleaseState::Open
+        );
+        let surface = customer_planning_surface(true, &open_control);
+        assert!(surface.deepseek_configured);
+        assert!(surface.switch_enabled);
+
+        // 未配置可用的 DeepSeek 服务：开关禁用，但卡片仍可见。
+        let missing = customer_planning_surface(false, &open_control);
+        assert!(!missing.deepseek_configured);
+        assert!(!missing.switch_enabled);
+
+        // 急停：即使存在可用 DeepSeek 服务也全局判负。
+        let mut emergency = open_control.clone();
+        emergency.emergency_off = true;
+        emergency.release_state = crate::plan_policy::PlanningReleaseState::Off;
+        let halted = customer_planning_surface(true, &emergency);
+        assert!(halted.deepseek_configured);
+        assert!(!halted.switch_enabled);
     }
 }

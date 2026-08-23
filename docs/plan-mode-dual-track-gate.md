@@ -3,8 +3,13 @@
 > 文档类型：产品需求文档（PRD）+ 实施设计，二合一。
 >
 > 状态：Phase 0 已按第 17 节顺序实施（M0-00…M0-11 基建完成；`plan_ready` 与 Main 模式首轮收窄已下线）。
-> 证据门保持关闭：仓库尚无真实 DeepSeek 三臂证据 manifest，`validated` 恒为 off（fail closed），
-> 自动建议与 Plan 双轨默认不启用；`eval/plan-eval/README.md` 描述真实运行协议。
+> **证据门已废弃（2026-08-22，见 `docs/settings-ux-and-image-understanding.md` A3）**：
+> §14.1 的 manifest 嵌入、§16 的预注册发布门与 experiment 环境变量均已移除，相关
+> 章节仅作历史设计记录保留。客户滑钮 `planning.suggest_complex_tasks` 是唯一开关，
+> 打开即生效；`R_CODE_PLANNING_EMERGENCY_OFF=1` 急停是唯一宿主级兜底。
+> `eval/plan-eval/` 降级为可选的事后质量回归工具，不再阻塞功能启用。
+> 配置入口：**设置 → Agent 编排 → 复杂任务先建议制定计划**，卡片始终可见；
+> 存在任一可用的 DeepSeek 服务即可操作开关（按任务实际 route 生效，无需设为默认）。
 >
 > 本文同时回答两类问题：客户会看到什么、为什么这样设计；工程团队如何实现、验证和安全发布。
 
@@ -199,16 +204,17 @@ GuideSheet 沿用已有能力：离线内置、内容注册表、Portal、focus 
 
 ### 6.4 客户设置
 
-普通客户只看到一个 DeepSeek 专属开关：
+普通客户在 **设置 → Agent 编排** 只看到一个 DeepSeek 专属开关：
 
 ```text
 复杂任务先建议制定计划    [开/关]
 仅在 DeepSeek 识别到复杂任务时询问；每个任务最多一次。
 ```
 
-- 只有当前默认 Provider 符合 DeepSeek 资格时显示该卡；非 DeepSeek 不显示一组无效的禁用控件；
+- 卡片在 Agent 编排设置中始终可见；当前默认 Provider 的稳定 `provider_kind`、证据状态和 route 覆盖只决定开关能否操作，不能让配置入口消失；
+- 当前默认 Provider 非 DeepSeek 时开关禁用，并说明“切换到 DeepSeek 后可配置”；
 - 证据状态、profile version、experiment 和 emergency off 留在诊断/开发者层；
-- 证据未通过时客户开关不可启用，产品保持 baseline，并用一句话说明“功能仍在验证中”；
+- 证据未通过时客户开关不可启用，产品保持 baseline，并用一句话说明“功能仍在验证中”；证据已通过但当前 route 未覆盖时也保持禁用并说明原因；
 - 切换开关只影响新 offer，不改变已经接受的 Plan；
 - 旧 `first_round_*` 实验档位从客户设置中移除。
 
@@ -224,7 +230,7 @@ GuideSheet 沿用已有能力：离线内置、内容注册表、Portal、focus 
 
 ## 7. PRD 验收标准
 
-- 新功能只在证据匹配的 DeepSeek Provider 上出现；非 DeepSeek 自动触发数为 0；
+- 自动建议和 Plan 双轨只在证据匹配的 DeepSeek route 上运行；设置卡始终可见，Provider 或证据不满足时不可操作并解释原因；非 DeepSeek 自动触发数为 0；
 - 客户弹窗不包含内部 signal、工具名、双轨或目录术语；
 - 客户只做“直接继续 / 先制定计划”一个二选一决定；
 - 同 request 最多一个 offer，同 task branch 最多一次主动阻断弹窗；
@@ -816,7 +822,7 @@ M0-00 必须位于所有 Rust M0 任务之前。证据 gate 之后仍保留正�
 | 续接 | durable append 前后、runtime accept 后、sent ack 前崩溃；retry 复用 operation ID |
 | 客户弹窗 | 只出现“直接继续 / 先制定计划”；客户 UI 不含 signal、reason、tool/catalog/profile/evidence/CAS/双轨等内部词；关闭和 Escape 等价于继续 |
 | GuideSheet | 从决策弹窗、DeepSeek 设置和 Help 打开；替换而非叠加 modal；关闭后恢复原决定与焦点；Guide 内 Escape 不拒绝 offer；focus trap、窄窗、reduced-motion 全覆盖 |
-| 客户设置 | 只有 eligible DeepSeek 显示一个建议开关；证据未通过不可启用；其他 Provider 不显示无效控件；切换只影响新 offer |
+| 客户设置 | Agent 编排中始终显示一个建议开关；默认 Provider 非 DeepSeek、证据未通过或 route 未覆盖时不可启用但卡片不消失；切换只影响新 offer |
 | UI 恢复 | 双击、IPC 失败、内联 retry、重载、非当前 task 不抢焦点、键盘全流程与 `Needs You` 投影 |
 | Plan 硬门 | 历史 ToolUse、直接 `call_inner`、外部 host 三条路径尝试 edit/Shell/MCP/delegate |
 | Plan 发布 | 坏 DAG、空叶项、ready 未批准、批准 CAS、取消、提问、发布失败 |
@@ -912,3 +918,15 @@ M0-00 必须位于所有 Rust M0 任务之前。证据 gate 之后仍保留正�
 - [Plan 模式、人工确认与增强审核](./plan-mode.md)
 - [请求构成审计与首轮锚定实验](./request-audit-and-anchoring.md)
 - [架构与实现细节](./architecture.md)
+
+---
+
+## 实施状态修订（2026-08，docs/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md 生效后）
+
+新增独立客户滑钮 `planning.deepseek_plan_anchoring`（默认关闭）：
+
+- 与 `suggest_complex_tasks` 互不替代：建议开关只控制是否注册 propose_plan_mode；锚定开关控制实际进入 DeepSeek Plan 后是否启用 5→8 最小只读目录 + PlanMinimal 上下文注入，以及批准实施后的完整能力恢复（`RestoredFull` 事件 + worker 侧 fail-closed 断言 `PLAN_FULL_CATALOG_NOT_RESTORED`）。
+- 开关值、Provider route（kind/model/protocol/route revision）在 Plan 创建时冻结进 `ResolvedPlanRuntimeProfile`（profile_version=2）；运行中切换设置只影响之后新建的 Plan。
+- `R_CODE_PLANNING_EMERGENCY_OFF=1` 同时关闭建议与锚定，Plan 只读安全硬门保持。
+- 上下文注入统一经 `ContextInjectionProfile` 闸门（Standard / PlanMinimalV1）：PlanMinimal 从固定最小模板正向构造 system，禁止 memory、本地时钟、普通 task context、用户协作文案、MCP 文案、peer mailbox（保持 pending 不消费）、Plan 建议尾部、工具进度 checkpoint、委派提示、hosted web fallback 与 governor 尾部。
+- 关闭开关时与 baseline Plan 请求形状一致（目录与注入均不受影响）。

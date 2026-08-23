@@ -13,6 +13,7 @@
 //!
 //! [doc-06 §2-8] [agent-contracts/12 §2,§5]
 
+pub mod attachment_store;
 pub mod backup;
 pub mod change_service;
 pub mod database;
@@ -32,6 +33,7 @@ pub mod verification;
 pub mod workspace_service;
 
 // 重新导出核心类型
+pub use attachment_store::{AttachmentRecord, AttachmentState, AttachmentStore, StageAttachment};
 pub use backup::BackupManager;
 pub use change_service::{
     ChangeService, ChangeSet, ChangeSetEntry, NewRunWorkspaceSnapshot, RollbackResult,

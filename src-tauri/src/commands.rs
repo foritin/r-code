@@ -62,11 +62,11 @@ use r_code_agent_worker::{
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEngine, AgentEvent, AgentEventScope, AgentKind, AgentRun,
-    AgentRunRuntimeKind, AgentSendMode, CreateSessionInput, FileChange, FileChangeType,
-    Notification, NotificationKind, PermissionDecision, PermissionRequest, PlanStep,
-    ProjectAccessMode, QueuedMessage, QueuedMessageState, ReviewState, RiskLevel, SessionBranch,
-    SubagentAccessMode, SubagentState, Task, TaskEvent, TaskEventType, TaskMode, TaskState,
-    ToolCall, VerificationRecord, Workspace, WorkspaceMemoryMode,
+    AgentRunRuntimeKind, AgentSendMode, CatalogAnchorPhase, CreateSessionInput, FileChange,
+    FileChangeType, Notification, NotificationKind, PermissionDecision, PermissionRequest,
+    PlanStep, ProjectAccessMode, QueuedMessage, QueuedMessageState, ReviewState, RiskLevel,
+    SessionBranch, SubagentAccessMode, SubagentState, Task, TaskEvent, TaskEventType, TaskMode,
+    TaskState, ToolCall, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
 use r_code_core::error::ProductError;
 use r_code_core::plan::{
@@ -107,6 +107,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex_app_server::{
     recognized_protocol_progress, CodexAppServerError, CodexAppServerLease,
     CodexAppServerLineEvent, CodexAppServerRegistry, CodexAppServerTransport,
+    CODEX_DISABLE_R_CODE_MCP_OVERRIDE,
 };
 use crate::codex_mcp::{CodexMcpCallOutcome, CodexMcpRegistry};
 use crate::codex_permissions::{CodexDelegationPermissions, CodexPermissionMode};
@@ -132,6 +133,8 @@ use crate::replay::{ReplayDepth, ReplayService};
 use crate::search::SearchService;
 use crate::settings::{ProjectAgentPromptPolicy, ProjectPromptMode, SettingsService};
 use crate::skills::SkillManager;
+#[cfg(not(test))]
+use crate::subagent_providers::VerifiedExecutableTrustChain;
 use crate::subagent_providers::{
     attest_subagent_health_receipt, build_subagent_provider_catalog,
     compute_subagent_pool_revision, load_or_create_fingerprint_pepper,
@@ -141,7 +144,7 @@ use crate::subagent_providers::{
     SubagentHealthReceiptDocument, SubagentHealthReceiptStore, SubagentPoolSlotHealth,
     SubagentPoolSnapshot, SubagentProviderAvailability, SubagentProviderCapabilities,
     SubagentProviderCatalogEntry, SubagentProviderHealthState, SubagentProviderProbeBatchResponse,
-    SubagentProviderProbeRequest, SubagentProviderProbeResponse, VerifiedExecutableTrustChain,
+    SubagentProviderProbeRequest, SubagentProviderProbeResponse,
 };
 use crate::support_bundle::{McpServerSupportSummary, SupportBundle};
 use crate::workflow_skills::{
@@ -466,8 +469,8 @@ enum ExternalSteerOutcome {
 }
 
 impl ExternalAgentRegistry {
-    // One slot is occupied by the external main run. The remaining three match the native
-    // supervisor's child concurrency ceiling and also make those children individually cancellable.
+    // One slot is occupied by the external main run. The remaining three match the child
+    // concurrency ceiling and keep every external child individually cancellable.
     const MAX_ACTIVE_EXTERNAL_RUNS_PER_TASK: usize = 4;
 
     async fn reserve(
@@ -1014,6 +1017,52 @@ impl CommandState {
         project_root: PathBuf,
         db_path: Option<PathBuf>,
     ) -> Self {
+        Self::new_with_optional_planning_release_control(
+            db,
+            blobs_dir,
+            sessions_dir,
+            config_dir,
+            project_root,
+            db_path,
+            None,
+        )
+    }
+
+    /// 为隔离评估环境冻结显式的 Plan 发布控制。桌面生产入口必须使用 [`Self::new`]
+    /// 并只接受嵌入证据/内部环境解析结果；本入口用于三臂评估避免 baseline 与
+    /// dual-track 互相污染。
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_planning_release_control(
+        db: Arc<Database>,
+        blobs_dir: PathBuf,
+        sessions_dir: PathBuf,
+        config_dir: PathBuf,
+        project_root: PathBuf,
+        db_path: Option<PathBuf>,
+        release_control: crate::plan_policy::PlanningReleaseControl,
+    ) -> Self {
+        Self::new_with_optional_planning_release_control(
+            db,
+            blobs_dir,
+            sessions_dir,
+            config_dir,
+            project_root,
+            db_path,
+            Some(release_control),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_optional_planning_release_control(
+        db: Arc<Database>,
+        blobs_dir: PathBuf,
+        sessions_dir: PathBuf,
+        config_dir: PathBuf,
+        project_root: PathBuf,
+        db_path: Option<PathBuf>,
+        release_control: Option<crate::plan_policy::PlanningReleaseControl>,
+    ) -> Self {
         let permission_engine = Arc::new(PermissionEngine::new());
         let mcp_manager = Arc::new(McpManager::new(config_dir.clone()));
         // `config_dir` is AppData/r-code/config in production and <tmp>/config in tests.
@@ -1022,11 +1071,15 @@ impl CommandState {
             db.clone(),
             plan_projection_root(&config_dir),
         ));
-        let planning = Arc::new(PlanningRuntimeState::new(
-            db.clone(),
-            plan_store.clone(),
-            config_dir.clone(),
-        ));
+        let planning = Arc::new(match release_control {
+            Some(release_control) => PlanningRuntimeState::new_with_release_control(
+                db.clone(),
+                plan_store.clone(),
+                config_dir.clone(),
+                release_control,
+            ),
+            None => PlanningRuntimeState::new(db.clone(), plan_store.clone(), config_dir.clone()),
+        });
         // 崩溃窗口恢复（docs §12.4 降级合同）：未确认续接显式 failed 供重试；
         // Provider 已变化的 pending 建议 superseded（恢复顺序先于任何新 Run）。
         match planning.recover_interrupted_continuations() {
@@ -2110,6 +2163,7 @@ pub async fn task_prepare(state: &CommandState, task_id: &str) -> Result<(), Str
         &state.db,
         &state.session_store,
         &state.sessions_dir,
+        &state.config_dir,
         &task,
         &branch,
     )
@@ -2160,7 +2214,7 @@ fn render_host_task_context_from_store(
     let execution_policy = match execution.status {
         PlanExecutionStatus::NoExecutingPlan => None,
         PlanExecutionStatus::ActiveFeature => Some(
-            "Implement only active_feature and keep its persisted progress current. Attribute every workspace write to that feature. Do not work ahead or skip dependencies. Independent read-only investigation or verification for this active feature may use up to three subagents in parallel; collect every result before deciding acceptance. Keep overlapping or mutating work with the main Agent so enhanced ownership remains deterministic. Prefer direct edit/apply_patch/create_file/delete_file tools for Plan feature writes. Writes made through shell, MCP, or external agents cannot be reliably attributed and appear only in ordinary Git review. Call plan_item_update when the feature is completed or blocked before continuing. A normal final answer does not end the run while active_feature still exists.",
+            "Implement only active_feature and keep its persisted progress current. Attribute every workspace write to that feature. Do not work ahead or skip dependencies. Work directly by default: permission to use subagents is not an instruction to create them. Only genuinely independent read-only investigation or verification for this active feature may use up to two subagents in parallel; collect every result and synthesize once before deciding acceptance. Keep overlapping or mutating work with the main Agent so enhanced ownership remains deterministic. Prefer direct edit/apply_patch/create_file/delete_file tools for Plan feature writes. Writes made through shell, MCP, or external agents cannot be reliably attributed and appear only in ordinary Git review. Call plan_item_update when the feature is completed or blocked before continuing. A normal final answer does not end the run while active_feature still exists.",
         ),
         PlanExecutionStatus::Paused => Some(
             "Plan execution is paused. Do not write to the workspace through direct tools, shell, MCP, or external agents. First resume blocked_feature by calling plan_item_update with state=in_progress for the same feature and current Plan revision; only then continue implementation.",
@@ -2533,7 +2587,22 @@ fn stage_plan_implementation(
         .plan_store
         .stage_implementation_dispatch(task_id, plan_id, &branch.id, &message)
     {
-        Ok(view) => Ok(view),
+        Ok(view) => {
+            // docs §8.6：implementation dispatch 事务成功（task.mode=auto +
+            // dispatch=dispatched + 队列入队）后发出 RestoredFull 审计事件。
+            // 下一 run 的 prepare_runtime_session 派生 ExecutionFull，恢复完整
+            // 目录与 Standard 注入；worker 侧断言非 Plan 策略绝不再看到收窄目录。
+            state.emit_agent_event(
+                task_id,
+                &AgentEvent::CatalogAnchor {
+                    phase: CatalogAnchorPhase::RestoredFull,
+                    catalog: "plan_native".to_string(),
+                    tool_count: 0,
+                    full_tool_count: 0,
+                },
+            );
+            Ok(view)
+        }
         Err(error) => {
             let error = format!("PLAN_IMPLEMENTATION_STAGE_FAILED: {error}");
             if let Err(mark_error) = state
@@ -4655,6 +4724,22 @@ impl AgentRuntime for AgentRuntimeKind {
             Self::Mock(_) => Ok(()),
         }
     }
+
+    async fn update_vision_budget_and_route(
+        &mut self,
+        session_id: &str,
+        vision_budget: Option<agent_contract::VisionBudgetProfile>,
+        route: r_code_agent_worker::RouteDescriptor,
+    ) -> Result<(), ProductError> {
+        // docs §5.1/§6.2：冻结能力派生物只进 Real runtime；Mock 无预算概念。
+        match self {
+            Self::Real(r) => {
+                r.update_vision_budget_and_route(session_id, vision_budget, route)
+                    .await
+            }
+            Self::Mock(_) => Ok(()),
+        }
+    }
 }
 
 impl AgentBridge {
@@ -4889,6 +4974,51 @@ async fn ensure_real_runtime(
                 .promote_catalog_phase(task_id)
                 .map(|_| ())
                 .map_err(|error| error.to_string())
+        }));
+    }
+    // docs/multimodal-attachments §6.3：注入附件解析器。发送时的所有权与元数据
+    // 校验已在 build_ref_send_plan 完成（task-local lock 内 get_owned）；此处
+    // 解析器只服务 Provider 请求构造期的物化（attachment_id → Blob 字节），
+    // 物化副本随请求结束丢弃，Base64 不进任何持久层。blobs 目录与 sessions
+    // 目录同根（main.rs 构造 CommandState 时为 base/blobs 与 base/sessions）。
+    {
+        let resolver_db = db.clone();
+        let resolver_blobs_dir = sessions_dir
+            .parent()
+            .map(|base| base.join("blobs"))
+            .unwrap_or_else(|| sessions_dir.join("..").join("blobs"));
+        runtime = runtime.with_attachment_resolver(Arc::new(move |attachment_id| {
+            let db = resolver_db.clone();
+            let blobs_dir = resolver_blobs_dir.clone();
+            Box::pin(async move {
+                let (task_id, blob_hash, name, media_type): (String, String, String, String) =
+                    db.conn()
+                        .map_err(|error| ProductError::DatabaseError(error.to_string()))?
+                        .query_row(
+                            "SELECT task_id, blob_hash, name, media_type FROM attachments WHERE id = ?1",
+                            rusqlite::params![attachment_id],
+                            |row| {
+                                Ok((
+                                    row.get(0)?,
+                                    row.get(1)?,
+                                    row.get(2)?,
+                                    row.get(3)?,
+                                ))
+                            },
+                        )
+                        .map_err(|_| ProductError::AttachmentNotFound {
+                            attachment_id: attachment_id.clone(),
+                        })?;
+                let store = r_code_store::AttachmentStore::new(&db, blobs_dir);
+                let bytes = store.read_owned(&task_id, &attachment_id)?;
+                let _ = blob_hash;
+                Ok(r_code_agent_worker::ResolvedAttachment {
+                    name,
+                    media_type,
+                    bytes,
+                    text: None,
+                })
+            })
         }));
     }
     // A3.2：请求信封审计（opt-in，默认关闭）。旁路 journal 写子目录
@@ -5803,6 +5933,7 @@ async fn ensure_runtime_session(
     db: &Database,
     session_store: &SessionStore,
     sessions_dir: &Path,
+    config_dir: &Path,
     task: &Task,
     branch: &SessionBranch,
 ) -> Result<String, String> {
@@ -5841,6 +5972,32 @@ async fn ensure_runtime_session(
         .set_request_journal_target(&session.meta.id, branch.storage_id.clone())
         .await
         .map_err(err_str)?;
+    // docs/multimodal-attachments §5.1/§6.2：会话建立时注入冻结能力派生物——
+    // 视觉预算 profile（目录确认多模态时）与路由审计描述。能力解析只经
+    // model_capabilities 单一入口；同 run 内不再随设置热变化。
+    {
+        let settings = SettingsService::new(config_dir.to_path_buf());
+        if let Ok(config) = settings.load_global_unvalidated() {
+            let capabilities = crate::model_capabilities::resolve(
+                &config,
+                task.agent_engine,
+                task.provider_name.as_deref(),
+                task.model.as_deref(),
+            );
+            let _ = bridge
+                .kind
+                .update_vision_budget_and_route(
+                    &session.meta.id,
+                    capabilities.vision_budget,
+                    r_code_agent_worker::RouteDescriptor {
+                        provider_kind: capabilities.provider_kind.clone(),
+                        protocol: capabilities.protocol.clone(),
+                        route_revision: crate::model_capabilities::route_revision(&capabilities),
+                    },
+                )
+                .await;
+        }
+    }
     bridge
         .kind
         .replace_context(&session.meta.id, history.messages, history.model_projection)
@@ -6240,21 +6397,22 @@ fn valid_attachment_preview_id(value: &str) -> bool {
     }
 }
 
-/// 本机 OCR 原图的落盘扩展名。JPEG 采用 `jpg`。
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+/// 本机 OCR 原图的落盘扩展名。JPEG 采用 `jpg`。视觉模型引擎处理 gif/webp 时
+/// 复用同一条原图预览链。
 fn attachment_preview_extension(media_type: &str) -> Result<&'static str, String> {
     match media_type {
         "image/png" => Ok("png"),
         "image/jpeg" => Ok("jpg"),
-        other => Err(format!("{other} 不支持本机 OCR 原图预览")),
+        "image/gif" => Ok("gif"),
+        "image/webp" => Ok("webp"),
+        other => Err(format!("{other} 不支持图片原图预览")),
     }
 }
 
-/// 把本机 OCR 原图字节写入 `{app_data}/attachments/{task_id}/{preview_id}.{ext}`。
+/// 把本机 OCR / 视觉模型的原图字节写入 `{app_data}/attachments/{task_id}/{preview_id}.{ext}`。
 ///
 /// `sessions_dir` 位于 `{app_data}/sessions`，附件目录由其父目录推导，避免为单一
 /// 功能扩展 `CommandState`。返回的引用只服务 UI 预览，绝不进入模型上下文。
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn persist_attachment_preview(
     sessions_dir: &Path,
     task_id: &str,
@@ -6369,6 +6527,314 @@ async fn apply_native_ocr(
     }
 }
 
+/// OCR 引擎下的标记规则（可单测的纯函数）：用户显式选择 OCR，全部 png/jpeg
+/// 图片都走系统 OCR，与主模型是否支持读图无关；gif/webp/pdf 维持现有能力路径。
+fn mark_ocr_engine_images(attachments: &mut [ValidatedAttachment]) {
+    for attachment in attachments.iter_mut() {
+        if attachment.kind == ValidatedAttachmentKind::Image
+            && matches!(attachment.media_type.as_str(), "image/png" | "image/jpeg")
+        {
+            attachment.native_ocr = true;
+        }
+    }
+}
+
+/// 主模型是否**原生**处理图片——命中时图片直发原图，完全跳过图片理解引擎
+///（避免本末倒置：辅助引擎只服务文本主模型）：
+/// - Codex 主 Agent：附件由 Codex 自身的模型目录处理（`prepare_codex_attachments`），
+///   引擎不得抢处理；
+/// - 目录**确认**多模态（`vision == true`）的主模型：原图直接进主模型上下文。
+///
+/// 能力未知（自定义中转/同步模型）不视为确认，仍按配置引擎分派。
+fn main_model_handles_images_natively(
+    config: &agent_config::Config,
+    agent_engine: AgentEngine,
+    provider_name: Option<&str>,
+    model_override: Option<&str>,
+) -> bool {
+    if agent_engine == AgentEngine::Codex {
+        return true;
+    }
+    let provider_name = provider_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(config.default_provider.as_str());
+    let Some(provider) = config.providers.get(provider_name) else {
+        return false;
+    };
+    let model = model_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(provider.model.as_str());
+    if model.is_empty() {
+        return false;
+    }
+    // docs §5.1：判定全部委托 model_capabilities 单一入口（目录 + 地址未改写
+    // 的预设标注为权威）；此处只保留薄封装供既有调用方使用。
+    let resolved =
+        crate::model_capabilities::resolve(config, agent_engine, Some(provider_name), Some(model));
+    resolved.vision == crate::model_capabilities::CapabilityTruth::Confirmed
+}
+
+/// 图片理解引擎（docs/settings-ux-and-image-understanding.md D4）：把"图片怎么被
+/// 理解"从隐式降级变成显式配置分派。
+///
+/// **前置短路**：主模型原生处理图片（Codex 主 Agent，或目录确认多模态的主模型）
+/// 时直接返回原图，引擎只作为文本主模型的辅助。
+///
+/// - `ocr`（默认）：png/jpeg 走系统 OCR 转文本注入上下文；gif/webp/pdf 维持现有
+///   能力路径。
+/// - `model`：每张图片由配置的视觉模型理解一次，生成结构化描述文本注入主对话
+///   （并发执行，多图等待时间为最慢一张而非累加）；失败时 png/jpeg 在有系统
+///   OCR 的平台自动降级并标注，否则返回明确错误。
+async fn apply_image_understanding(
+    state: &CommandState,
+    task_id: &str,
+    mut attachments: Vec<ValidatedAttachment>,
+) -> Result<Vec<ValidatedAttachment>, String> {
+    let settings = SettingsService::new(state.config_dir.clone());
+    let config = settings.load_global_unvalidated().map_err(err_str)?;
+    // 按任务实际绑定的服务/模型判定（与运行时 route 解析同规则）。
+    let task = TaskRepository::new(&state.db).get(task_id).ok().flatten();
+    let (agent_engine, provider_name, model_override) = task
+        .as_ref()
+        .map(|task| {
+            (
+                task.agent_engine,
+                task.provider_name.as_deref(),
+                task.model.as_deref(),
+            )
+        })
+        .unwrap_or((AgentEngine::RCode, None, None));
+    if main_model_handles_images_natively(&config, agent_engine, provider_name, model_override) {
+        return Ok(attachments);
+    }
+    match config.image_understanding.engine {
+        agent_config::ImageUnderstandingEngine::Ocr => {
+            mark_ocr_engine_images(&mut attachments);
+            apply_native_ocr(&state.sessions_dir, task_id, attachments)
+                .await
+                .map_err(|error| {
+                    // Linux 等无系统 OCR 的平台：给出切换指引而不是裸报错。
+                    if error.contains("当前平台不提供系统 OCR") {
+                        "当前平台不提供系统 OCR；可在 设置 → 模型服务 → 图片理解 切换到\
+                         视觉模型引擎，或改用支持图片输入的模型"
+                            .to_string()
+                    } else {
+                        error
+                    }
+                })
+        }
+        agent_config::ImageUnderstandingEngine::Model => {
+            apply_vision_model_understanding(
+                &AttachmentPlanCtx {
+                    db: &state.db,
+                    blobs_dir: state.blobs_dir.clone(),
+                    sessions_dir: state.sessions_dir.clone(),
+                    config_dir: state.config_dir.clone(),
+                },
+                task_id,
+                attachments,
+                &config,
+            )
+            .await
+        }
+    }
+}
+
+/// 视觉模型单次理解的输出上限与超时（对齐子代理探测的模式）。
+const IMAGE_UNDERSTANDING_MAX_TOKENS: u32 = 2048;
+const IMAGE_UNDERSTANDING_MODEL_TIMEOUT: Duration = Duration::from_secs(60);
+/// 视觉模型路径复用本机 OCR 的同组预算常量，避免一次贴 N 图打爆计费。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const MAX_IMAGE_UNDERSTANDING_ATTACHMENTS: usize = MAX_NATIVE_OCR_ATTACHMENTS;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const MAX_IMAGE_UNDERSTANDING_ATTACHMENTS: usize = 4;
+const IMAGE_UNDERSTANDING_PROMPT: &str = "描述这张图片的内容、界面元素与文字，输出结构化中文描述。";
+
+fn vision_understanding_request(
+    model: &str,
+    attachment: &ValidatedAttachment,
+) -> CompletionRequest {
+    CompletionRequest {
+        model: model.to_string(),
+        system: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Image {
+                    source: agent_contract::ImageSource {
+                        kind: "base64".to_string(),
+                        media_type: attachment.media_type.clone(),
+                        data: attachment.data.clone(),
+                    },
+                },
+                ContentBlock::Text {
+                    text: IMAGE_UNDERSTANDING_PROMPT.to_string(),
+                },
+            ],
+        }],
+        tools: vec![],
+        hosted_tools: vec![],
+        max_tokens: IMAGE_UNDERSTANDING_MAX_TOKENS,
+        temperature: Some(0.0),
+        enable_caching: false,
+        inference: InferenceOptions::default(),
+    }
+}
+
+async fn apply_vision_model_understanding(
+    ctx: &AttachmentPlanCtx<'_>,
+    task_id: &str,
+    mut attachments: Vec<ValidatedAttachment>,
+    config: &agent_config::Config,
+) -> Result<Vec<ValidatedAttachment>, String> {
+    // 发送时的权威校验：配置缺失 / 服务被删都返回可读错误（settings_set 不校验，
+    // 旧配置也可能漂移）。
+    let provider_name = config
+        .image_understanding
+        .model_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "图片理解引擎为视觉模型，但未配置服务；请在 设置 → 模型服务 → 图片理解 选择服务与模型"
+                .to_string()
+        })?;
+    let model = config
+        .image_understanding
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "图片理解引擎为视觉模型，但未配置模型；请在 设置 → 模型服务 → 图片理解 选择模型"
+                .to_string()
+        })?;
+    let mut provider_config = config
+        .providers
+        .get(provider_name)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "图片理解服务“{provider_name}”已被删除；请到 设置 → 模型服务 → 图片理解 重新选择"
+            )
+        })?;
+    if let Some(problem) = provider_readiness_error(provider_name, &provider_config) {
+        return Err(format!("图片理解服务“{provider_name}”尚未就绪：{problem}"));
+    }
+
+    let image_count = attachments
+        .iter()
+        .filter(|attachment| attachment.kind == ValidatedAttachmentKind::Image)
+        .count();
+    if image_count > MAX_IMAGE_UNDERSTANDING_ATTACHMENTS {
+        return Err(format!(
+            "一次最多由视觉模型理解 {MAX_IMAGE_UNDERSTANDING_ATTACHMENTS} 张图片"
+        ));
+    }
+    if image_count == 0 {
+        return Ok(attachments);
+    }
+
+    provider_config.model = model.to_string();
+    let provider = std::sync::Arc::new(
+        agent_llm::create_provider(build_provider_config(provider_name, &provider_config))
+            .map_err(err_str)?,
+    );
+
+    // 并发理解全部图片：多图的等待时间是"最慢一张"而不是逐张累加——否则
+    // 发送前的不可见等待会线性变长（4 张 × 60s 超时的最坏情况不可接受）。
+    enum Described {
+        Text(String),
+        Failed(String),
+    }
+    let image_indices: Vec<usize> = attachments
+        .iter()
+        .enumerate()
+        .filter(|(_, attachment)| attachment.kind == ValidatedAttachmentKind::Image)
+        .map(|(index, _)| index)
+        .collect();
+    let requests = image_indices
+        .iter()
+        .map(|&index| {
+            let provider = provider.clone();
+            let request = vision_understanding_request(model, &attachments[index]);
+            async move {
+                match timeout(
+                    IMAGE_UNDERSTANDING_MODEL_TIMEOUT,
+                    provider.complete(request),
+                )
+                .await
+                {
+                    Ok(Ok(response)) => {
+                        let text = response.text().trim().to_string();
+                        if text.is_empty() {
+                            Described::Failed("视觉模型返回了空描述".to_string())
+                        } else {
+                            Described::Text(text)
+                        }
+                    }
+                    Ok(Err(error)) => Described::Failed(err_str(error)),
+                    Err(_) => Described::Failed("视觉模型响应超过 60 秒".to_string()),
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    let described_results = futures::future::join_all(requests).await;
+
+    // docs/multimodal-attachments §5.2：辅助视觉模型失败必须原样返回可操作
+    // 错误——**没有**「失败后自动 OCR 降级」分支。用户选择视觉模型引擎后，
+    // 静默换引擎等于绕过显式配置；需要 OCR 时由用户在设置中显式切换。
+    let mut failures: Vec<String> = Vec::new();
+    for (position, &index) in image_indices.iter().enumerate() {
+        let attachment = &mut attachments[index];
+        let original_name = attachment.name.clone();
+        let original_media_type = attachment.media_type.clone();
+        let description = match &described_results[position] {
+            Described::Text(text) => text.clone(),
+            Described::Failed(reason) => {
+                failures.push(format!("{original_name}：{reason}"));
+                continue;
+            }
+        };
+        let text = format!(
+            "[视觉模型 {provider_name}/{model} · 原图片：{original_name}（{original_media_type}）]\n{description}",
+        );
+        if text.len() > MAX_TEXT_ATTACHMENT_BYTES {
+            return Err(format!(
+                "{original_name} 的视觉模型描述超过 1 MiB，请换用更小的图片"
+            ));
+        }
+        // 原图落盘供 UI 回显（复用 OCR 原图预览链）；理解成功才落盘，失败不留孤儿文件。
+        let preview_id = uuid::Uuid::new_v4().to_string();
+        let preview = persist_attachment_preview(
+            &ctx.sessions_dir,
+            task_id,
+            &preview_id,
+            &original_name,
+            &original_media_type,
+            &format!("{}.vision.txt", trim_chars(&original_name, 168)),
+            &attachment.bytes,
+        )?;
+        attachment.name = preview.ocr_name.clone();
+        attachment.kind = ValidatedAttachmentKind::Text;
+        attachment.media_type = "text/plain".to_string();
+        attachment.bytes = text.as_bytes().to_vec();
+        attachment.data = BASE64_STANDARD.encode(&attachment.bytes);
+        attachment.text = Some(text);
+        attachment.native_ocr = false;
+        attachment.preview = Some(preview);
+    }
+    if !failures.is_empty() {
+        return Err(format!(
+            "视觉模型理解以下图片失败，未发送任何消息：{}。不会自动降级 OCR；如需改用 OCR 请在 设置 → 模型服务 → 图片理解 切换引擎",
+            failures.join("；")
+        ));
+    }
+    Ok(attachments)
+}
+
 fn user_message_with_attachments(text: &str, attachments: &[ValidatedAttachment]) -> Message {
     let mut content = Vec::with_capacity(attachments.len() + usize::from(!text.is_empty()));
     if !text.is_empty() {
@@ -6394,6 +6860,523 @@ fn user_message_with_attachments(text: &str, attachments: &[ValidatedAttachment]
         role: Role::User,
         content,
     }
+}
+
+// ============================================================================
+// 附件引用链路（docs/multimodal-attachments §4.4/§5.2）
+// ============================================================================
+
+/// staging 命令返回的引用 DTO（camelCase 对齐前端）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRefDto {
+    pub attachment_id: String,
+    pub name: String,
+    pub media_type: String,
+    pub kind: String,
+    pub byte_len: u64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+impl AttachmentRefDto {
+    fn from_ref_v1(reference: &agent_contract::AttachmentRefV1) -> Self {
+        Self {
+            attachment_id: reference.attachment_id.clone(),
+            name: reference.name.clone(),
+            media_type: reference.media_type.clone(),
+            kind: match reference.kind {
+                agent_contract::AttachmentKind::Image => "image",
+                agent_contract::AttachmentKind::Text => "text",
+                agent_contract::AttachmentKind::Pdf => "pdf",
+            }
+            .to_string(),
+            byte_len: reference.byte_len,
+            width: reference.width,
+            height: reference.height,
+        }
+    }
+}
+
+/// `cmd_attachment_stage`：WebView 把浏览器 File 的一次性 IPC 载荷交给后端。
+/// 后端立即解码、校验、写 Blob 并返回引用；Base64 字符串在命令返回前丢弃
+/// （docs §2.2 边界 1）。草稿态引用带 24h 租约，UI 删除草稿时调用 discard。
+pub async fn attachment_stage(
+    state: &CommandState,
+    task_id: &str,
+    input: AttachmentInput,
+) -> Result<AttachmentRefDto, String> {
+    // 复用既有校验（名称/Base64/魔数/大小/UTF-8）；native_ocr 决策位被忽略——
+    // 路由只能由后端按冻结能力与设置产生（§5.2）。
+    let validated = validate_attachments(std::slice::from_ref(&input))?;
+    let attachment = validated
+        .first()
+        .ok_or_else(|| "附件内容为空".to_string())?;
+    let store = r_code_store::AttachmentStore::new(&state.db, state.blobs_dir.clone());
+    let reference = store
+        .stage(
+            task_id,
+            &r_code_store::StageAttachment {
+                name: attachment.name.clone(),
+                media_type: attachment.media_type.clone(),
+            },
+            &attachment.bytes,
+        )
+        .map_err(err_str)?;
+    Ok(AttachmentRefDto::from_ref_v1(&reference))
+}
+
+/// `cmd_attachment_discard`：删除草稿附件（立即释放 staged 引用与 Blob 计数）。
+pub async fn attachment_discard(
+    state: &CommandState,
+    task_id: &str,
+    attachment_id: &str,
+) -> Result<(), String> {
+    let store = r_code_store::AttachmentStore::new(&state.db, state.blobs_dir.clone());
+    store
+        .discard_staged(task_id, attachment_id)
+        .map_err(err_str)
+}
+
+/// 排队附件载荷 v2（docs §4.4）：只持久化引用与路由快照，不含 Base64。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QueuedAttachmentsV2 {
+    version: u8,
+    attachments: Vec<agent_contract::AttachmentRefV1>,
+    route: String,
+}
+
+fn queued_attachments_v2_payload(
+    references: &[agent_contract::AttachmentRefV1],
+    route: &str,
+) -> Option<String> {
+    if references.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&QueuedAttachmentsV2 {
+        version: 2,
+        attachments: references.to_vec(),
+        route: route.to_string(),
+    })
+    .ok()
+}
+
+/// 队列载荷双读：v2（引用）返回 refs + route 快照；v1（旧 Base64 数组）按旧
+/// 路径返回字节附件（供 Codex / 旧 drain 使用）。二进制 Base64 不得再进入
+/// 新写路径。
+/// docs §7.4：旧 `attachments_json`（v1 Base64 数组）在 claim 后懒迁移为 v2
+/// 引用载荷。事务外 stage Blob → 以原 attachments JSON 为 CAS 改写 → 提交附件；
+/// CAS 失败释放本次 staged 引用并重读；任一附件损坏把队列项标 failed（可读
+/// 错误），绝不丢附件后发送纯文本。迁移本身不做引擎调用（OCR/视觉模型在
+/// dispatch 的 v2 重建路径按当前路由执行）。
+#[allow(clippy::too_many_arguments)]
+async fn migrate_queued_attachments_v1_to_v2(
+    db: &Database,
+    blobs_dir: &std::path::Path,
+    config_dir: &std::path::Path,
+    task: &Task,
+    queued: QueuedMessage,
+) -> Result<QueuedMessage, String> {
+    let payload = queued.attachments_json.clone();
+    let attachments: Vec<ValidatedAttachment> = match restore_queued_attachments(payload.as_deref())
+    {
+        Ok(attachments) if !attachments.is_empty() => attachments,
+        // 空载荷或已损坏到无法还原：空载荷原样返回；损坏交给 dispatch 的双读
+        // 标 failed（保持单一失败路径）。
+        Ok(_) => return Ok(queued),
+        Err(error) => return Err(error),
+    };
+    let store = r_code_store::AttachmentStore::new(db, blobs_dir.to_path_buf());
+    let mut staged_ids: Vec<String> = Vec::with_capacity(attachments.len());
+    for attachment in &attachments {
+        let reference = store
+            .stage(
+                &queued.task_id,
+                &r_code_store::StageAttachment {
+                    name: attachment.name.clone(),
+                    media_type: attachment.media_type.clone(),
+                },
+                &attachment.bytes,
+            )
+            .map_err(|error| {
+                // stage 失败：释放已 staged 的引用（不留无主计数）。
+                for id in &staged_ids {
+                    let _ = store.discard_staged(&queued.task_id, id);
+                }
+                format!(
+                    "队列附件 {} 迁移失败：{error}；不会丢附件后发送纯文本",
+                    attachment.name
+                )
+            })?;
+        staged_ids.push(reference.attachment_id.clone());
+    }
+    let references: Vec<agent_contract::AttachmentRefV1> = staged_ids
+        .iter()
+        .zip(attachments.iter())
+        .map(|(attachment_id, attachment)| {
+            let record = store
+                .get_owned(&queued.task_id, attachment_id)
+                .map_err(|error| error.to_string())?;
+            let purpose = match attachment.kind {
+                ValidatedAttachmentKind::Text => agent_contract::AttachmentPurpose::TextInput,
+                _ => agent_contract::AttachmentPurpose::NativeInput,
+            };
+            Ok(record.to_ref_v1(purpose))
+        })
+        .collect::<Result<_, String>>()?;
+
+    // 路由快照在迁移时刻按当前配置解析（v1 载荷未携带历史路由）。
+    let has_images = references
+        .iter()
+        .any(|reference| reference.kind == agent_contract::AttachmentKind::Image);
+    let route_label = if has_images {
+        let settings = SettingsService::new(config_dir.to_path_buf());
+        match settings.load_global_unvalidated() {
+            Ok(config) => {
+                let caps = crate::model_capabilities::resolve(
+                    &config,
+                    task.agent_engine,
+                    task.provider_name.as_deref(),
+                    task.model.as_deref(),
+                );
+                match crate::model_capabilities::resolve_image_delivery_route(&caps, &config, true)
+                {
+                    Ok(Some(route)) => route.route_label().to_string(),
+                    Ok(None) => "none".to_string(),
+                    Err(_) => "unknown".to_string(),
+                }
+            }
+            Err(_) => "unknown".to_string(),
+        }
+    } else {
+        "none".to_string()
+    };
+    let v2_payload =
+        queued_attachments_v2_payload(&references, &route_label).unwrap_or_else(|| "null".into());
+
+    // CAS：attachments_json 仍是迁移前读到的值才改写。
+    let updated = {
+        let conn = db.conn().map_err(err_str)?;
+        let original = payload.clone().unwrap_or_default();
+        conn.execute(
+            "UPDATE queued_messages SET attachments_json = ?2, updated_at = ?3 \
+             WHERE id = ?1 AND attachments_json IS ?4",
+            rusqlite::params![
+                queued.id,
+                v2_payload,
+                chrono::Utc::now().to_rfc3339(),
+                original
+            ],
+        )
+        .map_err(err_str)?
+    };
+    if updated == 0 {
+        // CAS 失败：释放本次 staged 引用并重读当前行（另一写方已改写）。
+        for id in &staged_ids {
+            let _ = store.discard_staged(&queued.task_id, id);
+        }
+        // 仓库无按 id 重读 API；本进程内的 v1 副本按旧载荷双读派发（安全回退），
+        // 行内新值由下一轮 claim 消费。
+        tracing::warn!(queue_id = %queued.id, "queued attachment migration CAS failed; dispatching from the claimed snapshot");
+        return Ok(queued);
+    }
+    store
+        .commit_many(&queued.task_id, &staged_ids)
+        .map_err(err_str)?;
+    let mut migrated = queued;
+    migrated.attachments_json = Some(v2_payload);
+    Ok(migrated)
+}
+enum QueuedAttachmentRestore {
+    V2 {
+        references: Vec<agent_contract::AttachmentRefV1>,
+        route: String,
+    },
+    V1(Vec<ValidatedAttachment>),
+}
+
+fn restore_queued_attachments_dual(json: Option<&str>) -> Result<QueuedAttachmentRestore, String> {
+    let Some(json) = json.filter(|value| !value.trim().is_empty()) else {
+        return Ok(QueuedAttachmentRestore::V1(Vec::new()));
+    };
+    if let Ok(v2) = serde_json::from_str::<QueuedAttachmentsV2>(json) {
+        if v2.version == 2 {
+            return Ok(QueuedAttachmentRestore::V2 {
+                references: v2.attachments,
+                route: v2.route,
+            });
+        }
+    }
+    Ok(QueuedAttachmentRestore::V1(restore_queued_attachments(
+        Some(json),
+    )?))
+}
+
+/// 引用形态的发送计划：路由决策 + 用户消息内容块 +（Codex 引擎的）字节附件。
+struct AttachmentSendPlan {
+    user_message: Message,
+    references: Vec<agent_contract::AttachmentRefV1>,
+    route: Option<crate::model_capabilities::ImageDeliveryRouteV1>,
+    /// Codex 主 Agent 仍以临时文件承载附件；字节从 Blob 读取。
+    codex_attachments: Vec<ValidatedAttachment>,
+}
+
+/// 校验引用的消息元数据与数据库权威一致（§4.1：不一致 →
+/// ATTACHMENT_METADATA_MISMATCH）。
+fn verify_attachment_metadata(
+    reference: &agent_contract::AttachmentRefV1,
+    record: &r_code_store::AttachmentRecord,
+) -> Result<(), String> {
+    let mismatch = |detail: String| {
+        format!(
+            "ATTACHMENT_METADATA_MISMATCH：附件 {} 的元数据与存储记录不一致（{detail}）",
+            reference.attachment_id
+        )
+    };
+    if record.name != reference.name || record.media_type != reference.media_type {
+        return Err(mismatch("名称或 MIME 漂移".to_string()));
+    }
+    if record.byte_len != reference.byte_len {
+        return Err(mismatch(format!(
+            "byte_len {} != {}",
+            record.byte_len, reference.byte_len
+        )));
+    }
+    Ok(())
+}
+
+/// docs §5.2 三条显式路由的执行器。冻结能力 + 设置 → 路由 → 执行：
+/// - NativeMainVision：原图引用保留 native_input，OCR/helper 调用数为 0；
+/// - OcrForTextMain：图片引用转 display_only，OCR 文本作为独立 Text 块；
+/// - VisionHelperForTextMain：同上，由辅助视觉模型生成描述；失败原样返回
+///   可操作错误（**不再自动 OCR 降级**）。
+pub struct AttachmentPlanCtx<'a> {
+    pub db: &'a Database,
+    pub blobs_dir: std::path::PathBuf,
+    pub sessions_dir: std::path::PathBuf,
+    pub config_dir: std::path::PathBuf,
+}
+
+impl<'a> AttachmentPlanCtx<'a> {
+    fn from_state(state: &'a CommandState) -> Self {
+        Self {
+            db: &state.db,
+            blobs_dir: state.blobs_dir.clone(),
+            sessions_dir: state.sessions_dir.clone(),
+            config_dir: state.config_dir.clone(),
+        }
+    }
+}
+
+async fn build_ref_send_plan(
+    ctx: AttachmentPlanCtx<'_>,
+    task_id: &str,
+    message: &str,
+    attachment_ids: &[String],
+) -> Result<AttachmentSendPlan, String> {
+    if attachment_ids.len() > MAX_ATTACHMENTS {
+        return Err(format!("一次最多附加 {MAX_ATTACHMENTS} 个文件"));
+    }
+    let settings = SettingsService::new(ctx.config_dir.clone());
+    let config = settings.load_global_unvalidated().map_err(err_str)?;
+    let task = TaskRepository::new(ctx.db).get(task_id).ok().flatten();
+    let (agent_engine, provider_name, model_override) = task
+        .as_ref()
+        .map(|task| {
+            (
+                task.agent_engine,
+                task.provider_name.as_deref(),
+                task.model.as_deref(),
+            )
+        })
+        .unwrap_or((AgentEngine::RCode, None, None));
+
+    // task-local lock 内解析一次能力并冻结（§2.1）。
+    let capabilities =
+        crate::model_capabilities::resolve(&config, agent_engine, provider_name, model_override);
+
+    let store = r_code_store::AttachmentStore::new(ctx.db, ctx.blobs_dir.clone());
+    // get_owned 重新验证所有权；消息内元数据与 DB 权威比对。
+    let mut records = Vec::with_capacity(attachment_ids.len());
+    for attachment_id in attachment_ids {
+        let record = store
+            .get_owned(task_id, attachment_id)
+            .map_err(|error| error.to_string())?;
+        let reference = record.to_ref_v1(agent_contract::AttachmentPurpose::NativeInput);
+        verify_attachment_metadata(&reference, &record)?;
+        records.push(record);
+    }
+    let total: u64 = records.iter().map(|record| record.byte_len).sum();
+    if total > MAX_ATTACHMENTS_TOTAL_BYTES as u64 {
+        return Err("附件总大小不能超过 24 MiB".to_string());
+    }
+
+    // 字节附件（Codex 引擎 / OCR / helper 执行器共用）从 Blob 读取。
+    let mut byte_attachments = Vec::with_capacity(records.len());
+    for record in &records {
+        let bytes = store
+            .read_owned(task_id, &record.attachment_id)
+            .map_err(|error| error.to_string())?;
+        byte_attachments.push(ValidatedAttachment {
+            name: record.name.clone(),
+            media_type: record.media_type.clone(),
+            data: BASE64_STANDARD.encode(&bytes),
+            text: (record.kind == agent_contract::AttachmentKind::Text)
+                .then(|| String::from_utf8_lossy(&bytes).into_owned()),
+            bytes,
+            kind: match record.kind {
+                agent_contract::AttachmentKind::Image => ValidatedAttachmentKind::Image,
+                agent_contract::AttachmentKind::Text => ValidatedAttachmentKind::Text,
+                agent_contract::AttachmentKind::Pdf => ValidatedAttachmentKind::Pdf,
+            },
+            native_ocr: false,
+            preview: None,
+        });
+    }
+
+    let has_images = byte_attachments
+        .iter()
+        .any(|attachment| attachment.kind == ValidatedAttachmentKind::Image);
+    let route = crate::model_capabilities::resolve_image_delivery_route(
+        &capabilities,
+        &config,
+        has_images,
+    )
+    .map_err(|error| match error {
+        crate::model_capabilities::ImageRouteError::UnknownCapabilityUnconfigured => {
+            "当前主模型的图片能力未知，且未完成图片理解配置。请在 设置 → 模型服务 → 图片理解 选择引擎，或改用目录确认支持图片的模型"
+                .to_string()
+        }
+        crate::model_capabilities::ImageRouteError::HelperEngineMisconfigured(detail) => detail,
+    })?;
+
+    // 执行路由：产出消息内容块（引用 + 派生文本）。
+    let mut content: Vec<ContentBlock> = Vec::new();
+    if !message.trim().is_empty() {
+        content.push(ContentBlock::Text {
+            text: message.to_string(),
+        });
+    }
+    let mut references = Vec::with_capacity(records.len());
+    let mut codex_attachments = byte_attachments.clone();
+    match &route {
+        None => {
+            // 无图片附件：全部引用按类别直通。
+            for record in &records {
+                let purpose = match record.kind {
+                    agent_contract::AttachmentKind::Text => {
+                        agent_contract::AttachmentPurpose::TextInput
+                    }
+                    _ => agent_contract::AttachmentPurpose::NativeInput,
+                };
+                let reference = record.to_ref_v1(purpose);
+                content.push(ContentBlock::Attachment {
+                    source: reference.clone(),
+                });
+                references.push(reference);
+            }
+        }
+        Some(crate::model_capabilities::ImageDeliveryRouteV1::NativeMainVision { .. }) => {
+            // 原图直发：不调用 mark_ocr_engine_images / apply_native_ocr /
+            // apply_vision_model_understanding（§5.2 执行规则）。
+            for record in &records {
+                let purpose = match record.kind {
+                    agent_contract::AttachmentKind::Text => {
+                        agent_contract::AttachmentPurpose::TextInput
+                    }
+                    _ => agent_contract::AttachmentPurpose::NativeInput,
+                };
+                let reference = record.to_ref_v1(purpose);
+                content.push(ContentBlock::Attachment {
+                    source: reference.clone(),
+                });
+                references.push(reference);
+            }
+        }
+        Some(crate::model_capabilities::ImageDeliveryRouteV1::OcrForTextMain { .. }) => {
+            let mut attachments = byte_attachments.clone();
+            mark_ocr_engine_images(&mut attachments);
+            let attachments = apply_native_ocr(&ctx.sessions_dir, task_id, attachments).await?;
+            codex_attachments = attachments.clone();
+            for (record, attachment) in records.iter().zip(attachments.iter()) {
+                let reference = attachment_purpose_for_record(record);
+                if attachment.kind == ValidatedAttachmentKind::Text
+                    && record.kind == agent_contract::AttachmentKind::Image
+                {
+                    // OCR 文本作为独立 Text 块；原图仅 UI 预览。
+                    content.push(ContentBlock::Text {
+                        text: format!(
+                            "[derived_from_attachment_id={} · OCR]\n{}",
+                            record.attachment_id,
+                            attachment.text.as_deref().unwrap_or_default()
+                        ),
+                    });
+                }
+                content.push(ContentBlock::Attachment {
+                    source: reference.clone(),
+                });
+                references.push(reference);
+            }
+        }
+        Some(crate::model_capabilities::ImageDeliveryRouteV1::VisionHelperForTextMain {
+            ..
+        }) => {
+            // 辅助视觉模型理解；失败原样返回错误——没有 OCR 降级分支。
+            let attachments = apply_vision_model_understanding(
+                &AttachmentPlanCtx {
+                    db: ctx.db,
+                    blobs_dir: ctx.blobs_dir.clone(),
+                    sessions_dir: ctx.sessions_dir.clone(),
+                    config_dir: ctx.config_dir.clone(),
+                },
+                task_id,
+                byte_attachments.clone(),
+                &config,
+            )
+            .await?;
+            codex_attachments = attachments.clone();
+            for (record, attachment) in records.iter().zip(attachments.iter()) {
+                let reference = attachment_purpose_for_record(record);
+                if attachment.kind == ValidatedAttachmentKind::Text
+                    && record.kind == agent_contract::AttachmentKind::Image
+                {
+                    content.push(ContentBlock::Text {
+                        text: format!(
+                            "[derived_from_attachment_id={} · vision]\n{}",
+                            record.attachment_id,
+                            attachment.text.as_deref().unwrap_or_default()
+                        ),
+                    });
+                }
+                content.push(ContentBlock::Attachment {
+                    source: reference.clone(),
+                });
+                references.push(reference);
+            }
+        }
+    }
+
+    Ok(AttachmentSendPlan {
+        user_message: Message {
+            role: Role::User,
+            content,
+        },
+        references,
+        route,
+        codex_attachments,
+    })
+}
+
+/// 图片在文本主模型路由下转 display_only；文本/PDF 维持原用途。
+fn attachment_purpose_for_record(
+    record: &r_code_store::AttachmentRecord,
+) -> agent_contract::AttachmentRefV1 {
+    let purpose = match record.kind {
+        agent_contract::AttachmentKind::Image => agent_contract::AttachmentPurpose::DisplayOnly,
+        agent_contract::AttachmentKind::Text => agent_contract::AttachmentPurpose::TextInput,
+        agent_contract::AttachmentKind::Pdf => agent_contract::AttachmentPurpose::NativeInput,
+    };
+    record.to_ref_v1(purpose)
 }
 
 fn send_mode_name(mode: AgentSendMode) -> &'static str {
@@ -6575,6 +7558,308 @@ fn enqueue_message_with_attachments(
     Ok(queued)
 }
 
+fn enqueue_message_with_refs(
+    db: &Database,
+    task_id: &str,
+    branch_id: &str,
+    message: &str,
+    priority: i64,
+    references: &[agent_contract::AttachmentRefV1],
+    route: &str,
+    request_key: Option<&str>,
+) -> Result<QueuedMessage, String> {
+    // docs §4.4：v2 载荷只含引用与路由快照；enqueue 与 commit 在同一调用方
+    // 序列完成（引用在入队前已 commit_many，dispatch 侧按 id 重新验证）。
+    let attachments_json = queued_attachments_v2_payload(references, route);
+    let queued = QueuedMessage::new_with_attachments(
+        task_id,
+        branch_id,
+        message,
+        priority,
+        attachments_json,
+    )
+    .with_request_key(request_key.map(str::to_string));
+    QueuedMessageRepository::new(db)
+        .enqueue(&queued)
+        .map_err(err_str)?;
+    TaskEventStore::new(db)
+        .append_for_branch(task_id, branch_id, TaskEventType::UserMessageQueued)
+        .map_err(err_str)?;
+    Ok(queued)
+}
+
+/// 引用形态发送入口（docs §4.4 直接发送顺序）：staging 已由
+/// `cmd_attachment_stage` 完成，本命令只接收 attachment id 列表；在 task-local
+/// 锁内用 get_owned 重新验证所有权与元数据，路由由冻结能力产生。
+pub async fn agent_send_with_attachment_refs(
+    state: &CommandState,
+    task_id: &str,
+    message: &str,
+    mode: AgentSendMode,
+    attachment_ids: &[String],
+) -> Result<(), String> {
+    let message_text = message.trim().to_string();
+    if message_text.is_empty() && attachment_ids.is_empty() {
+        return Err("消息不能为空".to_string());
+    }
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let mut bridge = task_agent.lock().await;
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能继续发送消息".to_string());
+    }
+    // 路由与计划在持有 task-local 发送锁时构建（能力快照随本次请求冻结）。
+    let plan = build_ref_send_plan(
+        AttachmentPlanCtx::from_state(state),
+        task_id,
+        &message_text,
+        attachment_ids,
+    )
+    .await?;
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+
+    // Codex 主 Agent：附件以临时文件承载（字节来自 Blob），消息仍走 Codex 链路。
+    if task.agent_engine == AgentEngine::Codex {
+        if task.mode == TaskMode::Plan {
+            return Err(
+                "Codex CLI 主 Agent 暂不支持 Plan 模式；请切换到 R-Code 内置 Agent".to_string(),
+            );
+        }
+        let result = agent_send_codex_with_mode(
+            state,
+            &task,
+            &branch,
+            &message_text,
+            mode,
+            &plan.codex_attachments,
+        )
+        .await;
+        if result.is_ok() {
+            commit_sent_attachments(state, task_id, attachment_ids);
+        }
+        drop(bridge);
+        return result;
+    }
+
+    // 引用已进入发送路径：commit（幂等）。崩溃窗口由 GC 的 JSONL 引用扫描与
+    // reconcile_session_refs 保护（§4.3），不会误删仍被引用的 staged 记录。
+    commit_sent_attachments(state, task_id, attachment_ids);
+
+    let had_active_run = bridge.active.is_some();
+    let mode = if !had_active_run && matches!(mode, AgentSendMode::Steer | AgentSendMode::Queue) {
+        AgentSendMode::Auto
+    } else {
+        mode
+    };
+    if bridge.real_mode.load(Ordering::Acquire)
+        && !had_active_run
+        && !matches!(mode, AgentSendMode::Queue | AgentSendMode::Steer)
+    {
+        ensure_real_runtime(
+            &state.config_dir,
+            &state.db,
+            &state.tool_gateway,
+            &state.mcp_manager,
+            &state.subagent_config_mutations,
+            &mut bridge,
+            task.provider_name.as_deref(),
+            task.workspace_path.as_deref(),
+            &state.sessions_dir,
+        )
+        .await?;
+    }
+    let active = bridge.active.clone();
+    let route_label = plan
+        .route
+        .as_ref()
+        .map(|route| route.route_label().to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let envelope = crate::plan_entry_commands::new_origin_request_envelope(
+        &state.planning,
+        task_id,
+        &branch.id,
+        match mode {
+            AgentSendMode::Steer => OriginRequestKind::Steer,
+            AgentSendMode::Queue | AgentSendMode::Auto if active.is_some() => {
+                OriginRequestKind::Queued
+            }
+            _ => OriginRequestKind::Direct,
+        },
+        None,
+        None,
+    )?;
+
+    let active_is_closing = active
+        .as_ref()
+        .is_some_and(|active| bridge.closing_run_id.as_deref() == Some(active.run_id.as_str()));
+    if active_is_closing && matches!(mode, AgentSendMode::Steer | AgentSendMode::SendNow) {
+        let priority = if mode == AgentSendMode::SendNow {
+            1_000_000
+        } else {
+            1
+        };
+        enqueue_message_with_refs(
+            &state.db,
+            task_id,
+            &branch.id,
+            &message_text,
+            priority,
+            &plan.references,
+            &route_label,
+            Some(envelope.request_key.as_str()),
+        )?;
+        return Ok(());
+    }
+
+    match mode {
+        AgentSendMode::Steer => {
+            Err("运行中引导暂不支持附件；请改为排队发送，或等当前运行结束后再发送".to_string())
+        }
+        AgentSendMode::Queue => {
+            enqueue_message_with_refs(
+                &state.db,
+                task_id,
+                &branch.id,
+                &message_text,
+                0,
+                &plan.references,
+                &route_label,
+                Some(envelope.request_key.as_str()),
+            )?;
+            if active.is_none() {
+                drop(bridge);
+                let sink = { state.agent_event_sink.lock().unwrap().clone() };
+                dispatch_next_queued(
+                    QueuedDispatchResources {
+                        agent_pool: state.agent.clone(),
+                        external_agents: state.external_agents.clone(),
+                        codex_app_server: state.codex_app_server.clone(),
+                        db: state.db.clone(),
+                        plan_store: state.plan_store.clone(),
+                        paths: AgentRuntimePaths {
+                            blobs_dir: state.blobs_dir.clone(),
+                            sessions_dir: state.sessions_dir.clone(),
+                            config_dir: state.config_dir.clone(),
+                        },
+                        tool_gateway: state.tool_gateway.clone(),
+                        mcp_manager: state.mcp_manager.clone(),
+                        subagent_config_mutations: state.subagent_config_mutations.clone(),
+                        planning: state.planning.clone(),
+                        sink,
+                    },
+                    task_id.to_string(),
+                )
+                .await;
+            }
+            Ok(())
+        }
+        AgentSendMode::SendNow => {
+            if let Some(active) = active {
+                enqueue_message_with_refs(
+                    &state.db,
+                    task_id,
+                    &branch.id,
+                    &message_text,
+                    1_000_000,
+                    &plan.references,
+                    &route_label,
+                    Some(envelope.request_key.as_str()),
+                )?;
+                bridge
+                    .kind
+                    .abort(&active.runtime_session_id)
+                    .await
+                    .map_err(err_str)?;
+                drop(bridge);
+                TaskRepository::new(&state.db)
+                    .update_state(&active.task_id, TaskState::Interrupted)
+                    .map_err(err_str)?;
+                state.emit_agent_event(
+                    &active.task_id,
+                    &AgentEvent::State {
+                        state: TaskState::Interrupted,
+                    },
+                );
+                Ok(())
+            } else {
+                let active = start_run_locked_with_message(
+                    &mut bridge,
+                    &state.db,
+                    &state.plan_store,
+                    &state.session_store,
+                    &state.sessions_dir,
+                    &state.config_dir,
+                    &task,
+                    &branch,
+                    &plan.user_message,
+                    AgentSendMode::SendNow,
+                    &plan.codex_attachments,
+                    &state.planning,
+                    &envelope.request_key,
+                )
+                .await?;
+                drop(bridge);
+                spawn_drain_loop(state, active);
+                Ok(())
+            }
+        }
+        AgentSendMode::Auto => {
+            if let Some(active) = active {
+                enqueue_message_with_refs(
+                    &state.db,
+                    task_id,
+                    &branch.id,
+                    &message_text,
+                    0,
+                    &plan.references,
+                    &route_label,
+                    Some(envelope.request_key.as_str()),
+                )?;
+                let _ = active;
+                drop(bridge);
+                Ok(())
+            } else {
+                let active = start_run_locked_with_message(
+                    &mut bridge,
+                    &state.db,
+                    &state.plan_store,
+                    &state.session_store,
+                    &state.sessions_dir,
+                    &state.config_dir,
+                    &task,
+                    &branch,
+                    &plan.user_message,
+                    AgentSendMode::Auto,
+                    &plan.codex_attachments,
+                    &state.planning,
+                    &envelope.request_key,
+                )
+                .await?;
+                drop(bridge);
+                spawn_drain_loop(state, active);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// 发送路径成功进入运行/队列后把引用标记 committed（幂等；失败只记日志——
+/// staged 记录由租约 GC 的 JSONL 引用扫描兜底）。
+fn commit_sent_attachments(state: &CommandState, task_id: &str, attachment_ids: &[String]) {
+    if attachment_ids.is_empty() {
+        return;
+    }
+    let store = r_code_store::AttachmentStore::new(&state.db, state.blobs_dir.clone());
+    if let Err(error) = store.commit_many(task_id, attachment_ids) {
+        tracing::warn!(task_id, "attachment commit_many failed: {error}");
+    }
+}
+
 fn mark_run_aborted(db: &Database, active: &ActiveRun) -> Result<(), String> {
     let runs = AgentRunRepository::new(db);
     if let Some(run) = runs.get(&active.run_id).map_err(err_str)? {
@@ -6678,10 +7963,11 @@ pub async fn agent_send_with_mode_and_attachments(
     if !attachments.is_empty() && has_active_run && matches!(mode, AgentSendMode::Steer) {
         return Err("运行中引导暂不支持附件；请改为排队发送，或等当前运行结束后再发送".to_string());
     }
-    // Native OCR can be CPU/memory intensive. Validate the task and reserve its task-local send
-    // boundary before invoking Vision, so archived/running tasks cannot consume OCR resources and
-    // another run cannot start halfway through this conversion.
-    let attachments = apply_native_ocr(&state.sessions_dir, task_id, attachments).await?;
+    // Native OCR / vision-model understanding can be CPU/memory/network intensive. Validate
+    // the task and reserve its task-local send boundary before invoking them, so archived/
+    // running tasks cannot consume conversion resources and another run cannot start halfway
+    // through this conversion.
+    let attachments = apply_image_understanding(state, task_id, attachments).await?;
     let user_message = user_message_with_attachments(message, &attachments);
     let branch = SessionBranchRepository::new(&state.db)
         .ensure_active(task_id)
@@ -6939,6 +8225,7 @@ pub async fn agent_send_with_mode_and_attachments(
                     &state.plan_store,
                     &state.session_store,
                     &state.sessions_dir,
+                    &state.config_dir,
                     &task,
                     &branch,
                     &user_message,
@@ -6981,6 +8268,7 @@ pub async fn agent_send_with_mode_and_attachments(
                     &state.plan_store,
                     &state.session_store,
                     &state.sessions_dir,
+                    &state.config_dir,
                     &task,
                     &branch,
                     &user_message,
@@ -7552,13 +8840,52 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 return;
             }
         };
+        // docs §7.4：v1 Base64 载荷在 claim 后懒迁移为 v2 引用（CAS 改写）。
+        // 损坏载荷标 failed（可读错误），绝不丢附件后发送纯文本。
+        let queue_id = queued.id.clone();
+        let queued =
+            match migrate_queued_attachments_v1_to_v2(&db, &blobs_dir, &config_dir, &task, queued)
+                .await
+            {
+                Ok(queued) => queued,
+                Err(error) => {
+                    mark_queued_dispatch_failed(&db, &plan_store, &queue_id, &error);
+                    return;
+                }
+            };
         if task.agent_engine == AgentEngine::Codex {
             // Codex CLI owns its own process/session lifecycle, but startup still stays under the
             // task-local lock. This closes the gap between the active-run check and durable run
             // creation, so concurrent queue dispatchers cannot claim a second message.
+            // v2 引用载荷在 Codex 侧重建字节附件（从 Blob 读取）；v1 走旧路径。
             let restored_attachments =
-                match restore_queued_attachments(queued.attachments_json.as_deref()) {
-                    Ok(attachments) => attachments,
+                match restore_queued_attachments_dual(queued.attachments_json.as_deref()) {
+                    Ok(QueuedAttachmentRestore::V1(attachments)) => attachments,
+                    Ok(QueuedAttachmentRestore::V2 { references, .. }) => {
+                        let ids: Vec<String> = references
+                            .iter()
+                            .map(|reference| reference.attachment_id.clone())
+                            .collect();
+                        match build_ref_send_plan(
+                            AttachmentPlanCtx {
+                                db: &db,
+                                blobs_dir: blobs_dir.clone(),
+                                sessions_dir: sessions_dir.clone(),
+                                config_dir: config_dir.clone(),
+                            },
+                            &queued.task_id,
+                            &queued.message,
+                            &ids,
+                        )
+                        .await
+                        {
+                            Ok(plan) => plan.codex_attachments,
+                            Err(error) => {
+                                mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
+                                return;
+                            }
+                        }
+                    }
                     Err(error) => {
                         mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
                         return;
@@ -7619,15 +8946,68 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 return;
             }
         }
-        let restored_attachments =
-            match restore_queued_attachments(queued.attachments_json.as_deref()) {
-                Ok(attachments) => attachments,
-                Err(error) => {
-                    mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
-                    return;
+        // docs §4.4/§7.4：队列载荷双读。v2 只恢复引用——route snapshot 与当前
+        // 任务 route 不一致时标 failed（ATTACHMENT_ROUTE_DRIFT），不得重新解释
+        // 为其他引擎；v1 旧 Base64 载荷按旧路径还原字节附件。
+        #[allow(unused_assignments)]
+        let mut restored_attachments: Vec<ValidatedAttachment> = Vec::new();
+        let mut ref_queued_message: Option<Message> = None;
+        match restore_queued_attachments_dual(queued.attachments_json.as_deref()) {
+            Ok(QueuedAttachmentRestore::V2 { references, route }) => {
+                let ids: Vec<String> = references
+                    .iter()
+                    .map(|reference| reference.attachment_id.clone())
+                    .collect();
+                let plan = build_ref_send_plan(
+                    AttachmentPlanCtx {
+                        db: &db,
+                        blobs_dir: blobs_dir.clone(),
+                        sessions_dir: sessions_dir.clone(),
+                        config_dir: config_dir.clone(),
+                    },
+                    &queued.task_id,
+                    &queued.message,
+                    &ids,
+                )
+                .await;
+                match plan {
+                    Ok(plan) => {
+                        let current_route = plan
+                            .route
+                            .as_ref()
+                            .map(|route| route.route_label())
+                            .unwrap_or("none");
+                        if current_route != route {
+                            mark_queued_dispatch_failed(
+                                &db,
+                                &plan_store,
+                                &queued.id,
+                                &format!(
+                                    "ATTACHMENT_ROUTE_DRIFT：排队消息的图片路由（{route}）与当前任务路由（{current_route}）不一致，已标记失败；请重新发送"
+                                ),
+                            );
+                            continue;
+                        }
+                        restored_attachments = plan.codex_attachments;
+                        ref_queued_message = Some(plan.user_message);
+                    }
+                    Err(error) => {
+                        mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
+                        continue;
+                    }
                 }
-            };
-        let queued_message = user_message_with_attachments(&queued.message, &restored_attachments);
+            }
+            Ok(QueuedAttachmentRestore::V1(attachments)) => {
+                restored_attachments = attachments;
+            }
+            Err(error) => {
+                mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
+                return;
+            }
+        }
+        let queued_message = ref_queued_message.unwrap_or_else(|| {
+            user_message_with_attachments(&queued.message, &restored_attachments)
+        });
         // 领取的队列行继承它创建时的请求键（host continuation；docs §10）。
         let request_key = queued
             .request_key
@@ -7639,6 +9019,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             &plan_store,
             &SessionStore::new(sessions_dir.clone()),
             &sessions_dir,
+            &config_dir,
             &task,
             &branch,
             &queued_message,
@@ -10835,6 +12216,15 @@ pub async fn agent_attachment_preview(
         .ok_or_else(|| format!("task not found: {task_id}"))?;
 
     let reference = reference.trim();
+    // 解析顺序（docs §4.1：数据库元数据为权威）：附件账本中的 id 一律走
+    // BlobStore——附件 id 与旧磁盘预览 id 同为 UUID 格式，先查 attachments
+    // 表消除歧义；查无此附件时才按旧磁盘预览 / 内联引用回退。
+    {
+        let store = r_code_store::AttachmentStore::new(&state.db, state.blobs_dir.clone());
+        if store.get_owned(task_id, reference).is_ok() {
+            return read_attachment_blob_preview(state, task_id, reference).await;
+        }
+    }
     if valid_attachment_preview_id(reference) {
         read_disk_preview(&state.sessions_dir, task_id, reference)
     } else if let Some((storage_id, line, image_index)) = parse_inline_preview_ref(reference) {
@@ -10842,6 +12232,28 @@ pub async fn agent_attachment_preview(
     } else {
         Err("图片预览引用不合法".to_string())
     }
+}
+
+/// 按 attachment_id 从 BlobStore 取回原图字节（所有权经 get_owned 验证）。
+async fn read_attachment_blob_preview(
+    state: &CommandState,
+    task_id: &str,
+    attachment_id: &str,
+) -> Result<AttachmentPreviewPayload, String> {
+    let store = r_code_store::AttachmentStore::new(&state.db, state.blobs_dir.clone());
+    let record = store
+        .get_owned(task_id, attachment_id)
+        .map_err(|error| error.to_string())?;
+    if record.kind != agent_contract::AttachmentKind::Image {
+        return Err("该附件不是图片，无法预览".to_string());
+    }
+    let bytes = store
+        .read_owned(task_id, attachment_id)
+        .map_err(|error| error.to_string())?;
+    Ok(AttachmentPreviewPayload {
+        media_type: record.media_type,
+        data: BASE64_STANDARD.encode(bytes),
+    })
 }
 
 fn push_visible_session_message(
@@ -10899,6 +12311,24 @@ fn push_visible_session_message(
                     media_type: source.media_type.clone(),
                     kind: kind.to_string(),
                     preview_id: None,
+                });
+            }
+            agent_contract::ContentBlock::Attachment { source } => {
+                // 引用块：预览按 attachment_id 从 BlobStore 取回（display_only
+                // 与 native_input 对 UI 同样可见；正文永不进入 DTO）。
+                if source.kind == agent_contract::AttachmentKind::Image {
+                    image_media_types.push(source.media_type.clone());
+                }
+                attachments.push(SessionAttachmentMeta {
+                    name: source.name.clone(),
+                    media_type: source.media_type.clone(),
+                    kind: match source.kind {
+                        agent_contract::AttachmentKind::Image => "image",
+                        agent_contract::AttachmentKind::Text => "text",
+                        agent_contract::AttachmentKind::Pdf => "pdf",
+                    }
+                    .to_string(),
+                    preview_id: Some(source.attachment_id.clone()),
                 });
             }
             _ => {}
@@ -12198,6 +13628,7 @@ async fn start_run_locked_with_message(
     plan_store: &PlanStore,
     session_store: &SessionStore,
     sessions_dir: &Path,
+    config_dir: &Path,
     task: &Task,
     branch: &SessionBranch,
     message: &Message,
@@ -12209,8 +13640,16 @@ async fn start_run_locked_with_message(
     if bridge.active.is_some() {
         return Err("已有运行正在收尾，无法并发启动新的运行".to_string());
     }
-    let runtime_session_id =
-        ensure_runtime_session(bridge, db, session_store, sessions_dir, task, branch).await?;
+    let runtime_session_id = ensure_runtime_session(
+        bridge,
+        db,
+        session_store,
+        sessions_dir,
+        config_dir,
+        task,
+        branch,
+    )
+    .await?;
     // Plan 入口建议注册门 + Plan 原生目录配置（docs §9/§14.3）：资格判断发生在
     // 注册工具和构建提示之前；每个 run 启动前按最新 branch/offer 状态刷新。
     let mut armed_suggestion = None;
@@ -13062,12 +14501,23 @@ fn effective_max_tokens(name: &str, provider: &agent_config::ProviderConfig) -> 
             );
             Some(limit)
         }
-        // 「默认」= 目录声明的厂商输出上限：设置页不再预填保守的 8192 种子，
-        // 思考模型的 reasoning 计入输出预算，低默认值会让推理耗尽预算后整轮报废。
-        // 请求侧还有窗口钳制（clamp_request_max_tokens），取大值不会推超上下文。
-        (None, Some(limit)) => Some(limit),
+        // docs/multimodal-attachments §6.4：未显式配置时采用目录的
+        // recommended_output_tokens（如 DeepSeek V4 的 65,536），**不得**自动
+        // 采用服务端硬上限——无条件预留 393,216 会把 1M 窗口的可用输入压掉
+        // 近 40%，过早触发伪压缩。目录未给推荐值时保持 runtime 侧 8,192
+        // 保守默认（LlmAgentRuntime::new 对 None 的处理）。
+        (None, _) => preset_recommended_output_tokens(name, provider),
         (configured, _) => configured,
     }
+}
+
+/// 目录为该 provider 声明的推荐单轮输出（§6.4）；无目录命中/未声明 → None
+/// （调用方回退到 runtime 的 8,192 保守默认）。
+fn preset_recommended_output_tokens(
+    name: &str,
+    provider: &agent_config::ProviderConfig,
+) -> Option<u32> {
+    crate::provider_catalog::preset_for(name, &provider.base_url)?.recommended_output_tokens
 }
 
 fn provider_env_has_key(name: &str, provider_kind: Option<&str>) -> bool {
@@ -13647,9 +15097,9 @@ const SUBAGENT_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const SUBAGENT_PROVIDER_PROBE_MAX_BATCH: usize = 64;
 const SUBAGENT_HEALTH_SUCCESS_TTL_MINUTES: i64 = 30;
 const SUBAGENT_HEALTH_FAILURE_TTL_MINUTES: i64 = 5;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 const MAX_CODEX_TRUST_TREE_ENTRIES: usize = 512;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 const MAX_CODEX_ADDITIONAL_BINARIES: usize = 32;
 
 struct SubagentCatalogContext {
@@ -13784,6 +15234,7 @@ impl SubagentCandidateRunner for CodexCliSubagentCandidateRunner {
     }
 }
 
+#[cfg(not(test))]
 fn canonical_regular_file(path: &Path) -> Option<PathBuf> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -13792,7 +15243,7 @@ fn canonical_regular_file(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 fn collect_codex_vendor_binaries(root: &Path) -> Option<Vec<PathBuf>> {
     let canonical_root = root.canonicalize().ok()?;
     let mut pending = vec![canonical_root.clone()];
@@ -13838,6 +15289,7 @@ fn collect_codex_vendor_binaries(root: &Path) -> Option<Vec<PathBuf>> {
 
 /// Resolve every executable layer used by the already-verified Codex launch path. A script shim
 /// is never accepted as a native binary; incomplete npm layouts remain `trust_required`.
+#[cfg(not(test))]
 fn verified_codex_trust_chain(cli_path: Option<&Path>) -> Option<VerifiedExecutableTrustChain> {
     let cli_path = cli_path?;
     #[cfg(windows)]
@@ -13895,13 +15347,9 @@ fn verified_codex_trust_chain(cli_path: Option<&Path>) -> Option<VerifiedExecuta
     }
 }
 
-async fn build_subagent_catalog_context(
-    config_dir: &Path,
-    config: agent_config::Config,
-) -> Result<SubagentCatalogContext, String> {
-    let settings = SettingsService::new(config_dir.to_path_buf());
-    let pepper = load_or_create_fingerprint_pepper(&settings).map_err(err_str)?;
-    let receipts = SubagentHealthReceiptStore::new(config_dir).load();
+#[cfg(not(test))]
+async fn detect_subagent_codex_catalog_input(
+) -> Result<(CodexCliCatalogInput, Option<PathBuf>), String> {
     let cli = probe_codex_cli().await;
     let auth_ready = if cli.available {
         probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::Authenticated
@@ -13910,6 +15358,23 @@ async fn build_subagent_catalog_context(
     };
     let config_path = codex_home_dir().join("config.toml");
     let (_, configured_model, _, _) = read_codex_preference_values(&config_path)?;
+    // `model` is an optional Codex override. When it is absent the CLI still has a real default,
+    // exposed as the first priority-sorted entry from `codex debug models`. Resolve that effective
+    // model here so the subagent catalog can probe and fingerprint the same model the CLI will run.
+    let needs_cli_default = configured_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .is_none();
+    let cli_models = if auth_ready && needs_cli_default {
+        match cli.path.as_deref() {
+            Some(cli_path) => load_codex_model_catalog(cli_path).await.unwrap_or_default(),
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let model = resolve_subagent_codex_model(configured_model, &cli_models);
     // Candidate execution is always constrained by the parent run's Host-owned ceiling. Bind the
     // receipt to that policy instead of trusting arbitrary permission strings in config.toml.
     let trust_chain = verified_codex_trust_chain(cli.path.as_deref());
@@ -13918,16 +15383,48 @@ async fn build_subagent_catalog_context(
         installed: cli.available,
         auth_ready,
         adapter_ready: trust_chain.is_some(),
-        model: configured_model.unwrap_or_default(),
+        model,
         permission_profile: SUBAGENT_CODEX_PERMISSION_PROFILE.to_string(),
         trust_chain,
     };
+    Ok((codex, cli.path))
+}
+
+#[cfg(test)]
+async fn detect_subagent_codex_catalog_input(
+) -> Result<(CodexCliCatalogInput, Option<PathBuf>), String> {
+    // Unit tests must not read the user's CODEX_HOME or launch their installed CLI. Besides leaking
+    // host state into assertions, a transient four-second probe timeout can change the catalog CAS
+    // revision between a test's snapshot and save. CLI discovery and parsing have focused tests;
+    // catalog tests use this deterministic unavailable input and pure provider fixtures.
+    Ok((
+        CodexCliCatalogInput {
+            configured: false,
+            installed: false,
+            auth_ready: false,
+            adapter_ready: false,
+            model: String::new(),
+            permission_profile: SUBAGENT_CODEX_PERMISSION_PROFILE.to_string(),
+            trust_chain: None,
+        },
+        None,
+    ))
+}
+
+async fn build_subagent_catalog_context(
+    config_dir: &Path,
+    config: agent_config::Config,
+) -> Result<SubagentCatalogContext, String> {
+    let settings = SettingsService::new(config_dir.to_path_buf());
+    let pepper = load_or_create_fingerprint_pepper(&settings).map_err(err_str)?;
+    let receipts = SubagentHealthReceiptStore::new(config_dir).load();
+    let (codex, codex_cli_path) = detect_subagent_codex_catalog_input().await?;
     Ok(SubagentCatalogContext {
         config,
         receipts,
         pepper,
         codex,
-        codex_cli_path: cli.path,
+        codex_cli_path,
     })
 }
 
@@ -14530,6 +16027,7 @@ const CODEX_CLI_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
 const CODEX_CLI_INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 const CODEX_CLI_INSTALL_COMMAND: &str = "npm install -g @openai/codex";
 const CODEX_CLI_INSTALL_ARGS: &[&str] = &["install", "-g", "@openai/codex"];
+const CODEX_CLI_UPDATE_ARGS: &[&str] = &["update"];
 static CODEX_CLI_INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CODEX_COLLAB_SETUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CODEX_PREFERENCES_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -14754,22 +16252,28 @@ fn codex_cli_names() -> &'static [&'static str] {
     }
 }
 
-fn initial_codex_cli_candidates() -> Vec<CodexCliCandidate> {
+fn ordered_initial_codex_cli_candidates(
+    user_npm_paths: Vec<PathBuf>,
+    path_paths: Vec<PathBuf>,
+) -> Vec<CodexCliCandidate> {
     let mut found = Vec::new();
-    push_codex_cli_candidates(
-        &mut found,
-        executable_paths(codex_cli_names()),
-        CodexCliSource::Path,
-    );
+    push_codex_cli_candidates(&mut found, user_npm_paths, CodexCliSource::NpmGlobal);
+    push_codex_cli_candidates(&mut found, path_paths, CodexCliSource::Path);
+    found
+}
+
+fn initial_codex_cli_candidates() -> Vec<CodexCliCandidate> {
+    let mut user_npm_paths = Vec::new();
     #[cfg(windows)]
     if let Some(app_data) = std::env::var_os("APPDATA") {
-        // GUI 应用可能继承了尚未刷新的 PATH；npm 的默认用户级 prefix 仍可直接探测。
+        // 打包应用可能把 WindowsApps / Codex Desktop 的 resources 目录放在用户 PATH
+        // 前面。那套内置 CLI 能通过 `--version`，却不一定共享用户已登录的 npm CLI
+        // 认证环境。先探测用户级 npm 安装，既避免误报“尚未登录”，也让后续运行、
+        // 登录和更新始终落到同一份 CLI。
         let npm_prefix = Path::new(&app_data).join("npm");
-        let mut paths = Vec::new();
-        push_executable_candidates(&mut paths, &npm_prefix, codex_cli_names());
-        push_codex_cli_candidates(&mut found, paths, CodexCliSource::NpmGlobal);
+        push_executable_candidates(&mut user_npm_paths, &npm_prefix, codex_cli_names());
     }
-    found
+    ordered_initial_codex_cli_candidates(user_npm_paths, executable_paths(codex_cli_names()))
 }
 
 #[cfg(target_os = "macos")]
@@ -15389,6 +16893,15 @@ async fn load_codex_model_catalog(cli_path: &Path) -> Result<Vec<CodexModelOptio
     parse_codex_model_catalog(&output.stdout)
 }
 
+fn resolve_subagent_codex_model(
+    configured_model: Option<String>,
+    models: &[CodexModelOption],
+) -> String {
+    normalize_codex_preference(configured_model.as_deref())
+        .or_else(|| models.first().map(|model| model.slug.clone()))
+        .unwrap_or_default()
+}
+
 fn codex_config_string(
     document: &toml_edit::DocumentMut,
     key: &str,
@@ -15720,6 +17233,101 @@ pub async fn codex_install_cli(state: &CommandState) -> Result<serde_json::Value
     }
     state.codex_app_server.invalidate_all().await;
     codex_integration_status().await
+}
+
+async fn invalidate_codex_cli_runtime(state: &CommandState) {
+    *CODEX_AUTH_PREFLIGHT_CACHE.lock().await = None;
+    state.codex_app_server.invalidate_all().await;
+}
+
+fn completed_codex_update_state(
+    previous_version: Option<&str>,
+    current_version: Option<&str>,
+) -> &'static str {
+    if current_version != previous_version {
+        "updated"
+    } else {
+        "up_to_date"
+    }
+}
+
+/// 进入 Codex 运行时设置时，同步已安装 CLI 到官方最新版本。
+///
+/// `codex update` 自己负责检查版本并只在有更新时替换安装；R-Code 不解析或回传
+/// updater 的原始输出。更新失败返回结构化降级结果而不是错误，确保仍可用的当前
+/// CLI、登录状态和运行偏好不会被 UI 误判为不可用。未安装时只返回状态，安装仍需
+/// 经过现有的显式确认门禁。
+pub async fn codex_sync_cli(state: &CommandState) -> Result<serde_json::Value, String> {
+    let _guard = CODEX_CLI_INSTALL_LOCK.lock().await;
+    let before = probe_codex_cli().await;
+    let previous_version = before.version.clone();
+    if !before.available {
+        return Ok(serde_json::json!({
+            "update_state": "not_installed",
+            "previous_version": previous_version,
+            "current_version": previous_version,
+            "update_error": null,
+            "status": codex_integration_status().await?,
+        }));
+    }
+
+    let Some(cli_path) = before.path.as_deref() else {
+        return Ok(serde_json::json!({
+            "update_state": "failed",
+            "previous_version": previous_version,
+            "current_version": previous_version,
+            "update_error": "已检测到 Codex CLI，但无法确定更新目标；当前版本仍可使用。",
+            "status": codex_integration_status().await?,
+        }));
+    };
+
+    let output =
+        run_codex_cli_at_with_timeout(cli_path, CODEX_CLI_UPDATE_ARGS, CODEX_CLI_INSTALL_TIMEOUT)
+            .await;
+
+    let (update_state, current_version, update_error) = match output {
+        Ok(output) if output.status.success() => {
+            invalidate_codex_cli_runtime(state).await;
+            let after = probe_codex_cli().await;
+            if !after.available {
+                (
+                    "failed",
+                    previous_version.clone(),
+                    Some("Codex 更新已结束，但暂时无法重新运行 CLI。请重启 R-Code 后再次检测。"),
+                )
+            } else {
+                let current_version = after.version.clone();
+                let state = completed_codex_update_state(
+                    previous_version.as_deref(),
+                    current_version.as_deref(),
+                );
+                (state, current_version, None)
+            }
+        }
+        Ok(_) => (
+            "failed",
+            previous_version.clone(),
+            Some("Codex 自动更新未完成；当前版本仍可使用。可在系统终端运行 `codex update` 查看诊断。"),
+        ),
+        Err(CodexCommandError::Timeout) => (
+            "failed",
+            previous_version.clone(),
+            Some("Codex 自动更新超过 5 分钟，已停止更新进程；当前版本仍可使用。"),
+        ),
+        Err(CodexCommandError::Launch(_)) => (
+            "failed",
+            previous_version.clone(),
+            Some("无法启动 Codex 自动更新；当前版本仍可使用。"),
+        ),
+    };
+
+    Ok(serde_json::json!({
+        "update_state": update_state,
+        "previous_version": previous_version,
+        "current_version": current_version,
+        "update_error": update_error,
+        "status": codex_integration_status().await?,
+    }))
 }
 
 const CODEX_MCP_CONFIG_TIMEOUT: Duration = Duration::from_secs(12);
@@ -16127,12 +17735,53 @@ impl CodexLoginMode {
 }
 
 #[cfg(windows)]
-fn codex_login_shell_script(executable: &Path, mode: CodexLoginMode) -> Result<String, String> {
-    let executable = windows_cmd_safe_path(executable)?;
-    let arguments = mode.args().join(" ");
-    Ok(format!(
-        "call {executable} {arguments} & if errorlevel 1 (echo. & echo Codex login did not complete. & echo This window stays open for diagnostics. Press any key to close it. & pause)"
-    ))
+fn configure_windows_codex_login_command(
+    command: &mut Command,
+    executable: &Path,
+    mode: CodexLoginMode,
+) -> Result<(), String> {
+    // `cmd.exe` does not use CommandLineToArgvW parsing. Passing one script argument that contains
+    // a quoted `.cmd` path makes Rust escape the inner quotes as `\"`; cmd then treats those
+    // backslashes as literal characters and never starts Codex. Keep every command token separate
+    // so the standard Windows process builder quotes only the executable path when needed.
+    windows_cmd_safe_path(executable)?;
+    command
+        .args(["/D", "/S", "/C", "call"])
+        .arg(executable)
+        .args(mode.args())
+        .args([
+            "&",
+            "if",
+            "errorlevel",
+            "1",
+            "(",
+            "echo.",
+            "&",
+            "echo",
+            "Codex",
+            "login",
+            "did",
+            "not",
+            "complete.",
+            "&",
+            "echo",
+            "This",
+            "window",
+            "stays",
+            "open",
+            "for",
+            "diagnostics.",
+            "Press",
+            "any",
+            "key",
+            "to",
+            "close",
+            "it.",
+            "&",
+            "pause",
+            ")",
+        ]);
+    Ok(())
 }
 
 #[cfg(any(test, target_os = "macos"))]
@@ -16208,17 +17857,21 @@ async fn codex_start_login_with_mode(mode: CodexLoginMode) -> Result<(), String>
             .to_string());
     }
 
+    // The settings view can hold a stale signed-out snapshot while another terminal or Codex
+    // Desktop has already completed ChatGPT authentication. Re-read the exact selected CLI before
+    // opening OAuth; an existing login is already shared through Codex's normal credential store.
+    if probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::Authenticated {
+        return Ok(());
+    }
+
     #[cfg(windows)]
     {
         let executable = cli.path.unwrap_or_else(|| PathBuf::from("codex"));
-        let script = codex_login_shell_script(&executable, mode)?;
         // R-Code 是 GUI 进程；新控制台确保设备码和 OAuth 提示始终对用户可见。
-        // `/C` 在成功时自然退出，脚本只在失败分支执行 `pause` 保留诊断信息。
+        // `/C` 在成功时自然退出，参数化的失败分支只在 Codex 非零退出时执行 `pause`。
         let mut command = Command::new("cmd.exe");
-        command
-            .args(["/D", "/S", "/C"])
-            .arg(script)
-            .creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+        configure_windows_codex_login_command(&mut command, &executable, mode)?;
+        command.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
         command
             .spawn()
             .map_err(|_| "无法启动 Codex 登录终端。请在系统终端运行 `codex login`。".to_string())?;
@@ -16276,6 +17929,10 @@ const R_CODE_REASONING_EVENT: &str = "r_code_reasoning";
 /// 工具调用前的过渡性叙述。UI 折叠为可展开的“过程”条目，而不是逐条渲染成正式回答。
 const R_CODE_INTERIM_EVENT: &str = "r_code_interim";
 const CODEX_RCODE_DELEGATE_TOOL: &str = "rcode_delegate_subagent";
+/// Codex 主运行的直接 R-Code 子代理上限。动态 Codex → R-Code 桥的每次回调都新建
+/// worker supervisor，因此必须在共享宿主注册表按父运行执行更小的直接子级预算；
+/// 这些外部主代理创建的 R-Code 子节点在 worker 中同时被钳制为叶子节点。
+const CODEX_RCODE_MAX_UNIQUE_DELEGATIONS: usize = r_code_agent_worker::MAX_DIRECT_SUBAGENTS_PER_RUN;
 const CODEX_EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Windows 上首次加载大型工作区、杀毒扫描和 Rust/Node 工具启动都可能超过 90 秒。
 /// 子代理仍可随时手动停止；这里与主 Codex 运行保持相同的无进度容忍度。
@@ -16396,6 +18053,8 @@ struct CodexExecCompletion {
     summary: Option<String>,
     usage_json: Option<String>,
     failure: Option<CodexExecFailure>,
+    tool_calls: usize,
+    stream_retries: usize,
 }
 
 /// Codex CLI backend exposed to the native R-Code agent's `delegate_task` tool.
@@ -16651,6 +18310,7 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
         if !completion.succeeded {
             return Err(ProductError::Other(codex_exec_failure_message(
                 completion.failure,
+                completion.stream_retries,
             )));
         }
         Ok(CodexSubagentOutcome::Completed(
@@ -16703,15 +18363,32 @@ fn safe_codex_action(value: &str, fallback: &str) -> String {
 
 fn safe_codex_tool_output(item: &serde_json::Value) -> Option<String> {
     let item_type = item.get("type").and_then(serde_json::Value::as_str)?;
-    if !matches!(item_type, "command_execution" | "commandExecution") {
-        return None;
-    }
-    let output = item
-        .get("aggregated_output")
-        .or_else(|| item.get("aggregatedOutput"))
-        .or_else(|| item.get("output"))
-        .and_then(serde_json::Value::as_str)?;
-    let safe = bounded_text(&redact_text(output), CODEX_EXEC_MAX_TOOL_OUTPUT_CHARS);
+    let output = match item_type {
+        "command_execution" | "commandExecution" => item
+            .get("aggregated_output")
+            .or_else(|| item.get("aggregatedOutput"))
+            .or_else(|| item.get("output"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)?,
+        "dynamic_tool_call" | "dynamicToolCall" => item
+            .get("contentItems")
+            .or_else(|| item.get("content_items"))
+            .and_then(serde_json::Value::as_array)?
+            .iter()
+            .take(32)
+            .filter(|content| {
+                content
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| matches!(kind, "inputText" | "input_text" | "text"))
+            })
+            .filter_map(|content| content.get("text").and_then(serde_json::Value::as_str))
+            .map(|text| bounded_text(text, CODEX_EXEC_MAX_TOOL_OUTPUT_CHARS))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    let safe = bounded_text(&redact_text(&output), CODEX_EXEC_MAX_TOOL_OUTPUT_CHARS);
     (!safe.is_empty()).then_some(safe)
 }
 
@@ -16725,7 +18402,11 @@ fn codex_item_failed(item: &serde_json::Value) -> bool {
         .or_else(|| item.get("exitCode"))
         .and_then(serde_json::Value::as_i64)
         .is_some_and(|code| code != 0);
-    failed_status || failed_exit
+    let failed_dynamic_result = item
+        .get("success")
+        .and_then(serde_json::Value::as_bool)
+        .is_some_and(|success| !success);
+    failed_status || failed_exit || failed_dynamic_result
 }
 
 fn codex_tool_result_payload(is_error: bool, output: Option<String>) -> serde_json::Value {
@@ -16810,7 +18491,27 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
                 .map(|value| format!("{value} · {tool}"))
                 .unwrap_or_else(|| tool.to_string());
             if tool == CODEX_RCODE_DELEGATE_TOOL {
-                ("delegate_task", "委派 R-Code 子智能体".to_string())
+                let arguments = item.get("arguments").and_then(serde_json::Value::as_object);
+                let task_label = arguments
+                    .and_then(|arguments| arguments.get("label"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                let goal = arguments
+                    .and_then(|arguments| arguments.get("goal"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                let action = match (task_label, goal) {
+                    (Some(task_label), Some(goal)) => format!("{task_label} · {goal}"),
+                    (Some(task_label), None) => task_label.to_string(),
+                    (None, Some(goal)) => goal.to_string(),
+                    (None, None) => "委派 R-Code 子智能体".to_string(),
+                };
+                (
+                    "delegate_task",
+                    safe_codex_action(&action, "委派 R-Code 子智能体"),
+                )
             } else {
                 ("Codex 工具", safe_codex_action(&label, "工具"))
             }
@@ -16822,6 +18523,47 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
         _ => return None,
     };
     Some((call_id, name.to_string(), summary))
+}
+
+/// Preserve the concrete dynamic-delegation goal in the parent timeline. Other Codex tools keep
+/// the compact summary-only projection used by the existing audit UI.
+fn codex_item_tool_input(item: &serde_json::Value, summary: &str) -> serde_json::Value {
+    let is_rcode_delegate = item
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| matches!(kind, "dynamic_tool_call" | "dynamicToolCall"))
+        && item.get("tool").and_then(serde_json::Value::as_str) == Some(CODEX_RCODE_DELEGATE_TOOL);
+    if !is_rcode_delegate {
+        return serde_json::json!({ "summary": summary });
+    }
+
+    let mut safe = serde_json::Map::new();
+    safe.insert(
+        "agent".to_string(),
+        serde_json::Value::String("r_code".to_string()),
+    );
+    if let Some(arguments) = item.get("arguments").and_then(serde_json::Value::as_object) {
+        for (key, max_chars) in [("label", 80), ("goal", 4_000), ("access", 40)] {
+            if let Some(value) = arguments
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                safe.insert(
+                    key.to_string(),
+                    serde_json::Value::String(bounded_text(&redact_text(value), max_chars)),
+                );
+            }
+        }
+    }
+    if !safe.contains_key("goal") {
+        safe.insert(
+            "summary".to_string(),
+            serde_json::Value::String(summary.to_string()),
+        );
+    }
+    serde_json::Value::Object(safe)
 }
 
 /// 从 `codex-cli 0.145.0` 之类的版本行解析 `(major, minor, patch)`。
@@ -16923,7 +18665,7 @@ fn codex_exec_protocol_progress(line: &str) -> bool {
     )
 }
 
-fn codex_exec_failure_message(failure: Option<CodexExecFailure>) -> String {
+fn codex_exec_failure_message(failure: Option<CodexExecFailure>, stream_retries: usize) -> String {
     match failure {
         Some(CodexExecFailure::IdleTimeout) => {
             "Codex CLI 长时间没有返回任何进度，R-Code 已自动停止该子代理。请缩小任务范围后重试。"
@@ -16943,6 +18685,9 @@ fn codex_exec_failure_message(failure: Option<CodexExecFailure>) -> String {
             "Codex 的审批桥未能建立。请升级本机 Codex CLI，或在设置中改用“替我审批”或“完全访问权限”。"
                 .to_string()
         }
+        Some(CodexExecFailure::Stream) if stream_retries > 0 => format!(
+            "Codex CLI 的进度通道连续中断；R-Code 已在工具执行前安全重连 {stream_retries} 次，仍未恢复。请在设置中刷新 Codex 状态后重试。"
+        ),
         Some(CodexExecFailure::Stream) => {
             "Codex CLI 的进度通道意外中断，请重试。".to_string()
         }
@@ -16988,6 +18733,12 @@ Use a bounded batch of at most four for unrelated read-only inspections and veri
 only when they do not share mutable files, caches, build outputs, package state, or services. \
 Keep writes and result-dependent steps sequential; never parallelize edits, package changes, Git \
 mutations, or commands that may contend for the same resource.";
+
+const CODEX_CROSS_PLATFORM_SHELL_HINT: &str =
+    "Use the host platform's native shell syntax. On Windows, commands run under PowerShell: do \
+not use Bash-only operators or utilities, and route PowerShell cmdlets through `rtk proxy \
+pwsh.exe -NoProfile -NonInteractive -Command` when RTK has no dedicated wrapper. On macOS and \
+Linux, use the configured POSIX shell and never emit PowerShell-only syntax.";
 
 const CODEX_FILE_LINK_HINT: &str = "Make workspace file references clickable in replies. Link every referenced existing file with \
 a workspace-relative Markdown destination. Add a one-based location when useful: \
@@ -17062,7 +18813,7 @@ each batch, synthesize the evidence and decide whether it already supports the r
 Stop immediately once the assignment is supported. Do not invoke \
 unrelated skills, MCP servers, or web research. {CODEX_PARALLEL_EXECUTION_HINT} \
 {rtk} {CODEX_FILE_LINK_HINT} {report_guidance} \
-Do not expose private chain-of-thought.{editable}{memory}\n\nAssignment:\n{goal}"
+Do not expose private chain-of-thought. {CODEX_CROSS_PLATFORM_SHELL_HINT}{editable}{memory}\n\nAssignment:\n{goal}"
     )
 }
 
@@ -17089,22 +18840,118 @@ fn safe_codex_reasoning_summary(item: &serde_json::Value) -> Option<String> {
     if parts.len() > MAX_SUMMARY_PARTS {
         return None;
     }
-    let text = parts
-        .iter()
-        .filter_map(|part| {
-            part.as_str().or_else(|| {
-                (part.get("type").and_then(serde_json::Value::as_str) == Some("summary_text"))
-                    .then(|| part.get("text").and_then(serde_json::Value::as_str))
-                    .flatten()
-            })
+    let mut normalized = Vec::<(String, String)>::new();
+    for part in parts.iter().filter_map(|part| {
+        part.as_str().or_else(|| {
+            (part.get("type").and_then(serde_json::Value::as_str) == Some("summary_text"))
+                .then(|| part.get("text").and_then(serde_json::Value::as_str))
+                .flatten()
         })
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(|part| bounded_text(part, CODEX_REASONING_SUMMARY_CHARS))
+    }) {
+        let cleaned = normalize_codex_reasoning_part(part);
+        if cleaned.is_empty() {
+            continue;
+        }
+        let cleaned = bounded_text(&redact_text(&cleaned), CODEX_REASONING_SUMMARY_CHARS);
+        let key = codex_reasoning_part_key(&cleaned);
+        if key.is_empty() || codex_reasoning_part_is_generic(&key) {
+            continue;
+        }
+        if normalized.iter().any(|(_, existing)| existing == &key) {
+            continue;
+        }
+        // App Server snapshots can contain both an earlier partial summary and its cumulative
+        // replacement. Keep the more informative adjacent form instead of rendering both.
+        if let Some((previous_text, previous_key)) = normalized.last_mut() {
+            if key.contains(previous_key.as_str()) || previous_key.contains(key.as_str()) {
+                if key.len() > previous_key.len() {
+                    *previous_text = cleaned;
+                    *previous_key = key;
+                }
+                continue;
+            }
+        }
+        normalized.push((cleaned, key));
+    }
+    let text = normalized
+        .into_iter()
+        .map(|(text, _)| text)
         .collect::<Vec<_>>()
         .join("\n");
     let safe = bounded_text(&redact_text(&text), CODEX_REASONING_SUMMARY_CHARS);
     (!safe.is_empty()).then_some(safe)
+}
+
+/// Remove presentation-only Markdown that Codex sometimes wraps around each public summary part.
+/// Internal Markdown (for example a `commands.rs` file reference) remains intact.
+fn normalize_codex_reasoning_part(value: &str) -> String {
+    let mut text = value.trim().to_string();
+    loop {
+        let current = text.trim();
+        let mut changed = false;
+
+        let heading_marks = current.bytes().take_while(|byte| *byte == b'#').count();
+        if heading_marks > 0
+            && current
+                .get(heading_marks..)
+                .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+        {
+            text = current[heading_marks..].trim().to_string();
+            changed = true;
+        } else if let Some(quoted) = current.strip_prefix('>') {
+            text = quoted.trim().to_string();
+            changed = true;
+        } else {
+            for marker in ["**", "__", "~~", "*", "_"] {
+                if current.len() > marker.len() * 2
+                    && current.starts_with(marker)
+                    && current.ends_with(marker)
+                {
+                    let inner = &current[marker.len()..current.len() - marker.len()];
+                    if !inner.trim().is_empty() {
+                        text = inner.trim().to_string();
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn codex_reasoning_part_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// A bare workflow-status phrase is technically public, but it carries no useful information for
+/// the user. Concrete file/module/error names make the key fall outside this small deny-list.
+fn codex_reasoning_part_is_generic(key: &str) -> bool {
+    matches!(
+        key,
+        "reviewingchecklist"
+            | "reviewingthechecklist"
+            | "checkingchecklist"
+            | "checkingthechecklist"
+            | "reviewingtask"
+            | "reviewingthetask"
+            | "reviewingrequest"
+            | "reviewingtherequest"
+            | "reviewingrequirements"
+            | "reviewingtherequirements"
+            | "reviewinginstructions"
+            | "reviewingtheinstructions"
+            | "analyzingtask"
+            | "analyzingthetask"
+    )
 }
 
 /// 从 Activity detail 提取 reasoning summary 文本（F15）。新格式是带 kind 的
@@ -17392,8 +19239,10 @@ modify this snapshot unless the user asks about memory.\n{value}"
     format!(
         "You are the selected main coding agent inside the independent R-Code desktop client. \
 Work directly on the user's request inside the attached workspace. You may call the built-in \
-`rcode_delegate_subagent` tool to delegate a bounded task to an R-Code child agent inside this \
-same task and run tree. Its access defaults to the parent's access and can never exceed it. Do \
+`rcode_delegate_subagent` tool to delegate a unique, bounded task to an R-Code child agent inside \
+this same task and run tree. Delegate each goal once; an equivalent repeated goal waits for and \
+reuses the original child result instead of starting another child. Its access defaults to the \
+parent's access and can never exceed it. Do \
 not use configured global R-Code MCP delegation tools from this hosted run: those tools are for \
 standalone external sessions and create separate top-level tasks. Keep tool activity observable, do not expose \
 private chain-of-thought, and finish with a concise result and verification summary.\n\n\
@@ -17667,6 +19516,7 @@ fn observable_external_event(run: &AgentRun, event: AgentEvent) -> AgentEvent {
     }
 }
 
+#[derive(Clone, Copy)]
 struct CodexExecObserver<'a> {
     db: &'a Database,
     session_store: &'a SessionStore,
@@ -17838,6 +19688,10 @@ fn codex_exec_command_with_permissions_and_images(
         command.args(["-c", "model_reasoning_effort=\"medium\""]);
         command.args(["-c", "web_search=\"disabled\""]);
     }
+    // A Codex child launched by R-Code must not reconnect to R-Code's legacy MCP server. Doing
+    // so recursively creates another host session and turns host shutdown into an MCP handshake
+    // failure. Keep every other user-configured MCP server intact.
+    command.args(["-c", CODEX_DISABLE_R_CODE_MCP_OVERRIDE]);
     command.args([
         "--skip-git-repo-check",
         "--sandbox",
@@ -18456,6 +20310,8 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
         summary,
         usage_json,
         failure,
+        tool_calls,
+        stream_retries: 0,
     }
 }
 
@@ -18555,6 +20411,326 @@ struct CodexRCodeDelegateContext {
     /// `ReadOnly` 的子代理 inherit 保持只读；其他（RequestApproval/AutoReview/
     /// Custom）inherit 的子代理进入审批模式（工具可见但写入/命令需审批，F3）。
     permission_mode: CodexPermissionMode,
+    /// Per-parent-run idempotency boundary shared by every concurrent App Server callback.
+    delegation_registry: Arc<CodexRCodeDelegateRegistry>,
+}
+
+#[derive(Clone)]
+struct CodexRCodeDelegateCachedResult {
+    success: bool,
+    response_text: String,
+}
+
+struct CodexRCodeDelegateEntry {
+    goal_key: String,
+    stable_label: Option<String>,
+    display_label: String,
+    result: tokio::sync::watch::Sender<Option<CodexRCodeDelegateCachedResult>>,
+}
+
+#[derive(Default)]
+struct CodexRCodeDelegateRegistryState {
+    /// Only canonical call IDs (the call that first claimed a unique goal) are retained. Alias
+    /// call IDs for an already-known goal do not grow this map, keeping it bounded by the goal cap.
+    by_call_id: HashMap<String, Arc<CodexRCodeDelegateEntry>>,
+    /// A stable model-supplied delivery key is the primary semantic idempotency boundary. Unlike
+    /// fuzzy prompt matching, it cannot collapse two intentionally different review partitions.
+    by_label: HashMap<String, Arc<CodexRCodeDelegateEntry>>,
+    by_goal: HashMap<String, Arc<CodexRCodeDelegateEntry>>,
+}
+
+#[derive(Default)]
+struct CodexRCodeDelegateRegistry {
+    inner: Mutex<CodexRCodeDelegateRegistryState>,
+}
+
+enum CodexRCodeDelegateClaim {
+    Execute(CodexRCodeDelegateExecution),
+    Replay {
+        entry: Arc<CodexRCodeDelegateEntry>,
+        reason: &'static str,
+    },
+    CallIdConflict,
+    LimitReached,
+}
+
+struct CodexRCodeDelegateExecution {
+    entry: Arc<CodexRCodeDelegateEntry>,
+    completed: bool,
+}
+
+impl CodexRCodeDelegateExecution {
+    fn display_label(&self) -> String {
+        self.entry.display_label.clone()
+    }
+
+    fn stable_label(&self) -> Option<String> {
+        self.entry.stable_label.clone()
+    }
+
+    fn complete(mut self, result: CodexRCodeDelegateCachedResult) {
+        self.entry.result.send_replace(Some(result));
+        self.completed = true;
+    }
+}
+
+impl Drop for CodexRCodeDelegateExecution {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        // A handler may be hard-dropped while the App Server is shutting down. Wake any duplicate
+        // callback instead of leaving it permanently blocked on an owner that no longer exists.
+        self.entry
+            .result
+            .send_replace(Some(CodexRCodeDelegateCachedResult {
+                success: false,
+                response_text: serde_json::json!({
+                    "status": "cancelled",
+                    "summary": "R-Code 子代理委派已中断，请根据当前运行状态决定是否重试"
+                })
+                .to_string(),
+            }));
+    }
+}
+
+impl CodexRCodeDelegateRegistry {
+    fn claim(
+        &self,
+        call_id: Option<&str>,
+        goal: &str,
+        requested_label: Option<&str>,
+    ) -> CodexRCodeDelegateClaim {
+        let goal_key = codex_rcode_delegate_goal_key(goal);
+        let stable_label = requested_label.and_then(codex_rcode_delegate_stable_label);
+        let label_key = stable_label.as_deref().map(codex_rcode_delegate_label_key);
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("Codex R-Code delegation registry poisoned");
+
+        if let Some(call_id) = call_id {
+            if let Some(entry) = inner.by_call_id.get(call_id) {
+                return if entry.goal_key == goal_key {
+                    CodexRCodeDelegateClaim::Replay {
+                        entry: entry.clone(),
+                        reason: "call_id",
+                    }
+                } else {
+                    CodexRCodeDelegateClaim::CallIdConflict
+                };
+            }
+        }
+        if let Some(label_key) = label_key.as_deref() {
+            if let Some(entry) = inner.by_label.get(label_key) {
+                return CodexRCodeDelegateClaim::Replay {
+                    entry: entry.clone(),
+                    reason: "label",
+                };
+            }
+        }
+        if let Some(entry) = inner.by_goal.get(&goal_key) {
+            return CodexRCodeDelegateClaim::Replay {
+                entry: entry.clone(),
+                reason: "goal",
+            };
+        }
+        if inner.by_goal.len() >= CODEX_RCODE_MAX_UNIQUE_DELEGATIONS {
+            return CodexRCodeDelegateClaim::LimitReached;
+        }
+
+        let (result, _receiver) = tokio::sync::watch::channel(None);
+        let display_label = codex_rcode_delegate_display_label(
+            inner.by_goal.len().saturating_add(1),
+            stable_label.as_deref(),
+        );
+        let entry = Arc::new(CodexRCodeDelegateEntry {
+            goal_key: goal_key.clone(),
+            stable_label,
+            display_label,
+            result,
+        });
+        inner.by_goal.insert(goal_key, entry.clone());
+        if let Some(label_key) = label_key {
+            inner.by_label.insert(label_key, entry.clone());
+        }
+        if let Some(call_id) = call_id {
+            inner.by_call_id.insert(call_id.to_string(), entry.clone());
+        }
+        CodexRCodeDelegateClaim::Execute(CodexRCodeDelegateExecution {
+            entry,
+            completed: false,
+        })
+    }
+}
+
+fn codex_rcode_delegate_display_label(ordinal: usize, requested_label: Option<&str>) -> String {
+    let base = format!("R-Code Agent {ordinal}");
+    let requested_label = requested_label.and_then(codex_rcode_delegate_stable_label);
+    requested_label
+        .map(|label| bounded_text(&format!("{base} · {label}"), 80))
+        .unwrap_or(base)
+}
+
+fn codex_rcode_delegate_stable_label(value: &str) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    let lowercase = normalized.to_lowercase();
+    if lowercase == "self"
+        || lowercase.starts_with("self ")
+        || normalized == "本家"
+        || normalized.starts_with("本家 ")
+    {
+        return None;
+    }
+    Some(bounded_text(&normalized, 80))
+}
+
+fn codex_rcode_delegate_label_key(label: &str) -> String {
+    let normalized = label
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    blake3::hash(normalized.as_bytes()).to_hex().to_string()
+}
+
+fn codex_rcode_delegate_argument_label(arguments: &serde_json::Value) -> Result<String, String> {
+    let label = arguments
+        .get("label")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "子代理 label 不能为空；请为每个交付方向使用稳定 snake_case 键".to_string()
+        })?;
+    let bytes = label.as_bytes();
+    let valid = (3..=64).contains(&bytes.len())
+        && bytes.first().is_some_and(u8::is_ascii_lowercase)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+        && label != "self";
+    if !valid {
+        return Err(
+            "子代理 label 必须是 3–64 位小写 snake_case 稳定键，且不能使用 self".to_string(),
+        );
+    }
+    Ok(label.to_string())
+}
+
+#[derive(Debug, Clone)]
+struct CodexRCodeDelegateTaskInput {
+    goal: String,
+    label: String,
+    access_mode: SubagentAccessMode,
+}
+
+fn codex_rcode_delegate_task_input(
+    arguments: &serde_json::Value,
+    max_access: SubagentAccessMode,
+    parent_mode: CodexPermissionMode,
+) -> Result<CodexRCodeDelegateTaskInput, String> {
+    let goal = arguments
+        .get("goal")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "子代理目标不能为空".to_string())?;
+    if goal.contains('\0') || goal.chars().count() > CODEX_EXEC_MAX_GOAL_CHARS {
+        return Err(format!(
+            "子代理目标无效或超过 {} 字符",
+            CODEX_EXEC_MAX_GOAL_CHARS
+        ));
+    }
+    let label = codex_rcode_delegate_argument_label(arguments)?;
+    let access_mode = codex_rcode_delegate_access(arguments, max_access, parent_mode)?;
+    Ok(CodexRCodeDelegateTaskInput {
+        goal: goal.to_string(),
+        label: bounded_text(&redact_text(&label), 80),
+        access_mode,
+    })
+}
+
+/// Accept the new batched protocol while retaining the original single-task shape for persisted
+/// Codex threads that may still replay an older tool definition.
+fn codex_rcode_delegate_task_inputs(
+    arguments: &serde_json::Value,
+    max_access: SubagentAccessMode,
+    parent_mode: CodexPermissionMode,
+) -> Result<(Vec<CodexRCodeDelegateTaskInput>, bool), String> {
+    let Some(tasks) = arguments.get("tasks") else {
+        return codex_rcode_delegate_task_input(arguments, max_access, parent_mode)
+            .map(|task| (vec![task], false));
+    };
+    if arguments.get("goal").is_some()
+        || arguments.get("label").is_some()
+        || arguments.get("access").is_some()
+    {
+        return Err("批量 tasks 不能与单任务 goal/label/access 混用".to_string());
+    }
+    let tasks = tasks
+        .as_array()
+        .ok_or_else(|| "批量委派 tasks 必须是数组".to_string())?;
+    if tasks.is_empty() || tasks.len() > CODEX_RCODE_MAX_UNIQUE_DELEGATIONS {
+        return Err(format!(
+            "一次批量委派必须包含 1–{CODEX_RCODE_MAX_UNIQUE_DELEGATIONS} 个独立任务"
+        ));
+    }
+
+    let mut labels = HashSet::with_capacity(tasks.len());
+    let mut goals = HashSet::with_capacity(tasks.len());
+    let mut parsed = Vec::with_capacity(tasks.len());
+    for (index, task) in tasks.iter().enumerate() {
+        if !task.is_object() {
+            return Err(format!("tasks[{index}] 必须是 JSON 对象"));
+        }
+        let task = codex_rcode_delegate_task_input(task, max_access, parent_mode)
+            .map_err(|error| format!("tasks[{index}]：{error}"))?;
+        if !labels.insert(codex_rcode_delegate_label_key(&task.label)) {
+            return Err(format!("tasks[{index}] 的 label 与本批次其他任务重复"));
+        }
+        if !goals.insert(codex_rcode_delegate_goal_key(&task.goal)) {
+            return Err(format!("tasks[{index}] 的目标与本批次其他任务重复"));
+        }
+        parsed.push(task);
+    }
+    Ok((parsed, true))
+}
+
+fn codex_rcode_delegate_goal_key(goal: &str) -> String {
+    // Match the worker's same-goal policy (case/whitespace insensitive), but retain only a digest
+    // in the host registry so full user prompts are not duplicated in process memory.
+    let normalized = goal
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    blake3::hash(normalized.as_bytes()).to_hex().to_string()
+}
+
+async fn wait_for_codex_rcode_delegate_result(
+    entry: &CodexRCodeDelegateEntry,
+    cancellation: &CancellationToken,
+) -> Option<CodexRCodeDelegateCachedResult> {
+    let mut result = entry.result.subscribe();
+    loop {
+        if let Some(cached) = { result.borrow().clone() } {
+            return Some(cached);
+        }
+        tokio::select! {
+            changed = result.changed() => {
+                if changed.is_err() {
+                    return None;
+                }
+            }
+            _ = cancellation.cancelled() => return None,
+        }
+    }
 }
 
 fn codex_app_server_dynamic_tools(enabled: bool) -> Vec<serde_json::Value> {
@@ -18564,18 +20740,45 @@ fn codex_app_server_dynamic_tools(enabled: bool) -> Vec<serde_json::Value> {
     vec![serde_json::json!({
         "type": "function",
         "name": CODEX_RCODE_DELEGATE_TOOL,
-        "description": "Delegate a bounded task to an R-Code child agent inside this same R-Code task and run tree. Use this instead of any configured global R-Code MCP delegation tool, because global MCP delegation creates a standalone task/session.",
+        "description": "Delegate one bounded batch of independent deliverables to R-Code child agents inside this same R-Code task and run tree. Work directly by default: a user saying that subagents can or may be used is permission only, not an instruction to call this tool. Delegate only when independent deliverables save material elapsed time. When two or three directions are known, put all of them in one tasks array so the R-Code host starts them concurrently; never issue one tool call per direction and wait serially. Use at most three R-Code children for the entire parent run, then synthesize once instead of opening another batch. Children created here are leaves and cannot fan out. Give every deliverable one stable lowercase snake_case label and never reuse that label for another deliverable. A repeated label is idempotent and returns the original child result even when the goal wording changes. After a completed result, synthesize it into the parent answer; do not delegate that label again. Different, non-overlapping review partitions must use different labels. The legacy goal/label shape remains valid for one child only. Use this instead of any configured global R-Code MCP delegation tool, because global MCP delegation creates a standalone task/session.",
         "inputSchema": {
             "type": "object",
-            "required": ["goal"],
             "properties": {
+                "tasks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": CODEX_RCODE_MAX_UNIQUE_DELEGATIONS,
+                    "description": "All independent directions known now. Two or three entries run concurrently inside R-Code.",
+                    "items": {
+                        "type": "object",
+                        "required": ["goal", "label"],
+                        "properties": {
+                            "goal": {
+                                "type": "string",
+                                "description": "A concrete, self-contained goal for this child agent."
+                            },
+                            "label": {
+                                "type": "string",
+                                "pattern": "^[a-z][a-z0-9_]{2,63}$",
+                                "description": "Stable idempotency key for this deliverable, such as storage_review."
+                            },
+                            "access": {
+                                "type": "string",
+                                "enum": ["inherit", "read_only", "full_access"],
+                                "description": "Defaults to inherit. The child can never exceed the parent run's access ceiling."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
                 "goal": {
                     "type": "string",
-                    "description": "A concrete, self-contained goal for the child agent."
+                    "description": "Legacy single-child form: a concrete, self-contained goal."
                 },
                 "label": {
                     "type": "string",
-                    "description": "Optional short label shown in the R-Code child-run inspector."
+                    "pattern": "^[a-z][a-z0-9_]{2,63}$",
+                    "description": "Legacy single-child form: required stable idempotency key. Reuse means replay, never a new child."
                 },
                 "access": {
                     "type": "string",
@@ -18583,6 +20786,10 @@ fn codex_app_server_dynamic_tools(enabled: bool) -> Vec<serde_json::Value> {
                     "description": "Defaults to inherit. The child can never exceed the parent run's access ceiling."
                 }
             },
+            "oneOf": [
+                { "required": ["tasks"] },
+                { "required": ["goal", "label"] }
+            ],
             "additionalProperties": false
         }
     })]
@@ -19277,6 +21484,180 @@ async fn handle_codex_rcode_dynamic_tool(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     if tool != CODEX_RCODE_DELEGATE_TOOL {
+        return handle_codex_rcode_single_dynamic_tool(
+            value,
+            writer,
+            approval,
+            cancellation,
+            progress,
+            observer,
+            event_sink,
+        )
+        .await;
+    }
+    let Some(arguments) = params
+        .get("arguments")
+        .and_then(serde_json::Value::as_object)
+        .map(|value| serde_json::Value::Object(value.clone()))
+    else {
+        return handle_codex_rcode_single_dynamic_tool(
+            value,
+            writer,
+            approval,
+            cancellation,
+            progress,
+            observer,
+            event_sink,
+        )
+        .await;
+    };
+    if arguments.get("tasks").is_none() {
+        return handle_codex_rcode_single_dynamic_tool(
+            value,
+            writer,
+            approval,
+            cancellation,
+            progress,
+            observer,
+            event_sink,
+        )
+        .await;
+    }
+    let Some(delegate) = approval.rcode_delegate.as_ref() else {
+        return respond_codex_dynamic_tool(
+            writer,
+            request_id,
+            false,
+            "当前 Codex 运行不允许反向创建 R-Code 子代理",
+        )
+        .await;
+    };
+    let (tasks, _) = match codex_rcode_delegate_task_inputs(
+        &arguments,
+        delegate.max_access,
+        delegate.permission_mode,
+    ) {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            return respond_codex_dynamic_tool(writer, request_id, false, error).await;
+        }
+    };
+    let base_call_id = params
+        .get("callId")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| bounded_text(value, 90));
+
+    // App Server serializes one dynamic tool call behind its result. Make the call itself a batch
+    // and poll every child handler together, so all provider requests can be in flight before any
+    // one child completes. Each derived call ID remains independently replayable and auditable.
+    let futures = tasks.into_iter().enumerate().map(|(index, task)| {
+        let call_id = base_call_id
+            .as_deref()
+            .map(|base| format!("{base}:{}", task.label));
+        let access = match task.access_mode {
+            SubagentAccessMode::ReadOnly => "read_only",
+            SubagentAccessMode::FullAccess => "full_access",
+        };
+        let synthetic = serde_json::json!({
+            "id": format!("batch-{index}"),
+            "method": "item/tool/call",
+            "params": {
+                "tool": CODEX_RCODE_DELEGATE_TOOL,
+                "callId": call_id,
+                "arguments": {
+                    "goal": task.goal,
+                    "label": task.label,
+                    "access": access,
+                },
+            },
+        });
+        async move {
+            let fallback_label = synthetic["params"]["arguments"]["label"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let (item_writer, mut item_reader) = tokio::sync::mpsc::channel(1);
+            let handling = handle_codex_rcode_single_dynamic_tool(
+                &synthetic,
+                &item_writer,
+                approval,
+                cancellation,
+                progress,
+                observer,
+                event_sink,
+            )
+            .await;
+            let frame = item_reader.try_recv().ok();
+            let success = frame
+                .as_ref()
+                .and_then(|frame| frame.get("result"))
+                .and_then(|result| result.get("success"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let text = frame
+                .as_ref()
+                .and_then(|frame| frame.get("result"))
+                .and_then(|result| result.get("contentItems"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("R-Code 子代理委派未返回结果");
+            let result = serde_json::from_str::<serde_json::Value>(text).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "label": fallback_label,
+                    "status": "failed",
+                    "summary": redact_text(text),
+                    "terminal": true,
+                })
+            });
+            (handling, success, result)
+        }
+    });
+    let outcomes = futures::future::join_all(futures).await;
+    let parent_cancelled = outcomes
+        .iter()
+        .any(|(handling, _, _)| matches!(handling, CodexAppServerRequestHandling::Cancelled));
+    let success = outcomes.iter().all(|(_, success, _)| *success);
+    let results = outcomes
+        .into_iter()
+        .map(|(_, _, result)| result)
+        .collect::<Vec<_>>();
+    let response_text = serde_json::json!({
+        "batch": true,
+        "results": results,
+        "terminal": true,
+        "next_action": "本批次已经结束；请综合这些结果，不要逐个重放，也不要开启第二批相同方向的子代理。",
+    })
+    .to_string();
+    let handled = respond_codex_dynamic_tool(writer, request_id, success, response_text).await;
+    if parent_cancelled && matches!(handled, CodexAppServerRequestHandling::Handled) {
+        CodexAppServerRequestHandling::Cancelled
+    } else {
+        handled
+    }
+}
+
+/// Original one-child implementation retained as a compatibility path and as the independently
+/// cancellable unit used by a batched dynamic-tool invocation.
+async fn handle_codex_rcode_single_dynamic_tool(
+    value: &serde_json::Value,
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
+    approval: &CodexAppServerApprovalContext,
+    cancellation: &CancellationToken,
+    progress: Option<&tokio::sync::mpsc::Sender<()>>,
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+) -> CodexAppServerRequestHandling {
+    let Some(request_id) = value.get("id") else {
+        return CodexAppServerRequestHandling::Failed;
+    };
+    let params = value.get("params").cloned().unwrap_or_default();
+    let tool = params
+        .get("tool")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if tool != CODEX_RCODE_DELEGATE_TOOL {
         return respond_codex_dynamic_tool(
             writer,
             request_id,
@@ -19319,12 +21700,12 @@ async fn handle_codex_rcode_dynamic_tool(
         )
         .await;
     }
-    let label = arguments
-        .get("label")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| bounded_text(&redact_text(value), 80));
+    let label = match codex_rcode_delegate_argument_label(&arguments) {
+        Ok(label) => bounded_text(&redact_text(&label), 80),
+        Err(error) => {
+            return respond_codex_dynamic_tool(writer, request_id, false, error).await;
+        }
+    };
     let access_mode = match codex_rcode_delegate_access(
         &arguments,
         delegate.max_access,
@@ -19433,6 +21814,73 @@ async fn handle_codex_rcode_dynamic_tool(
         }
     };
 
+    let delegated_by_tool_call_id = params
+        .get("callId")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| bounded_text(value, 160));
+    let execution = match delegate.delegation_registry.claim(
+        delegated_by_tool_call_id.as_deref(),
+        goal,
+        Some(&label),
+    ) {
+        CodexRCodeDelegateClaim::Execute(execution) => execution,
+        CodexRCodeDelegateClaim::Replay { entry, reason } => {
+            tracing::info!(
+                task_id = %approval.task_id,
+                parent_run_id = %approval.run_id,
+                dedupe_reason = reason,
+                "reusing an existing dynamic R-Code delegation"
+            );
+            let Some(cached) =
+                wait_for_codex_rcode_delegate_result(entry.as_ref(), cancellation).await
+            else {
+                let handled = respond_codex_dynamic_tool(
+                    writer,
+                    request_id,
+                    false,
+                    "父运行已取消，未重复启动相同目标的 R-Code 子代理",
+                )
+                .await;
+                return if cancellation.is_cancelled()
+                    && matches!(handled, CodexAppServerRequestHandling::Handled)
+                {
+                    CodexAppServerRequestHandling::Cancelled
+                } else {
+                    handled
+                };
+            };
+            return respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                cached.success,
+                cached.response_text,
+            )
+            .await;
+        }
+        CodexRCodeDelegateClaim::CallIdConflict => {
+            return respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                false,
+                "同一个 Codex 工具 callId 被用于不同目标，已拒绝重复执行",
+            )
+            .await;
+        }
+        CodexRCodeDelegateClaim::LimitReached => {
+            return respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                false,
+                format!(
+                    "单次父运行最多可委派 {CODEX_RCODE_MAX_UNIQUE_DELEGATIONS} 个唯一 R-Code 子代理目标"
+                ),
+            )
+            .await;
+        }
+    };
+    let stable_label = execution.stable_label();
+    let label = Some(execution.display_label());
+
     let child_run_id = uuid::Uuid::new_v4().to_string();
     let child_cancellation = match delegate
         .external_agents
@@ -19441,13 +21889,20 @@ async fn handle_codex_rcode_dynamic_tool(
     {
         Ok(token) => token,
         Err(error) => {
-            return respond_codex_dynamic_tool(writer, request_id, false, error).await;
+            let cached = CodexRCodeDelegateCachedResult {
+                success: false,
+                response_text: error,
+            };
+            execution.complete(cached.clone());
+            return respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                cached.success,
+                cached.response_text,
+            )
+            .await;
         }
     };
-    let delegated_by_tool_call_id = params
-        .get("callId")
-        .and_then(serde_json::Value::as_str)
-        .map(|value| bounded_text(value, 160));
     let abort = Arc::new(AtomicBool::new(false));
     // F9：有界事件队列 + 丢弃计数。sink 是同步闭包，无法 await 背压；
     // try_send 失败时丢弃中间事件（只影响实时投影）。终态 lifecycle
@@ -19586,12 +22041,32 @@ async fn handle_codex_rcode_dynamic_tool(
     };
     // Native child reports already pass through the adaptive 6k direct / long-summary policy.
     // Keep the JSON envelope intact here instead of applying a second, silent character cut.
+    let terminal = matches!(status, "completed" | "failed" | "cancelled");
+    let next_action = if status == "completed" {
+        stable_label
+            .as_deref()
+            .map(|label| {
+                format!(
+                    "委派键 {label} 已完成；请直接综合这份结果。同一键再次调用只会回放，不会创建新子代理。"
+                )
+            })
+            .unwrap_or_else(|| "该子代理已完成；请直接综合这份结果，不要重复委派。".to_string())
+    } else {
+        "该子代理调用已经结束；需要新的交付方向时请使用新的稳定 label。".to_string()
+    };
     let response_text = serde_json::json!({
         "subagent_id": child_run_id,
+        "label": stable_label,
         "status": status,
         "summary": redact_text(&summary),
+        "terminal": terminal,
+        "next_action": next_action,
     });
     let response_text = serde_json::to_string(&response_text).unwrap_or_default();
+    execution.complete(CodexRCodeDelegateCachedResult {
+        success,
+        response_text: response_text.clone(),
+    });
     let handled = respond_codex_dynamic_tool(writer, request_id, success, response_text).await;
     if parent_cancelled && matches!(handled, CodexAppServerRequestHandling::Handled) {
         CodexAppServerRequestHandling::Cancelled
@@ -19844,12 +22319,13 @@ async fn observe_codex_app_server_event(
                 )
                 .await;
             } else if let Some((call_id, name, action)) = codex_item_tool(item) {
+                let input = codex_item_tool_input(item, &action);
                 emit_codex_observable_event(
                     observer,
                     event_sink,
                     AgentEvent::ToolCall {
                         name,
-                        input: serde_json::json!({ "summary": action }),
+                        input,
                         call_id,
                     },
                 )
@@ -20717,6 +23193,8 @@ async fn run_codex_app_server_process_with_images_and_registry(
         summary,
         usage_json: None,
         failure,
+        tool_calls,
+        stream_retries: 0,
     };
     transport_owner.finish(transport_reusable).await;
     completion
@@ -20808,6 +23286,16 @@ async fn run_codex_delegation_process(
     .await
 }
 
+/// A disconnected one-shot stream may be retried only before Codex has exposed any action or
+/// reply. Once a tool starts, replay could duplicate a command, file write, or external MCP call;
+/// once a message is visible, replay would duplicate transcript content.
+fn codex_exec_stream_retry_is_safe(completion: &CodexExecCompletion) -> bool {
+    !completion.cancelled
+        && completion.failure == Some(CodexExecFailure::Stream)
+        && completion.tool_calls == 0
+        && completion.summary.is_none()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_codex_delegation_process_with_images(
     workspace: &Path,
@@ -20837,18 +23325,48 @@ async fn run_codex_delegation_process_with_images(
         )
         .await
     } else {
-        run_codex_exec_process_with_options_and_permissions_and_images(
+        let mut completion = run_codex_exec_process_with_options_and_permissions_and_images(
             workspace,
             prompt,
             image_paths,
-            cli_path,
-            cancellation,
+            cli_path.clone(),
+            cancellation.clone(),
             observer,
             event_sink,
             permissions,
-            limits,
+            limits.clone(),
         )
-        .await
+        .await;
+        if codex_exec_stream_retry_is_safe(&completion) && !cancellation.is_cancelled() {
+            tracing::warn!(
+                task_id = %approval.task_id,
+                run_id = %approval.run_id,
+                "Codex exec stream disconnected before observable work; retrying once"
+            );
+            emit_codex_observable_event(
+                observer.as_ref(),
+                event_sink,
+                AgentEvent::Activity {
+                    phase: AgentActivityPhase::Requesting,
+                    detail: Some("Codex CLI 启动通道中断，正在安全重连（1/1）".to_string()),
+                },
+            )
+            .await;
+            completion = run_codex_exec_process_with_options_and_permissions_and_images(
+                workspace,
+                prompt,
+                image_paths,
+                cli_path,
+                cancellation,
+                observer,
+                event_sink,
+                permissions,
+                limits,
+            )
+            .await;
+            completion.stream_retries = 1;
+        }
+        completion
     }
 }
 
@@ -20930,6 +23448,7 @@ fn spawn_codex_main(
                     // H3：直接记录父的 Codex 权限预设，inherit 语义在
                     // `codex_rcode_delegate_access` 按预设分档（ReadOnly 父不升权）。
                     permission_mode: permissions.mode(),
+                    delegation_registry: Arc::new(CodexRCodeDelegateRegistry::default()),
                 }),
             },
             Some(steer_requests),
@@ -20982,8 +23501,9 @@ fn spawn_codex_main(
             ),
             NativeRunTerminalOutcome::PartialSuccess
             | NativeRunTerminalOutcome::CompletedWithError => {
-                let detail = codex_exec_failure_message(completion.failure)
-                    .replace("Codex CLI 子代理", "Codex 主 Agent");
+                let detail =
+                    codex_exec_failure_message(completion.failure, completion.stream_retries)
+                        .replace("Codex CLI 子代理", "Codex 主 Agent");
                 tracing::warn!(
                     task_id = %run.task_id,
                     run_id = %run.id,
@@ -21169,7 +23689,7 @@ fn spawn_codex_exec_subagent(
             (
                 SubagentState::Failed,
                 ReviewState::Failed,
-                codex_exec_failure_message(completion.failure),
+                codex_exec_failure_message(completion.failure, completion.stream_retries),
             )
         };
         let lifecycle_detail = bounded_text(&summary, CODEX_EXEC_MAX_LIFECYCLE_DETAIL_CHARS);
@@ -21873,6 +24393,102 @@ pub fn create_external_session_injection(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// 测试读取 v2 队列载荷的镜像类型（与 QueuedAttachmentsV2 同构）。
+    #[derive(serde::Deserialize)]
+    struct QueuedAttachmentsV2Ver {
+        version: u8,
+        attachments: Vec<agent_contract::AttachmentRefV1>,
+    }
+
+    /// §7.4 队列懒迁移：v1 Base64 载荷在 claim 后迁移为 v2 引用（CAS 改写 +
+    /// commit_many）；迁移失败不丢附件。直接调用迁移函数验证存储侧契约。
+    #[tokio::test]
+    async fn queued_v1_payload_lazily_migrates_to_refs() {
+        let (_dir, state) = setup_state();
+        {
+            let conn = state.db.conn().unwrap();
+            conn.execute(
+                "INSERT INTO tasks (id, title, goal, state, mode, agent_engine, created_at, updated_at)                  VALUES ('qt1', 't', 'g', 'idle', 'auto', 'r_code', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+        let png = vec![
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R',
+            0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x90, 0x77, 0x53, 0xde,
+        ];
+        let payload = serde_json::to_string(&vec![QueuedAttachmentPayload {
+            name: "shot.png".to_string(),
+            media_type: "image/png".to_string(),
+            data: BASE64_STANDARD.encode(&png),
+            text: None,
+            kind: ValidatedAttachmentKind::Image,
+            preview: None,
+        }])
+        .unwrap();
+        {
+            let conn = state.db.conn().unwrap();
+            conn.execute(
+                "INSERT INTO queued_messages                  (id, task_id, branch_id, message, priority, state, created_at, updated_at, attachments_json)                  VALUES ('q-lz-1', 'qt1', 'b1', 'hi', 0, 'queued', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?1)",
+                rusqlite::params![payload],
+            )
+            .unwrap();
+        }
+        let task = TaskRepository::new(&state.db).get("qt1").unwrap().unwrap();
+        let queued = QueuedMessageRepository::new(&state.db)
+            .take_next_for_task("qt1")
+            .unwrap()
+            .expect("queued row claimed");
+        assert!(queued
+            .attachments_json
+            .as_deref()
+            .unwrap_or("")
+            .contains("\"data\""));
+
+        let migrated = migrate_queued_attachments_v1_to_v2(
+            &state.db,
+            &state.blobs_dir,
+            &state.config_dir,
+            &task,
+            queued,
+        )
+        .await
+        .expect("lazy migration succeeds");
+        let json = migrated.attachments_json.unwrap();
+        assert!(json.contains("\"version\":2"), "payload is v2: {json}");
+        assert!(
+            !json.contains("\"data\":\""),
+            "no Base64 in payload: {json}"
+        );
+        // 行内 CAS 改写已落库。
+        let stored: String = state
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT attachments_json FROM queued_messages WHERE id = 'q-lz-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored.contains("\"version\":2"));
+        // 迁移产生的附件已 commit（可按 task 解析）。
+        let store = r_code_store::AttachmentStore::new(&state.db, state.blobs_dir.clone());
+        let references: Vec<agent_contract::AttachmentRefV1> =
+            serde_json::from_str::<QueuedAttachmentsV2Ver>(&stored)
+                .unwrap()
+                .attachments;
+        for reference in &references {
+            let record = store.get_owned("qt1", &reference.attachment_id).unwrap();
+            assert_eq!(record.state, r_code_store::AttachmentState::Committed);
+            assert_eq!(
+                store.read_owned("qt1", &reference.attachment_id).unwrap(),
+                png
+            );
+        }
+    }
+
     use super::*;
     use r_code_store::WorkspaceRepository;
     use tempfile::TempDir;
@@ -25183,11 +27799,13 @@ input.on('line', (line) => {
         let task = task_create(&state, None, "Image", "analyze", "ask")
             .await
             .unwrap();
-        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        // 默认图片理解引擎是本机 OCR，PNG/JPEG 会被转换为文本；GIF 维持原图直发
+        // 路径，因此用它验证"图片正文持久化、对外只暴露安全元数据"的契约。
+        let gif = [b'G', b'I', b'F', b'8', b'9', b'a', 0x01, 0x00, 0x01, 0x00];
         let attachment = AttachmentInput {
-            name: "clipboard.png".into(),
-            media_type: "image/png".into(),
-            data: BASE64_STANDARD.encode(png),
+            name: "clipboard.gif".into(),
+            media_type: "image/gif".into(),
+            data: BASE64_STANDARD.encode(gif),
             native_ocr: false,
         };
 
@@ -25207,10 +27825,10 @@ input.on('line', (line) => {
             .find(|message| message.role.as_deref() == Some("user"))
             .expect("persisted user message");
         assert_eq!(user.image_count, Some(1));
-        assert_eq!(user.image_media_types, Some(vec!["image/png".into()]));
+        assert_eq!(user.image_media_types, Some(vec!["image/gif".into()]));
         assert_eq!(user.attachments.as_ref().map(Vec::len), Some(1));
-        assert_eq!(user.attachments.as_ref().unwrap()[0].name, "clipboard.png");
-        assert!(!serde_json::to_string(user).unwrap().contains("iVBORw0KGgo"));
+        assert_eq!(user.attachments.as_ref().unwrap()[0].name, "clipboard.gif");
+        assert!(!serde_json::to_string(user).unwrap().contains("R0lGODlh"));
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
     }
 
@@ -27018,7 +29636,10 @@ kind = "codex_cli"
         let untested_error = subagent_pool_save(&state, &untested.revision, pool.clone())
             .await
             .unwrap_err();
-        assert!(untested_error.contains("尚未在当前配置指纹下通过连通测试"));
+        assert!(
+            untested_error.contains("尚未在当前配置指纹下通过连通测试"),
+            "unexpected untested-pool error: {untested_error}"
+        );
 
         save_test_subagent_receipt(
             &state,
@@ -27031,7 +29652,10 @@ kind = "codex_cli"
         let failed_error = subagent_pool_save(&state, &failed.revision, pool.clone())
             .await
             .unwrap_err();
-        assert!(failed_error.contains("尚未在当前配置指纹下通过连通测试"));
+        assert!(
+            failed_error.contains("尚未在当前配置指纹下通过连通测试"),
+            "unexpected failed-health error: {failed_error}"
+        );
 
         save_test_subagent_receipt(
             &state,
@@ -27044,7 +29668,10 @@ kind = "codex_cli"
         let stale_error = subagent_pool_save(&state, &stale.revision, pool.clone())
             .await
             .unwrap_err();
-        assert!(stale_error.contains("尚未在当前配置指纹下通过连通测试"));
+        assert!(
+            stale_error.contains("尚未在当前配置指纹下通过连通测试"),
+            "unexpected stale-health error: {stale_error}"
+        );
 
         save_test_subagent_receipt(&state, &request, chrono::Utc::now(), Ok(())).await;
         let connected = subagent_pool_snapshot(&state).await.unwrap();
@@ -27639,13 +30266,15 @@ suggest_complex_tasks = false
         let detail = task_detail(&state, &task.id).await.unwrap();
         assert_eq!(detail.task.mode, TaskMode::Edit);
         assert!(detail.pending_plan_entry_offer.is_none());
-        // propose 工具不受 legacy 配置影响：客户开关关闭 + 无证据 manifest 时
-        // 资格恒为关闭（release state off）。
+        // propose 工具不受 legacy 配置影响：证据门已移除（A3），release 恒为开放，
+        // 是否注册建议只由客户滑钮与 DeepSeek 资格决定。
         let status = crate::plan_entry_commands::planning_status(&state)
             .await
             .unwrap();
-        assert_eq!(status.release_state, "off");
-        assert!(!status.evidence_validated);
+        assert_eq!(status.release_state, "open");
+        // 该测试环境没有配置任何 DeepSeek 服务：滑钮不可用但卡片仍可见。
+        assert!(!status.customer_switch_enabled);
+        assert!(!status.deepseek_configured);
     }
 
     #[tokio::test]
@@ -28717,19 +31346,22 @@ suggest_complex_tasks = false
     }
 
     #[test]
-    fn effective_max_tokens_defaults_to_catalog_limit_when_unset() {
-        // 未配置 + 目录声明上限 →「默认」取目录上限（思考模型推理计入输出预算，
-        // 不再落回保守的 8192）。
+    fn effective_max_tokens_defaults_to_recommended_not_ceiling() {
+        // docs §6.4：未配置 + 目录声明推荐值 →「默认」取推荐值（DeepSeek V4
+        // 为 65,536），不得自动采用服务端硬上限 393,216（无条件预留近 40% 窗口
+        // 会过早触发伪压缩）。
         let deepseek = provider_cfg_with_identity(
             "https://api.deepseek.com",
             "deepseek-v4-pro",
             ProviderProtocol::OpenAiChat,
             "deepseek",
         );
-        assert_eq!(effective_max_tokens("deepseek", &deepseek), Some(393_216));
+        assert_eq!(effective_max_tokens("deepseek", &deepseek), Some(65_536));
 
+        // 目录未给推荐值（anthropic 等未声明 recommended_output_tokens）→
+        // None，由 runtime 兜底 8,192。
         let anthropic = provider_cfg("https://api.anthropic.com", "claude-x");
-        assert_eq!(effective_max_tokens("anthropic", &anthropic), Some(128_000));
+        assert_eq!(effective_max_tokens("anthropic", &anthropic), None);
 
         // 目录未声明上限（自定义/网关线路）→ 保持 None，由 runtime 兜底。
         let custom = provider_cfg("https://relay.internal.example/v1", "glm-5.3");
@@ -29734,6 +32366,41 @@ suggest_complex_tasks = false
     }
 
     #[test]
+    fn codex_subagent_catalog_uses_cli_default_when_model_override_is_absent() {
+        let catalog = parse_codex_model_catalog(
+            br#"{
+              "models": [
+                {
+                  "slug": "gpt-5.6-terra",
+                  "display_name": "GPT-5.6-Terra",
+                  "description": "Balanced model",
+                  "default_reasoning_level": "medium",
+                  "supported_reasoning_levels": [],
+                  "visibility": "list",
+                  "priority": 2
+                },
+                {
+                  "slug": "gpt-5.6-sol",
+                  "display_name": "GPT-5.6-Sol",
+                  "description": "Frontier coding model",
+                  "default_reasoning_level": "low",
+                  "supported_reasoning_levels": [],
+                  "visibility": "list",
+                  "priority": 1
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_subagent_codex_model(None, &catalog), "gpt-5.6-sol");
+        assert_eq!(
+            resolve_subagent_codex_model(Some("configured-model".to_string()), &catalog),
+            "configured-model"
+        );
+    }
+
+    #[test]
     fn attachments_are_typed_size_and_magic_validated() {
         let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
         let input = AttachmentInput {
@@ -29802,6 +32469,367 @@ suggest_complex_tasks = false
         } else {
             assert!(capabilities.native_ocr_formats.is_empty());
         }
+    }
+
+    #[test]
+    fn ocr_engine_marks_every_png_and_jpeg_regardless_of_model_capability() {
+        fn image(name: &str, media_type: &str, bytes: &[u8]) -> ValidatedAttachment {
+            ValidatedAttachment {
+                name: name.to_string(),
+                media_type: media_type.to_string(),
+                data: BASE64_STANDARD.encode(bytes),
+                bytes: bytes.to_vec(),
+                text: None,
+                kind: ValidatedAttachmentKind::Image,
+                native_ocr: false,
+                preview: None,
+            }
+        }
+        const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        const JPEG_MAGIC: &[u8] = &[0xff, 0xd8, 0xff];
+        const GIF_MAGIC: &[u8] = &[b'G', b'I', b'F', b'8', b'9', b'a', 0x01, 0x00];
+        const WEBP_MAGIC: &[u8] = &[b'R', b'I', b'F', b'F', 0, 0, 0, 0, b'W', b'E', b'B', b'P'];
+        let mut attachments = vec![
+            image("screen.png", "image/png", PNG_MAGIC),
+            image("photo.jpg", "image/jpeg", JPEG_MAGIC),
+            image("anim.gif", "image/gif", GIF_MAGIC),
+            image("pic.webp", "image/webp", WEBP_MAGIC),
+            ValidatedAttachment {
+                name: "note.txt".to_string(),
+                media_type: "text/plain".to_string(),
+                data: BASE64_STANDARD.encode(b"hello"),
+                bytes: b"hello".to_vec(),
+                text: Some("hello".to_string()),
+                kind: ValidatedAttachmentKind::Text,
+                native_ocr: false,
+                preview: None,
+            },
+        ];
+        mark_ocr_engine_images(&mut attachments);
+        // 用户显式选择 OCR：png/jpeg 全部标记，不再看主模型能力。
+        assert!(attachments[0].native_ocr, "png 必须走本机 OCR");
+        assert!(attachments[1].native_ocr, "jpeg 必须走本机 OCR");
+        // gif/webp 与文本维持现有能力路径。
+        assert!(!attachments[2].native_ocr);
+        assert!(!attachments[3].native_ocr);
+        assert!(!attachments[4].native_ocr);
+    }
+
+    fn image_engine_config(
+        default_provider: &str,
+        kind: &str,
+        model: &str,
+        base_url: &str,
+    ) -> agent_config::Config {
+        let mut config = agent_config::Config {
+            default_provider: default_provider.to_string(),
+            ..agent_config::Config::default()
+        };
+        config.providers.insert(
+            default_provider.to_string(),
+            agent_config::ProviderConfig {
+                base_url: base_url.to_string(),
+                api_key: "sk-test".to_string(),
+                model: model.to_string(),
+                provider_kind: Some(kind.to_string()),
+                max_tokens: None,
+                temperature: None,
+                protocol: None,
+                show_reasoning: true,
+            },
+        );
+        config
+    }
+
+    #[test]
+    fn native_image_main_models_skip_the_understanding_engines() {
+        // Codex 主 Agent：附件由 Codex 自身目录处理，引擎不抢处理。
+        let config =
+            image_engine_config("openai", "openai", "gpt-5.5", "https://api.openai.com/v1");
+        assert!(main_model_handles_images_natively(
+            &config,
+            AgentEngine::Codex,
+            None,
+            None
+        ));
+
+        // 目录确认多模态的主模型：原图直发（本末倒置防护）。
+        assert!(
+            main_model_handles_images_natively(&config, AgentEngine::RCode, None, None),
+            "gpt-5.5 目录标注多模态"
+        );
+        assert!(main_model_handles_images_natively(
+            &config,
+            AgentEngine::RCode,
+            Some("openai"),
+            Some("gpt-5.6-sol"),
+        ));
+
+        // 纯文本主模型：仍需引擎。
+        let deepseek = image_engine_config(
+            "deepseek",
+            "deepseek",
+            "deepseek-v4-pro",
+            "https://api.deepseek.com",
+        );
+        assert!(!main_model_handles_images_natively(
+            &deepseek,
+            AgentEngine::RCode,
+            None,
+            None
+        ));
+        // DeepSeek 的视觉实验模型被确认时直发。
+        assert!(main_model_handles_images_natively(
+            &deepseek,
+            AgentEngine::RCode,
+            Some("deepseek"),
+            Some("deepseek-v4-flash-vision-exp"),
+        ));
+        // 方舟 Agent Plan 的豆包系列。
+        let ark = image_engine_config(
+            "ark_agent",
+            "ark_agent",
+            "doubao-seed-2.1-pro",
+            "https://ark.cn-beijing.volces.com/api/plan",
+        );
+        assert!(main_model_handles_images_natively(
+            &ark,
+            AgentEngine::RCode,
+            None,
+            None
+        ));
+
+        // 能力未知（目录外模型 / 地址被改写的中转）：不视为确认，仍走引擎。
+        assert!(!main_model_handles_images_natively(
+            &config,
+            AgentEngine::RCode,
+            Some("openai"),
+            Some("gpt-custom-turbo"),
+        ));
+        let relay = image_engine_config(
+            "openai",
+            "openai",
+            "gpt-5.5",
+            "https://my-relay.example.com/v1",
+        );
+        assert!(
+            !main_model_handles_images_natively(&relay, AgentEngine::RCode, None, None),
+            "改写到中转站后预设标注不再可信"
+        );
+        // 服务不存在 / 模型为空。
+        assert!(!main_model_handles_images_natively(
+            &config,
+            AgentEngine::RCode,
+            Some("ghost"),
+            None
+        ));
+        let empty_model = image_engine_config("openai", "openai", "", "https://api.openai.com/v1");
+        assert!(!main_model_handles_images_natively(
+            &empty_model,
+            AgentEngine::RCode,
+            None,
+            None
+        ));
+    }
+
+    #[tokio::test]
+    async fn multimodal_default_provider_leaves_images_untouched() {
+        let (_dir, state) = setup_state();
+        // 默认服务是目录确认多模态的 gpt-5.5：即使引擎配置为 OCR，原图也直发。
+        std::fs::write(
+            state.config_dir.join("config.toml"),
+            "default_provider = \"openai\"
+
+[providers.openai]
+base_url = \"https://api.openai.com/v1\"
+api_key = \"sk-test\"
+model = \"gpt-5.5\"
+provider_kind = \"openai\"
+
+[image_understanding]
+engine = \"ocr\"
+",
+        )
+        .unwrap();
+        const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let attachment = ValidatedAttachment {
+            name: "screen.png".to_string(),
+            media_type: "image/png".to_string(),
+            data: BASE64_STANDARD.encode(PNG_MAGIC),
+            bytes: PNG_MAGIC.to_vec(),
+            text: None,
+            kind: ValidatedAttachmentKind::Image,
+            native_ocr: false,
+            preview: None,
+        };
+        let result = apply_image_understanding(&state, "task-1", vec![attachment])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].kind, ValidatedAttachmentKind::Image, "原图直发");
+        assert!(!result[0].native_ocr);
+        assert!(result[0].preview.is_none());
+    }
+
+    #[test]
+    fn vision_understanding_request_carries_image_and_structured_prompt() {
+        const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let attachment = ValidatedAttachment {
+            name: "shot.png".to_string(),
+            media_type: "image/png".to_string(),
+            data: BASE64_STANDARD.encode(PNG_MAGIC),
+            bytes: PNG_MAGIC.to_vec(),
+            text: None,
+            kind: ValidatedAttachmentKind::Image,
+            native_ocr: false,
+            preview: None,
+        };
+        let request = vision_understanding_request("claude-sonnet-5", &attachment);
+        assert_eq!(request.model, "claude-sonnet-5");
+        assert_eq!(request.max_tokens, IMAGE_UNDERSTANDING_MAX_TOKENS);
+        assert!(request.tools.is_empty() && request.hosted_tools.is_empty());
+        let message = &request.messages[0];
+        assert_eq!(message.role, Role::User);
+        assert!(
+            matches!(&message.content[0], ContentBlock::Image { source } if source.media_type == "image/png")
+        );
+        assert!(
+            matches!(&message.content[1], ContentBlock::Text { text } if text.contains("结构化中文描述"))
+        );
+    }
+
+    #[tokio::test]
+    async fn model_engine_reports_readable_errors_for_missing_configuration() {
+        let (_dir, state) = setup_state();
+        // engine = model 但没有配置任何服务：发送前返回可读错误。
+        std::fs::write(
+            state.config_dir.join("config.toml"),
+            "[image_understanding]
+engine = \"model\"
+",
+        )
+        .unwrap();
+        let error = apply_image_understanding(&state, "task-1", Vec::new())
+            .await
+            .unwrap_err();
+        assert!(error.contains("未配置服务"), "unexpected error: {error}");
+
+        // 指向已删除的服务：错误列明服务名并指引重新选择。
+        std::fs::write(
+            state.config_dir.join("config.toml"),
+            "[image_understanding]
+engine = \"model\"
+model_provider = \"gone\"
+model = \"m\"
+",
+        )
+        .unwrap();
+        let error = apply_image_understanding(&state, "task-1", Vec::new())
+            .await
+            .unwrap_err();
+        assert!(error.contains("已被删除"), "unexpected error: {error}");
+
+        // 服务存在但未就绪（缺密钥）。
+        std::fs::write(
+            state.config_dir.join("config.toml"),
+            "[image_understanding]
+engine = \"model\"
+model_provider = \"openai\"
+model = \"gpt-5.5\"
+
+[providers.openai]
+base_url = \"https://api.openai.com/v1\"
+api_key = \"\"
+model = \"gpt-5.5\"
+",
+        )
+        .unwrap();
+        let error = apply_image_understanding(&state, "task-1", Vec::new())
+            .await
+            .unwrap_err();
+        assert!(error.contains("尚未就绪"), "unexpected error: {error}");
+    }
+
+    #[tokio::test]
+    async fn settings_set_round_trips_image_understanding_engine() {
+        let (_dir, state) = setup_state();
+        // 先落一个就绪的 provider，满足 model 引擎的校验链。
+        settings_set(
+            &state,
+            "providers.openai.base_url",
+            serde_json::json!("https://api.openai.com/v1"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "providers.openai.model",
+            serde_json::json!("gpt-5.5"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "providers.openai.api_key",
+            serde_json::json!("sk-test"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "image_understanding.engine",
+            serde_json::json!("model"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "image_understanding.model_provider",
+            serde_json::json!("openai"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "image_understanding.model",
+            serde_json::json!("gpt-5.5"),
+        )
+        .await
+        .unwrap();
+
+        let payload = settings_get(&state).await.unwrap();
+        assert_eq!(payload["config"]["image_understanding"]["engine"], "model");
+        assert_eq!(
+            payload["config"]["image_understanding"]["model_provider"],
+            "openai"
+        );
+        assert_eq!(payload["config"]["image_understanding"]["model"], "gpt-5.5");
+        let raw = std::fs::read_to_string(state.config_dir.join("config.toml")).unwrap();
+        assert!(raw.contains("engine = \"model\""));
+
+        // 切回 OCR：清空模型字段，不留悬空引用。
+        settings_set(
+            &state,
+            "image_understanding.engine",
+            serde_json::json!("ocr"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "image_understanding.model_provider",
+            serde_json::Value::Null,
+        )
+        .await
+        .unwrap();
+        settings_set(&state, "image_understanding.model", serde_json::Value::Null)
+            .await
+            .unwrap();
+        let payload = settings_get(&state).await.unwrap();
+        assert_eq!(payload["config"]["image_understanding"]["engine"], "ocr");
+        assert!(payload["config"]["image_understanding"]
+            .get("model_provider")
+            .is_none());
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -30287,6 +33315,22 @@ command = "r-code-host"
         assert_eq!(default, PathBuf::from("C:/Users/example/.codex"));
     }
 
+    #[test]
+    fn codex_candidate_order_prefers_the_user_npm_auth_environment() {
+        let npm = PathBuf::from("C:/Users/example/AppData/Roaming/npm/codex.cmd");
+        let bundled = PathBuf::from("C:/Program Files/WindowsApps/OpenAI.Codex/codex.exe");
+        let candidates = ordered_initial_codex_cli_candidates(
+            vec![npm.clone()],
+            vec![bundled.clone(), npm.clone()],
+        );
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].path, npm);
+        assert_eq!(candidates[0].source, CodexCliSource::NpmGlobal);
+        assert_eq!(candidates[1].path, bundled);
+        assert_eq!(candidates[1].source, CodexCliSource::Path);
+    }
+
     #[cfg(unix)]
     fn codex_probe_test_shim(directory: &Path, name: &str, version: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -30458,6 +33502,45 @@ command = "r-code-host"
         .is_err());
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_login_terminal_executes_command_file_and_cleans_it_up() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let shim_dir = directory.path().join("Codex Login Test's");
+        std::fs::create_dir_all(&shim_dir).unwrap();
+        let shim = shim_dir.join("codex");
+        std::fs::write(
+            &shim,
+            "#!/bin/sh\nif [ \"$1\" = \"login\" ]; then echo codex-login-started; exit 0; fi\nexit 2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let command_path =
+            create_macos_codex_login_command_file(&shim, CodexLoginMode::Browser).unwrap();
+        let mode = std::fs::metadata(&command_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+
+        let output = Command::new(&command_path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("codex-login-started"));
+        assert!(
+            !command_path.exists(),
+            "the temporary login command must remove itself before launching Codex"
+        );
+    }
+
     #[test]
     fn npm_installer_only_targets_the_official_codex_package() {
         let npm_path = if cfg!(windows) {
@@ -30474,6 +33557,19 @@ command = "r-code-host"
                 .map(|value| value.to_string_lossy().into_owned())
                 .collect::<Vec<_>>(),
             ["install", "-g", "@openai/codex"]
+        );
+    }
+
+    #[test]
+    fn codex_auto_update_uses_the_official_fixed_subcommand_and_reports_version_changes() {
+        assert_eq!(CODEX_CLI_UPDATE_ARGS, ["update"]);
+        assert_eq!(
+            completed_codex_update_state(Some("codex-cli 0.145.0"), Some("codex-cli 0.149.0")),
+            "updated"
+        );
+        assert_eq!(
+            completed_codex_update_state(Some("codex-cli 0.149.0"), Some("codex-cli 0.149.0")),
+            "up_to_date"
         );
     }
 
@@ -30534,6 +33630,30 @@ command = "r-code-host"
             }) if detail == r#"{"kind":"codex_reasoning_summary","text":"已定位委派入口"}"#
                 && !detail.contains("private raw reasoning")
         ));
+        assert_eq!(
+            safe_codex_reasoning_summary(&serde_json::json!({
+                "type": "reasoning",
+                "summary": [
+                    "**Reviewing the checklist**",
+                    { "type": "summary_text", "text": "**Reviewing the checklist**" }
+                ],
+                "content": ["private raw reasoning"]
+            })),
+            None,
+            "duplicated generic status text should not become a reasoning card"
+        );
+        assert_eq!(
+            safe_codex_reasoning_summary(&serde_json::json!({
+                "type": "reasoning",
+                "summary": [
+                    "**Inspecting `commands.rs` delegation registry**",
+                    "Inspecting `commands.rs` delegation registry",
+                    "Inspecting `commands.rs` delegation registry and `Composer.tsx`"
+                ]
+            })),
+            Some("Inspecting `commands.rs` delegation registry and `Composer.tsx`".to_string()),
+            "Markdown-equivalent and cumulative parts should collapse to the useful form"
+        );
         let command = parse_codex_exec_json_line(
             r#"{"type":"item.started","item":{"id":"item-7","type":"command_execution","command":"curl -H 'Authorization: Bearer secret-token' https://example.test","status":"in_progress"}}"#,
         );
@@ -30571,6 +33691,11 @@ command = "r-code-host"
             "type": "dynamicToolCall",
             "id": "delegate-call",
             "tool": CODEX_RCODE_DELEGATE_TOOL,
+            "arguments": {
+                "label": "storage_review",
+                "goal": "审查 database/cache/vector/storage 配置边界",
+                "access": "read_only"
+            },
             "status": "inProgress"
         });
         assert_eq!(
@@ -30578,9 +33703,42 @@ command = "r-code-host"
             Some((
                 "delegate-call".to_string(),
                 "delegate_task".to_string(),
-                "委派 R-Code 子智能体".to_string(),
+                "storage_review · 审查 database/cache/vector/storage 配置边界".to_string(),
             ))
         );
+        assert_eq!(
+            codex_item_tool_input(
+                &dynamic_delegate,
+                "storage_review · 审查 database/cache/vector/storage 配置边界"
+            ),
+            serde_json::json!({
+                "agent": "r_code",
+                "label": "storage_review",
+                "goal": "审查 database/cache/vector/storage 配置边界",
+                "access": "read_only"
+            })
+        );
+        let completed_delegate = serde_json::json!({
+            "type": "dynamicToolCall",
+            "id": "delegate-call",
+            "tool": CODEX_RCODE_DELEGATE_TOOL,
+            "status": "completed",
+            "success": true,
+            "contentItems": [{
+                "type": "inputText",
+                "text": "{\"status\":\"completed\",\"summary\":\"storage review done\",\"token\":\"sk-secret-value\"}"
+            }]
+        });
+        let dynamic_output = safe_codex_tool_output(&completed_delegate)
+            .expect("dynamic tool text output should be projected");
+        assert!(dynamic_output.contains("storage review done"));
+        assert!(!dynamic_output.contains("sk-secret-value"));
+        assert!(!codex_item_failed(&completed_delegate));
+        assert!(codex_item_failed(&serde_json::json!({
+            "type": "dynamicToolCall",
+            "status": "failed",
+            "success": false
+        })));
     }
 
     #[test]
@@ -30819,6 +33977,7 @@ command = "r-code-host"
                 memory_context: Some(FROZEN_MEMORY_SNAPSHOT.to_string()),
                 max_access: SubagentAccessMode::FullAccess,
                 permission_mode: CodexPermissionMode::RequestApproval,
+                delegation_registry: Arc::new(CodexRCodeDelegateRegistry::default()),
             }),
         };
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel(8);
@@ -30843,7 +34002,11 @@ command = "r-code-host"
             "params": {
                 "tool": CODEX_RCODE_DELEGATE_TOOL,
                 "callId": "call-42",
-                "arguments": { "goal": "检查当前实现", "access": "inherit" },
+                "arguments": {
+                    "goal": "检查当前实现",
+                    "label": "current_impl_review",
+                    "access": "inherit"
+                },
             },
         });
         let handled = tokio::time::timeout(
@@ -30914,6 +34077,11 @@ command = "r-code-host"
             .expect("child run id in response");
         // child 因 provider 返回 400（不可重试）而失败，但 run 生命周期事件已落库。
         assert_eq!(inner["status"], serde_json::json!("failed"));
+        assert_eq!(inner["label"], serde_json::json!("current_impl_review"));
+        assert_eq!(inner["terminal"], serde_json::json!(true));
+        assert!(inner["next_action"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("新的稳定 label")));
         let runs = AgentRunRepository::new(&state.db);
         assert!(
             runs.get(child_run_id).unwrap().is_some(),
@@ -30971,9 +34139,9 @@ command = "r-code-host"
     }
 
     #[tokio::test]
-    async fn dynamic_delegate_handlers_run_concurrently_and_stay_isolated() {
-        // F7：并发 dispatch——两个 item/tool/call 同时处理，各自 child 独立
-        // 运行、独立响应，registry 槽位互不串扰。
+    async fn dynamic_delegate_batch_runs_three_children_concurrently_and_stays_isolated() {
+        // App Server 一次只发出一个 item/tool/call；批量协议必须让同一次回调里的
+        // 三个 child 真正并发运行，并让每个 child 保持独立 run/registry 槽位。
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let (_dir, state) = setup_state();
@@ -30989,17 +34157,18 @@ command = "r-code-host"
         .unwrap();
         let task_id = task.id.clone();
 
-        // Keep both provider calls behind a deterministic local barrier. The previous fixture
+        // Keep all three provider calls behind a deterministic local barrier. The previous fixture
         // used an unreachable port, so a fast connection refusal (notably on macOS) could finish
         // and remove the first child before the registry poll observed the second one. This
         // server accepts real OpenAI-compatible streaming requests but does not answer until the
-        // test has observed both child slots.
+        // test has observed all child slots.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind gated provider fixture");
         let provider_addr = listener.local_addr().expect("gated provider address");
         let (provider_release, release_rx) = tokio::sync::watch::channel(false);
-        let (provider_request_tx, mut provider_requests) = tokio::sync::mpsc::channel(2);
+        let (provider_request_tx, mut provider_requests) = tokio::sync::mpsc::channel(3);
+        let provider_request_index = Arc::new(AtomicUsize::new(0));
         let provider_server = tokio::spawn(async move {
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
@@ -31007,6 +34176,7 @@ command = "r-code-host"
                 };
                 let mut release_rx = release_rx.clone();
                 let provider_request_tx = provider_request_tx.clone();
+                let provider_request_index = provider_request_index.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::with_capacity(4096);
                     let mut chunk = [0_u8; 1024];
@@ -31033,18 +34203,31 @@ command = "r-code-host"
                             Ok(read) => request.extend_from_slice(&chunk[..read]),
                         }
                     }
+                    let request_index = provider_request_index.fetch_add(1, Ordering::SeqCst);
                     if provider_request_tx.send(()).await.is_err() {
                         return;
                     }
                     while !*release_rx.borrow() && release_rx.changed().await.is_ok() {}
 
-                    let body = concat!(
-                        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
-                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-                        "data: [DONE]\n\n"
-                    );
+                    let (status, content_type, body) = if request_index == 0 {
+                        (
+                            "400 Bad Request",
+                            "application/json",
+                            r#"{"error":{"message":"fixture batch child failure","type":"invalid_request_error"}}"#,
+                        )
+                    } else {
+                        (
+                            "200 OK",
+                            "text/event-stream",
+                            concat!(
+                                "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
+                                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                                "data: [DONE]\n\n"
+                            ),
+                        )
+                    };
                     let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         body.len(),
                         body
                     );
@@ -31112,36 +34295,34 @@ command = "r-code-host"
                 memory_context: None,
                 max_access: SubagentAccessMode::ReadOnly,
                 permission_mode: CodexPermissionMode::RequestApproval,
+                delegation_registry: Arc::new(CodexRCodeDelegateRegistry::default()),
             }),
         };
-        let request = |call_id: &str, goal: &str| {
-            serde_json::json!({
-                "id": call_id.parse::<u64>().unwrap(),
-                "method": "item/tool/call",
-                "params": {
-                    "tool": CODEX_RCODE_DELEGATE_TOOL,
-                    "callId": call_id,
-                    "arguments": { "goal": goal, "access": "read_only" },
+        let request = serde_json::json!({
+            "id": 1001,
+            "method": "item/tool/call",
+            "params": {
+                "tool": CODEX_RCODE_DELEGATE_TOOL,
+                "callId": "batch-1001",
+                "arguments": {
+                    "tasks": [
+                        { "goal": "并发任务甲", "label": "concurrent_a", "access": "read_only" },
+                        { "goal": "并发任务乙", "label": "concurrent_b", "access": "read_only" },
+                        { "goal": "并发任务丙", "label": "concurrent_c", "access": "read_only" }
+                    ]
                 },
-            })
-        };
-        let (writer_a, mut writer_rx_a) = tokio::sync::mpsc::channel(8);
-        let (writer_b, mut writer_rx_b) = tokio::sync::mpsc::channel(8);
-        let request_a = request("1001", "并发任务甲");
-        let request_b = request("1002", "并发任务乙");
-        let cancellation_a = CancellationToken::new();
-        let cancellation_b = CancellationToken::new();
-        // F7：两个动态委派独立 dispatch 并行执行。用 registry 直接观测
-        // "主槽 + 两个 child 同时存在"（并发在途的硬证据），再各自回收。
-        let task_a = tokio::spawn({
+            },
+        });
+        let (writer, mut writer_rx) = tokio::sync::mpsc::channel(8);
+        let batch_task = tokio::spawn({
             let approval = approval.clone();
-            let writer_a = writer_a.clone();
+            let writer = writer.clone();
             async move {
                 handle_codex_rcode_dynamic_tool(
-                    &request_a,
-                    &writer_a,
+                    &request,
+                    &writer,
                     &approval,
-                    &cancellation_a,
+                    &CancellationToken::new(),
                     None,
                     None,
                     None,
@@ -31149,33 +34330,38 @@ command = "r-code-host"
                 .await
             }
         });
-        let task_b = tokio::spawn({
-            let approval = approval.clone();
-            let writer_b = writer_b.clone();
-            async move {
-                handle_codex_rcode_dynamic_tool(
-                    &request_b,
-                    &writer_b,
-                    &approval,
-                    &cancellation_b,
-                    None,
-                    None,
-                    None,
-                )
-                .await
-            }
-        });
-        tokio::time::timeout(Duration::from_secs(10), async {
-            for _ in 0..2 {
-                provider_requests
-                    .recv()
+        // Runtime/config refresh is serialized by the task bridge before each child reserves its
+        // registry slot. Wait until the main run plus all three children are visible; releasing the
+        // provider before this point would allow a serial implementation to pass accidentally.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let active_runs = state
+                    .external_agents
+                    .runs
+                    .lock()
                     .await
-                    .expect("gated provider server stopped before both requests arrived");
+                    .values()
+                    .filter(|handle| handle.parent_run_id == parent_run_id)
+                    .count();
+                if active_runs == 4 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
-        .expect("two complete provider requests must be in-flight simultaneously");
-        let active_children = state
+        .expect("all three batched children must reserve isolated registry slots");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for _ in 0..3 {
+                provider_requests
+                    .recv()
+                    .await
+                    .expect("gated provider server stopped before all requests arrived");
+            }
+        })
+        .await
+        .expect("three complete provider requests must be in-flight simultaneously");
+        let active_runs = state
             .external_agents
             .runs
             .lock()
@@ -31184,75 +34370,171 @@ command = "r-code-host"
             .filter(|handle| handle.parent_run_id == parent_run_id)
             .count();
         assert_eq!(
-            active_children, 3,
-            "the parent and both provider-blocked children must occupy isolated registry slots"
+            active_runs, 4,
+            "the parent and three provider-blocked children must occupy isolated registry slots"
         );
         provider_release
             .send(true)
             .expect("release gated provider responses");
-        let (a, b) = tokio::time::timeout(Duration::from_secs(30), async {
-            tokio::join!(task_a, task_b)
-        })
-        .await
-        .expect("concurrent dynamic handlers must finish after provider release");
+        let handled = tokio::time::timeout(Duration::from_secs(30), batch_task)
+            .await
+            .expect("batched dynamic handler must finish after provider release")
+            .unwrap();
         provider_server.abort();
-        let (a, b) = (a.unwrap(), b.unwrap());
-        assert!(matches!(a, CodexAppServerRequestHandling::Handled));
-        assert!(matches!(b, CodexAppServerRequestHandling::Handled));
-        let child_a = {
-            let frame = writer_rx_a.recv().await.expect("response A");
-            assert_eq!(frame["result"]["success"], serde_json::json!(true));
-            let inner: serde_json::Value = serde_json::from_str(
-                frame["result"]["contentItems"][0]["text"]
+        assert!(matches!(handled, CodexAppServerRequestHandling::Handled));
+        let frame = writer_rx.recv().await.expect("batch response");
+        assert_eq!(frame["result"]["success"], serde_json::json!(false));
+        let inner: serde_json::Value = serde_json::from_str(
+            frame["result"]["contentItems"][0]["text"]
+                .as_str()
+                .expect("batch inner JSON text"),
+        )
+        .expect("batch inner JSON");
+        assert_eq!(inner["batch"], serde_json::json!(true));
+        let results = inner["results"].as_array().expect("batch results");
+        assert_eq!(results.len(), 3);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result["status"] == serde_json::json!("completed"))
+                .count(),
+            2,
+            "one failed child must not prevent the other two from completing"
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result["status"] == serde_json::json!("failed"))
+                .count(),
+            1
+        );
+        let child_ids = results
+            .iter()
+            .map(|result| {
+                result["subagent_id"]
                     .as_str()
-                    .expect("inner JSON text A"),
-            )
-            .expect("inner JSON A");
-            assert_eq!(inner["status"], serde_json::json!("completed"));
-            inner
-                .get("subagent_id")
-                .and_then(serde_json::Value::as_str)
-                .expect("child id A")
-                .to_string()
-        };
-        let child_b = {
-            let frame = writer_rx_b.recv().await.expect("response B");
-            assert_eq!(frame["result"]["success"], serde_json::json!(true));
-            let inner: serde_json::Value = serde_json::from_str(
-                frame["result"]["contentItems"][0]["text"]
-                    .as_str()
-                    .expect("inner JSON text B"),
-            )
-            .expect("inner JSON B");
-            assert_eq!(inner["status"], serde_json::json!("completed"));
-            inner
-                .get("subagent_id")
-                .and_then(serde_json::Value::as_str)
-                .expect("child id B")
-                .to_string()
-        };
-        assert_ne!(
-            child_a, child_b,
-            "two concurrent children must not share a run id"
+                    .expect("batched child id")
+                    .to_string()
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            child_ids.len(),
+            3,
+            "every batched child needs its own run id"
         );
         // handle 返回 = child 已受管回收（F2）：槽位应已释放，cancel 找不到。
-        assert!(
-            !state
-                .external_agents
-                .cancel_run_for_task(&task_id, &child_a)
-                .await,
-            "child A slot must be released"
-        );
-        assert!(
-            !state
-                .external_agents
-                .cancel_run_for_task(&task_id, &child_b)
-                .await,
-            "child B slot must be released"
-        );
+        for child_id in child_ids {
+            assert!(
+                !state
+                    .external_agents
+                    .cancel_run_for_task(&task_id, &child_id)
+                    .await,
+                "batched child slot must be released"
+            );
+        }
         SettingsService::new(state.config_dir.clone())
             .set_provider_secret(&provider_name, "")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dynamic_delegate_registry_dedupes_call_ids_and_normalized_goals() {
+        assert_eq!(CODEX_RCODE_MAX_UNIQUE_DELEGATIONS, 3);
+        let reserved_registry = CodexRCodeDelegateRegistry::default();
+        let reserved =
+            match reserved_registry.claim(Some("reserved-call"), "Inspect self", Some("self")) {
+                CodexRCodeDelegateClaim::Execute(execution) => execution,
+                _ => panic!("a reserved display label must still permit the unique goal"),
+            };
+        assert_eq!(
+            reserved.display_label(),
+            "R-Code Agent 1",
+            "reserved self labels must be replaced by the host-assigned runtime identity"
+        );
+
+        let registry = CodexRCodeDelegateRegistry::default();
+        let first = match registry.claim(
+            Some("call-1"),
+            "Inspect   Module A",
+            Some("module_a_review"),
+        ) {
+            CodexRCodeDelegateClaim::Execute(execution) => execution,
+            _ => panic!("the first unique goal must own execution"),
+        };
+        assert_eq!(first.display_label(), "R-Code Agent 1 · module_a_review");
+        first.complete(CodexRCodeDelegateCachedResult {
+            success: true,
+            response_text: "cached-result".to_string(),
+        });
+
+        let (same_call, same_call_reason) =
+            match registry.claim(Some("call-1"), "Inspect   Module A", Some("ignored alias")) {
+                CodexRCodeDelegateClaim::Replay { entry, reason } => (entry, reason),
+                _ => panic!("an identical callId must replay its original execution"),
+            };
+        assert_eq!(same_call_reason, "call_id");
+        let cached =
+            wait_for_codex_rcode_delegate_result(same_call.as_ref(), &CancellationToken::new())
+                .await
+                .expect("completed execution must remain replayable");
+        assert!(cached.success);
+        assert_eq!(cached.response_text, "cached-result");
+
+        let same_label = match registry.claim(
+            Some("call-reworded"),
+            "Re-check module A using a differently worded prompt",
+            Some("module_a_review"),
+        ) {
+            CodexRCodeDelegateClaim::Replay { entry, reason } => {
+                assert_eq!(reason, "label");
+                entry
+            }
+            _ => panic!("a stable label must replay even when Codex rewrites the goal"),
+        };
+        assert!(Arc::ptr_eq(&same_call, &same_label));
+
+        let normalized_goal = match registry.claim(
+            Some("call-2"),
+            " inspect module a ",
+            Some("duplicate description"),
+        ) {
+            CodexRCodeDelegateClaim::Replay { entry, reason } => {
+                assert_eq!(reason, "goal");
+                entry
+            }
+            _ => panic!("case/whitespace-equivalent goals must reuse one child"),
+        };
+        assert!(Arc::ptr_eq(&same_call, &normalized_goal));
+        assert!(matches!(
+            registry.claim(Some("call-1"), "different goal", None),
+            CodexRCodeDelegateClaim::CallIdConflict
+        ));
+
+        for ordinal in 2..=CODEX_RCODE_MAX_UNIQUE_DELEGATIONS {
+            let call_id = format!("call-{ordinal}");
+            let goal = format!("unique goal {ordinal}");
+            let label = format!("unique_goal_{ordinal}");
+            let execution = match registry.claim(Some(&call_id), &goal, Some(&label)) {
+                CodexRCodeDelegateClaim::Execute(execution) => execution,
+                _ => panic!("unique goal {ordinal} must fit inside the parent budget"),
+            };
+            assert_eq!(
+                execution.display_label(),
+                format!("R-Code Agent {ordinal} · {label}")
+            );
+            execution.complete(CodexRCodeDelegateCachedResult {
+                success: true,
+                response_text: format!("result {ordinal}"),
+            });
+        }
+        assert!(matches!(
+            registry.claim(
+                Some("over-limit"),
+                "one unique goal too many",
+                Some("over_limit")
+            ),
+            CodexRCodeDelegateClaim::LimitReached
+        ));
     }
 
     #[test]
@@ -31266,7 +34548,71 @@ command = "r-code-host"
         assert!(tools[0]
             .get("description")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|description| description.contains("same R-Code task")));
+            .is_some_and(|description| description.contains("same R-Code task")
+                && description.contains("repeated label")
+                && description.contains("permission only")
+                && description.contains("at most three R-Code children")
+                && description.contains("starts them concurrently")
+                && description.contains("are leaves")));
+        assert_eq!(
+            tools[0]["inputSchema"]["properties"]["tasks"]["maxItems"],
+            serde_json::json!(3)
+        );
+        assert_eq!(
+            tools[0]["inputSchema"]["oneOf"].as_array().map(Vec::len),
+            Some(2)
+        );
+        let (batch, is_batch) = codex_rcode_delegate_task_inputs(
+            &serde_json::json!({
+                "tasks": [
+                    { "goal": "review storage", "label": "storage_review" },
+                    { "goal": "review runtime", "label": "runtime_review" },
+                    { "goal": "review ui", "label": "ui_review" }
+                ]
+            }),
+            SubagentAccessMode::ReadOnly,
+            CodexPermissionMode::ReadOnly,
+        )
+        .expect("three independent batch tasks must parse");
+        assert!(is_batch);
+        assert_eq!(batch.len(), 3);
+        assert!(codex_rcode_delegate_task_inputs(
+            &serde_json::json!({
+                "tasks": [
+                    { "goal": "same goal", "label": "duplicate_a" },
+                    { "goal": " SAME  GOAL ", "label": "duplicate_b" }
+                ]
+            }),
+            SubagentAccessMode::ReadOnly,
+            CodexPermissionMode::ReadOnly,
+        )
+        .is_err());
+        assert!(codex_rcode_delegate_task_inputs(
+            &serde_json::json!({
+                "tasks": [
+                    { "goal": "one", "label": "batch_one" },
+                    { "goal": "two", "label": "batch_two" },
+                    { "goal": "three", "label": "batch_three" },
+                    { "goal": "four", "label": "batch_four" }
+                ]
+            }),
+            SubagentAccessMode::ReadOnly,
+            CodexPermissionMode::ReadOnly,
+        )
+        .is_err());
+        assert_eq!(
+            codex_rcode_delegate_argument_label(&serde_json::json!({
+                "label": "storage_review"
+            })),
+            Ok("storage_review".to_string())
+        );
+        assert!(
+            codex_rcode_delegate_argument_label(&serde_json::json!({ "label": "self" })).is_err()
+        );
+        assert!(codex_rcode_delegate_argument_label(&serde_json::json!({
+            "label": "Storage Review"
+        }))
+        .is_err());
         assert!(codex_app_server_dynamic_tools(false).is_empty());
 
         let inherited = serde_json::json!({ "goal": "inspect" });
@@ -32399,17 +35745,61 @@ command = "r-code-host"
 
     #[cfg(windows)]
     #[test]
-    fn codex_login_terminal_closes_on_success_and_pauses_only_on_failure() {
+    fn codex_login_terminal_uses_separate_cmd_arguments_and_pauses_only_on_failure() {
         let executable = Path::new(r"C:\Program Files\Codex\codex.cmd");
-        let browser = codex_login_shell_script(executable, CodexLoginMode::Browser).unwrap();
-        let device = codex_login_shell_script(executable, CodexLoginMode::DeviceCode).unwrap();
+        let mut browser = Command::new("cmd.exe");
+        configure_windows_codex_login_command(&mut browser, executable, CodexLoginMode::Browser)
+            .unwrap();
+        let browser = browser
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(&browser[..4], ["/D", "/S", "/C", "call"]);
+        assert_eq!(browser[4], executable.to_string_lossy());
+        assert_eq!(browser[5], "login");
+        assert!(!browser.iter().any(|argument| argument == "--device-auth"));
+        assert!(!browser.iter().any(|argument| argument.contains("call \"")));
 
-        assert!(browser.starts_with(r#"call "C:\Program Files\Codex\codex.cmd" login"#));
-        assert!(!browser.contains("--device-auth"));
-        assert!(device.contains("login --device-auth"));
-        assert!(device.contains("if errorlevel 1"));
-        assert!(device.contains("pause"));
-        assert!(!device.contains("/K"));
+        let mut device = Command::new("cmd.exe");
+        configure_windows_codex_login_command(&mut device, executable, CodexLoginMode::DeviceCode)
+            .unwrap();
+        let device = device
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(device.iter().any(|argument| argument == "--device-auth"));
+        assert!(device
+            .windows(3)
+            .any(|args| args == ["if", "errorlevel", "1"]));
+        assert!(device.iter().any(|argument| argument == "pause"));
+        assert!(!device.iter().any(|argument| argument == "/K"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_login_terminal_executes_a_cmd_shim_with_spaces() {
+        let directory = TempDir::new().unwrap();
+        let shim_dir = directory.path().join("Codex Login Test");
+        std::fs::create_dir_all(&shim_dir).unwrap();
+        let shim = shim_dir.join("codex.cmd");
+        std::fs::write(
+            &shim,
+            "@echo off\r\nif \"%1\"==\"login\" (echo codex-login-started & exit /b 0)\r\nexit /b 2\r\n",
+        )
+        .unwrap();
+
+        let mut command = Command::new("cmd.exe");
+        configure_windows_codex_login_command(&mut command, &shim, CodexLoginMode::Browser)
+            .unwrap();
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("codex-login-started"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("did not complete"));
     }
 
     #[cfg(windows)]
@@ -32482,6 +35872,71 @@ process.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output
             completion.usage_json.as_deref(),
             Some(r#"{"input_tokens":1,"output_tokens":2}"#)
         );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_subagent_reconnects_once_when_the_stream_breaks_before_any_tool() {
+        if executable_paths(&["node.exe"]).is_empty() {
+            return;
+        }
+        let directory = TempDir::new().unwrap();
+        let shim = directory.path().join("codex.cmd");
+        let entrypoint = directory
+            .path()
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        let attempts = directory.path().join("attempts.txt");
+        std::fs::create_dir_all(entrypoint.parent().unwrap()).unwrap();
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+        std::fs::write(
+            &entrypoint,
+            format!(
+                r#"const fs = require('node:fs');
+const attemptsPath = {};
+process.stdin.resume();
+process.stdin.on('end', () => {{
+  const attempt = Number(fs.readFileSync(attemptsPath, {{ encoding: 'utf8', flag: 'a+' }}) || '0') + 1;
+  fs.writeFileSync(attemptsPath, String(attempt));
+  if (attempt === 1) {{
+    process.stdout.write(Buffer.from([0xff, 0x0a]));
+    return;
+  }}
+  process.stdout.write('{{"type":"thread.started","thread_id":"thread-reconnected"}}\n');
+  process.stdout.write('{{"type":"item.completed","item":{{"type":"agent_message","text":"Recovered summary"}}}}\n');
+  process.stdout.write('{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":2}}}}\n');
+}});"#,
+                serde_json::to_string(&attempts.to_string_lossy()).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let completion = run_codex_delegation_process(
+            directory.path(),
+            "inspect only",
+            Some(shim),
+            CancellationToken::new(),
+            None,
+            None,
+            CodexDelegationPermissions::read_only(),
+            CodexAppServerApprovalContext {
+                permission_engine: Arc::new(PermissionEngine::new()),
+                task_id: "task-reconnect".to_string(),
+                run_id: "run-reconnect".to_string(),
+                caller: "subagent:run-reconnect".to_string(),
+                workspace: Some(directory.path().to_path_buf()),
+                rcode_delegate: None,
+            },
+            CodexExecLimits::subagent(),
+        )
+        .await;
+
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert_eq!(completion.summary.as_deref(), Some("Recovered summary"));
+        assert_eq!(std::fs::read_to_string(attempts).unwrap(), "2");
     }
 
     #[cfg(windows)]
@@ -32666,6 +36121,25 @@ process.stdin.on('end', () => {
             "expected the selective R-Code MCP override in {args:?}"
         );
         assert!(!args.iter().any(|arg| arg == "mcp_servers={}"));
+
+        let exec = codex_exec_command_with_permissions(
+            None,
+            &workspace,
+            CodexDelegationPermissions::read_only(),
+            "inspect only",
+        )
+        .unwrap();
+        let exec_args = exec
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            exec_args.windows(2).any(|pair| pair[0] == "-c"
+                && pair[1] == "mcp_servers.r-code={enabled=false,command='r-code-disabled'}"),
+            "one-shot Codex children must not recursively reconnect to R-Code MCP: {exec_args:?}"
+        );
+        assert!(!exec_args.iter().any(|arg| arg == "mcp_servers={}"));
     }
 
     #[cfg(windows)]
@@ -33918,6 +37392,8 @@ input.on('line', (line) => {{
                 "model_reasoning_effort=\"medium\"",
                 "-c",
                 "web_search=\"disabled\"",
+                "-c",
+                "mcp_servers.r-code={enabled=false,command='r-code-disabled'}",
                 "--skip-git-repo-check",
                 "--sandbox",
                 "read-only",
@@ -33960,6 +37436,8 @@ input.on('line', (line) => {{
                 "model_reasoning_effort=\"medium\"",
                 "-c",
                 "web_search=\"disabled\"",
+                "-c",
+                "mcp_servers.r-code={enabled=false,command='r-code-disabled'}",
                 "--skip-git-repo-check",
                 "--sandbox",
                 "workspace-write",
@@ -34004,6 +37482,8 @@ input.on('line', (line) => {{
         assert!(delegated.contains("Keep writes and result-dependent steps sequential"));
         assert!(delegated.contains("token-optimized wrappers"));
         assert!(delegated.contains("`rtk rg`"));
+        assert!(delegated.contains("On Windows, commands run under PowerShell"));
+        assert!(delegated.contains("On macOS and Linux"));
         assert!(
             delegated.contains("read all known independent relevant files in one bounded batch")
         );
@@ -34059,6 +37539,24 @@ input.on('line', (line) => {{
         assert_eq!(main.idle_timeout, Duration::from_secs(5 * 60));
         assert_eq!(main.hard_timeout, None);
         assert_eq!(main.policy.max_tool_calls(), None);
+    }
+
+    #[test]
+    fn codex_stream_reconnect_never_replays_observable_work() {
+        let mut completion = CodexExecCompletion {
+            failure: Some(CodexExecFailure::Stream),
+            ..Default::default()
+        };
+        assert!(codex_exec_stream_retry_is_safe(&completion));
+
+        completion.tool_calls = 1;
+        assert!(!codex_exec_stream_retry_is_safe(&completion));
+        completion.tool_calls = 0;
+        completion.summary = Some("visible preface".to_string());
+        assert!(!codex_exec_stream_retry_is_safe(&completion));
+        completion.summary = None;
+        completion.cancelled = true;
+        assert!(!codex_exec_stream_retry_is_safe(&completion));
     }
 
     #[test]

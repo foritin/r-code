@@ -157,6 +157,18 @@ pub trait AgentRuntime: Send + Sync {
         Ok(())
     }
 
+    /// docs/multimodal-attachments §5.1/§6.2：宿主在 run 启动前注入冻结能力
+    /// 派生物——主模型的视觉预算 profile 与路由审计描述。默认 no-op 保持
+    /// 轻量 runtime 兼容。
+    async fn update_vision_budget_and_route(
+        &mut self,
+        _session_id: &str,
+        _vision_budget: Option<agent_contract::VisionBudgetProfile>,
+        _route: crate::llm_runtime::RouteDescriptor,
+    ) -> Result<(), ProductError> {
+        Ok(())
+    }
+
     /// 获取当前 run 的事件（ drain 语义：取出后清空）。
     async fn poll_events(&mut self) -> Result<Vec<AgentEvent>, ProductError>;
 }

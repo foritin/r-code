@@ -1,13 +1,14 @@
-//! DeepSeek Plan 入口建议与双轨的资格解析、内部发布控制与证据门。
+//! DeepSeek Plan 入口建议与双轨的资格解析与内部发布控制。
 //!
-//! 权威层次（docs/plan-mode-dual-track-gate.md §14.1、§15、§16）：
+//! 权威层次（docs/settings-ux-and-image-understanding.md A3）：
 //! - `vendor/agent-contracts` 只定义配置 schema（客户布尔偏好）；
-//! - 本模块集中实现 eligibility、内部 release control 与 frozen profile 解析；
-//! - `build.rs` 把通过验证的证据 manifest 嵌入 `OUT_DIR`，本模块 include 并重验；
+//! - 本模块集中实现 eligibility 与内部 release control；
+//! - 客户滑钮 `planning.suggest_complex_tasks` 是唯一开关，打开即生效；
+//! - `R_CODE_PLANNING_EMERGENCY_OFF` 是唯一的宿主级兜底（一键全局急停）；
 //! - 存储层只保存冻结结果，不读取 Provider、Settings 或证据文件。
 //!
-//! 一切证据未通过、manifest 缺失或 route 不匹配的路径都 fail closed：产品保持
-//! baseline（普通 Agent 目录 + baseline Plan + 原生只读硬门）。
+//! 历史上的预注册证据门（manifest 嵌入 + allowlist）已于 2026-08-22 移除；
+//! `eval/plan-eval/` 降级为可选的事后质量回归工具，不再阻塞功能启用。
 
 use std::fmt;
 
@@ -17,27 +18,21 @@ use r_code_core::plan_entry::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Build 时由 `build.rs` 嵌入的证据 manifest（缺失/无效时为字面 `null`）。
-const EMBEDDED_PLAN_EVIDENCE_MANIFEST: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/plan_evidence_manifest.json"));
-
-/// 内部发布档位。`off | experiment | validated` 只存在于内部诊断/发布控制，
-/// 不进入普通客户设置（docs §15.2）。
+/// 内部发布档位。`off | open` 只存在于内部诊断/发布控制，不进入普通客户设置。
+/// `off` 仅在急停开关（`R_CODE_PLANNING_EMERGENCY_OFF=1`）时出现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanningReleaseState {
     #[default]
     Off,
-    Experiment,
-    Validated,
+    Open,
 }
 
 impl PlanningReleaseState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Off => "off",
-            Self::Experiment => "experiment",
-            Self::Validated => "validated",
+            Self::Open => "open",
         }
     }
 }
@@ -81,7 +76,9 @@ impl EndpointClass {
     }
 }
 
-/// 内部发布控制合同（docs §15.2 `PlanningReleaseControlV1`）。
+/// 内部发布控制合同。证据门移除后 `release_state` 只有两值：急停 = `off`，
+/// 其余 = `open`。`allowed_*` 与 `evidence_version` 字段仅为审计快照与存储层
+/// 兼容保留，恒为空，资格判定不再读取。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanningReleaseControl {
     pub provider_kind: String,
@@ -92,178 +89,8 @@ pub struct PlanningReleaseControl {
     pub allowed_models: Vec<String>,
     pub allowed_protocols: Vec<String>,
     pub allowed_endpoint_classes: Vec<String>,
-    /// 证据门为何是这个结论（诊断层可见；不进客户文案）。
+    /// 当前结论的依据（诊断层可见；不进客户文案）。
     pub basis: String,
-}
-
-/// 解析后的证据 manifest（score.mjs 产物；schema 见 eval/plan-eval）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlanEvidenceManifest {
-    pub schema: String,
-    pub provider_kind: String,
-    pub eligibility_profile_version: String,
-    pub evidence_version: String,
-    pub allowed_models: Vec<String>,
-    pub allowed_protocols: Vec<String>,
-    pub allowed_endpoint_classes: Vec<String>,
-    pub preregistration_sha256: String,
-    pub corpus_lock_sha256: String,
-    pub capability: ManifestCapabilityGates,
-    pub routing: ManifestRoutingGates,
-    pub raw_results_count: u32,
-    #[serde(default)]
-    pub raw_results_digest: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestCapabilityGates {
-    pub records: u32,
-    pub net_solved_gain: i64,
-    pub regressions: i64,
-    pub mcnemar_p_exact_one_sided: f64,
-    pub unapproved_side_effects: u32,
-    pub dual_median_tokens_ratio: f64,
-    pub dual_p95_wall_time_ratio: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestRoutingGates {
-    pub records: u32,
-    pub simple_false_prompt_rate: f64,
-    pub complex_recall_rate: f64,
-    pub same_request_repeat_rate: f64,
-}
-
-/// 预注册发布门的冻结阈值（docs §16.5）。修改阈值必须以新证据版本重跑完整评估，
-/// 不能挑 case 补跑覆盖原结论。
-pub mod preregistered_gates {
-    pub const MIN_NET_SOLVED_GAIN: i64 = 4;
-    pub const MAX_REGRESSIONS: i64 = 1;
-    pub const MAX_MCNEMAR_P: f64 = 0.10;
-    pub const MAX_UNAPPROVED_SIDE_EFFECTS: u32 = 0;
-    pub const MAX_SIMPLE_FALSE_PROMPT_RATE: f64 = 0.10;
-    pub const MIN_COMPLEX_RECALL_RATE: f64 = 0.80;
-    pub const MAX_SAME_REQUEST_REPEAT_RATE: f64 = 0.0;
-    pub const MAX_DUAL_MEDIAN_TOKENS_RATIO: f64 = 1.20;
-    pub const MAX_DUAL_P95_WALL_TIME_RATIO: f64 = 1.30;
-    pub const CAPABILITY_RECORDS: u32 = 75;
-    pub const ROUTING_RECORDS: u32 = 40;
-    pub const MANIFEST_SCHEMA: &str = "r-code-plan-evidence-manifest/v1";
-}
-
-/// 独立重验嵌入的 manifest：数量、门限、schema 与 provider 全部重算（docs §16.4
-/// 验证器要求）。任何一项失败都视为无证据。
-pub fn load_validated_manifest() -> Option<PlanEvidenceManifest> {
-    let manifest: PlanEvidenceManifest =
-        serde_json::from_str(EMBEDDED_PLAN_EVIDENCE_MANIFEST).ok()?;
-    validate_manifest(&manifest).ok()?;
-    Some(manifest)
-}
-
-/// 门校验失败的具体原因（诊断用）。
-pub fn validate_manifest(manifest: &PlanEvidenceManifest) -> Result<(), String> {
-    use preregistered_gates as gates;
-    if manifest.schema != gates::MANIFEST_SCHEMA {
-        return Err(format!("manifest schema mismatch: {}", manifest.schema));
-    }
-    if manifest.provider_kind != "deepseek" {
-        return Err(format!(
-            "manifest provider_kind is not deepseek: {}",
-            manifest.provider_kind
-        ));
-    }
-    let capability = &manifest.capability;
-    if capability.records != gates::CAPABILITY_RECORDS {
-        return Err(format!(
-            "capability records must be {}: {}",
-            gates::CAPABILITY_RECORDS,
-            capability.records
-        ));
-    }
-    if capability.net_solved_gain < gates::MIN_NET_SOLVED_GAIN {
-        return Err(format!(
-            "net solved gain {} below preregistered minimum {}",
-            capability.net_solved_gain,
-            gates::MIN_NET_SOLVED_GAIN
-        ));
-    }
-    if capability.regressions > gates::MAX_REGRESSIONS {
-        return Err(format!(
-            "regressions {} exceed preregistered maximum {}",
-            capability.regressions,
-            gates::MAX_REGRESSIONS
-        ));
-    }
-    if capability.mcnemar_p_exact_one_sided > gates::MAX_MCNEMAR_P {
-        return Err(format!(
-            "mcnemar p {:.4} exceeds preregistered maximum {:.2}",
-            capability.mcnemar_p_exact_one_sided,
-            gates::MAX_MCNEMAR_P
-        ));
-    }
-    if capability.unapproved_side_effects > gates::MAX_UNAPPROVED_SIDE_EFFECTS {
-        return Err(format!(
-            "unapproved side effects {} must be 0",
-            capability.unapproved_side_effects
-        ));
-    }
-    if capability.dual_median_tokens_ratio > gates::MAX_DUAL_MEDIAN_TOKENS_RATIO {
-        return Err(format!(
-            "dual median tokens ratio {:.3} exceeds {:.2}",
-            capability.dual_median_tokens_ratio,
-            gates::MAX_DUAL_MEDIAN_TOKENS_RATIO
-        ));
-    }
-    if capability.dual_p95_wall_time_ratio > gates::MAX_DUAL_P95_WALL_TIME_RATIO {
-        return Err(format!(
-            "dual p95 wall time ratio {:.3} exceeds {:.2}",
-            capability.dual_p95_wall_time_ratio,
-            gates::MAX_DUAL_P95_WALL_TIME_RATIO
-        ));
-    }
-    let routing = &manifest.routing;
-    if routing.records != gates::ROUTING_RECORDS {
-        return Err(format!(
-            "routing records must be {}: {}",
-            gates::ROUTING_RECORDS,
-            routing.records
-        ));
-    }
-    if routing.simple_false_prompt_rate > gates::MAX_SIMPLE_FALSE_PROMPT_RATE {
-        return Err(format!(
-            "simple false prompt rate {:.3} exceeds {:.2}",
-            routing.simple_false_prompt_rate,
-            gates::MAX_SIMPLE_FALSE_PROMPT_RATE
-        ));
-    }
-    if routing.complex_recall_rate < gates::MIN_COMPLEX_RECALL_RATE {
-        return Err(format!(
-            "complex recall rate {:.3} below preregistered minimum {:.2}",
-            routing.complex_recall_rate,
-            gates::MIN_COMPLEX_RECALL_RATE
-        ));
-    }
-    if routing.same_request_repeat_rate > gates::MAX_SAME_REQUEST_REPEAT_RATE {
-        return Err(format!(
-            "same request repeat rate {:.3} must be 0",
-            routing.same_request_repeat_rate
-        ));
-    }
-    if manifest.raw_results_count != gates::CAPABILITY_RECORDS + gates::ROUTING_RECORDS {
-        return Err(format!(
-            "raw results count {} does not match {} capability + {} routing",
-            manifest.raw_results_count,
-            gates::CAPABILITY_RECORDS,
-            gates::ROUTING_RECORDS
-        ));
-    }
-    if manifest.preregistration_sha256.trim().is_empty()
-        || manifest.corpus_lock_sha256.trim().is_empty()
-        || manifest.raw_results_digest.trim().is_empty()
-    {
-        return Err("raw artifact / preregistration digests must be present".to_string());
-    }
-    Ok(())
 }
 
 fn planning_emergency_off() -> bool {
@@ -272,27 +99,13 @@ fn planning_emergency_off() -> bool {
         .unwrap_or(false)
 }
 
-fn planning_experiment_env() -> bool {
-    std::env::var("R_CODE_PLANNING_EXPERIMENT")
-        .map(|value| value == "1")
-        .unwrap_or(false)
-}
-
-/// 内部实验档的固定 allowlist：DeepSeek 原生 API + 冻结 v4 模型 + 目录协议
-///（docs §15.2：experiment 不能从普通 Settings 选择）。
-const EXPERIMENT_ALLOWED_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
-const EXPERIMENT_ALLOWED_PROTOCOLS: &[&str] =
-    &["openai_chat", "openai_responses", "anthropic_messages"];
-const EXPERIMENT_ALLOWED_ENDPOINT_CLASSES: &[&str] = &["official_api"];
 pub const ELIGIBILITY_PROFILE_VERSION: &str = "deepseek-plan-v1";
 /// Provider profile schema 版本（快照字段组成）。字段组成变化时递增。
 pub const PROVIDER_PROFILE_VERSION: &str = "1";
 
-/// 解析当前进程的内部发布控制。解析顺序遵循 docs §15.2：
-/// 1. 非 deepseek 在 resolver 中直接判负（不读取 DeepSeek 结果）；
-/// 2. emergency off 关闭建议与双轨；
-/// 3. validated 只认嵌入且通过独立重验的 manifest；
-/// 4. experiment 只在内部环境变量开启时可用。
+/// 解析当前进程的内部发布控制：
+/// 1. `R_CODE_PLANNING_EMERGENCY_OFF=1` 时急停（release_state = off）；
+/// 2. 其余情况开放（release_state = open），是否启用由客户滑钮决定。
 pub fn resolve_release_control() -> PlanningReleaseControl {
     let emergency_off = planning_emergency_off();
     if emergency_off {
@@ -310,56 +123,17 @@ pub fn resolve_release_control() -> PlanningReleaseControl {
                 .to_string(),
         };
     }
-    if let Some(manifest) = load_validated_manifest() {
-        return PlanningReleaseControl {
-            provider_kind: "deepseek".to_string(),
-            release_state: PlanningReleaseState::Validated,
-            emergency_off: false,
-            eligibility_profile_version: manifest.eligibility_profile_version.clone(),
-            evidence_version: manifest.evidence_version.clone(),
-            allowed_models: manifest.allowed_models.clone(),
-            allowed_protocols: manifest.allowed_protocols.clone(),
-            allowed_endpoint_classes: manifest.allowed_endpoint_classes.clone(),
-            basis: format!(
-                "embedded evidence manifest validated (evidence_version={}, prereg={})",
-                manifest.evidence_version, manifest.preregistration_sha256
-            ),
-        };
-    }
-    if planning_experiment_env() {
-        return PlanningReleaseControl {
-            provider_kind: "deepseek".to_string(),
-            release_state: PlanningReleaseState::Experiment,
-            emergency_off: false,
-            eligibility_profile_version: ELIGIBILITY_PROFILE_VERSION.to_string(),
-            evidence_version: String::new(),
-            allowed_models: EXPERIMENT_ALLOWED_MODELS
-                .iter()
-                .map(|model| (*model).to_string())
-                .collect(),
-            allowed_protocols: EXPERIMENT_ALLOWED_PROTOCOLS
-                .iter()
-                .map(|protocol| (*protocol).to_string())
-                .collect(),
-            allowed_endpoint_classes: EXPERIMENT_ALLOWED_ENDPOINT_CLASSES
-                .iter()
-                .map(|class| (*class).to_string())
-                .collect(),
-            basis: "internal experiment environment (R_CODE_PLANNING_EXPERIMENT=1); \
-                    allowlisted official DeepSeek routes only"
-                .to_string(),
-        };
-    }
     PlanningReleaseControl {
         provider_kind: "deepseek".to_string(),
-        release_state: PlanningReleaseState::Off,
+        release_state: PlanningReleaseState::Open,
         emergency_off: false,
         eligibility_profile_version: ELIGIBILITY_PROFILE_VERSION.to_string(),
         evidence_version: String::new(),
         allowed_models: Vec::new(),
         allowed_protocols: Vec::new(),
         allowed_endpoint_classes: Vec::new(),
-        basis: "no validated evidence manifest embedded; baseline Plan stays authoritative"
+        basis: "open release: the customer switch is the sole gate; emergency off via \
+                R_CODE_PLANNING_EMERGENCY_OFF=1"
             .to_string(),
     }
 }
@@ -382,9 +156,9 @@ pub struct PlanEntryEligibility {
     pub blocked_reason: Option<String>,
 }
 
-/// `DeepSeekPlanEligibilityResolver`（docs M0-02）：只认稳定 `provider_kind` 与证据
-/// 匹配的 model/protocol/endpoint；其他 Provider fail closed。显示名、相似 URL 都
-/// 不能冒充。
+/// `DeepSeekPlanEligibilityResolver`：只认稳定 `provider_kind` 身份（显示名、
+/// 相似 URL 都不能冒充），任意 DeepSeek 模型、任意线路（官方或中转）、任意协议
+/// 均可；急停开关全局判负。
 pub fn resolve_plan_entry_eligibility(
     route: &ProviderRouteContext,
     control: &PlanningReleaseControl,
@@ -412,48 +186,6 @@ pub fn resolve_plan_entry_eligibility(
             eligible: false,
             release_state: control.release_state,
             blocked_reason: Some("release state is off".to_string()),
-        };
-    }
-    if !control
-        .allowed_models
-        .iter()
-        .any(|model| model == &route.model)
-    {
-        return PlanEntryEligibility {
-            eligible: false,
-            release_state: control.release_state,
-            blocked_reason: Some(format!(
-                "model {} is not in the evidence allowlist",
-                route.model
-            )),
-        };
-    }
-    if !control
-        .allowed_protocols
-        .iter()
-        .any(|protocol| protocol == &route.wire_protocol)
-    {
-        return PlanEntryEligibility {
-            eligible: false,
-            release_state: control.release_state,
-            blocked_reason: Some(format!(
-                "wire protocol {} is not in the evidence allowlist",
-                route.wire_protocol
-            )),
-        };
-    }
-    if !control
-        .allowed_endpoint_classes
-        .iter()
-        .any(|class| class == route.endpoint_class.as_str())
-    {
-        return PlanEntryEligibility {
-            eligible: false,
-            release_state: control.release_state,
-            blocked_reason: Some(format!(
-                "endpoint class {} is not covered by the evidence manifest",
-                route.endpoint_class.as_str()
-            )),
         };
     }
     PlanEntryEligibility {
@@ -501,18 +233,28 @@ pub fn resolve_plan_runtime_profile(
     route: &ProviderRouteContext,
     control: &PlanningReleaseControl,
     workspace_bound: bool,
+    anchoring_preference: bool,
 ) -> ResolvedPlanRuntimeProfile {
+    // docs/multimodal-attachments §8.1/§8.2：`deepseek_plan_anchoring` 与
+    // `suggest_complex_tasks` 互不替代——建议开关只控制是否注册
+    // propose_plan_mode；锚定开关控制实际进入 DeepSeek Plan 后是否启用最小
+    // 轨迹。急停（R_CODE_PLANNING_EMERGENCY_OFF=1）同时关闭两者，但不关闭
+    // Plan 的只读安全硬门。
     let eligibility = resolve_plan_entry_eligibility(route, control);
-    if eligibility.eligible && workspace_bound {
+    if eligibility.eligible && workspace_bound && anchoring_preference {
+        let route_snapshot = provider_route_snapshot(route, PROVIDER_PROFILE_VERSION);
         return ResolvedPlanRuntimeProfile {
             enabled: true,
             catalog_profile: PlanCatalogProfile::PlanNativeV1,
             context_profile: PlanContextProfile::MinimalV1,
-            profile_version: 1,
+            profile_version: 2,
             evidence_version: control.evidence_version.clone(),
             provider_kind: route.provider_kind.clone(),
             model_id: route.model.clone(),
             endpoint_class: route.endpoint_class.as_str().to_string(),
+            protocol: route.wire_protocol.clone(),
+            provider_route_revision: route_snapshot.provider_route_revision,
+            anchoring_preference,
         };
     }
     ResolvedPlanRuntimeProfile::baseline()
@@ -644,23 +386,13 @@ mod tests {
         }
     }
 
-    fn validated_control() -> PlanningReleaseControl {
-        PlanningReleaseControl {
-            provider_kind: "deepseek".to_string(),
-            release_state: PlanningReleaseState::Validated,
-            emergency_off: false,
-            eligibility_profile_version: ELIGIBILITY_PROFILE_VERSION.to_string(),
-            evidence_version: "test-1".to_string(),
-            allowed_models: vec!["deepseek-v4-flash".to_string()],
-            allowed_protocols: vec!["openai_chat".to_string()],
-            allowed_endpoint_classes: vec!["official_api".to_string()],
-            basis: "test".to_string(),
-        }
+    fn open_control() -> PlanningReleaseControl {
+        resolve_release_control()
     }
 
     #[test]
     fn non_deepseek_kind_fails_closed_without_reading_release_state() {
-        let control = validated_control();
+        let control = open_control();
         let eligibility = resolve_plan_entry_eligibility(
             &route("openai", "gpt-5", "openai_chat", EndpointClass::Relay),
             &control,
@@ -674,40 +406,15 @@ mod tests {
     }
 
     #[test]
-    fn lookalike_names_and_relays_cannot_impersonate_deepseek() {
-        let control = validated_control();
-        // 显示名不是身份：provider_kind 才是稳定身份。
+    fn lookalike_names_cannot_impersonate_deepseek_but_any_deepseek_route_passes() {
+        let control = open_control();
+        // 显示名不是身份：provider_kind 才是稳定身份；前缀相同的冒名者必须判负。
+        // （尾随空白属于归一化而非冒名：identity 比较按 trim 后进行。）
         assert!(
             !resolve_plan_entry_eligibility(
                 &route(
-                    "deepseek ",
+                    "deepseek-clone",
                     "deepseek-v4-flash",
-                    "openai_chat",
-                    EndpointClass::Relay
-                ),
-                &control,
-            )
-            .eligible
-        );
-        // relay endpoint class 未被 manifest 覆盖时 fail closed。
-        assert!(
-            !resolve_plan_entry_eligibility(
-                &route(
-                    "deepseek",
-                    "deepseek-v4-flash",
-                    "openai_chat",
-                    EndpointClass::Relay
-                ),
-                &control,
-            )
-            .eligible
-        );
-        // 模型/协议不在 allowlist 时 fail closed。
-        assert!(
-            !resolve_plan_entry_eligibility(
-                &route(
-                    "deepseek",
-                    "deepseek-v3",
                     "openai_chat",
                     EndpointClass::OfficialApi
                 ),
@@ -715,7 +422,19 @@ mod tests {
             )
             .eligible
         );
-        // 全部匹配才 eligible。
+        assert!(
+            !resolve_plan_entry_eligibility(
+                &route(
+                    "notdeepseek",
+                    "deepseek-v4-flash",
+                    "openai_chat",
+                    EndpointClass::Relay
+                ),
+                &control,
+            )
+            .eligible
+        );
+        // 证据门移除后：任意 DeepSeek 模型、任意线路（官方或中转）、任意协议均放行。
         assert!(
             resolve_plan_entry_eligibility(
                 &route(
@@ -728,12 +447,37 @@ mod tests {
             )
             .eligible
         );
+        assert!(
+            resolve_plan_entry_eligibility(
+                &route(
+                    "deepseek",
+                    "deepseek-v3-custom",
+                    "openai_chat",
+                    EndpointClass::Relay
+                ),
+                &control,
+            )
+            .eligible
+        );
+        assert!(
+            resolve_plan_entry_eligibility(
+                &route(
+                    "deepseek",
+                    "deepseek-v4-pro",
+                    "anthropic_messages",
+                    EndpointClass::OfficialApi
+                ),
+                &control,
+            )
+            .eligible
+        );
     }
 
     #[test]
-    fn emergency_off_disables_even_validated_release() {
-        let mut control = validated_control();
+    fn emergency_off_disables_even_open_release() {
+        let mut control = open_control();
         control.emergency_off = true;
+        control.release_state = PlanningReleaseState::Off;
         assert!(
             !resolve_plan_entry_eligibility(
                 &route(
@@ -765,76 +509,35 @@ mod tests {
     }
 
     #[test]
-    fn default_release_control_fails_closed_without_evidence() {
-        // 本仓库尚无真实证据 manifest：默认解析必须是 off（除非实验环境变量）。
-        std::env::remove_var("R_CODE_PLANNING_EXPERIMENT");
+    fn default_release_control_is_open_without_any_evidence() {
+        // 证据门已移除：无 manifest、无实验环境变量时默认即开放，客户滑钮是唯一开关。
         std::env::remove_var("R_CODE_PLANNING_EMERGENCY_OFF");
         let control = resolve_release_control();
-        assert_eq!(control.release_state, PlanningReleaseState::Off);
-    }
-
-    #[test]
-    fn manifest_gate_math_is_revalidated() {
-        let mut manifest = PlanEvidenceManifest {
-            schema: preregistered_gates::MANIFEST_SCHEMA.to_string(),
-            provider_kind: "deepseek".to_string(),
-            eligibility_profile_version: "deepseek-plan-v1".to_string(),
-            evidence_version: "test".to_string(),
-            allowed_models: vec!["deepseek-v4-flash".to_string()],
-            allowed_protocols: vec!["openai_chat".to_string()],
-            allowed_endpoint_classes: vec!["official_api".to_string()],
-            preregistration_sha256: "a".to_string(),
-            corpus_lock_sha256: "b".to_string(),
-            capability: ManifestCapabilityGates {
-                records: 75,
-                net_solved_gain: 6,
-                regressions: 0,
-                mcnemar_p_exact_one_sided: 0.037,
-                unapproved_side_effects: 0,
-                dual_median_tokens_ratio: 1.05,
-                dual_p95_wall_time_ratio: 1.1,
-            },
-            routing: ManifestRoutingGates {
-                records: 40,
-                simple_false_prompt_rate: 0.05,
-                complex_recall_rate: 0.9,
-                same_request_repeat_rate: 0.0,
-            },
-            raw_results_count: 115,
-            raw_results_digest: "c".to_string(),
-        };
-        assert!(validate_manifest(&manifest).is_ok());
-        manifest.capability.net_solved_gain = 3;
-        assert!(validate_manifest(&manifest).is_err());
-        manifest.capability.net_solved_gain = 6;
-        manifest.capability.records = 74;
-        assert!(validate_manifest(&manifest).is_err());
-        manifest.capability.records = 75;
-        manifest.routing.complex_recall_rate = 0.7;
-        assert!(validate_manifest(&manifest).is_err());
-        manifest.routing.complex_recall_rate = 0.9;
-        manifest.provider_kind = "openai".to_string();
-        assert!(validate_manifest(&manifest).is_err());
+        assert_eq!(control.release_state, PlanningReleaseState::Open);
+        assert!(!control.emergency_off);
+        assert!(control.allowed_models.is_empty());
+        assert!(control.allowed_protocols.is_empty());
+        assert!(control.allowed_endpoint_classes.is_empty());
     }
 
     #[test]
     fn profile_resolution_requires_workspace_binding() {
-        let control = validated_control();
+        let control = open_control();
         let deepseek = route(
             "deepseek",
             "deepseek-v4-flash",
             "openai_chat",
             EndpointClass::OfficialApi,
         );
-        let profile = resolve_plan_runtime_profile(&deepseek, &control, true);
+        let profile = resolve_plan_runtime_profile(&deepseek, &control, true, true);
         assert!(profile.enabled);
         assert_eq!(profile.catalog_profile, PlanCatalogProfile::PlanNativeV1);
         assert_eq!(profile.context_profile, PlanContextProfile::MinimalV1);
         // 未绑定 workspace 的 Plan 保持 baseline。
-        assert!(!resolve_plan_runtime_profile(&deepseek, &control, false).enabled);
+        assert!(!resolve_plan_runtime_profile(&deepseek, &control, false, true).enabled);
         // 非 DeepSeek 保持 baseline。
         let other = route("openai", "gpt-5", "openai_chat", EndpointClass::Relay);
-        assert!(!resolve_plan_runtime_profile(&other, &control, true).enabled);
+        assert!(!resolve_plan_runtime_profile(&other, &control, true, true).enabled);
     }
 
     #[test]

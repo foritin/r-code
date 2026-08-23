@@ -1403,13 +1403,15 @@ fn runtime_contract_capabilities_and_tree_limits_fail_closed() {
         DelegationLimits::default(),
         DelegationLimits {
             max_depth: 2,
-            max_descendants: 12,
-            max_active_descendants: 5,
+            max_descendants: 4,
+            max_active_descendants: 3,
+            max_direct_subagents_per_run: 3,
         }
     );
     assert_eq!(MAX_SUBAGENT_DEPTH, 2);
-    assert_eq!(MAX_DESCENDANTS_PER_TREE, 12);
-    assert_eq!(MAX_ACTIVE_DESCENDANTS, 5);
+    assert_eq!(MAX_DESCENDANTS_PER_TREE, 4);
+    assert_eq!(MAX_ACTIVE_DESCENDANTS, 3);
+    assert_eq!(MAX_DIRECT_SUBAGENTS_PER_RUN, 3);
 }
 
 #[tokio::test]
@@ -3966,7 +3968,7 @@ async fn consecutive_tool_turns_keep_system_and_sent_prefix_byte_stable() {
             .collect::<Vec<_>>();
         assert!(texts[0].starts_with("Current local time: "));
         assert!(texts[1].contains("Agent mode is active"));
-        assert!(texts[2].contains("For independent investigation"));
+        assert!(texts[2].contains("Subagent use is opt-in by value"));
         assert!(messages_tail
             .iter()
             .all(|message| message.role == agent_contract::Role::User));
@@ -5312,6 +5314,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::ReadOnly,
             false,
+            false,
             test_native_options(provider),
             "peer-model".to_string(),
             "peer prompt".to_string(),
@@ -5482,6 +5485,7 @@ async fn root_peer_mail_is_injected_once_without_entering_canonical_history() {
             "manual-peer-child".to_string(),
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::ReadOnly,
+            false,
             false,
             test_native_options(root_supervisor.provider.clone()),
             "child-model".to_string(),
@@ -6073,7 +6077,11 @@ async fn native_api_candidate_uses_the_shared_tree_and_can_delegate_a_grandchild
 async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     let supervisor = test_supervisor(Arc::new(NestedDelegationProvider), event_tx);
-    let parent_ids = (0..MAX_ACTIVE_DESCENDANTS)
+    // Two parents plus one grandchild each exactly fill the four-descendant lifetime budget. The
+    // separate direct-cap tests cover three first-level children; this fixture isolates permit
+    // handoff while a parent awaits its child.
+    let parent_count = 2;
+    let parent_ids = (0..parent_count)
         .map(|index| format!("parallel-parent-{index}"))
         .collect::<Vec<_>>();
     for parent_id in &parent_ids {
@@ -6102,7 +6110,7 @@ async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
     let payload: serde_json::Value = serde_json::from_str(&collected.content).unwrap();
     assert_eq!(
         payload["subagents"].as_array().map(Vec::len),
-        Some(MAX_ACTIVE_DESCENDANTS)
+        Some(parent_count)
     );
     assert!(
         payload["subagents"]
@@ -6119,8 +6127,56 @@ async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
     );
     assert_eq!(
         supervisor.descendants_created.load(Ordering::SeqCst),
-        MAX_ACTIVE_DESCENDANTS * 2
+        parent_count * 2
     );
+}
+
+#[tokio::test]
+async fn external_main_rcode_child_is_a_leaf_and_cannot_fan_out() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(PendingProvider {
+        requests: requests.clone(),
+    });
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = test_supervisor(provider, event_tx);
+    let run_id = "external-main-leaf".to_string();
+
+    supervisor
+        .spawn_with_run_id(
+            run_id.clone(),
+            SubagentBackend::RCode,
+            Some("bounded_review".to_string()),
+            "bounded review from Codex main".to_string(),
+            SubagentAccessMode::ReadOnly,
+            Some("dynamic-tool-call".to_string()),
+            "external main leaf fixture".to_string(),
+            DelegationInitiator::ExternalMain,
+        )
+        .await
+        .unwrap();
+
+    let child = supervisor
+        .children
+        .lock()
+        .await
+        .get(&run_id)
+        .cloned()
+        .expect("external-main child must be registered");
+    let nested = child
+        .nested_supervisor
+        .as_ref()
+        .expect("native runtime carrier must remain available");
+    assert_eq!(nested.depth, MAX_SUBAGENT_DEPTH);
+    assert!(!nested.can_delegate());
+
+    supervisor.abort_all().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        supervisor.collect(Some(vec![run_id])),
+    )
+    .await
+    .expect("leaf child must settle during cleanup")
+    .unwrap();
 }
 
 #[tokio::test]
@@ -6293,6 +6349,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
             parent_scope.run_id.clone(),
             parent_abort.clone(),
             SubagentAccessMode::ReadOnly,
+            false,
             false,
             test_native_options(provider),
             "parent-model".to_string(),
@@ -6625,14 +6682,25 @@ async fn external_main_runner_keeps_the_supplied_child_run_in_the_parent_tree() 
 
     assert_eq!(outcome.state, SubagentState::Completed);
     assert_eq!(outcome.summary, "子代理调查完成");
-    assert!(events.lock().unwrap().iter().any(|event| matches!(
-        event,
-        AgentEvent::Scoped { scope, .. }
-            if scope.run_id == "rcode-child-run"
-                && scope.parent_run_id.as_deref() == Some("codex-main-run")
-                && scope.delegated_by_tool_call_id.as_deref() == Some("dynamic-tool-call")
-                && scope.access_mode == SubagentAccessMode::FullAccess
-    )));
+    let events = events.lock().unwrap();
+    let scope = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::Scoped { scope, .. } if scope.run_id == "rcode-child-run" => Some(scope),
+            _ => None,
+        })
+        .expect("external main child must emit a scoped event");
+    assert_eq!(scope.parent_run_id.as_deref(), Some("codex-main-run"));
+    assert_eq!(
+        scope.delegated_by_tool_call_id.as_deref(),
+        Some("dynamic-tool-call")
+    );
+    assert_eq!(scope.access_mode, SubagentAccessMode::FullAccess);
+    assert_eq!(scope.runtime_kind, AgentRunRuntimeKind::Native);
+    assert!(
+        !matches!(scope.agent_label.as_deref(), Some("Self" | "本家")),
+        "an R-Code child of a Codex main agent is a peer runtime, not the parent's self"
+    );
 }
 
 #[tokio::test]
@@ -7267,6 +7335,7 @@ fn native_supervisor_derives_and_enforces_the_parent_access_ceiling() {
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::FullAccess,
             true,
+            false,
             test_native_options(approval.provider.clone()),
             approval.model.clone(),
             "child prompt".to_string(),
@@ -7297,6 +7366,7 @@ fn native_supervisor_derives_and_enforces_the_parent_access_ceiling() {
             "read-only-child".to_string(),
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::ReadOnly,
+            false,
             false,
             test_native_options(full.provider.clone()),
             full.model.clone(),
@@ -7830,6 +7900,7 @@ fn memory_context_is_an_independent_head_message_not_spliced_into_system() {
             main_agent: String::new(),
             subagent: String::new(),
         },
+        ContextInjectionProfile::Standard,
     );
     assert!(!prompt.contains("durable memory snapshot"));
 }
@@ -7966,8 +8037,20 @@ fn mcp_policy_presence_derives_from_run_frozen_tool_sources() {
     assert_eq!(mcp_policy_presence(&gateway, None), (false, false));
 
     // 同来源两次推导的 system 字节一致（P0-A 稳定前缀）。
-    let first = build_main_system_prompt(true, true, true, &AgentPromptPolicy::default());
-    let second = build_main_system_prompt(true, true, true, &AgentPromptPolicy::default());
+    let first = build_main_system_prompt(
+        true,
+        true,
+        true,
+        &AgentPromptPolicy::default(),
+        ContextInjectionProfile::Standard,
+    );
+    let second = build_main_system_prompt(
+        true,
+        true,
+        true,
+        &AgentPromptPolicy::default(),
+        ContextInjectionProfile::Standard,
+    );
     assert_eq!(first, second);
 }
 
@@ -8274,13 +8357,47 @@ fn explicit_user_delegation_opt_out_is_a_hard_runtime_boundary() {
 }
 
 #[test]
+fn delegation_hint_treats_permission_as_permission_not_instruction() {
+    let hint = build_delegation_hint_message(true, TaskMode::Auto, true, true, true)
+        .expect("delegation-enabled runs receive the conservative hint")
+        .text_content();
+    assert!(hint.contains("Default to zero subagents"));
+    assert!(hint.contains("authorization only"));
+    assert!(hint.contains("no more than THREE direct subagents"));
+    assert!(hint.contains("After one batch"));
+
+    let tools = delegation_tool_specs(&[], true, false);
+    let delegate = tools
+        .iter()
+        .find(|tool| tool.name == "delegate_task")
+        .expect("delegate tool is available");
+    assert!(delegate
+        .description
+        .contains("permission to use subagents is not an instruction"));
+    assert!(delegate
+        .description
+        .contains("at most three direct subagents"));
+    let plan = tools
+        .iter()
+        .find(|tool| tool.name == "plan_subagents")
+        .expect("plan tool is available");
+    assert!(plan.description.contains("direct-child ceiling is three"));
+}
+
+#[test]
 fn custom_agent_prompts_are_layered_without_replacing_safety_prompt() {
     let prompts = AgentPromptPolicy {
         main_agent: "MAIN CUSTOM RELATIONSHIP".to_string(),
         subagent: "CHILD CUSTOM RELATIONSHIP".to_string(),
     };
 
-    let main = build_main_system_prompt(true, false, false, &prompts);
+    let main = build_main_system_prompt(
+        true,
+        false,
+        false,
+        &prompts,
+        ContextInjectionProfile::Standard,
+    );
     assert!(main.contains("All file paths are relative to the attached workspace"));
     assert!(main.contains("MAIN CUSTOM RELATIONSHIP"));
 
@@ -8405,16 +8522,13 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
         .unwrap_err();
     assert!(blocked.to_string().contains("plan_subagents"));
 
-    // 分析段：不锁定名额，返回数量与警告。
+    // 分析段：不锁定名额，返回数量与警告。保守上限只允许再加一个。
     let analysis = tool_host
         .call_inner(
             Some("plan-analysis"),
             "plan_subagents",
             serde_json::json!({
-                "entries": [
-                    {"goal": "再做点别的", "agent": "codex"},
-                    {"goal": "顺带验证结论", "agent": "codex"}
-                ]
+                "entries": [{"goal": "再做点别的", "agent": "codex"}]
             }),
         )
         .await
@@ -8422,25 +8536,22 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
     assert!(!analysis.is_error);
     let payload: serde_json::Value = serde_json::from_str(&analysis.content).unwrap();
     assert_eq!(payload["status"], "needs_confirmation");
-    assert_eq!(payload["planned_entries"], 2);
+    assert_eq!(payload["planned_entries"], 1);
     assert_eq!(payload["existing_children"], 1);
-    assert_eq!(payload["allowed_total_after_confirm"], 3);
+    assert_eq!(payload["allowed_total_after_confirm"], 2);
     // 分析段之后门仍然关闭。
     let still_blocked = delegate_via_host(&tool_host, "再做点别的")
         .await
         .unwrap_err();
     assert!(still_blocked.to_string().contains("plan_subagents"));
 
-    // 确认段：锁定 1（已有）+ 2（计划）= 3 个总数。
+    // 确认段：锁定 1（已有）+ 1（计划）= 2 个总数。
     let confirmed = tool_host
         .call_inner(
             Some("plan-confirm"),
             "plan_subagents",
             serde_json::json!({
-                "entries": [
-                    {"goal": "再做点别的", "agent": "codex", "label": "补充调查"},
-                    {"goal": "顺带验证结论", "agent": "codex"}
-                ],
+                "entries": [{"goal": "再做点别的", "agent": "codex", "label": "补充调查"}],
                 "confirm": true
             }),
         )
@@ -8449,18 +8560,12 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
     assert!(!confirmed.is_error);
     let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
     assert_eq!(payload["status"], "confirmed");
-    assert_eq!(payload["allowed_total"], 3);
+    assert_eq!(payload["allowed_total"], 2);
     assert_eq!(payload["revision"], 1);
 
-    // 计划内的两个新子代理放行。
+    // 计划内的第二个子代理放行。
     assert!(
         !delegate_via_host(&tool_host, "再做点别的")
-            .await
-            .unwrap()
-            .is_error
-    );
-    assert!(
-        !delegate_via_host(&tool_host, "顺带验证结论")
             .await
             .unwrap()
             .is_error
@@ -8470,7 +8575,7 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
         .await
         .unwrap_err();
     assert!(exceeded.to_string().contains("修订后的计划"));
-    // 收口后统计：只有 1 个免计划 + 2 个计划内子代理真正执行。
+    // 收口后统计：只有 1 个免计划 + 1 个计划内子代理真正执行。
     tool_host
         .call_inner(
             Some("plan-collect"),
@@ -8479,18 +8584,18 @@ async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
         )
         .await
         .unwrap();
-    assert_eq!(runner.calls.load(Ordering::Relaxed), 3);
+    assert_eq!(runner.calls.load(Ordering::Relaxed), 2);
 }
 
 #[tokio::test]
-async fn plan_subagents_redispatch_after_collect_keeps_cumulative_allowance() {
+async fn plan_subagents_redispatch_after_collect_enforces_cumulative_direct_cap() {
     let directory = TempDir::new().unwrap();
     let runner = Arc::new(LenientCodexRunner {
         calls: AtomicUsize::new(0),
     });
     let tool_host = plan_gate_tool_host(&directory, runner.clone());
 
-    // 首个免计划 + 计划内 1 个 = 累计派生 2，旧额度全部用尽。
+    // 首个免计划 + 计划内 1 个 = 累计派生 2，仍剩一个直接子级名额。
     delegate_via_host(&tool_host, "初审方向甲").await.unwrap();
     tool_host
         .call_inner(
@@ -8515,48 +8620,21 @@ async fn plan_subagents_redispatch_after_collect_keeps_cumulative_allowance() {
         .await
         .unwrap();
 
-    // 重派计划若按活子代理数计额度只会得到 2，一条也派不出；
-    // 正确口径是累计 2 + 重派 2 = 4。
-    let confirmed = tool_host
+    // 第三个直接子代理仍在生命周期额度内，可以经新计划派生。
+    let redispatch = tool_host
         .call_inner(
             Some("plan-confirm-redispatch"),
             "plan_subagents",
             serde_json::json!({
-                "entries": [
-                    {"goal": "重派方向甲", "agent": "codex", "label": "甲重派"},
-                    {"goal": "重派方向乙", "agent": "codex", "label": "乙重派"}
-                ],
+                "entries": [{"goal": "重派方向甲", "agent": "codex", "label": "甲重派"}],
                 "confirm": true
             }),
         )
         .await
         .unwrap();
-    assert!(!confirmed.is_error);
-    let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
-    assert_eq!(payload["status"], "confirmed");
-    assert_eq!(payload["existing_children"], 0);
-    assert_eq!(payload["spawns_used"], 2);
-    assert_eq!(payload["allowed_total"], 4);
-
-    // 计划内两条重派都能放行（旧实现在这里报"已超出允许的 2 个"）。
-    assert!(
-        !delegate_via_host(&tool_host, "重派方向甲")
-            .await
-            .unwrap()
-            .is_error
-    );
-    assert!(
-        !delegate_via_host(&tool_host, "重派方向乙")
-            .await
-            .unwrap()
-            .is_error
-    );
-    // 第 5 次派生超出累计额度 4，被拒并引导修订计划。
-    let exceeded = delegate_via_host(&tool_host, "计划外增量")
-        .await
-        .unwrap_err();
-    assert!(exceeded.to_string().contains("修订后的计划"));
-
+    assert!(!redispatch.is_error, "{}", redispatch.content);
+    let third = delegate_via_host(&tool_host, "重派方向甲").await.unwrap();
+    assert!(!third.is_error, "{}", third.content);
     tool_host
         .call_inner(
             Some("collect-redispatch"),
@@ -8565,7 +8643,22 @@ async fn plan_subagents_redispatch_after_collect_keeps_cumulative_allowance() {
         )
         .await
         .unwrap();
-    assert_eq!(runner.calls.load(Ordering::Relaxed), 4);
+
+    // 累计派生数达到 3 后，再次收集也不会重置额度；第四个必须被拒绝。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-confirm-over-cap"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "重派方向乙", "agent": "codex", "label": "乙重派"}],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(rejected.is_error);
+    assert!(rejected.content.contains("上限 3"));
+    assert_eq!(runner.calls.load(Ordering::Relaxed), 3);
 }
 
 #[tokio::test]
@@ -8598,8 +8691,8 @@ async fn plan_subagents_validates_entries_and_run_cap() {
         .unwrap();
     assert!(blank_goal.is_error);
 
-    // 超过单次运行上限（12）的确认计划被拒。
-    let over_cap_entries: Vec<serde_json::Value> = (0..13)
+    // 超过单次运行上限（3）的确认计划被拒。
+    let over_cap_entries: Vec<serde_json::Value> = (0..4)
         .map(|index| serde_json::json!({"goal": format!("方向 {index}")}))
         .collect();
     let over_cap = tool_host
@@ -8745,10 +8838,7 @@ async fn delegate_task_rejects_goal_of_running_child() {
             Some("plan-conflict"),
             "plan_subagents",
             serde_json::json!({
-                "entries": [
-                    {"goal": "保持运行的目标", "agent": "codex"},
-                    {"goal": "另一个方向", "agent": "codex"}
-                ],
+                "entries": [{"goal": "保持运行的目标", "agent": "codex"}],
                 "confirm": true
             }),
         )
