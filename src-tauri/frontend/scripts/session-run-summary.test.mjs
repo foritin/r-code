@@ -232,7 +232,14 @@ test("session strip exposes mutually exclusive step/change popovers and preserve
   await page.keyboard.press("Escape");
   await changeDialog.waitFor({ state: "detached" });
   assert.equal(await changeTrigger.getAttribute("aria-expanded"), "false");
-  assert.equal(await changeTrigger.evaluate((element) => document.activeElement === element), true);
+  // 焦点恢复走 rAF+0ms timeout 双保险（SessionRunSummary 的
+  // refocusAfterPopoverClose），慢速 runner 上断言时刻未必已回调；轮询等待
+  // 恢复完成，而不是瞬时断言竞速。
+  await page.waitForFunction(
+    (element) => document.activeElement === element,
+    await changeTrigger.elementHandle(),
+    { timeout: 2_000 },
+  );
 
   await page.setViewportSize({ width: 800, height: 600 });
   await page.emulateMedia({ reducedMotion: "reduce" });

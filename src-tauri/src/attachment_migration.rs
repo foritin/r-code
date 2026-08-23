@@ -310,39 +310,37 @@ fn rewrite_events(
                 }
                 *messages = next;
             }
-            SessionEvent::ModelProjection { messages } => {
-                if let Some(projected) = messages {
-                    let mut next = Vec::with_capacity(projected.len());
-                    for message in projected.iter() {
-                        match rewrite_message(
-                            message,
-                            store,
-                            db,
-                            task_id,
-                            &mut name_seq,
-                            &mut staged_ids,
-                        )? {
-                            MessageRewrite::Rewritten(rewritten) => next.push(rewritten),
-                            MessageRewrite::Unchanged => next.push(message.clone()),
-                        }
-                    }
-                    *projected = next;
-                }
-            }
-            SessionEvent::System { event, data } => {
-                if event == "r_code_attachment_image" {
-                    let next = rewrite_preview_event(
+            SessionEvent::ModelProjection {
+                messages: Some(projected),
+            } => {
+                let mut next = Vec::with_capacity(projected.len());
+                for message in projected.iter() {
+                    match rewrite_message(
+                        message,
                         store,
                         db,
                         task_id,
-                        previews_root,
-                        data,
+                        &mut name_seq,
                         &mut staged_ids,
-                        &mut unresolved_previews,
-                    );
-                    if next != *data {
-                        *data = next;
+                    )? {
+                        MessageRewrite::Rewritten(rewritten) => next.push(rewritten),
+                        MessageRewrite::Unchanged => next.push(message.clone()),
                     }
+                }
+                *projected = next;
+            }
+            SessionEvent::System { event, data } if event == "r_code_attachment_image" => {
+                let next = rewrite_preview_event(
+                    store,
+                    db,
+                    task_id,
+                    previews_root,
+                    data,
+                    &mut staged_ids,
+                    &mut unresolved_previews,
+                );
+                if next != *data {
+                    *data = next;
                 }
             }
             _ => {}
@@ -758,8 +756,9 @@ pub fn run_session_attachment_migrations(
 ///    扫描活动 JSONL 与排队载荷，防止「消息已落盘但 commit 标记未写」的崩溃
 ///    窗口误删附件；
 /// 2. 清理孤儿预览目录（`{app_data}/attachments/{task_id}` 中任务已不存在者）。
+///
 /// 必须在 `run_session_attachment_migrations` 之后调用（迁移会补 commit 引用，
-///    避免把 pending 恢复窗口内的附件当过期回收）。
+/// 避免把 pending 恢复窗口内的附件当过期回收）。
 pub fn run_startup_attachment_gc(db: &Database, blobs_dir: &Path, sessions_dir: &Path) {
     let referenced = collect_referenced_attachment_ids(db, sessions_dir);
     let store = AttachmentStore::new(db, blobs_dir.to_path_buf());

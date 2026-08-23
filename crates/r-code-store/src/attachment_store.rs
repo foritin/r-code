@@ -26,6 +26,9 @@ fn db_err(error: rusqlite::Error) -> ProductError {
     ProductError::DatabaseError(error.to_string())
 }
 
+/// 迁移行的当前状态：`(state, source_sha256, target_sha256, error)`。
+pub type MigrationStateRow = (String, String, Option<String>, Option<String>);
+
 /// staged 租约时长：24 小时。
 const STAGED_LEASE_HOURS: i64 = 24;
 /// 单附件上限与既有 IPC 校验一致（commands.rs 的 MAX_* 常量）。
@@ -497,7 +500,7 @@ impl<'a> AttachmentStore<'a> {
             let record = self.get_owned(&task_id, &reference.attachment_id);
             match record {
                 Ok(record) if record.state == AttachmentState::Staged => {
-                    self.commit_many(&task_id, &[reference.attachment_id.clone()])?;
+                    self.commit_many(&task_id, std::slice::from_ref(&reference.attachment_id))?;
                     reconciled.push(reference.attachment_id.clone());
                 }
                 _ => {}
@@ -543,15 +546,13 @@ impl<'a> AttachmentStore<'a> {
         Ok(collected)
     }
 
-    /// 任务删除前：列出其全部 blob hash（含重复计数），供事务后按引用数递减。
-
     // ── JSONL 迁移状态机（docs/multimodal-attachments §7.3）─────────────────
 
-    /// 迁移行的当前状态：`(state, source_sha256, target_sha256, error)`。
+    /// 迁移行的当前状态，见 [`MigrationStateRow`]。
     pub fn migration_state(
         &self,
         storage_id: &str,
-    ) -> Result<Option<(String, String, Option<String>, Option<String>)>, ProductError> {
+    ) -> Result<Option<MigrationStateRow>, ProductError> {
         let conn = self.db.conn()?;
         conn.query_row(
             "SELECT state, source_sha256, target_sha256, error              FROM session_attachment_migrations WHERE storage_id = ?1",
@@ -611,6 +612,7 @@ impl<'a> AttachmentStore<'a> {
         .map_err(db_err)?;
         Ok(())
     }
+    /// 任务删除前：列出其全部 blob hash（含重复计数），供事务后按引用数递减。
     pub fn list_hashes_for_task(&self, task_id: &str) -> Result<Vec<String>, ProductError> {
         let conn = self.db.conn()?;
         let mut statement = conn
@@ -808,7 +810,7 @@ mod tests {
         let store = AttachmentStore::new(&db, dir.path().join("blobs"));
         let committed = stage_png(&store, "task-1", "keep.png");
         store
-            .commit_many("task-1", &[committed.attachment_id.clone()])
+            .commit_many("task-1", std::slice::from_ref(&committed.attachment_id))
             .unwrap();
         // 直接把 staged 租约拨到过去（模拟 24h 过期）。
         let stale = stage_png(&store, "task-1", "stale.png");
@@ -845,7 +847,7 @@ mod tests {
             )
             .unwrap();
         let collected = store
-            .gc_expired_staged(Utc::now(), &[referenced.attachment_id.clone()])
+            .gc_expired_staged(Utc::now(), std::slice::from_ref(&referenced.attachment_id))
             .unwrap();
         assert!(collected.is_empty(), "被引用的 staged 记录不回收");
     }

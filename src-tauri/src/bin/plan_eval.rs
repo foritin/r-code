@@ -1133,6 +1133,7 @@ default_provider = "deepseek"
 
 [planning]
 suggest_complex_tasks = false
+deepseek_plan_anchoring = false
 
 [diagnostics]
 request_audit = true
@@ -1158,6 +1159,18 @@ async fn build_isolated_state(
 ) -> Result<CommandState, String> {
     let config_dir = env_root.join("config");
     write_eval_config(&config_dir, dry_run)?;
+    // 双轨臂要测的就是锚定轨迹：模拟已打开锚定滑钮的用户环境（§8.1：
+    // 锚定是独立于 release gate 的用户开关，基线臂保持生产默认关闭）。
+    if arm == Arm::PlanDualTrack {
+        let dual_track_toml = std::fs::read_to_string(config_dir.join("config.toml"))
+            .map_err(|error| error.to_string())?
+            .replace(
+                "deepseek_plan_anchoring = false",
+                "deepseek_plan_anchoring = true",
+            );
+        std::fs::write(config_dir.join("config.toml"), dual_track_toml)
+            .map_err(|error| error.to_string())?;
+    }
     let state = CommandState::new_with_planning_release_control(
         Arc::new(open_isolated_db(&env_root.join("app.db"))?),
         env_root.join("blobs"),

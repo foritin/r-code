@@ -197,7 +197,12 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
     {
         let conn = v18.conn().unwrap();
         conn.execute_batch(
-            "DROP TABLE plan_entry_offers;
+            "DROP INDEX idx_attachments_staged_lease;
+             DROP INDEX idx_attachments_blob;
+             DROP INDEX idx_attachments_task;
+             DROP TABLE attachments;
+             DROP TABLE session_attachment_migrations;
+             DROP TABLE plan_entry_offers;
              DROP TABLE plan_suggestion_branch_states;
              DROP TABLE origin_requests;
              DROP INDEX idx_queued_messages_request_key;
@@ -225,7 +230,7 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
              ALTER TABLE agent_runs DROP COLUMN checkpoint_sha;
              ALTER TABLE agent_runs DROP COLUMN checkpoint_base_head;
              ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33);",
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34);",
         )
         .unwrap();
         conn.execute(
