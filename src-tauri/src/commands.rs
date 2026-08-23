@@ -16264,7 +16264,12 @@ fn ordered_initial_codex_cli_candidates(
 }
 
 fn initial_codex_cli_candidates() -> Vec<CodexCliCandidate> {
+    // 仅 Windows 需要向 user_npm_paths 追加用户级 npm 候选；其他平台没有
+    // 追加点，mut 由 cfg 分支持有，避免非 Windows 上的 unused_mut。
+    #[cfg(windows)]
     let mut user_npm_paths = Vec::new();
+    #[cfg(not(windows))]
+    let user_npm_paths = Vec::new();
     #[cfg(windows)]
     if let Some(app_data) = std::env::var_os("APPDATA") {
         // 打包应用可能把 WindowsApps / Codex Desktop 的 resources 目录放在用户 PATH
