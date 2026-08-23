@@ -691,7 +691,7 @@ fn decode_receipt_attestation(encoded: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut decoded = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         decoded[index] =
             (decode_lower_hex_nibble(pair[0])? << 4) | decode_lower_hex_nibble(pair[1])?;
     }

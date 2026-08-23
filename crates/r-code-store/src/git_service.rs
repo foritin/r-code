@@ -481,7 +481,7 @@ impl GitService {
             .filter(|field| !field.is_empty())
             .collect();
         let mut changes = Vec::with_capacity(fields.len() / 2);
-        for pair in fields.chunks_exact(2) {
+        for pair in fields.as_chunks::<2>().0 {
             let status = pair[0].first().copied();
             let kind = match status {
                 Some(b'A') => GitTreeChangeKind::Added,
