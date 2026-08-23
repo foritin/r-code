@@ -4210,7 +4210,14 @@ test("saved providers auto-sync models on open; manual sync stays in the new-pro
     await page.locator(".provider-field-success").waitFor({ state: "visible" });
     const syncMessage = await page.locator(".provider-field-success").textContent();
     assert.match(syncMessage, /服务返回 \d+ 个可用模型/, "opening a saved provider auto-syncs its model list");
-    // 同步结果已持久化到本机快照。
+    // 同步结果已持久化到本机快照。持久化随 fetchModels 成功回调写入，慢速
+    // runner 上消息可见与写入落定之间可能交错；轮询等待而非瞬时读取。
+    await page.waitForFunction(() => {
+      const raw = window.localStorage.getItem("r-code.provider.synced");
+      const parsed = raw ? JSON.parse(raw) : {};
+      const entry = parsed.deepseek;
+      return Boolean(entry && Array.isArray(entry.models) && entry.models.length > 0);
+    }, { timeout: 2_000 });
     const persisted = await page.evaluate(() => {
       const raw = window.localStorage.getItem("r-code.provider.synced");
       const parsed = raw ? JSON.parse(raw) : {};

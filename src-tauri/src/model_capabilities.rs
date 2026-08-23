@@ -317,8 +317,10 @@ mod tests {
     use agent_config::{Config, ImageUnderstandingConfig, ProviderConfig};
 
     fn deepseek_config(model: &str, base_url: &str) -> Config {
-        let mut config = Config::default();
-        config.default_provider = "deepseek-main".to_string();
+        let mut config = Config {
+            default_provider: "deepseek-main".to_string(),
+            ..Config::default()
+        };
         config.providers.insert(
             "deepseek-main".to_string(),
             ProviderConfig {
