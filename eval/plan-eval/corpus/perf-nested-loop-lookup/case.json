@@ -1,0 +1,8 @@
+{
+  "id": "perf-nested-loop-lookup",
+  "category": "performance",
+  "task": "优化 `lib/matcher.js` 的 matchTags：当前对每个查询标签线性扫描全部资源（O(n*m)）。改为预建倒排索引，语义不变；`lib/feed.js` 组装推荐时复用同一匹配器。",
+  "expected_signals": [
+    "multi_stage_verification"
+  ]
+}

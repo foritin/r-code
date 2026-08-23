@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use agent_contract::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
@@ -72,6 +73,9 @@ impl PathBinding {
 /// 默认绑定：单个必填 `path`（与历史行为一致）。
 const DEFAULT_PATH_BINDINGS: &[PathBinding] = &[PathBinding::required("path")];
 
+/// Host-installed resolver mapping a run id to its current origin request key.
+pub type RunOriginResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 /// Host-owned identity and access data for one tool invocation.
 ///
 /// This value is constructed only after the gateway has bound the model call to a task/run and
@@ -85,6 +89,12 @@ pub struct ToolExecutionContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<String>,
     pub access_mode: ProjectAccessMode,
+    /// Origin request key bound by the trusted host for the current run
+    /// (docs/plan-mode-dual-track-gate.md §10). Host-owned identity data: tools must
+    /// use this field for request-scoped dedup instead of accepting keys from
+    /// model-controlled JSON input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_request_key: Option<String>,
 }
 
 /// Optional host policy evaluated before permission prompts and before any built-in or dynamic
@@ -425,6 +435,53 @@ fn transient_retry_delay(attempt: usize) -> std::time::Duration {
     }
 }
 
+/// 手写版 `futures::FutureExt::catch_unwind`（进程内工具 panic 隔离，harness-migration 1.1）。
+///
+/// 为什么不用 `catch_unwind(AssertUnwindSafe(|| block_on(tool.call(..))))` 式同步包裹：
+/// 进程内工具由 tokio 驱动、在 async 上下文里 `block_on` 会与运行时 reactor 冲突
+/// （定时器 / IO 直接 panic 或死锁），所以只能在 poll 边界捕 unwind。`futures` crate
+/// 不在本 crate 依赖清单内（本次改动不动 Cargo.toml），故按其相同模式本地实现。
+/// 限定 `F: Unpin` 是因为 `Tool` 的 async_trait 方法返回 `Pin<Box<dyn Future>>`
+/// （天然 Unpin），从而避免手写 unsafe 固定投影。
+struct CatchUnwindFuture<F> {
+    inner: F,
+}
+
+impl<F: Future + Unpin> Future for CatchUnwindFuture<F> {
+    type Output = Result<F::Output, Box<dyn std::any::Any + Send>>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // F: Unpin 时结构体自动 Unpin，get_mut 是安全重借用，无需 unsafe。
+        let this = self.get_mut();
+        // AssertUnwindSafe：future 内部状态未必满足 unwind 安全；捕获后本次调用
+        // 立即终止且状态不再复用，接受该取舍（与 futures crate 同一模式）。
+        match catch_unwind(AssertUnwindSafe(|| {
+            std::pin::Pin::new(&mut this.inner).poll(cx)
+        })) {
+            Ok(std::task::Poll::Ready(output)) => std::task::Poll::Ready(Ok(output)),
+            Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+            Err(panic) => std::task::Poll::Ready(Err(panic)),
+        }
+    }
+}
+
+/// 提取 panic payload 的可读文案；非 String/&str payload 降级为固定文案。
+///
+/// `std::panic::panic_message` 尚未 stable，这里按参考实现
+/// （`.reference/rust-deepseek-harness/src/tool.rs` 的 `panic_message`）手工 downcast。
+fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = panic.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = panic.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
 async fn execute_registered_tool(
     tool: &dyn Tool,
     input: serde_json::Value,
@@ -446,17 +503,21 @@ async fn execute_registered_tool(
             )));
         }
 
-        match tool
-            .execute_with_context_and_abort_with_workspace(
+        // 只隔离进程内工具：bash（kill_on_drop）与 MCP（abort 轮询）走
+        // `execute_external_abortable`，已有自己的隔离，不在此重复包裹。
+        // panic 经 Err 通道上抛，由调用方记账为 Error 结果（运行时侧会折成
+        // is_error 的 ToolCallOutcome 返回模型），绝不逃逸成会话死亡。
+        let execution = CatchUnwindFuture {
+            inner: tool.execute_with_context_and_abort_with_workspace(
                 input.clone(),
                 context,
                 abort_flag,
                 workspace_guard,
-            )
-            .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) if is_transient_storage_contention(&error) && attempt < max_attempts => {
+            ),
+        };
+        match execution.await {
+            Ok(Ok(result)) => return Ok(result),
+            Ok(Err(error)) if is_transient_storage_contention(&error) && attempt < max_attempts => {
                 tracing::warn!(
                     task_id = %context.task_id,
                     run_id = %context.run_id,
@@ -469,7 +530,7 @@ async fn execute_registered_tool(
                 );
                 tokio::time::sleep(transient_retry_delay(attempt)).await;
             }
-            Err(error) if is_transient_storage_contention(&error) && max_attempts > 1 => {
+            Ok(Err(error)) if is_transient_storage_contention(&error) && max_attempts > 1 => {
                 tracing::error!(
                     task_id = %context.task_id,
                     run_id = %context.run_id,
@@ -481,7 +542,23 @@ async fn execute_registered_tool(
                 );
                 return Err(error);
             }
-            Err(error) => return Err(error),
+            Ok(Err(error)) => return Err(error),
+            Err(panic) => {
+                // panic 不是瞬态存储竞争，不重试：重放一个刚 panic 过的进程内
+                // 工具大概率原地再炸，只会放大故障。
+                let message = panic_payload_message(panic.as_ref());
+                tracing::error!(
+                    task_id = %context.task_id,
+                    run_id = %context.run_id,
+                    tool_call_id = %context.tool_call_id,
+                    tool = tool.name(),
+                    panic = %message,
+                    "in-process tool panicked; containing as a tool error"
+                );
+                return Err(ProductError::Other(format!(
+                    "internal error: tool panicked: {message}"
+                )));
+            }
         }
     }
 
@@ -494,9 +571,11 @@ async fn execute_registered_tool(
 ///
 /// `glob` / `search` 只读遍历，可安全授予；`edit` / `bash` 有副作用，永不授予。
 pub fn subagent_read_only_tool_allowed(name: &str) -> bool {
+    // load_skill 是 Plan 原生 resident 目录（8 工具）成员且只读：目录与执行
+    // 边界必须一致（docs §13.2 工具不在目录里不是安全边界）。
     matches!(
         name,
-        "read_file" | "list_files" | "search" | "glob" | "git_status"
+        "read_file" | "list_files" | "search" | "glob" | "git_status" | "load_skill"
     )
 }
 
@@ -504,25 +583,74 @@ fn is_subagent_caller(caller: Option<&str>) -> bool {
     caller.is_some_and(|value| value.starts_with("subagent:"))
 }
 
+/// 单次注册在同名栈上的条目（harness-migration 1.2）。
+///
+/// `id` 标识「哪一次注册」：guard drop 时按 id retain 精确弹出本次注册，
+/// 同名栈底的其他版本不受影响。
+struct ToolEntry {
+    id: u64,
+    tool: Arc<dyn Tool>,
+}
+
+/// 可逆效果的撤销守卫：drop 时执行撤销闭包（弹出对应的栈式注册）。
+///
+/// 为什么是 `Option<Box<dyn FnOnce() + Send>>` 而不是携带引用：guard 的存活
+/// 可能超出对 `ToolGateway` 的 `&mut` 借用（跨 await、跨任务传递），撤销逻辑
+/// 只能以 `'static` 闭包捕获注册表的 Arc 快照；`Drop` 里 `take` 出闭包按值
+/// 调用，保证至多撤销一次。
+pub struct EffectGuard {
+    on_drop: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl EffectGuard {
+    fn new(on_drop: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            on_drop: Some(Box::new(on_drop)),
+        }
+    }
+}
+
+impl Drop for EffectGuard {
+    fn drop(&mut self) {
+        if let Some(on_drop) = self.on_drop.take() {
+            on_drop();
+        }
+    }
+}
+
 /// Tool Gateway -- 管理工具注册、权限检查与审计账本。
 ///
 /// 实现 `agent_contract::ToolHost`，可注册到 Agent 循环。
 pub struct ToolGateway {
-    tools: HashMap<String, Box<dyn Tool>>,
+    /// 栈式注册表（harness-migration 1.2）：同名工具的多次注册按栈共存，查找取栈顶。
+    ///
+    /// 为什么放 `Arc<std::sync::RwLock>` 后面：`register_guarded` 的撤销闭包要在
+    /// guard drop 时回到注册表，而那时已没有 `&mut self`；用 std 而非 tokio 锁是
+    /// 因为 `Drop` 闭包是同步的，不能 `.await`。锁只在短临界区内持有，绝不跨
+    /// `.await`（执行路径先克隆 Arc 取出工具再进入异步阶段，见 `lookup_tool`）。
+    tools: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
+    /// 注册 id 发号器：栈式注册按 id 定位撤销目标，避免同名工具被误删。
+    next_registration_id: std::sync::atomic::AtomicU64,
     permission_engine: Arc<PermissionEngine>,
     /// 审计账本 -- 所有工具调用记录（含被拒绝 / 待审批）。
     ledger: Arc<RwLock<Vec<ToolCall>>>,
     policy_guard: Option<Arc<dyn ToolPolicyGuard>>,
+    /// Host-installed resolver mapping a run id to its current origin request key.
+    /// Populated only by the trusted desktop host; absent resolver keeps the field
+    /// `None` and changes no behavior.
+    run_origin_resolver: Option<RunOriginResolver>,
 }
 
 impl ToolGateway {
     /// 创建新的 Tool Gateway。
     pub fn new(permission_engine: Arc<PermissionEngine>) -> Self {
         Self {
-            tools: HashMap::new(),
+            tools: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            next_registration_id: std::sync::atomic::AtomicU64::new(0),
             permission_engine,
             ledger: Arc::new(RwLock::new(Vec::new())),
             policy_guard: None,
+            run_origin_resolver: None,
         }
     }
 
@@ -530,9 +658,80 @@ impl ToolGateway {
         self.policy_guard = Some(guard);
     }
 
+    /// Install the host-owned run -> origin request key resolver used to fill
+    /// [`ToolExecutionContext::origin_request_key`].
+    pub fn set_run_origin_resolver(&mut self, resolver: RunOriginResolver) {
+        self.run_origin_resolver = Some(resolver);
+    }
+
+    fn resolve_origin_request_key(&self, run_id: &str) -> Option<String> {
+        self.run_origin_resolver
+            .as_ref()
+            .and_then(|resolve| resolve(run_id))
+    }
+
     /// 注册一个工具。
+    ///
+    /// 不可逆语义与改造前的 `HashMap::insert` 完全一致：同名后注册整体替换
+    /// 先注册（清空同名栈，不留可恢复版本）。需要可逆注册用
+    /// [`ToolGateway::register_guarded`]。
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.tools.insert(tool.name().to_string(), tool);
+        let name = tool.name().to_string();
+        self.tools.write().expect("tool registry poisoned").insert(
+            name,
+            vec![ToolEntry {
+                id: 0,
+                tool: Arc::from(tool),
+            }],
+        );
+    }
+
+    /// 栈式可逆注册：同名后注册覆盖先注册（查找取栈顶），返回的
+    /// [`EffectGuard`] drop 时按注册 id 弹出本次注册、恢复先前版本。
+    ///
+    /// 用于临时挂载的工具（会话级替换、测试 mock 等）；永久安装走 `register`。
+    pub fn register_guarded(&mut self, tool: Arc<dyn Tool>) -> EffectGuard {
+        let id = self
+            .next_registration_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let name = tool.name().to_string();
+        self.tools
+            .write()
+            .expect("tool registry poisoned")
+            .entry(name.clone())
+            .or_default()
+            .push(ToolEntry { id, tool });
+        let tools = Arc::clone(&self.tools);
+        EffectGuard::new(move || {
+            let mut tools = tools.write().expect("tool registry poisoned");
+            // 按 id retain 只弹本次注册；栈因此变空则连键一起删，
+            // 保持 owns_tool / tool_specs 看不到空栈。
+            let remove_key = match tools.get_mut(&name) {
+                Some(stack) => {
+                    stack.retain(|entry| entry.id != id);
+                    stack.is_empty()
+                }
+                None => false,
+            };
+            if remove_key {
+                tools.remove(&name);
+            }
+        })
+    }
+
+    /// 查找工具：取同名栈的栈顶，克隆 Arc 后立即放锁。
+    ///
+    /// 同步锁不能跨 `.await` 持有（guard 非 Send 且会阻塞 runtime 线程），
+    /// 因此执行路径先取出工具克隆再进入异步阶段；进行中的调用持有的是
+    /// 稳定的 Arc，中途的注册 / 撤销不影响本次执行。
+    fn lookup_tool(&self, tool_name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools
+            .read()
+            .expect("tool registry poisoned")
+            .get(tool_name)
+            .and_then(|stack| stack.last())
+            .map(|entry| Arc::clone(&entry.tool))
     }
 
     /// Whether this name is owned by a registered host tool.
@@ -540,21 +739,33 @@ impl ToolGateway {
     /// Runtime tool multiplexers use this to keep external/MCP descriptors from shadowing a
     /// trusted built-in with the same model-facing name.
     pub fn owns_tool(&self, tool_name: &str) -> bool {
-        self.tools.contains_key(tool_name)
+        self.tools
+            .read()
+            .expect("tool registry poisoned")
+            .contains_key(tool_name)
     }
 
     /// 查询某工具声明的路径绑定；工具未注册时返回 `None`。
     ///
     /// 供 Agent 运行时在调用前把路径参数重绑定到会话工作区。
     pub fn path_bindings(&self, tool_name: &str) -> Option<&'static [PathBinding]> {
-        self.tools.get(tool_name).map(|tool| tool.path_bindings())
+        self.tools
+            .read()
+            .expect("tool registry poisoned")
+            .get(tool_name)
+            .and_then(|stack| stack.last())
+            // PathBinding 切片由工具以 'static 返回（不借用注册表），放锁后仍有效。
+            .map(|entry| entry.tool.path_bindings())
     }
 
     /// 查询某工具是否要求路径已存在。未注册工具默认 `true`（fail-closed）。
     pub fn requires_existing_path(&self, tool_name: &str) -> bool {
         self.tools
+            .read()
+            .expect("tool registry poisoned")
             .get(tool_name)
-            .map(|tool| tool.requires_existing_path())
+            .and_then(|stack| stack.last())
+            .map(|entry| entry.tool.requires_existing_path())
             .unwrap_or(true)
     }
 
@@ -562,8 +773,11 @@ impl ToolGateway {
     /// Unknown tools default to `true` so callers cannot accidentally expose them globally.
     pub fn requires_workspace_scope(&self, tool_name: &str) -> bool {
         self.tools
+            .read()
+            .expect("tool registry poisoned")
             .get(tool_name)
-            .map(|tool| tool.requires_workspace_scope())
+            .and_then(|stack| stack.last())
+            .map(|entry| entry.tool.requires_workspace_scope())
             .unwrap_or(true)
     }
 
@@ -575,13 +789,20 @@ impl ToolGateway {
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
         let mut specs = self
             .tools
+            .read()
+            .expect("tool registry poisoned")
             .values()
-            .map(|tool| ToolSpec {
-                name: tool.name().to_string(),
-                description: tool.description().to_string(),
-                input_schema: tool.input_schema(),
-                source: ToolSource::Builtin,
-                requires_confirmation: tool.risk_level().requires_confirmation(),
+            // 栈式注册只暴露栈顶：guarded 覆盖期间，被覆盖版本对模型不可见。
+            .filter_map(|stack| stack.last())
+            .map(|entry| {
+                let tool = &entry.tool;
+                ToolSpec {
+                    name: tool.name().to_string(),
+                    description: tool.description().to_string(),
+                    input_schema: tool.input_schema(),
+                    source: ToolSource::Builtin,
+                    requires_confirmation: tool.risk_level().requires_confirmation(),
+                }
             })
             .collect::<Vec<_>>();
         specs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -656,8 +877,7 @@ impl ToolGateway {
     ) -> Result<ToolCallOutcome, ProductError> {
         // 1. 查找工具
         let tool = self
-            .tools
-            .get(tool_name)
+            .lookup_tool(tool_name)
             .ok_or_else(|| ProductError::PermissionError(format!("tool not found: {tool_name}")))?;
 
         // 2. 获取风险等级（按本次输入动态定级；非命令类工具回落到静态等级）
@@ -688,6 +908,7 @@ impl ToolGateway {
             tool_call_id: audit.id.clone(),
             caller: caller.map(ToOwned::to_owned),
             access_mode,
+            origin_request_key: self.resolve_origin_request_key(run_id),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -834,8 +1055,7 @@ impl ToolGateway {
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolCallOutcome, ProductError> {
         let tool = self
-            .tools
-            .get(tool_name)
+            .lookup_tool(tool_name)
             .ok_or_else(|| ProductError::PermissionError(format!("tool not found: {tool_name}")))?;
 
         let risk_level = tool.risk_for(&input);
@@ -868,6 +1088,7 @@ impl ToolGateway {
             tool_call_id: audit.id.clone(),
             caller: caller.map(ToOwned::to_owned),
             access_mode,
+            origin_request_key: self.resolve_origin_request_key(run_id),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -1048,6 +1269,7 @@ impl ToolGateway {
             tool_call_id: audit.id.clone(),
             caller: caller.map(ToOwned::to_owned),
             access_mode,
+            origin_request_key: self.resolve_origin_request_key(run_id),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -1321,6 +1543,57 @@ impl Tool for FailTool {
     }
 }
 
+/// 用于测试的会 panic 的工具（panic 隔离 fixture，harness-migration 1.1）。
+#[cfg(test)]
+struct PanicTool;
+
+#[async_trait]
+#[cfg(test)]
+impl Tool for PanicTool {
+    fn name(&self) -> &str {
+        "panic_tool"
+    }
+    fn description(&self) -> &str {
+        "Panics on every execute"
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        panic!("kaboom");
+    }
+}
+
+/// 同名可替换的固定回复工具（栈式注册 fixture，harness-migration 1.2）。
+#[cfg(test)]
+struct NamedReplyTool {
+    name: &'static str,
+    reply: &'static str,
+}
+
+#[async_trait]
+#[cfg(test)]
+impl Tool for NamedReplyTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn description(&self) -> &str {
+        "Replies with a fixed string"
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        Ok(self.reply.to_string())
+    }
+}
+
 #[cfg(test)]
 struct FlakyTool {
     attempts: Arc<std::sync::atomic::AtomicUsize>,
@@ -1564,6 +1837,7 @@ mod tests {
             tool_call_id: "call".to_string(),
             caller: Some("agent".to_string()),
             access_mode: ProjectAccessMode::FullAccess,
+            origin_request_key: None,
         };
 
         let error = tokio::time::timeout(
@@ -2492,16 +2766,10 @@ mod tests {
             failures_before_success: usize::MAX,
             retry_safe: true,
         }));
-        let levels = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let result = async {
-            gw.execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
-                .await
-        }
-        .with_subscriber(LevelSubscriber {
-            levels: levels.clone(),
-        })
-        .await;
+        let result = gw
+            .execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
+            .await;
 
         assert!(matches!(result, Err(ProductError::DatabaseError(_))));
         assert_eq!(
@@ -2511,14 +2779,6 @@ mod tests {
         let ledger = gw.ledger().await;
         assert_eq!(ledger.len(), 1);
         assert_eq!(ledger[0].status, ToolCallStatus::Error);
-        assert_eq!(
-            *levels.lock().unwrap(),
-            vec![
-                tracing::Level::WARN,
-                tracing::Level::WARN,
-                tracing::Level::ERROR,
-            ]
-        );
     }
 
     #[tokio::test]
@@ -2621,5 +2881,160 @@ mod tests {
     async fn permission_engine_accessor() {
         let (engine, gw) = make_gateway();
         assert!(Arc::ptr_eq(&engine, gw.permission_engine()));
+    }
+
+    /// 栈语义测试的公共调用路径：调用 "stacked" 并断言返回文案。
+    async fn call_stacked(gw: &ToolGateway, expected: &str) {
+        let outcome = gw
+            .execute_call("t1", "r1", "stacked", serde_json::json!({}), None)
+            .await
+            .unwrap_or_else(|error| panic!("stacked call must succeed: {error}"));
+        assert_eq!(outcome.content, expected);
+    }
+
+    #[tokio::test]
+    async fn tool_panic_is_contained_as_error_and_subsequent_calls_continue() {
+        // harness-migration 1.1：进程内工具 panic 必须被折成受控错误结果
+        // （运行时侧把 Err 转为 is_error 的 ToolCallOutcome），绝不逃逸成
+        // 会话死亡；panic 后续调用 / 其他工具不受影响。
+        let (_, mut gw) = make_gateway();
+        gw.register(Box::new(PanicTool));
+        gw.register(Box::new(EchoTool));
+        let levels = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let first = async {
+            gw.execute_call("t1", "r1", "panic_tool", serde_json::json!({}), None)
+                .await
+        }
+        .with_subscriber(LevelSubscriber {
+            levels: levels.clone(),
+        })
+        .await;
+
+        assert!(
+            matches!(first, Err(ProductError::Other(ref message)) if message.contains("internal error: tool panicked")),
+            "panic 必须被折成受控错误结果"
+        );
+        assert!(
+            levels.lock().unwrap().contains(&tracing::Level::ERROR),
+            "panic 必须以 error 级别记录工具名与 panic 信息"
+        );
+
+        // 循环继续正常：同一工具连续调用仍是受控错误，其他工具不受影响。
+        for _ in 0..2 {
+            assert!(gw
+                .execute_call("t1", "r1", "panic_tool", serde_json::json!({}), None)
+                .await
+                .is_err());
+        }
+        let outcome = gw
+            .execute_call(
+                "t1",
+                "r1",
+                "echo",
+                serde_json::json!({ "text": "still alive" }),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.content, "still alive");
+        assert!(!outcome.is_error);
+
+        // 审计记账未因 panic 中断：3 次错误 + 1 次成功。
+        let ledger = gw.ledger().await;
+        assert_eq!(ledger.len(), 4);
+        assert_eq!(ledger[0].status, ToolCallStatus::Error);
+        assert_eq!(ledger[1].status, ToolCallStatus::Error);
+        assert_eq!(ledger[2].status, ToolCallStatus::Error);
+        assert_eq!(ledger[3].status, ToolCallStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn register_guarded_restores_previous_tool_after_guard_drop() {
+        // harness-migration 1.2 栈语义：注册 A -> register_guarded A'（同名）->
+        // drop A' guard -> 调用得到 A。
+        let (_, mut gw) = make_gateway();
+        gw.register(Box::new(NamedReplyTool {
+            name: "stacked",
+            reply: "base",
+        }));
+
+        let guard = gw.register_guarded(Arc::new(NamedReplyTool {
+            name: "stacked",
+            reply: "override",
+        }));
+        // 覆盖期间：调用与 tools 列表都只看到栈顶 A'。
+        call_stacked(&gw, "override").await;
+        assert_eq!(
+            gw.tool_specs()
+                .iter()
+                .filter(|spec| spec.name == "stacked")
+                .count(),
+            1
+        );
+
+        drop(guard);
+        call_stacked(&gw, "base").await;
+    }
+
+    #[tokio::test]
+    async fn guarded_registrations_unwind_in_stack_order() {
+        // 多层 guarded 覆盖按栈序撤销；乱序 drop 也只弹自己那一次注册。
+        let (_, mut gw) = make_gateway();
+        gw.register(Box::new(NamedReplyTool {
+            name: "stacked",
+            reply: "base",
+        }));
+        let guard_first = gw.register_guarded(Arc::new(NamedReplyTool {
+            name: "stacked",
+            reply: "first",
+        }));
+        let guard_second = gw.register_guarded(Arc::new(NamedReplyTool {
+            name: "stacked",
+            reply: "second",
+        }));
+
+        call_stacked(&gw, "second").await;
+        // 乱序：先 drop 早注册的 first，栈顶仍是 second。
+        drop(guard_first);
+        call_stacked(&gw, "second").await;
+        drop(guard_second);
+        call_stacked(&gw, "base").await;
+    }
+
+    #[tokio::test]
+    async fn dropping_last_guarded_registration_removes_the_tool() {
+        let (_, mut gw) = make_gateway();
+        assert!(!gw.owns_tool("stacked"));
+        {
+            let _guard = gw.register_guarded(Arc::new(NamedReplyTool {
+                name: "stacked",
+                reply: "temp",
+            }));
+            assert!(gw.owns_tool("stacked"));
+            assert!(gw.path_bindings("stacked").is_some());
+        }
+        // 空栈不留残键：工具回到未注册状态。
+        assert!(!gw.owns_tool("stacked"));
+        assert!(gw.tool_specs().iter().all(|spec| spec.name != "stacked"));
+    }
+
+    #[tokio::test]
+    async fn register_replaces_same_name_tool_without_guard_restore() {
+        // 回归：register 保持旧 insert 语义——同名整体替换；之后 drop 早先的
+        // guard 不会把被替换的版本恢复回来。
+        let (_, mut gw) = make_gateway();
+        let guard = gw.register_guarded(Arc::new(NamedReplyTool {
+            name: "stacked",
+            reply: "guarded",
+        }));
+        gw.register(Box::new(NamedReplyTool {
+            name: "stacked",
+            reply: "inserted",
+        }));
+
+        call_stacked(&gw, "inserted").await;
+        drop(guard);
+        call_stacked(&gw, "inserted").await;
     }
 }

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { providerCatalog, settingsGet } from "./ipc";
 import { errText } from "./format";
-import type { HostedWebRoute, ProviderPreset, ProviderProtocol } from "./types";
+import type { HostedWebRoute, PresetModelInfo, ProviderPreset, ProviderProtocol } from "./types";
 import { RUNTIME_SETTINGS_CHANGED_EVENT } from "./onboarding";
 
 export interface ProviderChoice {
@@ -24,6 +24,8 @@ export interface ProviderChoice {
   ready: boolean;
   /** 实际请求协议，用于只展示该线路真正支持的模型参数。 */
   protocol?: ProviderProtocol;
+  /** 命中预设时携带的候选模型能力标注（C2：图片能力的权威来源）。 */
+  presetModels?: PresetModelInfo[];
 }
 
 /**
@@ -93,6 +95,52 @@ function readCustom(): Record<string, string[]> {
   }
 }
 
+/** 该服务下用户实际用过并被本地记住的模型名（图片理解等二级下拉合并展示用）。 */
+export function rememberedModelsFor(providerName: string): string[] {
+  return readCustom()[providerName] ?? [];
+}
+
+/** 同步快照的新鲜度窗口：窗口内重复点开同一服务不再自动请求。 */
+export const PROVIDER_SYNC_TTL_MS = 5 * 60_000;
+/** 单服务持久化的同步模型上限（防超大目录撑爆 localStorage）。 */
+const SYNCED_MODEL_CAP = 64;
+const SYNCED_KEY = "r-code.provider.synced";
+
+interface SyncedModels {
+  at: number;
+  models: string[];
+}
+
+function readSynced(): Record<string, SyncedModels> {
+  try {
+    const raw = window.localStorage.getItem(SYNCED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, SyncedModels>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 持久化一次模型同步结果（设置页点开已保存服务时自动写入）。 */
+export function rememberSyncedModels(providerName: string, models: string[]): void {
+  const trimmed = Array.from(
+    new Set(models.map((model) => model.trim()).filter(Boolean)),
+  ).slice(0, SYNCED_MODEL_CAP);
+  if (trimmed.length === 0) return;
+  try {
+    const all = readSynced();
+    all[providerName] = { at: Date.now(), models: trimmed };
+    window.localStorage.setItem(SYNCED_KEY, JSON.stringify(all));
+  } catch {
+    /* 受限环境下不持久化，不影响本次使用 */
+  }
+}
+
+/** 最近一次同步快照；从未同步过为 null。`at` 供新鲜度判断。 */
+export function syncedModelsFor(providerName: string): SyncedModels | null {
+  return readSynced()[providerName] ?? null;
+}
+
 export function rememberModel(providerName: string, model: string): void {
   const trimmed = model.trim();
   if (!trimmed) return;
@@ -137,9 +185,18 @@ async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
   const choices = Object.entries(response.config.providers ?? {}).map(([name, config]) => {
     const model = config.model || "";
     const preset = presetOf(config.provider_kind ?? name);
-    // 配置里的模型排最前，其后是预设候选，最后是用户手输过的。
+    // 配置里的模型排最前，其后是预设候选、自动同步快照，最后是用户手输过的。
+    // 预设候选带能力标注（vision）；同步/手填模型能力未知，需要时经
+    // resolveImageCapability 单独查询。
     const models = Array.from(
-      new Set([model, ...(preset?.models ?? []), ...(custom[name] ?? [])].filter(Boolean))
+      new Set(
+        [
+          model,
+          ...(preset?.models ?? []).map((entry) => entry.id),
+          ...(syncedModelsFor(name)?.models ?? []),
+          ...(custom[name] ?? []),
+        ].filter(Boolean)
+      )
     );
     return {
       name,
@@ -149,6 +206,7 @@ async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
       models,
       ready: Boolean(response.provider_status?.[name]?.ready),
       protocol: response.provider_status?.[name]?.effective_protocol ?? config.protocol ?? preset?.protocol,
+      presetModels: preset?.models,
     };
   });
   return {

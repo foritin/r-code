@@ -8,9 +8,18 @@ import {
   type LocalFileTarget,
 } from "../../lib/ipc";
 import { useAppStore } from "../../store/app";
-import { IconClose, IconEye, IconFile, IconFolderOpen } from "../icons";
+import { IconClose, IconEye, IconFolderOpen } from "../icons";
+import { FileTypeIcon } from "./FileTypeIcon";
 
 const RASTER_EXTENSION = /\.(?:png|jpe?g|gif|webp|bmp|avif)$/i;
+
+/** 链接 href 可能带 :行:列、:行-行 或 #L 片段；剥离后才是可用于扩展名识别的路径。 */
+function fileIconPath(href: string): string {
+  return href
+    .split("#", 1)[0]
+    .replace(/:\d+(?::\d+)?(?:-\d+)?$/, "")
+    .split("?", 1)[0];
+}
 
 export function isLocalRasterReference(reference: string): boolean {
   const withoutFragment = reference.replace(/#L\d+(?:C\d+)?$/i, "");
@@ -82,7 +91,7 @@ export function LocalFileLink({
       aria-busy={opening || undefined}
       onClick={() => void open()}
     >
-      <IconFile width={13} height={13} />
+      <FileTypeIcon path={fileIconPath(href)} size={13} />
       <span>{children}</span>
     </button>
   );

@@ -234,6 +234,16 @@ test("main and child activity use semantic collapsed groups and runtime-specific
       .flatMap((turn) => turn.items)
       .filter((entry) => entry.kind === "tool_group")
       .map((entry) => [entry.groupKind, entry.tools.length]);
+    const interleavedCodexCommands = buildTimelineTurns([
+      timelineTools[2],
+      { kind: "context", id: "reasoning-between", t: 3, label: "Codex 思考摘要", detail: "继续核对", collapsible: true },
+      timelineTools[3],
+    ])[0].items.map((entry) => ({
+      kind: entry.kind,
+      groupKind: entry.kind === "tool_group" ? entry.groupKind : null,
+      count: entry.kind === "tool_group" ? entry.tools.length : 1,
+      label: entry.kind === "context" ? entry.label : null,
+    }));
     const narratedTurn = buildTimelineTurns([
       { kind: "agent", id: "narration-a", t: 1, text: "现在修改文件。", streaming: false },
       { kind: "agent", id: "file-result", t: 1, text: "已定位 [实现文件](src/main.rs#L2C3)。", streaming: false },
@@ -283,6 +293,7 @@ test("main and child activity use semantic collapsed groups and runtime-specific
     return {
       childGroups,
       mainGroups,
+      interleavedCodexCommands,
       narratedTurn,
       identities,
       activeGroup,
@@ -295,18 +306,25 @@ test("main and child activity use semantic collapsed groups and runtime-specific
   });
 
   assert.deepEqual(result.childGroups, [
-    { kind: "tool_group", groupKind: "lookup", count: 2 },
+    // read_file 现在是文件行（彩色类型图标 + 读取动词），与 list_files 分属
+    // file/lookup 两种 kind；单条目不归组，保持独立的 tool 条目。
+    { kind: "tool", groupKind: null, count: 1 },
+    { kind: "tool", groupKind: null, count: 1 },
     { kind: "tool_group", groupKind: "command", count: 2 },
     { kind: "tool_group", groupKind: "file", count: 2 },
   ]);
-  assert.deepEqual(result.mainGroups, [["lookup", 2], ["command", 2]]);
+  assert.deepEqual(result.mainGroups, [["file", 1], ["lookup", 1], ["command", 2]]);
+  assert.deepEqual(result.interleavedCodexCommands, [
+    { kind: "tool_group", groupKind: "command", count: 2, label: null },
+    { kind: "context", groupKind: null, count: 1, label: "Codex 思考摘要" },
+  ], "public reasoning rows stay available without splitting one Codex command run");
   assert.deepEqual(result.narratedTurn.filter((entry) => entry.kind === "context"), []);
   assert.deepEqual(
     result.narratedTurn.map((entry) => entry.kind === "agent" ? entry.text : `${entry.kind}:${entry.groupKind}`),
     [
       "现在修改文件。",
       "已定位 [实现文件](src/main.rs#L2C3)。",
-      "tool_group:lookup",
+      "tool_group:file",
       "接着运行验证。",
       "tool_group:command",
       "修改与验证已完成。",
@@ -329,6 +347,6 @@ test("main and child activity use semantic collapsed groups and runtime-specific
   assert.match(result.identities[0].className, /runtime-rcode/);
   assert.match(result.identities[1].className, /runtime-codex/);
   assert.deepEqual(result.activeGroup, { expanded: "false", details: 0 });
-  assert.deepEqual(result.titles, ["已检查 38 项", "已编辑 7 个文件", "正在执行 4 个命令"]);
+  assert.deepEqual(result.titles, ["已探索 38 项", "已处理 7 个文件", "正在执行 4 个命令"]);
   await page.close();
 });

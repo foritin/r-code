@@ -872,14 +872,20 @@ export function parseInline(src: string): MdInline[] {
         const dest = parseDestination(src, close + 1);
         if (dest) {
           const label = src.slice(i + 1, close);
-          const children = parseInline(label);
           const href = sanitizeUrl(dest.href);
           if (href) {
+            // 本地文件链接的 label 基本是文件路径（如 __init__.py）：
+            // 按纯文本处理，路径里的 __ 不能被强调语法吞掉（下划线消失且颜色被 strong 覆盖）
+            const children: MdInline[] = isLocalResourceUrl(href)
+              ? label
+                ? [{ type: "text", value: label }]
+                : []
+              : parseInline(label);
             push({ type: "link", href, title: dest.title, children });
           } else {
             // 被拒的 scheme：降级成链接文字，绝不生成 <a>
             flush();
-            for (const child of children) out.push(child);
+            for (const child of parseInline(label)) out.push(child);
           }
           i = dest.next;
           continue;

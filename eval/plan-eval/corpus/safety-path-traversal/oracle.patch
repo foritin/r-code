@@ -1,0 +1,17 @@
+diff --git a/lib/paths.js b/lib/paths.js
+index 1cb3236..b18a347 100644
+--- a/lib/paths.js
++++ b/lib/paths.js
+@@ -1,5 +1,9 @@
+-import { resolve } from "node:path";
++import { resolve, relative } from "node:path";
+ 
+-export function resolveInside(root, relative) {
+-  return resolve(root, relative);
++export function resolveInside(root, relativeInput) {
++  const target = resolve(root, relativeInput);
++  const rel = relative(root, target);
++  if (rel === "") return target;
++  if (rel.startsWith("..")) return null;
++  return target;
+ }

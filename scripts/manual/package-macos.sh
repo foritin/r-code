@@ -8,7 +8,7 @@ bootstrap=true
 
 usage() {
   printf '%s\n' \
-    'Usage: bash ./scripts/build-macos.sh [options]' \
+    'Usage: bash ./scripts/manual/package-macos.sh [options]' \
     '' \
     'Options:' \
     '  --target <triple>   aarch64-apple-darwin (default) or x86_64-apple-darwin' \

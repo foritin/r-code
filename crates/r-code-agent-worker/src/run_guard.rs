@@ -29,6 +29,10 @@ const fn default_no_progress_rounds() -> u32 {
 const fn default_replay_detection() -> bool {
     true
 }
+/// replay 触发需要的连续一致轮数。取 3 而不是 2：上下文压缩可能裁掉上一轮工具
+/// 结果，模型相邻轮重发同一读调用是合法恢复行为，只构成一次重复；真正的卡循环
+/// 会连续三轮原样重放，代价也仅是多烧一轮。
+const REPLAY_TRIP_ROUNDS: u32 = 3;
 const fn default_diff_file_limit() -> u32 {
     60
 }
@@ -336,6 +340,8 @@ pub struct RunLoopGuard {
     same_error_streaks: HashMap<String, u32>,
     rounds_since_progress: u32,
     previous_round_signature: Option<Vec<String>>,
+    /// 连续完全一致的轮数（含当前轮）；相邻不同调用或错误轮都会归零。
+    replay_streak: u32,
     touched_files: HashSet<String>,
     touched_bytes: u64,
     test_failures_in_a_row: u32,
@@ -353,6 +359,7 @@ impl RunLoopGuard {
             same_error_streaks: HashMap::new(),
             rounds_since_progress: 0,
             previous_round_signature: None,
+            replay_streak: 0,
             touched_files: HashSet::new(),
             touched_bytes: 0,
             test_failures_in_a_row: 0,
@@ -516,24 +523,34 @@ impl RunLoopGuard {
             }
         }
 
-        // replay：相邻两轮的工具集合 + 结果完全相同。
-        // 含错误结果的轮次不参与 replay：它们交给同错连败 / 测试连败计数，否则
-        // “同错 3 次”会在第 2 轮就被 replay 抢断，同错阈值永远无法生效。
+        // replay：连续 REPLAY_TRIP_ROUNDS 轮的工具集合 + 成败形态完全相同才触发。
+        // 含错误结果的轮次不参与 replay 也不延续连胜：它们交给同错连败 / 测试连败
+        // 计数，否则“同错 3 次”会在第 2 轮就被 replay 抢断，同错阈值永远无法生效。
         let round_has_error = round.iter().any(|observation| {
             observation.is_error
                 || observation.error_code.is_some()
                 || matches!(observation.exit_code, Some(code) if code != 0)
         });
         round_signature.sort_unstable();
+        let matches_previous = self
+            .previous_round_signature
+            .as_ref()
+            .is_some_and(|previous| previous == &round_signature);
         if self.policy.replay_detection && !round_has_error {
-            if let Some(previous) = &self.previous_round_signature {
-                if previous == &round_signature {
-                    return self.trip(
-                        TripReason::NoProgress,
-                        "相邻两轮工具调用与结果完全相同（replay 检测）".to_string(),
-                    );
-                }
+            self.replay_streak = if matches_previous {
+                self.replay_streak.saturating_add(1)
+            } else {
+                1
+            };
+            if self.replay_streak >= REPLAY_TRIP_ROUNDS {
+                return self.trip(
+                    TripReason::NoProgress,
+                    format!("连续 {REPLAY_TRIP_ROUNDS} 轮工具调用与结果完全相同（replay 检测）"),
+                );
             }
+        } else {
+            // 关闭检测或错误轮：连胜归零，保持“相邻不同调用即打断”的语义。
+            self.replay_streak = 0;
         }
         self.previous_round_signature = Some(round_signature);
 
@@ -809,9 +826,40 @@ mod tests {
             ..first[0].clone()
         }];
         assert!(guard.observe_tool_round(&first).is_none());
-        let trip = guard.observe_tool_round(&same_but_volatile).unwrap();
+        assert!(
+            guard.observe_tool_round(&same_but_volatile).is_none(),
+            "两次相同只构成一次重复，压缩后重读这类合法恢复不应触发"
+        );
+        let trip = guard
+            .observe_tool_round(&same_but_volatile)
+            .expect("连续第三轮完全一致必须触发");
         assert_eq!(trip.reason, TripReason::NoProgress);
         assert!(trip.detail.contains("replay"));
+        assert!(trip.detail.contains("3"));
+    }
+
+    #[test]
+    fn replay_detection_requires_consecutive_identical_rounds() {
+        let mut guard = RunLoopGuard::new(RunBudgetPolicy::default());
+        let repeat = [edit("a.rs", "x", "y", false)];
+        let other = [edit("a.rs", "x", "z", false)];
+        // X、Y、X、X：中间夹一轮不同调用会打断连胜，两次重复不触发。
+        for round in [&repeat, &other, &repeat, &repeat] {
+            assert!(guard.observe_tool_round(round).is_none());
+        }
+        // 补上第三轮连续一致的 X 才触发。
+        assert!(guard.observe_tool_round(&repeat).is_some());
+    }
+
+    #[test]
+    fn replay_detection_error_round_resets_the_streak() {
+        let mut guard = RunLoopGuard::new(RunBudgetPolicy::default());
+        let ok = [edit("a.rs", "x", "y", false)];
+        let failed = [edit("a.rs", "x", "y", true)];
+        // X、X（连胜 2）、错误轮（归零）、X、X：恢复后的两次重复不应立即触发。
+        for round in [&ok, &ok, &failed, &ok, &ok] {
+            assert!(guard.observe_tool_round(round).is_none());
+        }
     }
 
     #[test]

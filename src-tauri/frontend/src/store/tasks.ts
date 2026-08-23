@@ -25,7 +25,7 @@ import {
 
 /** Deck / Inbox 共用的「待决项」：一条待批权限或一个 review_ready 任务。 */
 export interface NeedsYouItem {
-  kind: "permission" | "review_ready";
+  kind: "permission" | "review_ready" | "plan_entry_offer";
   task: Task;
   permission?: PermissionRequest;
   /** 等待时长起点（created_at） */
@@ -99,6 +99,10 @@ function detailSignature(detail: TaskDetail | undefined) {
     `permissions:${detail.permissions.map((item) => `${item.id}:${item.decision}:${item.decided_at ?? ""}`).join(",")}`,
     `verifications:${detail.verifications.map((item) => `${item.id}:${item.status}:${item.exit_code ?? ""}:${item.ended_at ?? ""}`).join(",")}`,
     `queue:${detail.queued_messages.map((item) => `${item.id}:${item.state}:${item.priority}:${item.updated_at}`).join(",")}`,
+    // Plan 入口建议的待决决定必须参与签名，否则轮询永远观测不到新建议。
+    `plan_offer:${detail.pending_plan_entry_offer
+      ? `${detail.pending_plan_entry_offer.id}:${detail.pending_plan_entry_offer.revision}:${detail.pending_plan_entry_offer.state}`
+      : ""}`,
   ].join("\u001f"));
 }
 
@@ -321,11 +325,13 @@ let reviewReadyCache: { tasks: Task[] | null; value: Task[] } = { tasks: null, v
 let pendingPermissionsCache: TaskDetailSelectorCache<NeedsYouItem[]> = { tasks: null, details: null, value: [] };
 let needsYouCache: {
   permissions: NeedsYouItem[] | null;
+  planOffers?: number;
   reviewTasks: Task[] | null;
   value: NeedsYouItem[];
 } = { permissions: null, reviewTasks: null, value: [] };
 let needsYouTaskIdsCache: {
   permissions: NeedsYouItem[] | null;
+  planOffers?: number;
   reviewTasks: Task[] | null;
   value: Set<string>;
 } = { permissions: null, reviewTasks: null, value: new Set() };
@@ -377,7 +383,22 @@ export const selectPendingPermissions = (s: TasksState): NeedsYouItem[] => {
 export const selectNeedsYou = (s: TasksState): NeedsYouItem[] => {
   const perms = selectPendingPermissions(s);
   const reviewTasks = selectReviewReady(s);
-  if (needsYouCache.permissions === perms && needsYouCache.reviewTasks === reviewTasks) {
+  // Plan 入口建议：非当前 task 只投影 Needs You，不能跨任务抢焦点（docs §6.5）。
+  const planOffers: NeedsYouItem[] = [];
+  for (const detail of Object.values(s.details)) {
+    if (detail?.pending_plan_entry_offer) {
+      planOffers.push({
+        kind: "plan_entry_offer",
+        task: detail.task,
+        since: detail.task.updated_at,
+      });
+    }
+  }
+  if (
+    needsYouCache.permissions === perms
+    && needsYouCache.reviewTasks === reviewTasks
+    && needsYouCache.planOffers === planOffers.length
+  ) {
     return needsYouCache.value;
   }
   const reviews = reviewTasks.map((t) => ({
@@ -385,8 +406,8 @@ export const selectNeedsYou = (s: TasksState): NeedsYouItem[] => {
     task: t,
     since: t.updated_at,
   }));
-  const value = [...perms, ...reviews].sort((a, b) => a.since.localeCompare(b.since));
-  needsYouCache = { permissions: perms, reviewTasks, value };
+  const value = [...perms, ...reviews, ...planOffers].sort((a, b) => a.since.localeCompare(b.since));
+  needsYouCache = { permissions: perms, reviewTasks, planOffers: planOffers.length, value };
   return value;
 };
 
@@ -394,14 +415,19 @@ export const selectNeedsYou = (s: TasksState): NeedsYouItem[] => {
 export const selectNeedsYouTaskIds = (s: TasksState): Set<string> => {
   const permissions = selectPendingPermissions(s);
   const reviewTasks = selectReviewReady(s);
+  const planOfferIds = Object.values(s.details)
+    .filter((detail) => detail?.pending_plan_entry_offer)
+    .map((detail) => detail!.task.id);
   if (
     needsYouTaskIdsCache.permissions === permissions
     && needsYouTaskIdsCache.reviewTasks === reviewTasks
+    && needsYouTaskIdsCache.planOffers === planOfferIds.length
   ) {
     return needsYouTaskIdsCache.value;
   }
   const ids = new Set(permissions.map((i) => i.task.id));
   for (const t of reviewTasks) ids.add(t.id);
-  needsYouTaskIdsCache = { permissions, reviewTasks, value: ids };
+  for (const id of planOfferIds) ids.add(id);
+  needsYouTaskIdsCache = { permissions, reviewTasks, planOffers: planOfferIds.length, value: ids };
   return ids;
 };

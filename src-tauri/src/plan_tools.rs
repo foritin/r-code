@@ -13,9 +13,15 @@ use r_code_core::plan::{
     PlanItemDraft, PlanItemState, PlanQuestionDraft, PlanView, PublishPlanInput,
     RequestPlanQuestionsInput, RequestScopeDecisionInput, UpdatePlanItemInput,
 };
+use r_code_core::plan_entry::{PlanComplexitySignal, ResolvedPlanRuntimeProfile};
 use r_code_gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
-use r_code_store::{Database, PlanStore, SessionBranchRepository, TaskRepository};
+use r_code_store::{Database, PlanEntryStore, PlanStore, SessionBranchRepository, TaskRepository};
 use serde::Deserialize;
+
+use crate::plan_policy::{
+    customer_copy_template, provider_route_snapshot, sanitize_reason_for_audit,
+    ArmedPlanSuggestion, PlanSuggestionGate, PROVIDER_PROFILE_VERSION,
+};
 
 fn invalid(message: impl Into<String>) -> ProductError {
     ProductError::StateMachineError(message.into())
@@ -86,15 +92,28 @@ struct EnterPlanModeArgs {
     reason: String,
 }
 
+/// 宿主解析的冻结 Plan profile 来源（docs §14.2）：按任务绑定的 Provider route
+/// 现场解析；工具与存储层都不读取 Provider 设置或证据文件。
+pub type TaskPlanProfileResolver = Arc<dyn Fn(&str) -> ResolvedPlanRuntimeProfile + Send + Sync>;
+
 #[derive(Clone)]
 pub struct EnterPlanModeTool {
     db: Arc<Database>,
     plans: Arc<PlanStore>,
+    profile_resolver: TaskPlanProfileResolver,
 }
 
 impl EnterPlanModeTool {
-    pub fn new(db: Arc<Database>, plans: Arc<PlanStore>) -> Self {
-        Self { db, plans }
+    pub fn new(
+        db: Arc<Database>,
+        plans: Arc<PlanStore>,
+        profile_resolver: TaskPlanProfileResolver,
+    ) -> Self {
+        Self {
+            db,
+            plans,
+            profile_resolver,
+        }
     }
 }
 
@@ -105,7 +124,7 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        "Safely change the current main task from Agent mode to Plan mode before making writes. Prefer this for high-complexity work: changes spanning multiple interdependent files or subsystems, migrations, design tradeoffs or impact assessments the user must approve, or anything that cannot be verified safely in one pass. Also use it when the user explicitly requests a structured plan. Do not use it for a single, isolated, immediately verifiable change. This ends the current Agent run and the host resumes the same request with read-only Plan tools. Returning to Agent mode requires explicit user approval; never use this to restart an already approved/executing Plan."
+        "Safely change the current main task from Agent mode to Plan mode. Call this only after the user explicitly chose Plan mode or explicitly asked for a structured plan first — explicit consent needs no second confirmation. Never use this for automatic complexity routing; when planning should merely be suggested to the user, call propose_plan_mode instead. Do not use it for a single, isolated, immediately verifiable change. This ends the current Agent run and the host resumes the same request with read-only Plan tools. Returning to Agent mode requires explicit user approval; never use this to restart an already approved/executing Plan."
     }
 
     fn risk_level(&self) -> RiskLevel {
@@ -160,11 +179,16 @@ impl Tool for EnterPlanModeTool {
             return Err(invalid("enter_plan_mode reason cannot be blank"));
         }
         let branch = SessionBranchRepository::new(&self.db).ensure_active(&context.task_id)?;
-        let view = self.plans.enter_plan_mode_and_stage_continuation(
-            &context.task_id,
-            &branch.id,
-            ENTER_PLAN_CONTINUATION,
-        )?;
+        let profile = (self.profile_resolver)(&context.task_id);
+        let view = self
+            .plans
+            .enter_plan_mode_and_stage_continuation_with_profile(
+                &context.task_id,
+                &branch.id,
+                ENTER_PLAN_CONTINUATION,
+                &profile,
+                context.origin_request_key.as_deref(),
+            )?;
         let content = serde_json::to_string(&serde_json::json!({
             "entered_plan_mode": true,
             "reason": args.reason.trim(),
@@ -174,6 +198,176 @@ impl Tool for EnterPlanModeTool {
         .map_err(|error| invalid(format!("serialize enter_plan_mode result: {error}")))?;
         Ok(ToolExecutionResult::suspend_for_user(content)
             .with_metadata(authoritative_plan_metadata(&view)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plan 入口建议（docs/plan-mode-dual-track-gate.md §9）。模型只能建议「先制定
+// 计划」，不能替客户切换模式：建议是 pending offer，任务保持原 Agent 模式。
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposePlanModeArgs {
+    reason: String,
+    signals: Vec<PlanComplexitySignal>,
+}
+
+#[derive(Clone)]
+pub struct ProposePlanModeTool {
+    db: Arc<Database>,
+    offers: Arc<PlanEntryStore>,
+    gate: Arc<PlanSuggestionGate>,
+}
+
+impl ProposePlanModeTool {
+    pub fn new(
+        db: Arc<Database>,
+        offers: Arc<PlanEntryStore>,
+        gate: Arc<PlanSuggestionGate>,
+    ) -> Self {
+        Self { db, offers, gate }
+    }
+}
+
+#[async_trait]
+impl Tool for ProposePlanModeTool {
+    fn name(&self) -> &str {
+        "propose_plan_mode"
+    }
+
+    fn description(&self) -> &str {
+        "Suggest to the user that this request should start with a structured plan, without switching modes yourself. Call this once when the request is genuinely complex: it spans multiple interdependent subsystems, involves data migration / protocol / persistence compatibility, needs a design or product decision the user must approve, a wrong attempt is expensive to roll back, or it cannot be verified safely in one pass. Submit 1-5 matching signals and a short internal reason. The host shows the user a one-time dialog and this run stops to wait for their decision. Do not call this for a single isolated fix, explanations, reviews, read-only checks, after the user asked to work directly, or twice for the same task."
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        &[]
+    }
+
+    fn requires_existing_path(&self) -> bool {
+        false
+    }
+
+    fn requires_workspace_scope(&self) -> bool {
+        false
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "Short internal reason for the suggestion. Audited locally only; never shown to the user."
+                },
+                "signals": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "enum": PlanComplexitySignal::ALL.iter().map(|signal| signal.as_str()).collect::<Vec<_>>(),
+                        "description": "Controlled complexity signals. Pick only what truly applies."
+                    }
+                }
+            },
+            "required": ["reason", "signals"]
+        })
+    }
+
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        Err(context_required())
+    }
+
+    async fn execute_with_context(
+        &self,
+        input: serde_json::Value,
+        context: &ToolExecutionContext,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        // 身份三重绑定：宿主 request key、宿主武装登记、任务模式。模型不能传入
+        // task_id / run_id / request_key / 目标模式（deny_unknown_fields 兜底）。
+        let Some(request_key) = context.origin_request_key.as_deref() else {
+            return Err(invalid(
+                "propose_plan_mode requires the host-bound origin request key",
+            ));
+        };
+        let Some(armed) = self.gate.armed(&context.run_id) else {
+            return Err(invalid(
+                "propose_plan_mode is not available for this run (not suggestion-eligible)",
+            ));
+        };
+        require_task_mode(
+            &self.db,
+            &context.task_id,
+            &[TaskMode::Ask, TaskMode::Edit, TaskMode::Auto],
+            "propose_plan_mode",
+        )?;
+        let args: ProposePlanModeArgs = decode(input)?;
+        let reason = sanitize_reason_for_audit(&args.reason);
+        if reason.is_empty() {
+            return Err(invalid("propose_plan_mode reason cannot be blank"));
+        }
+        if args.signals.is_empty() || args.signals.len() > 5 {
+            return Err(invalid("propose_plan_mode requires 1-5 signals"));
+        }
+        let mut unique = std::collections::HashSet::new();
+        if !args.signals.iter().all(|signal| unique.insert(*signal)) {
+            return Err(invalid("propose_plan_mode signals must be unique"));
+        }
+        let Some(primary_signal) = PlanComplexitySignal::primary_of(&args.signals) else {
+            return Err(invalid("propose_plan_mode signals could not be ranked"));
+        };
+        let copy = customer_copy_template(primary_signal);
+        let branch = SessionBranchRepository::new(&self.db).ensure_active(&context.task_id)?;
+        let task = TaskRepository::new(&self.db)
+            .get(&context.task_id)?
+            .ok_or_else(|| invalid(format!("task does not exist: {}", context.task_id)))?;
+        let snapshot = provider_route_snapshot(&armed.route, PROVIDER_PROFILE_VERSION);
+        let offer = self
+            .offers
+            .create_offer(&r_code_store::CreatePlanEntryOfferInput {
+                task_id: context.task_id.clone(),
+                branch_id: branch.id,
+                source_run_id: context.run_id.clone(),
+                request_key: request_key.to_string(),
+                original_mode: task.mode.to_string(),
+                reason_audit: reason,
+                signals: args.signals.clone(),
+                primary_signal,
+                customer_copy_key: copy.key.to_string(),
+                customer_copy_version: copy.version,
+                provider: snapshot,
+                eligibility_profile_version: armed.control.eligibility_profile_version.clone(),
+                evidence_version: armed.control.evidence_version.clone(),
+                resolved_plan_runtime_profile: armed.profile.clone(),
+            })?;
+        let content = serde_json::to_string(&serde_json::json!({
+            "proposed": true,
+            "primary_signal": primary_signal.as_str(),
+            "instruction": "Stop this Agent run and wait. The host is asking the user whether to start with a structured plan; do not continue editing while the suggestion is pending.",
+        }))
+        .map_err(|error| invalid(format!("serialize propose_plan_mode result: {error}")))?;
+        Ok(
+            ToolExecutionResult::suspend_for_user(content).with_metadata(serde_json::json!({
+                "r_code_plan_entry_offer": &offer,
+                "plan_entry_offer_id": &offer.id,
+            })),
+        )
+    }
+}
+
+/// 预留：宿主武装登记的只读探针（诊断与测试用）。
+impl ProposePlanModeTool {
+    pub fn gate_armed(&self, run_id: &str) -> Option<ArmedPlanSuggestion> {
+        self.gate.armed(run_id)
     }
 }
 
@@ -723,6 +917,7 @@ mod tests {
             tool_call_id: tool_call_id.to_string(),
             caller: Some("agent".to_string()),
             access_mode: ProjectAccessMode::RiskBased,
+            origin_request_key: None,
         }
     }
 
@@ -736,7 +931,13 @@ mod tests {
             .ensure_active(&task.id)
             .unwrap();
         let plans = Arc::new(PlanStore::new(db.clone(), temp.path().join("plans")));
-        let tool = EnterPlanModeTool::new(db.clone(), plans.clone());
+        let tool = EnterPlanModeTool::new(
+            db.clone(),
+            plans.clone(),
+            std::sync::Arc::new(|_task_id| {
+                r_code_core::plan_entry::ResolvedPlanRuntimeProfile::baseline()
+            }),
+        );
 
         let result = tool
             .execute_with_context(

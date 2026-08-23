@@ -1,0 +1,13 @@
+diff --git a/lib/retry.js b/lib/retry.js
+index b476181..74f3cb6 100644
+--- a/lib/retry.js
++++ b/lib/retry.js
+@@ -1,7 +1,7 @@
+ export async function retry(fn, attempts = 3) {
+   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+     try {
+-      fn();
++      await fn();
+       return true;
+     } catch (error) {
+       if (attempt === attempts) throw error;

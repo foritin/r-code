@@ -1,0 +1,39 @@
+diff --git a/lib/backfill.js b/lib/backfill.js
+new file mode 100644
+index 0000000..278ecc6
+--- /dev/null
++++ b/lib/backfill.js
+@@ -0,0 +1,19 @@
++function slugify(title) {
++  return String(title)
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, "-")
++    .replace(/^-+|-+$/g, "");
++}
++
++export function backfill(posts) {
++  const seen = new Set(posts.map((post) => post.slug).filter(Boolean));
++  return posts.map((post) => {
++    if (post.slug) return post;
++    const base = slugify(post.title) || "post";
++    let slug = base;
++    let serial = 2;
++    while (seen.has(slug)) slug = base + "-" + serial++;
++    seen.add(slug);
++    return { ...post, slug };
++  });
++}
+diff --git a/lib/index.js b/lib/index.js
+index f26a89c..9782de7 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1,5 +1,8 @@
++import { backfill } from "./backfill.js";
++
+ export function buildIndex(posts) {
++  const complete = backfill(posts);
+   const index = new Map();
+-  for (const post of posts) index.set(post.slug, post.id);
++  for (const post of complete) index.set(post.slug, post.id);
+   return index;
+ }

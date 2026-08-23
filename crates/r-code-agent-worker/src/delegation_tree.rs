@@ -410,6 +410,7 @@ mod tests {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         }
     }
 

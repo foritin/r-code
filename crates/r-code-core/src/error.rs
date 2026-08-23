@@ -93,6 +93,88 @@ pub enum ProductError {
     #[error("模型服务未返回可显示内容，请重试或检查模型线路配置")]
     EmptyAssistantResponse,
 
+    /// 模型输出在 max_tokens 处被截断且自动升档重试后仍无正文——推理耗尽了
+    /// 全部输出预算。这是配置/任务规模问题，不是线路故障，文案必须把用户
+    /// 引向调大「最大输出」而不是检查接口。
+    #[error("输出预算被推理耗尽（尝试 {attempted} / 配置 {configured} / 服务上限 {provider_ceiling}）。请在设置中调大「每轮最大输出」或降低推理强度")]
+    OutputBudgetExhausted {
+        attempted: u32,
+        /// 用户/自动配置的单轮输出上限。
+        configured: u32,
+        /// Provider 声明的服务端上限（0 = 未声明）。
+        provider_ceiling: u32,
+        /// 冻结请求的 reasoning effort（None = 未配置）。
+        reasoning_effort: Option<String>,
+    },
+
+    /// 请求在派发前已因上下文 headroom 被钳制，随后仍收到空 `MaxTokens` 截断。
+    /// 这是上下文预算问题：重放只会再次超窗，不重试（docs §6.5）。
+    #[error("CONTEXT_CONSTRAINED_OUTPUT_EXHAUSTED：上下文余量已把输出钳制到 {effective_output}，推理耗尽后无产物。请压缩上下文或降低推理强度")]
+    ContextConstrainedOutputExhausted { effective_output: u32 },
+
+    /// 发送前硬闸门无法获得最低可执行输出额度。Provider 调用次数必须为 0，
+    /// 不得把额度强制改成 1（docs §2.3）。
+    #[error("OUTPUT_HEADROOM_BELOW_MINIMUM：有效输出额度 {effective_output} 低于 {minimum} 的最低要求，已取消发送。请压缩上下文或降低每轮输出上限")]
+    OutputHeadroomBelowMinimum { effective_output: u32, minimum: u32 },
+
+    /// 整理（最多两次强制折叠/裁剪）后输入+输出仍超窗。Provider 调用次数为 0，
+    /// 不得跳出循环后继续发送（docs §6.4）。
+    #[error("CONTEXT_PREFLIGHT_FAILED：强制整理后请求仍超出模型窗口（估算输入 {estimated_input} + 输出 {output_reserve} > 窗口 {window}）。请开启新会话或手动压缩历史")]
+    ContextPreflightFailed {
+        estimated_input: u64,
+        output_reserve: u32,
+        window: u32,
+    },
+
+    /// 附件 ref 不存在（docs §11）。
+    #[error("ATTACHMENT_NOT_FOUND：附件 {attachment_id} 不存在或已被清理")]
+    AttachmentNotFound { attachment_id: String },
+
+    /// 附件 ref 不属于当前 task（docs §11）。
+    #[error("ATTACHMENT_OWNERSHIP_MISMATCH：附件 {attachment_id} 不属于当前会话")]
+    AttachmentOwnershipMismatch { attachment_id: String },
+
+    /// 消息内附件元数据与数据库权威元数据不一致（docs §11）。
+    #[error(
+        "ATTACHMENT_METADATA_MISMATCH：附件 {attachment_id} 的元数据与存储记录不一致（{detail}）"
+    )]
+    AttachmentMetadataMismatch {
+        attachment_id: String,
+        detail: String,
+    },
+
+    /// 排队消息或 Plan 冻结的图片路由与当前任务路由不一致（docs §11）。
+    #[error("ATTACHMENT_ROUTE_DRIFT：排队消息的图片路由与当前任务不一致，已标记失败；不会改用其他引擎重新解释")]
+    AttachmentRouteDrift { detail: String },
+
+    /// 已确认多模态但目录缺少视觉预算 profile（docs §6.2）。不得回退到
+    /// Base64 字符估算或 OCR。
+    #[error("VISION_BUDGET_PROFILE_MISSING：模型 {model} 声明支持图片但缺少视觉预算 profile，已取消发送")]
+    VisionBudgetProfileMissing { model: String },
+
+    /// 协议适配器不能发送图片块（docs §5.1）。不得改走 OCR。
+    #[error("VISION_WIRE_UNSUPPORTED：协议 {protocol} 无法序列化图片输入，请在设置中选择支持图片的协议；不会自动改用 OCR")]
+    VisionWireUnsupported { protocol: String },
+
+    /// Provider 拒绝了已确认的图片能力（能力声明漂移，docs §5.3）。此路径
+    /// OCR/helper 调用计数必须保持 0。
+    #[error("VISION_CAPABILITY_DRIFT：服务 {provider}（{provider_kind}）的模型 {model} 经协议 {protocol} 拒绝了图片输入，但目录已确认其支持。请核对模型/协议后重试；不会自动改用 OCR（route {route_revision}）")]
+    VisionCapabilityDrift {
+        provider: String,
+        provider_kind: String,
+        model: String,
+        protocol: String,
+        route_revision: String,
+    },
+
+    /// 活动 Plan 的 Provider route 漂移（docs §8.7）。
+    #[error("PLAN_ANCHOR_ROUTE_DRIFT：活动 Plan 冻结的 Provider 路由与当前任务不一致（{detail}）。请恢复原路由或重新创建 Plan")]
+    PlanAnchorRouteDrift { detail: String },
+
+    /// ExecutionFull 首个请求仍看到 5/8 收窄目录（docs §8.6）——fail closed。
+    #[error("PLAN_FULL_CATALOG_NOT_RESTORED：Plan 批准后的实施请求仍看到收窄目录（{tool_count} 项），已取消发送")]
+    PlanFullCatalogNotRestored { tool_count: usize },
+
     /// Git 错误
     #[error("git error: {0}")]
     GitError(String),
@@ -151,6 +233,22 @@ impl From<ProductError> for agent_error::Error {
             ),
             ProductError::EmptyAssistantResponse => {
                 Self::Other("模型服务未返回可显示内容，请重试或检查模型线路配置".to_string())
+            }
+            ProductError::OutputBudgetExhausted { .. }
+            | ProductError::ContextConstrainedOutputExhausted { .. }
+            | ProductError::OutputHeadroomBelowMinimum { .. }
+            | ProductError::ContextPreflightFailed { .. }
+            | ProductError::AttachmentNotFound { .. }
+            | ProductError::AttachmentOwnershipMismatch { .. }
+            | ProductError::AttachmentMetadataMismatch { .. }
+            | ProductError::AttachmentRouteDrift { .. }
+            | ProductError::VisionBudgetProfileMissing { .. }
+            | ProductError::VisionWireUnsupported { .. }
+            | ProductError::VisionCapabilityDrift { .. }
+            | ProductError::PlanAnchorRouteDrift { .. }
+            | ProductError::PlanFullCatalogNotRestored { .. } => {
+                // 新错误组携带稳定的可操作文案；跨边界传递时保留完整 display。
+                Self::Other(err.to_string())
             }
             ProductError::GitError(msg) => Self::Storage(format!("git: {msg}")),
             ProductError::IpcError(msg) => Self::Ipc(msg),

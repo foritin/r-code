@@ -12,6 +12,8 @@ import type {
   AgentSendMode,
   ChangeDiff,
   NotificationPage,
+  PlanEntryOfferView,
+  PlanningStatusView,
   ProjectActivityPage,
   TaskDetailBatch,
   WorkspaceDashboard,
@@ -55,6 +57,7 @@ import type {
   SubagentProviderProbeRequest,
   SubagentProviderProbeResponse,
   CodexCliPreferences,
+  CodexCliSyncResult,
   CodexIntegrationStatus,
   RtkStatus,
   ContextCompactionResult,
@@ -94,6 +97,7 @@ import {
   browserMockCodexIntegrationStatus,
   browserMockCodexCliPreferences,
   browserMockInstallCodexCli,
+  browserMockSyncCodexCli,
   browserMockSetupCodexCollaboration,
   browserMockSaveCodexCliPreferences,
   browserMockInstallCodexSkill,
@@ -298,6 +302,26 @@ export const taskCompactContext = async (taskId: string, focus?: string) => {
   return result;
 };
 
+export const planEntryDecide = (input: {
+  offerId: string;
+  expectedRevision: number;
+  decision: "accept" | "continue" | "close" | "escape";
+  idempotencyKey: string;
+}) =>
+  ipc<PlanEntryOfferView>("cmd_plan_entry_decide", {
+    input: {
+      offer_id: input.offerId,
+      expected_revision: input.expectedRevision,
+      decision: input.decision,
+      idempotency_key: input.idempotencyKey,
+    },
+  });
+
+export const planEntryRetryContinuation = (offerId: string) =>
+  ipc<PlanEntryOfferView>("cmd_plan_entry_retry_continuation", { offerId });
+
+export const planningStatus = () => ipc<PlanningStatusView>("cmd_planning_status");
+
 export const taskDetail = (taskId: string) =>
   ipc<TaskDetail>("cmd_task_detail", { taskId });
 
@@ -316,10 +340,25 @@ export const agentSend = (
   message: string,
   mode: AgentSendMode = "auto",
   attachments: AttachmentInput[] = [],
-) => ipc<void>("cmd_agent_send", { taskId, message, mode, attachments }).then((result) => {
+  attachmentIds: string[] = [],
+) => ipc<void>("cmd_agent_send", {
+  taskId,
+  message,
+  mode,
+  attachments,
+  attachmentIds,
+}).then((result) => {
   invalidateSessionMessages(taskId);
   return result;
 });
+
+/** 附件 staging（docs/multimodal-attachments §2.2 边界 1）：一次性 Base64 → Blob 引用。 */
+export const attachmentStage = (taskId: string, attachment: AttachmentInput) =>
+  ipc<import("./types").AttachmentRefDto>("cmd_attachment_stage", { taskId, attachment });
+
+/** 删除草稿附件：立即释放 staged 引用与 Blob 计数。 */
+export const attachmentDiscard = (taskId: string, attachmentId: string) =>
+  ipc<void>("cmd_attachment_discard", { taskId, attachmentId });
 
 export const agentAbort = (taskId: string) => ipc<void>("cmd_agent_abort", { taskId });
 
@@ -1200,6 +1239,24 @@ export const codexInstallCli = async () => {
     invalidateCodexIntegrationStatus();
     codexIntegrationStatusSnapshot = status;
     return status;
+  }
+};
+
+/** 进入 Codex 运行时设置时检查更新，并在官方 CLI 报告有新版时自动升级。 */
+export const codexSyncCli = async () => {
+  invalidateCodexIntegrationStatus();
+  try {
+    const result = await ipc<CodexCliSyncResult>("cmd_codex_sync_cli");
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = result.status;
+    return result;
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    const result = browserMockSyncCodexCli();
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = result.status;
+    return result;
   }
 };
 

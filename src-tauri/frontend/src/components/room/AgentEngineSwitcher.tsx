@@ -86,7 +86,7 @@ export function AgentEngineSwitcher({
             </MenuItem>
             <MenuSeparator />
             <MenuItem close={close} onSelect={() => setSettingsPane("agents")}>查看编排策略</MenuItem>
-            {!codexReady && <MenuItem close={close} onSelect={() => setSettingsPane("subagents")}>连接 Codex CLI</MenuItem>}
+            {!codexReady && <MenuItem close={close} onSelect={() => setSettingsPane("agents")}>连接 Codex CLI</MenuItem>}
           </>
         )}
       </Menu>

@@ -74,9 +74,9 @@
 .plan-state-diamond {
   display: inline-block;
   flex: none;
-  width: 7px;
-  height: 7px;
-  transform: rotate(45deg);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   border: 1px solid color-mix(in srgb, var(--accent) 68%, var(--border));
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-panel));
 }
@@ -582,13 +582,6 @@
 .timeline-run-summaries,
 .timeline-turn-trace { max-width:min(94%,var(--measure)); }
 .timeline-run-summaries { margin:0 0 var(--sp-4); }
-.timeline-turn-trace.has-activity {
-  position:relative; padding-left:28px;
-}
-.timeline-turn-trace.has-activity::before {
-  content:""; position:absolute; top:7px; bottom:10px; left:7px; width:1px;
-  background:linear-gradient(180deg,var(--edge-accent),var(--border) 18%,var(--border) 84%,transparent);
-}
 .timeline-process-disclosure {
   max-width:min(94%,var(--measure)); margin:0 0 var(--sp-5);
 }
@@ -600,7 +593,12 @@
 }
 .timeline-process-toggle:hover,
 .timeline-process-toggle:focus-visible { color:var(--fg-muted); }
+.timeline-process-disclosure.is-live .timeline-process-toggle { color:var(--fg-muted); }
 .timeline-process-duration { flex:none; letter-spacing:.01em; white-space:nowrap; }
+.timeline-process-preview {
+  min-width:0; max-width:42%; overflow:hidden; color:var(--fg-faint); font-weight:400;
+  text-overflow:ellipsis; white-space:nowrap;
+}
 .timeline-process-chevron {
   display:grid; place-items:center; width:14px; height:14px; flex:none; color:currentColor;
 }
@@ -616,6 +614,13 @@
 .timeline-process-body .timeline-run-summaries,
 .timeline-process-body .timeline-turn-trace { max-width:100%; }
 .timeline-process-body .timeline-run-summaries { margin-bottom:var(--sp-4); }
+.timeline-process-body .timeline-context-event.is-reasoning {
+  margin:var(--sp-2) 0; padding:0; border:0; border-radius:0; background:transparent;
+}
+.timeline-process-body .timeline-context-event.is-reasoning .timeline-context-toggle:hover,
+.timeline-process-body .timeline-context-event.is-reasoning .timeline-context-toggle:focus-visible {
+  background:color-mix(in srgb,var(--bg-panel) 55%,transparent);
+}
 .timeline-process-final { max-width:min(94%,var(--measure)); }
 .timeline-turn.has-archived-process .timeline-final-response {
   margin-top:0; padding-top:0; border-top:0;
@@ -627,45 +632,6 @@
 .timeline-activity-event,
 .timeline-context-event,
 .timeline-subagent-event { position:relative; }
-.timeline-trace-anchor {
-  position:absolute; z-index:2; top:3px; left:-31px; width:20px; height:20px; padding:0;
-  border:0; border-radius:999px; outline:0; background:transparent; color:var(--border-strong);
-  cursor:pointer;
-}
-.timeline-trace-anchor::before {
-  content:""; position:absolute; top:6px; left:6px; width:7px; height:7px;
-  border:1px solid currentColor; border-radius:2px; background:var(--bg-card); transform:rotate(45deg);
-  transition:transform var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease),background var(--dur-1) var(--ease),box-shadow var(--dur-1) var(--ease);
-}
-.timeline-trace-anchor:hover,
-.timeline-trace-anchor:focus-visible { color:var(--accent); }
-.timeline-trace-anchor:hover::before,
-.timeline-trace-anchor:focus-visible::before {
-  background:color-mix(in srgb,var(--accent) 14%,var(--bg-card));
-  box-shadow:0 0 0 4px var(--tint-accent); transform:rotate(45deg) scale(1.16);
-}
-.timeline-trace-anchor:focus-visible { box-shadow:0 0 0 2px var(--bg),0 0 0 4px color-mix(in srgb,var(--accent) 44%,transparent); }
-.timeline-activity-event.state-active .timeline-trace-anchor {
-  color:var(--accent);
-}
-.timeline-activity-event.state-active .timeline-trace-anchor::before {
-  background:var(--accent); box-shadow:0 0 0 4px var(--tint-accent);
-}
-.timeline-activity-event.is-trace-target,
-.timeline-context-event.is-trace-target,
-.timeline-subagent-event.is-trace-target {
-  border-radius:var(--radius-xs); animation:timeline-trace-arrival 880ms var(--ease-out);
-}
-@keyframes timeline-trace-arrival {
-  0% { background:color-mix(in srgb,var(--accent) 16%,transparent); box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 24%,transparent); }
-  100% { background:transparent; box-shadow:0 0 0 1px transparent; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .timeline-activity-event.is-trace-target,
-  .timeline-context-event.is-trace-target,
-  .timeline-subagent-event.is-trace-target { animation:none; }
-  .timeline-trace-anchor::before { transition:none; }
-}
 
 .timeline-activity-event { max-width:100%; margin:var(--sp-3) 0 var(--sp-5); }
 .timeline-activity-toggle {
@@ -689,7 +655,33 @@
 .timeline-activity-single-detail .tcard-payload:last-child { margin-bottom:0; }
 .timeline-command-list { display:flex; flex-direction:column; gap:var(--sp-2); }
 .timeline-command-list .tcard { max-width:100%; margin:0; }
-.timeline-command-list .tcard::before { display:none; }
+
+/* 文件活动：每个文件一行，动词 + 文件名前类型图标 + 行内 +− 差异 */
+.timeline-file-event { display:flex; flex-direction:column; gap:1px; margin:var(--sp-3) 0 var(--sp-5); }
+.timeline-file-row {
+  display:grid; grid-template-columns:auto 20px minmax(0,1fr) auto 14px; align-items:center; gap:var(--sp-3);
+  width:100%; min-height:30px; padding:var(--sp-1) var(--sp-2); border:0; border-radius:var(--radius-xs);
+  background:transparent; color:var(--fg-muted); cursor:pointer; font:var(--text-meta) var(--font-ui); text-align:left;
+}
+.timeline-file-row:disabled { cursor:default; }
+.timeline-file-row:hover:not(:disabled),
+.timeline-file-row:focus-visible { color:var(--fg); background:var(--bg-panel); }
+.timeline-file-row .timeline-file-icon { display:grid; place-items:center; width:20px; height:18px; }
+.timeline-file-row .timeline-file-icon svg,
+.timeline-file-row .timeline-file-icon img { display:block; }
+.timeline-file-verb { color:var(--fg-muted); white-space:nowrap; }
+.timeline-file-name { overflow:hidden; color:var(--fg); font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+.timeline-file-stat { color:var(--fg-faint); font:var(--text-meta) var(--font-mono); white-space:nowrap; }
+.timeline-file-stat .plus { color:var(--success); }
+.timeline-file-stat .minus { color:var(--danger); }
+.timeline-file-stat.state-fail { color:var(--danger); }
+.timeline-file-row > .spin { justify-self:center; }
+.timeline-file-more {
+  display:flex; align-items:center; gap:var(--sp-2); min-height:26px; padding:0 var(--sp-2);
+  border:0; border-radius:var(--radius-xs); background:transparent; color:var(--fg-faint);
+  cursor:pointer; font:var(--text-meta) var(--font-ui);
+}
+.timeline-file-more:hover, .timeline-file-more:focus-visible { color:var(--fg-muted); }
 
 .timeline-context-event {
   display:grid; grid-template-columns:20px auto minmax(0,1fr); align-items:center; gap:var(--sp-3);
@@ -725,6 +717,21 @@
 }
 
 .timeline-subagent-event { margin:var(--sp-5) 0 var(--sp-6); }
+/* 子智能体事件行（原型 C+）：藏青名称 + 任务提示词，展开显示状态芯片 */
+.timeline-subagent-toggle {
+  display:flex; align-items:center; gap:var(--sp-3);
+  width:100%; min-height:30px; padding:var(--sp-1) 0; border:0; border-radius:var(--radius-xs);
+  background:transparent; color:var(--fg-muted); cursor:pointer;
+  font:var(--text-meta) var(--font-ui); text-align:left;
+}
+.timeline-subagent-toggle:hover,
+.timeline-subagent-toggle:focus-visible { color:var(--fg); background:var(--bg-panel); }
+.timeline-subagent-title { color:var(--fg-muted); font-weight:500; white-space:nowrap; }
+.timeline-subagent-name { color:var(--subagent-run, var(--accent-2)); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:40%; }
+.timeline-subagent-goal { flex:1; min-width:0; overflow:hidden; color:var(--fg-faint); text-overflow:ellipsis; white-space:nowrap; }
+.timeline-subagent-state { color:var(--fg-faint); font:var(--text-meta) var(--font-mono); white-space:nowrap; margin-left:auto; }
+.timeline-subagent-state.is-active { color:var(--subagent-run, var(--accent)); }
+.timeline-subagent-details { margin:var(--sp-2) 0 0 29px; }
 .timeline-subagent-chips { display:flex; align-items:center; flex-wrap:wrap; gap:var(--sp-2); min-height:30px; }
 .timeline-subagent-chip {
   display:inline-flex; align-items:center; gap:var(--sp-2); max-width:min(260px,100%); min-height:28px; padding:var(--sp-1) var(--sp-3);
@@ -742,7 +749,6 @@
 .timeline-subagent-chip.status-queued .timeline-subagent-avatar { animation:pulse 1.5s infinite; }
 .timeline-subagent-chip.status-failed,
 .timeline-subagent-chip.status-cancelled { border-color:var(--edge-danger); }
-.timeline-subagent-summary { color:var(--fg-faint); font:var(--text-meta) var(--font-mono); white-space:nowrap; }
 .timeline-final-response { margin-top:var(--sp-6); padding-top:var(--sp-5); border-top:1px solid var(--border); }
 .timeline-run-changes {
   width:min(100%,calc(var(--measure) + 7rem)); margin:var(--sp-5) 0 0; overflow:hidden;
@@ -962,25 +968,35 @@
 }
 .agent .caret { margin-left:var(--sp-2); vertical-align: -1px; }
 
-.plan-card {
-  margin:var(--sp-2) 0 var(--sp-6); padding:var(--sp-6) var(--sp-6); max-width: min(94%, var(--measure));
-  background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
+/* 待办卡（原型 C+）：默认折叠的计数卡，展开后 ✓/→/○ 三态步骤 */
+.todo-card {
+  margin: var(--sp-3) 0 var(--sp-5); border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--bg-panel);
 }
-.plan-card .head {
-  display: flex; gap:var(--sp-5); align-items: center; margin-bottom:var(--sp-4);
-  font-family: var(--font-display); font-size: var(--text-base);
+.todo-head {
+  display:flex; align-items:center; gap:var(--sp-4); width:100%; min-height:38px;
+  padding: var(--sp-2) var(--sp-5); border:0; background:transparent; border-radius:inherit;
+  color:var(--fg-muted); font:var(--text-meta) var(--font-ui); text-align:left; cursor:pointer;
 }
-.plan-card .head .ok { margin-left:auto; font-size: var(--text-meta); color: var(--success); }
-.plan-card ol { list-style: none; display: flex; flex-direction: column; gap:var(--sp-3); }
-.plan-card li { display: flex; gap:var(--sp-5); font-size: var(--text-sm); color: var(--fg-muted); }
-.plan-card li b {
-  width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--border-strong);
-  font-family: var(--font-mono); font-size: var(--text-meta); font-weight: 400;
-  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top:1px;
+.todo-head:hover { background: color-mix(in srgb, var(--fg) 3%, transparent); }
+.todo-head .todo-ic { display:grid; place-items:center; width:18px; height:18px; color:var(--fg-faint); flex:none; }
+.todo-head .todo-k { color:var(--fg); font-weight:550; flex:none; }
+.todo-head .todo-m { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.todo-head .todo-n { margin-left:auto; flex:none; font-family:var(--font-mono); font-size:var(--text-meta); color:var(--fg-faint); font-variant-numeric:tabular-nums; }
+.todo-head .todo-chev {
+  flex:none; width:22px; height:22px; border-radius:50%;
+  border:1px solid var(--border); display:inline-flex; align-items:center; justify-content:center; color:var(--fg-faint);
 }
-.plan-card li.done b { border-color: var(--success); color: var(--success); }
-.plan-card li.now { color: var(--fg); }
-.plan-card li.now b { border-color: var(--accent); color: var(--accent); }
+.todo-card .todo-list {
+  list-style:none; margin:0; padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  display:grid; gap:2px; border-top:1px solid var(--border);
+}
+.todo-list li { display:flex; align-items:center; gap:var(--sp-4); padding:3px 0; font-size:var(--text-sm); color:var(--fg-faint); }
+.todo-list li b { width:15px; flex:none; text-align:center; font-weight:400; font-size:var(--text-meta); }
+.todo-list li.done { color: var(--fg-muted); }
+.todo-list li.done b { color: var(--success); }
+.todo-list li.cur { color: var(--fg); }
+.todo-list li.cur b { color: var(--accent); }
 
 /* ---------------------------------------------------------------- 工具调用卡片
    折叠态沿用原 .trow 的单行密度（一次运行几十个调用，全展开会淹没对话本身）；
@@ -1717,8 +1733,8 @@
 }
 .subagent-list-row.has-orphan,.subagent-list-row.has-cycle { box-shadow:inset 2px 0 0 color-mix(in srgb,var(--warning) 65%,transparent); }
 .subagent-list-row-select {
-  display:grid; grid-template-columns:40px minmax(0,1fr) auto; align-items:center; min-width:0; min-height:78px; flex:1; gap:12px;
-  padding:9px 10px; border:0; border-radius:inherit; background:transparent; color:inherit; cursor:pointer; font:inherit; text-align:left;
+  display:grid; grid-template-columns:24px minmax(0,1fr) auto; align-items:center; min-width:0; min-height:54px; flex:1; gap:10px;
+  padding:8px 10px; border:0; border-radius:inherit; background:transparent; color:inherit; cursor:pointer; font:inherit; text-align:left;
 }
 .subagent-list-row-select:focus-visible { outline:2px solid var(--edge-accent); outline-offset:-2px; }
 .subagent-list-avatar::after {
@@ -1783,6 +1799,13 @@
 .subagent-session-meta b { color:var(--fg-muted); font-weight:var(--weight-strong); }
 .subagent-session-meta .subagent-routing-reason { flex:1 1 100%; }
 .subagent-session-meta .subagent-tree-anomaly { flex:1 1 100%; color:var(--warning); }
+
+/* 任务卡：主代理下发给此子代理的提示词全文（原型 C+ 的 .ag-d 任务区） */
+.subagent-session-task { margin:0 0 14px; padding:10px 13px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-panel); }
+.subagent-session-task header { display:flex; align-items:center; gap:7px; margin-bottom:6px; color:var(--fg-muted); font:600 10px var(--font-display); letter-spacing:.05em; }
+.subagent-session-task-icon { display:grid; place-items:center; width:16px; height:16px; color:var(--subagent-run, var(--accent-2)); }
+.subagent-session-task p { margin:0; color:var(--fg-muted); font-size:12.5px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
+
 .subagent-session-placeholder { color:var(--fg-faint); font-size:var(--text-sm); }
 .subagent-load-earlier {
   display:flex; min-width:126px; min-height:30px; align-items:center; justify-content:center; gap:7px; margin:0 auto 18px; padding:5px 13px;
@@ -1832,6 +1855,9 @@
 .subagent-reasoning-detail .md > :last-child { margin-bottom:0; }
 .subagent-transcript-message { color:var(--fg); }
 .subagent-transcript-message.is-error { color:var(--danger); }
+.subagent-transcript-message.is-task { padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-panel); color:var(--fg-muted); }
+.subagent-transcript-message.is-task .subagent-transcript-speaker { color:var(--subagent-run, var(--accent-2)); }
+.subagent-transcript-task-icon { display:grid; place-items:center; width:15px; height:15px; }
 .subagent-transcript-speaker { display:flex; align-items:center; gap:7px; margin-bottom:9px; color:var(--fg-muted); font:600 10px var(--font-display); letter-spacing:.04em; }
 .subagent-transcript-message .md { color:inherit; font-size:13px; line-height:1.68; }
 .subagent-transcript-message .md > :first-child { margin-top:0; }

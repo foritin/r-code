@@ -62,6 +62,8 @@ import type {
   WorkflowSkill,
   WorkflowSkillDraft,
   ProjectAgentPromptConfig,
+  PlanEntryOfferView,
+  PlanningStatusView,
 } from "./types";
 import {
   browserMockAbortSubagent,
@@ -73,6 +75,7 @@ import {
   browserMockFileEntries,
   browserMockFiles,
   browserMockInstallCodexCli as browserMockInstallCli,
+  browserMockSyncCodexCli as browserMockSyncCli,
   browserMockEnableCodexMcp as browserMockInstallMcp,
   browserMockInstallCodexSkill as browserMockInstallSkill,
   browserMockAuthenticateCodex as browserMockLogin,
@@ -94,6 +97,10 @@ import {
   browserMockWorkspaces,
   browserMockWorkspaceDashboard,
 } from "./mock-data";
+
+// 引用链路 mock 状态：staging 计数与草稿登记（浏览器演示用）。
+let mockAttachmentSequence = 0;
+const mockAttachmentStore = new Map<string, string>();
 
 type MockArgs = Record<string, unknown>;
 
@@ -674,6 +681,25 @@ function taskById(taskId: string): Task {
   return task;
 }
 
+/** 浏览器回归钩子：当前模拟的待决 Plan 入口建议（默认无）。 */
+let browserMockPlanEntryOffer: PlanEntryOfferView | null = null;
+
+export function setBrowserMockPlanEntryOffer(offer: PlanEntryOfferView | null): void {
+  browserMockPlanEntryOffer = offer;
+}
+
+/** 浏览器回归钩子：模拟的规划发布状态（默认开放，客户滑钮即可用）。 */
+let browserMockPlanningStatus: PlanningStatusView = {
+  release_state: "open",
+  emergency_off: false,
+  deepseek_configured: true,
+  customer_switch_enabled: true,
+};
+
+export function setBrowserMockPlanningStatus(status: PlanningStatusView): void {
+  browserMockPlanningStatus = status;
+}
+
 function detailById(taskId: string): TaskDetail {
   const detail = browserMockDetails[taskId];
   if (!detail) throw new Error(`Demo 中不存在任务详情 ${taskId}`);
@@ -903,6 +929,14 @@ function sendMessage(args: MockArgs): void {
             ? "pdf"
             : "text",
       })),
+      timestamp,
+    },
+    {
+      id: nextId("message"),
+      branch_id: detail.active_branch.id,
+      kind: "system",
+      text: "r_code_user_message_mode",
+      output_json: JSON.stringify({ mode }),
       timestamp,
     },
     {
@@ -1920,7 +1954,12 @@ function providerModels(request: ProviderModelsInput): ProviderModelsResponse {
   const preset = browserMockProviderCatalog.presets.find((item) => item.id === request.preset);
   const configured = browserMockSettings.config.providers?.[request.name]?.model;
   return {
-    models: Array.from(new Set([configured, ...(preset?.models ?? [])].filter(Boolean))) as string[],
+    models: Array.from(
+      new Set(
+        [configured, ...(preset?.models ?? []).map((entry) => entry.id)]
+          .filter((model): model is string => Boolean(model)),
+      ),
+    ),
   };
 }
 
@@ -2155,12 +2194,59 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const count = browserMockMessages(stringArg(args, "taskId")).filter((item) => item.kind === "message").length;
       return { compacted: count > 4, before_messages: count, after_messages: count > 4 ? 3 : count };
     }
-    case "cmd_task_detail": return copy(detailById(stringArg(args, "taskId")));
+    case "cmd_task_detail": {
+      const detail = copy(detailById(stringArg(args, "taskId")));
+      detail.pending_plan_entry_offer = browserMockPlanEntryOffer
+        ? copy({ ...browserMockPlanEntryOffer, task_id: stringArg(args, "taskId") })
+        : null;
+      return detail;
+    }
+    case "cmd_plan_entry_offer_get": return null;
+    case "cmd_plan_entry_decide": {
+      const offer = browserMockPlanEntryOffer;
+      if (!offer) throw new Error("没有待决的 Plan 入口建议");
+      const decision = String(
+        (args as { input?: { decision?: string } }).input?.decision ?? "continue",
+      );
+      browserMockPlanEntryOffer = null;
+      return copy({
+        ...offer,
+        state: decision === "accept" ? "accepted" : "declined",
+        continuation_state: "sent",
+      });
+    }
+    case "cmd_plan_entry_retry_continuation": {
+      return null;
+    }
+    case "cmd_planning_status": return copy(browserMockPlanningStatus);
     case "cmd_task_detail_batch": return {
       details: copy(((args.taskIds as string[] | undefined) ?? []).map((id) => browserMockDetails[id]).filter(Boolean)),
     };
 
     case "cmd_agent_send": sendMessage(args); return undefined;
+    case "cmd_attachment_stage": {
+      // 浏览器 mock：不发 IPC、不落 Blob，返回确定性引用让草稿态走引用链路。
+      const attachment = (args.attachment ?? {}) as { name?: string; mediaType?: string };
+      const kind = (attachment.mediaType ?? "").startsWith("image/")
+        ? "image"
+        : (attachment.mediaType ?? "") === "application/pdf"
+          ? "pdf"
+          : "text";
+      const id = `mock-att-${++mockAttachmentSequence}`;
+      mockAttachmentStore.set(id, attachment.name ?? "attachment");
+      return {
+        attachmentId: id,
+        name: attachment.name ?? "attachment",
+        mediaType: attachment.mediaType ?? "application/octet-stream",
+        kind,
+        byteLen: 8,
+        width: kind === "image" ? 64 : null,
+        height: kind === "image" ? 64 : null,
+      };
+    }
+    case "cmd_attachment_discard":
+      mockAttachmentStore.delete(String(args.attachmentId ?? ""));
+      return undefined;
     case "cmd_agent_attachment_preview": {
       // 与正式后端同形状：media_type + 标准 Base64（1×1 透明 PNG）。
       return {
@@ -2224,7 +2310,26 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
         (item) => item.id === queueId && item.state === "queued",
       );
       if (index < 0) throw new Error("这条消息已经开始处理或不在当前队列中");
-      detail.queued_messages.splice(index, 1);
+      const [queued] = detail.queued_messages.splice(index, 1);
+      const timestamp = nowIso();
+      browserMockMessages(taskId).push(
+        {
+          id: nextId("message"),
+          branch_id: queued.branch_id,
+          kind: "message",
+          role: "user",
+          text: queued.message,
+          timestamp,
+        },
+        {
+          id: nextId("message"),
+          branch_id: queued.branch_id,
+          kind: "system",
+          text: "r_code_user_message_mode",
+          output_json: JSON.stringify({ mode: "steer" }),
+          timestamp,
+        },
+      );
       addEvent(detail, "user_steered");
       touchTask(task);
       return "steered";
@@ -2958,6 +3063,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_rtk_open_security_exclusions": return undefined;
     case "cmd_codex_integration_status": return copy(browserMockCodexIntegrationStatus());
     case "cmd_codex_install_cli": return copy(browserMockInstallCli());
+    case "cmd_codex_sync_cli": return copy(browserMockSyncCli());
     case "cmd_codex_start_login":
     case "cmd_codex_start_device_login": browserMockLogin(); return undefined;
     case "cmd_codex_install_skill": browserMockInstallSkill(); return undefined;

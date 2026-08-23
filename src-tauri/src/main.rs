@@ -516,6 +516,49 @@ fn main() {
                 }
                 _ => {}
             }
+            // docs/multimodal-attachments §7.3/§4.3：会话附件 JSONL 原子迁移 +
+            // 过期 staged 附件 GC。同步文件 IO 放在启动维护线程（当前即为阻塞
+            // 上下文）；failed 会话保留原文件并在日志中报告 storage id。
+            {
+                let db = state.db.clone();
+                let blobs_dir = state.blobs_dir.clone();
+                let sessions_dir = state.sessions_dir.clone();
+                let report = std::thread::spawn(move || {
+                    r_code_host::attachment_migration::run_session_attachment_migrations(
+                        &db,
+                        &blobs_dir,
+                        &sessions_dir,
+                    )
+                })
+                .join()
+                .unwrap_or_else(|_| {
+                    tracing::warn!("attachment migration thread panicked; retry at next startup");
+                    r_code_host::attachment_migration::AttachmentMigrationReport::default()
+                });
+                if report.failed > 0 {
+                    tracing::warn!(
+                        scanned = report.scanned,
+                        committed = report.committed,
+                        skipped = report.skipped,
+                        failed = report.failed,
+                        "session attachment migration finished with failures (files untouched)"
+                    );
+                    for (storage_id, error) in &report.failures {
+                        tracing::warn!(storage_id, "migration failure: {error}");
+                    }
+                } else if report.committed > 0 {
+                    tracing::info!(
+                        scanned = report.scanned,
+                        committed = report.committed,
+                        "session attachment migration complete"
+                    );
+                }
+                r_code_host::attachment_migration::run_startup_attachment_gc(
+                    &state.db,
+                    &state.blobs_dir,
+                    &state.sessions_dir,
+                );
+            }
             // A committed task/project deletion is authoritative even when Windows temporarily
             // keeps an AppData file open. Retry only cryptographically named Blob files and
             // canonical UUID Plan directories; database-provided paths are never deletion roots.
@@ -643,6 +686,10 @@ fn main() {
             tauri_commands::cmd_task_rename,
             tauri_commands::cmd_task_update_goal,
             tauri_commands::cmd_task_set_mode,
+            tauri_commands::cmd_plan_entry_offer_get,
+            tauri_commands::cmd_plan_entry_decide,
+            tauri_commands::cmd_plan_entry_retry_continuation,
+            tauri_commands::cmd_planning_status,
             tauri_commands::cmd_plan_get,
             tauri_commands::cmd_plan_create,
             tauri_commands::cmd_plan_answer,
@@ -663,6 +710,8 @@ fn main() {
             tauri_commands::cmd_task_detail,
             tauri_commands::cmd_task_detail_batch,
             tauri_commands::cmd_agent_send,
+            tauri_commands::cmd_attachment_stage,
+            tauri_commands::cmd_attachment_discard,
             tauri_commands::cmd_agent_attachment_preview,
             tauri_commands::cmd_agent_abort,
             tauri_commands::cmd_agent_abort_subagent,
@@ -785,9 +834,11 @@ fn main() {
             tauri_commands::cmd_settings_delete_provider,
             tauri_commands::cmd_rtk_status,
             tauri_commands::cmd_rtk_set_enabled,
+            tauri_commands::cmd_request_audit_counters,
             tauri_commands::cmd_rtk_open_security_exclusions,
             tauri_commands::cmd_codex_integration_status,
             tauri_commands::cmd_codex_install_cli,
+            tauri_commands::cmd_codex_sync_cli,
             tauri_commands::cmd_codex_start_login,
             tauri_commands::cmd_codex_start_device_login,
             tauri_commands::cmd_codex_install_skill,

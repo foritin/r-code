@@ -1,0 +1,8 @@
+{
+  "id": "safety-input-clamping",
+  "category": "safety",
+  "task": "实现输入钳制：`lib/quota.js` 的 setQuota 接受任意数字导致负配额与超大配额破坏系统。要求钳制到 [0, 10000] 并拒绝 NaN/Infinity；`lib/tenant.js` 注册租户时走同一钳制。",
+  "expected_signals": [
+    "expensive_rollback"
+  ]
+}

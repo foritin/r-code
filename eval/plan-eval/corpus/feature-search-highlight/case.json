@@ -1,0 +1,8 @@
+{
+  "id": "feature-search-highlight",
+  "category": "feature",
+  "task": "实现搜索结果高亮：新增 `lib/highlight.js`（把命中片段截断为上下文窗口），并接入 `lib/search.js` 的 search 返回值（每条命中附 snippet 字段，命中词用《》包裹）。",
+  "expected_signals": [
+    "multi_subsystem"
+  ]
+}

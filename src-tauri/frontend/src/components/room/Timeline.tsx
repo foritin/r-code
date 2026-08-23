@@ -61,6 +61,8 @@ export interface TimelineHandle {
   reload: () => void;
   /** 发送成功：立即本地追加用户气泡，稍后由持久化历史收敛。 */
   onSent: (text: string, mode: AgentSendMode, attachments?: SessionAttachmentMeta[]) => void;
+  /** 队列项被接纳后，把原排队气泡原位转换为本轮用户消息，避免重复显示。 */
+  onQueuedSteerAccepted: (queueId: string, text: string, mode: "steer" | "auto") => void;
 }
 
 interface Props {
@@ -187,11 +189,8 @@ export function runStreamRetriesLabel(value: string | null): string | null {
   }
 }
 
-function runDurationLabel(startedAt: string, endedAt: string | null, now: number): string {
-  const start = Date.parse(startedAt);
-  const end = endedAt ? Date.parse(endedAt) : now;
-  if (Number.isNaN(start) || Number.isNaN(end)) return "";
-  const seconds = Math.max(0, Math.floor((end - start) / 1000));
+/** 紧凑时长（原型 C）：5s / 1m 42s / 1h 02m。 */
+function compactDurationLabel(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
@@ -200,13 +199,23 @@ function runDurationLabel(startedAt: string, endedAt: string | null, now: number
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
+function runDurationLabel(startedAt: string, endedAt: string | null, now: number): string {
+  const start = Date.parse(startedAt);
+  const end = endedAt ? Date.parse(endedAt) : now;
+  if (Number.isNaN(start) || Number.isNaN(end)) return "";
+  return compactDurationLabel(Math.max(0, Math.floor((end - start) / 1000)));
+}
+
 const ARCHIVABLE_RUN_STATES = new Set<TimelineRunItem["state"]>([
   "finished",
   "accepted",
   "answered",
 ]);
 
-function completedProcessDurationLabel(runs: readonly TimelineRunItem[]): string | null {
+function completedProcessDurationLabel(
+  runs: readonly TimelineRunItem[],
+  steps: number,
+): string | null {
   if (runs.length === 0) return null;
   let startedAt = Number.POSITIVE_INFINITY;
   let endedAt = Number.NEGATIVE_INFINITY;
@@ -219,20 +228,47 @@ function completedProcessDurationLabel(runs: readonly TimelineRunItem[]): string
     endedAt = Math.max(endedAt, end);
   }
 
-  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
-  if (seconds < 60) return `耗时 ${seconds}秒`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) {
-    return remainingSeconds > 0
-      ? `耗时 ${minutes}分 ${remainingSeconds}秒`
-      : `耗时 ${minutes}分`;
+  const duration = compactDurationLabel(Math.max(0, Math.floor((endedAt - startedAt) / 1000)));
+  // 原型 C 的完成轮摘要条：已处理 N 步 · 耗时 3m 12s。
+  return steps > 0 ? `已处理 ${steps} 步 · 耗时 ${duration}` : `耗时 ${duration}`;
+}
+
+function liveProcessLabel(items: readonly TimelineDisplayItem[]): string {
+  let commands = 0;
+  let operations = 0;
+  let subagents = 0;
+  let failures = 0;
+  for (const item of items) {
+    if (item.kind === "tool_group") {
+      operations += item.tools.length;
+      if (item.groupKind === "command") commands += item.tools.length;
+      failures += item.tools.filter((tool) => tool.state === "fail").length;
+    } else if (item.kind === "subagent_group") {
+      subagents += item.agents.length;
+      failures += item.agents.filter((agent) => agent.status === "failed").length;
+    }
   }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0
-    ? `耗时 ${hours}小时 ${String(remainingMinutes).padStart(2, "0")}分`
-    : `耗时 ${hours}小时`;
+  const parts = ["正在执行"];
+  if (commands > 0) parts.push(`${commands} 个命令`);
+  else if (operations > 0) parts.push(`${operations} 项操作`);
+  if (subagents > 0) parts.push(`${subagents} 个子智能体`);
+  if (failures > 0) parts.push(`${failures} 项失败`);
+  return parts.join(" · ");
+}
+
+function latestProcessPreview(items: readonly TimelineDisplayItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (
+      item.kind === "context"
+      && (item.label === "Codex 思考摘要" || item.label === "思考过程" || item.label === "执行过程")
+      && item.detail?.trim()
+    ) {
+      const preview = item.detail.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+      return preview.length > 120 ? `${preview.slice(0, 117)}…` : preview;
+    }
+  }
+  return null;
 }
 
 /**
@@ -248,6 +284,53 @@ const RunDuration = memo(function RunDuration({ startedAt, endedAt }: {
   if (!duration) return null;
   return <span className="run-duration">{duration}</span>;
 });
+
+/**
+ * 待办卡（原型 C+）：默认折叠的计数卡，展开后是 ✓/→/○ 三态步骤列表。
+ * 标题位显示当前进行中的步骤（全部完成后显示「全部完成」），计数 n/总。
+ */
+function PlanTodoCard({ steps, t, dim = "" }: { steps: PlanStep[]; t: number; dim?: string }) {
+  const [open, setOpen] = useState(false);
+  const firstTodo = steps.findIndex((step) => !step.completed);
+  const completed = steps.filter((step) => step.completed).length;
+  const title = firstTodo === -1 ? "全部完成" : steps[firstTodo].description;
+  return (
+    <div className={"todo-card" + dim} data-t={t}>
+      <button
+        type="button"
+        className="todo-head"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="todo-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" width="14" height="14">
+            <path d="M9 6h11M9 12h11M9 18h11" />
+            <path d="M4 5.5l1 1 2-2M4 11.5l1 1 2-2M4 17.5l1 1 2-2" />
+          </svg>
+        </span>
+        <span className="todo-k">待办</span>
+        <span className="todo-m" title={title}>{title}</span>
+        <span className="todo-n">{completed}/{steps.length}</span>
+        <span className="todo-chev" aria-hidden="true">
+          {open ? <IconChevronDown width="11" height="11" /> : <IconChevronRight width="11" height="11" />}
+        </span>
+      </button>
+      {open && (
+        <ol className="todo-list">
+          {steps.map((step, index) => (
+            <li
+              key={index}
+              className={step.completed ? "done" : index === firstTodo ? "cur" : ""}
+            >
+              <b aria-hidden="true">{step.completed ? "✓" : index === firstTodo ? "→" : "○"}</b>
+              {step.description}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
 
 function TimelineAttachmentChip({
   taskId,
@@ -326,6 +409,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const [resending, setResending] = useState(false);
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
   const [expandedProcessTurnIds, setExpandedProcessTurnIds] = useState<Set<string>>(() => new Set());
+  const [collapsedLiveProcessTurnIds, setCollapsedLiveProcessTurnIds] = useState<Set<string>>(() => new Set());
   const [visibleTurnLimit, setVisibleTurnLimit] = useState(80);
   const [previewingImage, setPreviewingImage] = useState<{ src: string; name: string } | null>(null);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
@@ -560,6 +644,51 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         presentationRef.current.update(items, startIndex);
         setTimelineRevision((current) => current + 1);
       },
+      onQueuedSteerAccepted: (queueId, text, mode) => {
+        if (branchId) return;
+        const items = itemsRef.current;
+        let matchIndex = -1;
+        for (let index = items.length - 1; index >= 0; index -= 1) {
+          const item = items[index];
+          if (item.kind !== "you") continue;
+          if (item.queueId === queueId) {
+            matchIndex = index;
+            break;
+          }
+          if (
+            item.text === text
+            && (item.queuedState != null || item.sendMode === "queue" || item.sendMode === "send_now")
+          ) {
+            matchIndex = index;
+            break;
+          }
+        }
+        if (matchIndex >= 0) {
+          const item = items[matchIndex];
+          if (item.kind !== "you") return;
+          items[matchIndex] = {
+            ...item,
+            sendMode: mode,
+            queuedState: undefined,
+            queueId: undefined,
+          };
+          presentationRef.current.update(items, matchIndex);
+        } else {
+          const startIndex = items.length;
+          items.push({
+            kind: "you",
+            id: nid(),
+            t: nowSec(),
+            text,
+            imageCount: 0,
+            imageMediaTypes: [],
+            attachments: [],
+            sendMode: mode,
+          });
+          presentationRef.current.update(items, startIndex);
+        }
+        setTimelineRevision((current) => current + 1);
+      },
     }),
     [reload, nid, nowSec, branchId]
   );
@@ -593,6 +722,14 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   }, []);
   const toggleTurnProcess = useCallback((turnId: string) => {
     setExpandedProcessTurnIds((current) => {
+      const next = new Set(current);
+      if (next.has(turnId)) next.delete(turnId);
+      else next.add(turnId);
+      return next;
+    });
+  }, []);
+  const toggleLiveTurnProcess = useCallback((turnId: string) => {
+    setCollapsedLiveProcessTurnIds((current) => {
       const next = new Set(current);
       if (next.has(turnId)) next.delete(turnId);
       else next.add(turnId);
@@ -799,25 +936,10 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             <Markdown text={it.text} streaming={it.streaming} taskId={taskId} workspacePath={workspacePath} />
           </div>
         );
-      case "plan": {
-        const firstTodo = it.steps.findIndex((step) => !step.completed);
+      case "plan":
         return (
-          <div className={"plan-card" + dim(it.t)} data-t={it.t} key={it.id}>
-            <div className="head">
-              计划 · {it.steps.length} 步
-              {firstTodo === -1 && <span className="ok">✓ 全部完成</span>}
-            </div>
-            <ol>
-              {it.steps.map((step, index) => (
-                <li key={index} className={step.completed ? "done" : index === firstTodo ? "now" : ""}>
-                  <b>{step.completed ? "✓" : index + 1}</b>
-                  {step.description}
-                </li>
-              ))}
-            </ol>
-          </div>
+          <PlanTodoCard key={it.id} steps={it.steps} t={it.t} dim={dim(it.t)} />
         );
-      }
       case "run": {
         const expanded = expandedRunIds.has(it.id);
         const detailId = `${it.id}-details`;
@@ -917,7 +1039,12 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           ? turn.items.findIndex((item, index) => index > lastActivity && item.kind === "agent")
           : -1;
         const finalResponse = finalResponseIndex >= 0 ? turn.items[finalResponseIndex] : null;
-        const processDuration = completedProcessDurationLabel(turn.runs);
+        const processSteps = turn.items.reduce((count, item) => {
+          if (item.kind === "tool_group") return count + item.tools.length;
+          if (item.kind === "subagent_group") return count + item.agents.length;
+          return count;
+        }, 0);
+        const processDuration = completedProcessDurationLabel(turn.runs, processSteps);
         const canArchiveProcess = Boolean(
           turn.hasActivity
           && finalResponse?.kind === "agent"
@@ -926,26 +1053,42 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           && processDuration
           && turn.runs.every((run) => ARCHIVABLE_RUN_STATES.has(run.state))
         );
-        const processExpanded = canArchiveProcess && expandedProcessTurnIds.has(turn.id);
+        const hasLiveProcess = Boolean(
+          turn.hasActivity && turn.runs.some((run) => run.state === "active")
+        );
+        const hasProcessDisclosure = canArchiveProcess || hasLiveProcess;
+        const processExpanded = canArchiveProcess
+          ? expandedProcessTurnIds.has(turn.id)
+          : hasLiveProcess && !collapsedLiveProcessTurnIds.has(turn.id);
+        const processLabel = canArchiveProcess
+          ? processDuration ?? "执行过程"
+          : liveProcessLabel(turn.items);
+        const processPreview = latestProcessPreview(turn.items);
+        const processTraceEnd = canArchiveProcess ? finalResponseIndex : turn.items.length;
         const processDetailsId = `timeline-process-${turn.id}`;
         return (
           <section
-            className={`timeline-turn${turn.hasActivity ? " has-activity" : ""}${canArchiveProcess ? " has-archived-process" : ""}`}
+            className={`timeline-turn${turn.hasActivity ? " has-activity" : ""}${canArchiveProcess ? " has-archived-process" : ""}${hasLiveProcess ? " has-live-process" : ""}`}
             key={turn.id}
           >
             {turn.user && renderTimelineItem(turn.user)}
-            {canArchiveProcess ? (
+            {hasProcessDisclosure ? (
               <>
-                <div className={`timeline-process-disclosure${processExpanded ? " is-expanded" : ""}`}>
+                <div className={`timeline-process-disclosure${hasLiveProcess ? " is-live" : ""}${processExpanded ? " is-expanded" : ""}`}>
                   <button
                     type="button"
                     className="timeline-process-toggle ring-inset"
                     aria-expanded={processExpanded}
                     aria-controls={processDetailsId}
+                    aria-label={processLabel}
                     title={processExpanded ? "收起本轮思考与执行过程" : "展开本轮思考与执行过程"}
-                    onClick={() => toggleTurnProcess(turn.id)}
+                    onClick={() => {
+                      if (canArchiveProcess) toggleTurnProcess(turn.id);
+                      else toggleLiveTurnProcess(turn.id);
+                    }}
                   >
-                    <span className="timeline-process-duration">{processDuration}</span>
+                    <span className="timeline-process-duration">{processLabel}</span>
+                    {processPreview && <span className="timeline-process-preview">{processPreview}</span>}
                     <span className="timeline-process-chevron" aria-hidden="true">
                       {processExpanded
                         ? <IconChevronDown width={13} height={13} />
@@ -959,7 +1102,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                         {turn.runs.map((run) => renderTimelineItem(run))}
                       </div>
                       <div className="timeline-turn-trace has-activity">
-                        {turn.items.slice(0, finalResponseIndex).map((item, index) => {
+                        {turn.items.slice(0, processTraceEnd).map((item, index) => {
                           const progressUpdate = item.kind === "agent" && index < lastExecutionActivity;
                           return renderTimelineItem(item, false, progressUpdate);
                         })}
@@ -967,13 +1110,15 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                     </div>
                   )}
                 </div>
-                <div className="timeline-turn-trace timeline-process-final">
-                  {turn.items.slice(finalResponseIndex).map((item, index) => {
-                    const originalIndex = finalResponseIndex + index;
-                    const progressUpdate = item.kind === "agent" && originalIndex < lastExecutionActivity;
-                    return renderTimelineItem(item, originalIndex === finalResponseIndex, progressUpdate);
-                  })}
-                </div>
+                {canArchiveProcess && (
+                  <div className="timeline-turn-trace timeline-process-final">
+                    {turn.items.slice(finalResponseIndex).map((item, index) => {
+                      const originalIndex = finalResponseIndex + index;
+                      const progressUpdate = item.kind === "agent" && originalIndex < lastExecutionActivity;
+                      return renderTimelineItem(item, originalIndex === finalResponseIndex, progressUpdate);
+                    })}
+                  </div>
+                )}
               </>
             ) : (
               <>

@@ -155,7 +155,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      # Windows 测试机只恢复不保存：Windows 的缓存保存约 3 分钟且内容与同矩阵其它
+      # OS 腿相同（同 workspace/lockfile）；让 ubuntu 腿负责写、三条腿共享读。
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: matrix.os != 'windows-latest'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: matrix.os == 'windows-latest'
+        with:
+          save-if: false
       # Keep the existing required job name while making its Windows leg prove the same frontend
       # contracts under the OS that hosts WebView2 and native companion coordinates.
       # `src-tauri` declares `default = ["custom-protocol"]`, so every `cargo test`/
@@ -177,10 +184,13 @@ jobs:
         if: matrix.os == 'windows-latest'
         working-directory: src-tauri/frontend
         run: npx playwright-core install chromium
-      - name: Test Windows frontend
+      # Windows 只跑真实依赖宿主 OS 行为的浏览器契约（Windows 路径/OCR、companion
+      # 混合 DPI 坐标、原生窗口语义）；其余 e2e 全量在 ubuntu 的 Frontend job 覆盖，
+      # 不再整套重复（整套串行约 7 分钟，且慢 runner 上的时序 flaky 大多来自这里）。
+      - name: Test Windows frontend (host-OS contracts)
         if: matrix.os == 'windows-latest'
         working-directory: src-tauri/frontend
-        run: npm test
+        run: npm test -- app-shell.test.mjs companion-window-ui.test.mjs companion.test.mjs
       - name: cargo test
         # Several workspace integration suites share process-global fixtures.
         # Serial execution avoids platform-dependent false hangs under CI load.
@@ -198,7 +208,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
-        run: cargo install cargo-audit --version 0.22.2 --locked
+        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2
+        with:
+          tool: cargo-audit@0.22.2
       - name: cargo audit
         run: cargo audit
 
@@ -214,7 +226,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-deny
-        run: cargo install cargo-deny --version 0.20.2 --locked
+        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2
+        with:
+          tool: cargo-deny@0.20.2
       - name: cargo deny check
         run: cargo deny check
 

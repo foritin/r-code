@@ -268,6 +268,13 @@ pub struct Plan {
     pub implementation_dispatch_error: Option<String>,
     pub implementation_queue_message_id: Option<String>,
     pub implementation_dispatched_at: Option<DateTime<Utc>>,
+    /// 创建时冻结的运行 profile（docs/plan-mode-dual-track-gate.md §14）。旧 Plan 与
+    /// baseline Plan 为 None；非 None 时 Plan 使用该不可变快照而非全局设置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_profile: Option<crate::plan_entry::ResolvedPlanRuntimeProfile>,
+    /// task-level 权威目录阶段（bootstrap | resident）。只允许单向 CAS 晋升。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_phase: Option<crate::plan_entry::PlanCatalogPhase>,
 }
 
 /// A revisioned feature todo. Dependencies contain stable item IDs from the same Plan revision.

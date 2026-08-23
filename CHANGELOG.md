@@ -6,6 +6,78 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-23
+
+### Added
+
+- DeepSeek Plan 锚定（独立滑钮，默认关闭）：进入 DeepSeek Plan 后可选择最小规划轨迹——规划期仅保留 5→8 项只读工具与最小上下文注入（无 memory、时钟、MCP 文案、peer、进度与 governor 尾部），批准实施后自动恢复该任务全部可用能力（RestoredFull 审计事件 + fail-closed 断言）。与「复杂任务先建议制定计划」互不替代；开关与 Provider 路由在 Plan 创建时冻结，运行中切换只影响新计划。
+- 附件 Blob 引用链路：粘贴/选择文件即刻写入内容寻址 BlobStore（同一图片多任务只存一份物理副本），发送 IPC 只携带附件 id；会话 JSONL、排队消息与模型投影不再持久化 Base64。新增「删除草稿附件立即释放引用」与 24 小时租约回收。
+- 旧会话数据自动迁移：启动时按会话逐个把历史 JSONL/排队消息中的 Base64 附件原子迁移为 Blob 引用（源/目标 SHA-256 状态机，崩溃可恢复、可重复执行且不重复计数；损坏会话保留原文件并在日志报告），迁移完成后清理旧图片预览目录；过期草稿附件按 24 小时租约回收（回收前扫描活动会话与队列引用，防止崩溃窗口误删）。
+- 长会话图片视觉检查点：图片移出精确保留区进入压缩摘要前，由当前同一多模态主模型生成结构化描述替代旧图参与摘要（失败保留原图引用，绝不改走 OCR）。- 请求预算四类分离审计：request-audit 记录文本/工具 schema/图片/文档 token 分项、请求与有效输出额度、wire bytes、附件计数与锚定阶段；图片按确定性 tile 上界核算（deepseek-v4-flash-vision-exp 的 1818×1026 图片为 32,000 token）。
+- 「每轮最大输出」可编辑：范围 2,048 到服务上限；未显式配置时采用目录推荐值（DeepSeek V4 为 65,536），服务端上限只作上界展示，输入框不再锁死。
+
+### Changed
+
+- 修复图片 Base64 造成的伪超窗与 `1 → 2 → 4` 输出预算错误链：Base64 字符不再参与任何 token 估算；发送前预算闸门（resolve_request_max_tokens）在有效输出低于请求类别最低额度（聊天 2,048 / 工具回合 8,192 / Plan 16,384 / 压缩 4,096）或整理两次后仍超窗时零发送（OUTPUT_HEADROOM_BELOW_MINIMUM / CONTEXT_PREFLIGHT_FAILED），绝不把额度强制改成 1；MaxTokens 空回合不再自动 ×2 升档重放（输出预算耗尽按钳制状态分类报错）。
+- 图片路由改为后端按冻结能力产生：目录确认多模态的主模型原图直发（OCR/辅助视觉调用数为 0），服务拒图返回能力漂移错误（VISION_CAPABILITY_DRIFT）；文本主模型按显式引擎分派，视觉模型失败不再自动降级 OCR。
+- 压缩与发送闸门只预留本次请求的单轮输出，不再无条件预留 Provider 服务端上限（DeepSeek 393,216 预留会把 1M 窗口可用输入压掉近 40%）。
+- Provider 能力真值统一：deepseek-v4-flash-vision-exp 的 supports_vision 在全部三条协议线（Chat/Responses/Anthropic 口）与目录标注一致；能力解析统一经后端单一入口（provider_kind + model + protocol 为能力键）。
+
+
+### Added
+
+- 图片理解引擎配置（设置 → 模型服务 → 图片理解）：图片如何被模型理解从隐式降级升级为显式配置，本机 OCR（默认）或视觉模型二选一。视觉模型引擎由指定的多模态模型理解整张图片并生成结构化中文描述注入主对话（原图仅本地留存预览），失败时 PNG/JPEG 在 Windows/macOS 自动降级本机 OCR 并在文本头标注；配置缺失、服务被删或未就绪时发送返回可读错误，不再静默剔除图片。
+- Provider 模型能力标注：预设目录的候选模型全部携带人工核对的 `vision` 标注（多模态/文本），前端以统一三态出口 `resolveImageCapability` 判定（预设目录 > Codex 目录 > 名称启发式 > unknown）；设置页模型候选菜单显示 [多模态] / [文本] 徽标；目录补入官方核对的多模态模型——DeepSeek `deepseek-v4-flash-vision-exp`（V4 正式模型均为纯文本）、GLM-4.6V 系列（zhipu/zai）与 Qwen-VL 系列（bailian/dashscope）——图片理解的模型下拉列出该服务全部候选（预设 + 配置模型 + 本地记忆模型）并逐项带徽标，切换服务自动预选第一个多模态模型。
+- 子代理面板自动连通测试覆盖已保存槽位：进入面板的自动探测合并目录条目与槽位（按 来源+模型 精确键控去重），槽位使用非默认模型且回执过期后无需手动点击即可恢复 connected 并保存；面板顶部新增常驻状态行显示本次自动测试结果（失败不弹错误、可手动重测）。
+- 设置页顶部搜索：按区块标题与字段关键词（含手册关键词）跨 7 个面板过滤，命中后深链定位并闪烁聚焦目标区块。
+- 指引手册扩展：「模型服务 / 子代理候选池 / 图片理解」新增离线手册条目（服务 vs 默认服务、权重合计 100%、连通回执 TTL、OCR 与视觉模型取舍等），帮助菜单新增「设置与模型服务指引」入口；新增 InfoTip 轻量说明组件（`?` 图标 focus/hover 展开），用于规划建议卡、协议选择、权重与候选模型等关键字段。
+
+### Changed
+
+- **规划建议证据门移除（行为变化）**：预注册评估 manifest、构建期嵌入与实验环境变量不再是启用前提，客户滑钮「复杂任务先建议制定计划」成为唯一开关、打开即生效（`R_CODE_PLANNING_EMERGENCY_OFF=1` 急停保留为唯一兜底）。开关可用性改为「存在任一已配置且就绪的 DeepSeek 服务」，按任务实际使用的服务生效、无需把 DeepSeek 设为默认服务；`eval/plan-eval/` 降级为可选的事后质量回归工具。
+- **图片理解引擎只服务文本主模型（重要语义）**：主模型目录确认多模态（Claude、GPT、豆包、GLM-4.6V、Qwen-VL、DeepSeek vision-exp 等）时图片**原图直发**，不经过本机 OCR 或视觉模型（附件标签显示「多模态直发」）；Codex 主 Agent 的图片也回归其自身目录处理。引擎只对文本主模型（DeepSeek V4 正式模型、代码模型等）生效；能力未知（中转/手填模型）仍按所选引擎分派。Linux 无系统 OCR 时发送图片会返回包含切换指引的明确错误。
+- 图片转换的等待可见且更短：视觉模型引擎改为**多图并发**（等待时间为最慢一张而非逐张累加）；文本主模型带图发送期间，输入区显示「正在理解图片…，完成后自动开始对话」。
+- 「默认服务」语义显性化：`用于新对话` 按钮改名 `设为默认服务`（title 说明"设为默认后，新对话将使用这项服务；已开始的对话不受影响"），`保存并用于新对话` 改名 `保存并设为默认`，服务列表徽标 `正在使用` 改为 `默认` 并支持 hover 快捷设为默认（仍受服务就绪约束）。
+
+- DeepSeek 复杂任务 Plan 建议（Phase 0，默认关闭、证据门控）：DeepSeek 主代理识别到复杂请求时可调用新工具 `propose_plan_mode` 提交受控信号（multi_subsystem / migration_or_data / design_decision / expensive_rollback / multi_stage_verification），宿主按固定本地化模板生成客户弹窗——「直接继续 / 先制定计划」二选一，拒绝（含关闭与 Escape）后同任务分支持久安静、仍可手动选择 Plan；建议以 SQLite `plan_entry_offers` 聚合持久化（同请求键唯一、同分支一次预算、revision CAS、Provider 快照比对 supersede、崩溃窗口显式重试），接受事务原子完成建 Plan、切模式与续接。同一真实请求获得稳定 `origin_request_key`（direct/queued/steer/host-continuation 全路径），普通客户设置只新增一个 DeepSeek 专属开关 `planning.suggest_complex_tasks`；「Plan 模式会做什么」指引手册可从弹窗、DeepSeek 设置卡与 Help 菜单打开（替换决策弹窗而非叠加）。
+- Plan 原生双轨（DeepSeek 证据门控）：符合条件的 DeepSeek Plan 冻结 5→8 只读目录（bootstrap：glob/plan_publish/read_file/request_user_input/search_files；resident 追加 git_status/list_files/load_skill）与最小上下文（不注入本地时钟、委派说明与 memory），目录阶段以 `plans.catalog_phase` 为权威、经宿主 CAS 确认持久化后才允许下一轮请求，clear context/fork/重启不回退；执行硬门保持原生状态机（只读调查 → plan_publish → 用户批准 → 实施），隐藏的 edit/Shell/MCP/委派调用在副作用前硬拒。Plan 运行 profile 在创建时冻结（UI plan_create / 显式 enter_plan_mode / 建议接受共用同一 resolver），其他 Provider 与子代理不受影响。
+- 真实 DeepSeek 三臂评估基建（`eval/plan-eval/`）：25 个冻结 case（5 类 × 5，初始测试红 / oracle patch 绿）+ 40 个路由 probe（20 simple + 20 complex），预注册发布门与 corpus sha256 锁；`plan_eval` 二进制提供 eval-only 自动 accept/approve 的三臂/路由运行器（非 dry-run 只认原生 DeepSeek，dry-run 记录不得作为证据）；`score.mjs` 只消费 raw results 生成 manifest，`verify-manifest.mjs` 独立重算每个数字；评估工具链已降级为可选的事后质量回归（manifest 不再嵌入构建，不阻塞功能启用）。
+- 自动复杂度路由不再调用 `enter_plan_mode`：该工具只保留给用户显式选择 Plan 或明确要求先做结构化计划的路径；Agent 模式提示词按建议资格分档（eligible DeepSeek 注入建议策略，其余保持显式入口）。
+- 旧 `first_round_*` 实验档位从客户设置移除：`orchestration.first_round_catalog` / `first_round_promote_on` 仍可解析但写入时返回明确诊断警告，不再映射为新语义；首轮工具清单锚定实验（含 `plan_ready` 规划门）整体下线，Plan 原生目录取而代之。
+
+
+- 请求信封审计（诊断，默认关闭）：新增配置 `diagnostics.request_audit`，开启后每轮模型派发前向 `sessions/request-audit/{会话id}.jsonl` 追加旁路快照（system/tools/messages 指纹、工具清单名单、hosted 工具与实际派发的输出预算），并做重建自检（只记录不阻断）；canonical 会话文件与既有读者零改动。配套只读命令 `request_audit_counters` 可读取（追加数, 不一致数）计数。「设置 → 诊断」新增「请求构成审计」开关。
+- 首轮工具清单锚定实验（opt-in，默认关闭）：新增配置 `orchestration.first_round_catalog`（`full` 默认/`readonly`/`editor_pair`）与 `orchestration.first_round_promote_on`（`either` 默认/`tool_call`）。非默认值时主代理首轮只看到收窄的工具清单（每次请求携带的 tools 菜单，与项目文件夹无关），首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单，会话级粘性保证每会话至多一次清单变化；清单裁剪只是呈现层，工具执行与审批边界不变。「设置 → Agent 编排」新增「首轮工具清单锚定（实验）」卡片。
+- 子代理派生确认回路：新增 `plan_subagents` 工具，主代理要并行开出第 2 个及更多子代理前，必须先提交「每个方向一条条目」的计划并带 `confirm` 确认；运行时返回数量、角色槽位分布与同角色警告的分析，超出确认计划的 `delegate_task` 会被拒绝并引导修订计划。首个子代理仍可直接派生，子代理受阻时开孙代理（深度 2）的能力保持不变。
+- 子代理任务提示词全程可见：委派事件 scope 携带 goal 有界摘要，宿主在子代理独立会话记录首位落盘任务全文（优先取 `delegate_task` 审计输入，外部路径回退摘要）；子代理详情新增「任务 · 来自主代理」卡片，转录按任务样式渲染主代理下发的 user 消息，不再静默丢弃。
+- 时间线新增可展开的「子智能体」事件行（原型 C 的藏青高亮）：行首图标 + 藏青子代理名称 + 任务提示词摘要 + 运行状态计数，展开后为既有状态芯片；藏青色收敛为 `--subagent-run` 设计令牌，与目录状态环、运行中芯片描边同源。
+- 「首轮工具清单锚定（实验）」卡片新增「指引手册 →」入口：随应用内置的手册浮层（这是什么 / 三个档位 / 恢复时机 / 推荐组合 / 如何验证 / 边界与事实），档位卡与设置下拉共用同一份枚举文案，离线可用且不随文档站漂移；页脚「去开启请求构成审计」一键切到「诊断」页并闪烁高亮目标开关。
+- 首轮工具清单锚定的生效过程在时间线直接可见：会话首个受限请求派发时出现「工具清单已收窄（锚定期）」行（档位 + 收窄/完整工具数），锚定期结束时出现「锚定期结束 · 工具清单恢复完整」行；两行随会话记录持久化，重开任务详情仍可回放，不锚定（完整清单）时零噪音。收窄回合内托管联网工具（web_search / web_fetch）一并从请求剥离，「读写最小对」真的只剩 read_file + edit；审计 RequestHeader 的 hosted_tool_names 同步反映剥离，晋升后联网工具随配置回归。
+- 规划门档位与规划完成晋升信号（opt-in 实验扩展）：`orchestration.first_round_catalog` 新增 `plan_gate`（首轮起零工作工具），`orchestration.first_round_promote_on` 新增 `plan_complete`——收窄目录注入唯一「门铃」工具 `plan_ready`（worker 侧拦截执行，不转发网关、无审批），工具剥夺跨回合、跨 run 持续（会话级粘性），直到模型自己调用 plan_ready 声明规划完成才恢复完整工具目录；纯文本终答自然结束 run，粘性保持到下一个 run 的首轮。「设置 → Agent 编排」的锚定卡片新增总开关滑纽（开 = 记住的档位，关 = 完整清单现状，档位记忆保留在本地）。
+
+### Changed
+
+- 循环重放护栏从两轮放宽为连续三轮：相邻两轮工具调用完全一致不再立即停止——上下文压缩可能裁掉上一轮工具结果，模型相邻轮重发同一读调用是合法恢复行为；连续第三轮原样重放才触发，错误轮不延续连胜（仍由同错连败统计）。触发后的收尾行为不变：一次无工具总结后结束、工作区改动保留。
+- 同目标子代理硬阀门：`plan_subagents` 确认时，批内完全相同的 goal（忽略大小写与空白）或与仍在运行的子代理相同的 goal 会以 `needs_revision` 拒绝锁定，必须合并/改写条目后重新确认；`delegate_task` 对与运行中子代理完全相同的目标直接拒绝并引导先 `collect_subagents` 等待结果——不再只给软警告，杜绝「多名同角色子代理」的滥用观感。
+- `bash` 成功执行约 3 步及以上的串联命令（`&&`/`||`/`;`/`|`，引号内不计）时，在结果中附加一次拆解提示，引导逐次调用、逐步检查输出；失败/超时结果不叠加提示。
+
+### Changed
+
+- 文件行图标改为真实扩展名图标并移到文件名前：常用扩展名（ts/tsx/js/rust/css/html/md/json/yaml/python/docker 等 40+）使用 vscode-icons 图标集（MIT，经 Iconify 分发），未知扩展回退按语义分色的通用文档形；布局由「图标在行首」改为「动词 → 图标 → 文件名」。
+- 时间线计划卡改为待办卡：默认折叠的计数卡（当前步骤标题 + n/N 计数 + 圆形箭头），展开后为 ✓ 完成 / → 进行中 / ○ 待处理三态步骤列表。
+- 执行中文字采用「霓虹闪烁与余辉」效果：运行状态行（处理中 + 时长）与进行中工具卡动词在白光瞬时曝光后衰减为暖橙余辉，流式光标改为白→暖橙渐变带光晕；`prefers-reduced-motion` 下全部停用。
+- 子智能体目录对齐原型 C+：分组标题改为「正在运行 / 已结束 · N」，目录行的 40px 头像改为状态标记（运行中藏青环 / 已完成 ✓ 圈），行密度收紧；运行中子代理芯片与状态环统一藏青高亮。
+- 会话头部项目名与状态以 inset chip 呈现（边框 + 圆角 + 内嵌底色），对齐原型头部的项目/分支 chip 观感。
+- 主交互页对话流去除菱形节点与左侧轨道线：工具卡、轮次折叠条与定位锚点上的旋转方块标记全部移除，头部计划快捷条的状态菱形改为圆点，活动行回归安静的图标单行。
+- 文件活动不再折叠成「已编辑 N 个文件」：每个文件独立成行，带按扩展名着色的类型图标，行内即时显示 `+N −N` 行数差异（编辑按 old/new 片段行数，写入按整份内容行数），超过 6 个文件折叠尾部按需展开。
+- 读取/查看文件的活动与编辑同流呈现：同样渲染为彩色类型图标的文件行（动词「读取/查看」），目录清单类仍归「探索」行；探索行与思考行文案对齐原型（「已探索 N 项」「思考过程」）。
+- 完成轮次摘要条改为「已处理 N 步 · 耗时 3m 12s」紧凑格式（原「耗时 1小时 34分」），时长格式与运行态统一为 `5s / 1m 42s / 1h 02m`。
+- 会话输入框改为居中悬浮卡：宽度 `min(760px, 100%)`、16px 圆角与投影，不再通栏贴底；待发送队列宽度与浮层卡对齐。主操作按钮改为带文字的胶囊（运行中「■ 中断」，空闲「发送」），替换纯图标方块。
+
+### Fixed
+
+- 小助手（伴生窗）透明区的点击穿透改为自愈循环：此前原生 IPC 连续失败数次后穿透会一次性停摆，整窗（含透明区）从此变成吞掉背后所有点击的「隐形大框」；现在降级期间保持宠物可点可拖并持续慢速探活，原生调用恢复后自动回到 80ms 命中判定。同时修正三类误判来源：WebView2 的 `visibilityState` 滞留 hidden 时改用原生窗口可见性复核；窗口几何每约 1 秒主动重取（原生移动/DPI 事件可能漏发，旧坐标会把命中框整体偏移成「别处被挡、宠物点不中」）；`visibility:hidden` / `display:none` 的隐藏元素不再认领原生交互。原生拖拽结束但未派发 pointerup 时，移动停顿约 0.6 秒即恢复穿透判定（原只靠 3 秒兜底）。
+
 ## [0.9.1] - 2026-08-17
 
 > **预上线版本（Pre-release）**
@@ -276,5 +348,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.3.2]: https://github.com/foritin/r-code/releases/tag/v0.3.2
 [0.3.3]: https://github.com/foritin/r-code/releases/tag/v0.3.3
 [0.9.0]: https://github.com/foritin/r-code/releases/tag/v0.9.0
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.9.1...HEAD
 [0.9.1]: https://github.com/foritin/r-code/releases/tag/v0.9.1
+[Unreleased]: https://github.com/foritin/r-code/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/foritin/r-code/releases/tag/v1.0.0

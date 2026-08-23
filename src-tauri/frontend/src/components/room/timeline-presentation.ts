@@ -37,6 +37,8 @@ export interface TimelineSubagentEntry {
   id: string;
   runId: string | null;
   label: string;
+  /** 主代理下发的任务提示词（delegate_task 的 goal）；运行记录缺失时回退解析工具输入。 */
+  goal: string | null;
   summary: string | null;
   model: string | null;
   runtimeKind: TimelineRunItem["runtimeKind"];
@@ -258,14 +260,12 @@ function presentRawTurn(turn: RawTurn): TimelineTurn | null {
 }
 
 /**
- * Queued and steer messages belong to the composer surfaces (reorderable queue /
- * floating steer stack) until dispatch succeeds. Rendering them in the conversation at
- * the same time duplicates the same content and makes queue reordering look like it
- * rewrites chat history.
+ * Durable queue rows belong to the composer until dispatch succeeds. An accepted steer is
+ * different: it is already a user action in the active turn, so it remains visible in the
+ * conversation while the floating stack only communicates its short-lived apply status.
  */
 function composerOwnsQueuedMessage(user: TimelineUserItem | null): boolean {
-  return user?.sendMode === "steer"
-    || user?.queuedState === "queued"
+  return user?.queuedState === "queued"
     || user?.queuedState === "dispatching"
     || user?.queuedState === "failed";
 }
@@ -284,6 +284,7 @@ function presentTurn(turn: RawTurn): TimelineTurn {
   const agents = subagentEntries(childRuns, delegateTools);
   const output: TimelineDisplayItem[] = [];
   let emittedAgents = false;
+  const foldedCommandIds = new Set<string>();
 
   for (let index = 0; index < body.length;) {
     const item = body[index];
@@ -294,6 +295,10 @@ function presentTurn(turn: RawTurn): TimelineTurn {
     }
 
     if (item.kind === "tool") {
+      if (foldedCommandIds.has(item.id)) {
+        index += 1;
+        continue;
+      }
       const protocol = protocolToolKind(item.name);
       if (protocol) {
         if (!emittedAgents && agents.length > 0) {
@@ -312,6 +317,40 @@ function presentTurn(turn: RawTurn): TimelineTurn {
       const groupKind = toolGroupKind(item);
       const tools = [item];
       let cursor = index + 1;
+      // Codex App Server commonly emits a short public reasoning summary before every shell
+      // command. Those summaries should not split one command run into a tall stack of one-row
+      // groups. Fold commands across reasoning-only context rows while leaving the context rows
+      // themselves in the trace and preserving hard chronology boundaries such as agent messages,
+      // files, approvals and other tool kinds.
+      if (groupKind === "command") {
+        while (cursor < body.length) {
+          const candidate = body[cursor];
+          if (candidate.kind === "context" && isProcessNarration(candidate.label)) {
+            cursor += 1;
+            continue;
+          }
+          if (
+            candidate.kind === "tool"
+            && !protocolToolKind(candidate.name)
+            && toolGroupKind(candidate) === "command"
+          ) {
+            tools.push(candidate);
+            foldedCommandIds.add(candidate.id);
+            cursor += 1;
+            continue;
+          }
+          break;
+        }
+        output.push({
+          kind: "tool_group",
+          id: `tool-group-${tools.map((tool) => tool.id).join("-")}`,
+          t: tools[0].t,
+          groupKind,
+          tools,
+        });
+        index += 1;
+        continue;
+      }
       while (cursor < body.length) {
         const candidate = body[cursor];
         if (
@@ -385,6 +424,10 @@ function isInternalProtocolLabel(label: string): boolean {
     || label === "subagent_tool_audit";
 }
 
+function isProcessNarration(label: string): boolean {
+  return label === "Codex 思考摘要" || label === "思考过程" || label === "执行过程";
+}
+
 function subagentEntries(
   runs: readonly TimelineRunItem[],
   delegateTools: readonly TimelineToolItem[]
@@ -396,6 +439,7 @@ function subagentEntries(
         id: `subagent-entry-${run.runId}`,
         runId: run.runId,
         label: run.agentLabel?.trim() || runtimeFallbackLabel(run.runtimeKind),
+        goal: delegatedGoal(delegateTools, run.delegatedByToolCallId),
         summary: run.agentSummary,
         model: run.model || null,
         runtimeKind: run.runtimeKind,
@@ -404,6 +448,17 @@ function subagentEntries(
   }
 
   return delegateTools.map((tool, index) => placeholderSubagent(tool, index));
+}
+
+/** 从 delegate_task 工具输入解析该子代理的任务提示词（goal）。 */
+function delegatedGoal(
+  delegateTools: readonly TimelineToolItem[],
+  delegatedByToolCallId: string | null
+): string | null {
+  if (!delegatedByToolCallId) return null;
+  const tool = delegateTools.find((item) => item.callId === delegatedByToolCallId);
+  if (!tool) return null;
+  return firstString(parseRecord(tool.inputJson), ["goal", "task", "prompt"]);
 }
 
 function placeholderSubagent(tool: TimelineToolItem, index: number): TimelineSubagentEntry {
@@ -420,6 +475,7 @@ function placeholderSubagent(tool: TimelineToolItem, index: number): TimelineSub
     id: `subagent-placeholder-${tool.callId ?? tool.id}-${index}`,
     runId: null,
     label,
+    goal,
     summary: goal,
     model: firstString(output, ["model"]) ?? null,
     runtimeKind,

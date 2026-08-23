@@ -250,6 +250,7 @@ export function Canvas({
   const toggleFocus = useAppStore((s) => s.toggleWorkbenchFocus);
   const expandReview = useAppStore((s) => s.expandReview);
   const detail = useTasksStore((s) => s.details[taskId]);
+  const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const [reviewChangeCount, setReviewChangeCount] = useState<number | null>(null);
   useEffect(() => setReviewChangeCount(null), [taskId]);
   const displayedReviewChangeCount = reviewChangeCount ?? detail?.changes.length ?? 0;

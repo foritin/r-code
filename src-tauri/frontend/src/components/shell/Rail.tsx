@@ -28,6 +28,11 @@ interface ProjectNode {
   tasks: Task[];
 }
 
+// 原型 C 侧边栏的设计语言是「安静列表」：普通已结束的任务不加任何状态标记，
+// 只有运行中（旋转环）和需要用户动作的状态（等待确认/待审阅/已中止）才点亮。
+// 完整状态文字始终保留在条目的 title 提示里。
+const MARKED_STATES = new Set(["running", "attention", "review", "stopped"]);
+
 /** 左侧只负责全局导航与项目树，不承载项目动态；项目动态仅在 DashboardScene 内。 */
 export function Rail() {
   const scene = useAppStore((s) => s.scene);
@@ -160,7 +165,7 @@ export function Rail() {
                     }}
                     title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
                   >
-                    <i className={`task-state-dot ${state}`} />
+                    {MARKED_STATES.has(state) && <i className={`task-state-dot ${state}`} aria-hidden="true" />}
                     <span className="rail-label">{taskTitle(task)}</span>
                     <time className="rail-label">{elapsedMinutes(task.updated_at)}</time>
                   </button>
@@ -226,7 +231,7 @@ export function Rail() {
                           }}
                           title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
                         >
-                          <i className={`task-state-dot ${state}`} />
+                          {MARKED_STATES.has(state) && <i className={`task-state-dot ${state}`} aria-hidden="true" />}
                           <span className="rail-label">{taskTitle(task)}</span>
                           <time className="rail-label">{elapsedMinutes(task.updated_at)}</time>
                         </button>

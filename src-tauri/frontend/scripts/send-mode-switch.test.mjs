@@ -104,14 +104,9 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
   await stop.waitFor({ state: "visible" });
   assert.match(await stop.getAttribute("class"), /composer-primary-button/, "Stop should replace the primary Send button while the draft is empty");
   const stopButtonBox = await stop.boundingBox();
-  assert.ok(stopButtonBox && stopButtonBox.width >= 40 && stopButtonBox.height >= 40, "Stop needs the same substantial target as Send");
+  assert.ok(stopButtonBox && stopButtonBox.width >= 60 && stopButtonBox.height >= 28, "中断是带文字的胶囊按钮（原型 C），保持可点尺寸");
   assert.equal(await stop.locator("svg").count(), 1, "running controls should expose a square Stop icon");
-  const stopIconBox = await stop.locator("svg").boundingBox();
-  const stopGlyphBox = await stop.locator("svg rect").boundingBox();
-  assert.ok(stopIconBox && stopIconBox.width >= 19, "Stop icon should have enough visual weight inside the primary circle");
-  assert.ok(stopGlyphBox && stopGlyphBox.width >= 12, "Stop square must read clearly inside the primary circle");
-  const stopCopyBox = await stop.locator(".sr-only").boundingBox();
-  assert.ok(!stopCopyBox || stopCopyBox.width <= 1, "Stop copy should stay accessible without a text button");
+  assert.equal(await stop.locator(".send-label").innerText(), "中断", "Stop 显示可见文字「中断」而不是纯图标");
 
   await composer.fill("准备补充当前运行");
   await send.waitFor({ state: "visible" });
@@ -163,10 +158,49 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
       },
     };
   });
+
+  const queuedSteerText = "从队列引导当前运行的验收条件";
+  await page.evaluate(async ({ text }) => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    await browserMockInvoke("cmd_agent_send", {
+      taskId: "mock-task-queue",
+      message: text,
+      mode: "queue",
+      attachments: [],
+    });
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    await useTasksStore.getState().refreshDetail("mock-task-queue");
+  }, { text: queuedSteerText });
+  const queuedSteer = page.getByRole("button", {
+    name: `引导当前运行：${queuedSteerText}`,
+  });
+  await queuedSteer.waitFor({ state: "visible" });
+  await queuedSteer.click();
+  await page.waitForFunction(
+    ({ text }) => {
+      const matches = [...document.querySelectorAll(".you")]
+        .filter((element) => element.textContent?.includes(text));
+      return matches.length === 1
+        && matches[0].classList.contains("user-mode-steer")
+        && matches[0].querySelector(".user-send-mode")?.textContent === "引导";
+    },
+    { text: queuedSteerText },
+  );
+  assert.equal(
+    await page.locator(".you", { hasText: queuedSteerText }).count(),
+    1,
+    "queue → steer must transition the existing user bubble instead of duplicating it",
+  );
+  assert.equal(await queuedSteer.count(), 0, "the accepted item must leave the queue controls");
+
   await composer.fill("补充当前运行的验收条件");
   await send.click();
   await page.waitForFunction(() => globalThis.__rCodeObservedSendModes?.length === 1);
   assert.deepEqual(await page.evaluate(() => globalThis.__rCodeObservedSendModes), ["steer"]);
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll(".you.user-mode-steer")]
+      .some((element) => element.textContent?.includes("补充当前运行的验收条件")),
+  );
   await page.close();
 });
 

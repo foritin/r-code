@@ -1,0 +1,34 @@
+diff --git a/lib/pipeline.js b/lib/pipeline.js
+index 44675cc..ed2c054 100644
+--- a/lib/pipeline.js
++++ b/lib/pipeline.js
+@@ -3,4 +3,6 @@ import { createWriter } from "./writer.js";
+ export function runPipeline(records, sink) {
+   const writer = createWriter(sink);
+   writer.writeEach(records);
++  writer.flushBuffer();
++  return writer;
+ }
+diff --git a/lib/writer.js b/lib/writer.js
+index 1f8238d..2e08487 100644
+--- a/lib/writer.js
++++ b/lib/writer.js
+@@ -1,7 +1,17 @@
+ export function createWriter(sink) {
++  let buffer = [];
++  let flushes = 0;
+   return {
+     writeEach(records) {
+-      for (const record of records) sink([record]);
++      buffer.push(...records);
+     },
++    flushBuffer() {
++      if (buffer.length > 0) {
++        sink(buffer);
++        flushes += 1;
++        buffer = [];
++      }
++    },
++    flushCount() { return flushes; },
+   };
+ }

@@ -24,6 +24,12 @@ import { SessionRunSummary } from "../room/SessionRunSummary";
 import { SteerStack, type SteerStackItem } from "../room/SteerStack";
 import { latestRunRequestText, type PlanStep } from "../room/model";
 import { PendingPermissions } from "../room/Permissions";
+import {
+  PlanEntryDialog,
+  type PlanEntryDecision,
+} from "../room/PlanEntryDialog";
+import { GuideSheet } from "../settings/GuideSheet";
+import { planEntryDecide, planEntryRetryContinuation } from "../../lib/ipc";
 import { Canvas } from "../room/Canvas";
 import { TaskActionsMenu } from "../TaskActionsMenu";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
@@ -106,6 +112,50 @@ export function RoomScene() {
   const expandReview = useAppStore((s) => s.expandReview);
   const detail = useTasksStore((s) => (currentTaskId ? s.details[currentTaskId] : undefined));
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
+  // Plan 入口建议表面状态（docs §12.5）：decision | guide 两态互斥，同一时刻
+  // 只有一个 modal；offer / 决定草稿保留在宿主，切到 guide 不丢决定上下文。
+  const pendingPlanEntryOffer = detail?.pending_plan_entry_offer ?? null;
+  const [planEntrySurface, setPlanEntrySurface] = useState<"decision" | "guide">("decision");
+  const [planEntryReturnFocus, setPlanEntryReturnFocus] = useState<"guide-link" | null>(null);
+  const [planEntryBusy, setPlanEntryBusy] = useState(false);
+  const [planEntryError, setPlanEntryError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingPlanEntryOffer) {
+      setPlanEntrySurface("decision");
+      setPlanEntryError(null);
+    }
+  }, [pendingPlanEntryOffer]);
+  const decidePlanEntry = async (decision: PlanEntryDecision, idempotencyKey: string) => {
+    if (!pendingPlanEntryOffer || !currentTaskId || planEntryBusy) return;
+    setPlanEntryBusy(true);
+    setPlanEntryError(null);
+    try {
+      await planEntryDecide({
+        offerId: pendingPlanEntryOffer.id,
+        expectedRevision: pendingPlanEntryOffer.revision,
+        decision,
+        idempotencyKey,
+      });
+      await refreshDetail(currentTaskId);
+    } catch (cause) {
+      setPlanEntryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPlanEntryBusy(false);
+    }
+  };
+  const retryPlanEntryContinuation = async () => {
+    if (!pendingPlanEntryOffer || !currentTaskId) return;
+    setPlanEntryBusy(true);
+    setPlanEntryError(null);
+    try {
+      await planEntryRetryContinuation(pendingPlanEntryOffer.id);
+      await refreshDetail(currentTaskId);
+    } catch (cause) {
+      setPlanEntryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPlanEntryBusy(false);
+    }
+  };
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
   const setCurrentProject = useTasksStore((s) => s.setCurrentProject);
   const workspaces = useTasksStore((s) => s.workspaces);
@@ -631,6 +681,31 @@ export function RoomScene() {
         ) : (
           <>
             <PendingPermissions taskId={currentTaskId} />
+            {pendingPlanEntryOffer && planEntrySurface === "decision" ? (
+              <PlanEntryDialog
+                offer={pendingPlanEntryOffer}
+                busy={planEntryBusy}
+                error={planEntryError}
+                onDecide={(decision, idempotencyKey) => void decidePlanEntry(decision, idempotencyKey)}
+                onRetry={() => void retryPlanEntryContinuation()}
+                returnFocus={planEntryReturnFocus}
+                onOpenGuide={() => {
+                  setPlanEntryReturnFocus(null);
+                  setPlanEntrySurface("guide");
+                }}
+              />
+            ) : null}
+            {pendingPlanEntryOffer && planEntrySurface === "guide" ? (
+              <GuideSheet
+                guideId="plan-suggestion"
+                onClose={() => {
+                  // 决策弹窗重新挂载后聚焦「Plan 模式会做什么？」链接（docs §12.5）。
+                  setPlanEntryReturnFocus("guide-link");
+                  setPlanEntrySurface("decision");
+                }}
+                onAction={() => setPlanEntrySurface("decision")}
+              />
+            ) : null}
             {activeMainRun && (
               <SessionRunSummary
                 taskId={currentTaskId}
@@ -679,6 +754,13 @@ export function RoomScene() {
                   }
                   steerInFlightRef.current = null;
                   tlRef.current?.onSent(text, mode, attachments);
+                }}
+                onQueuedSteerAccepted={(queueId, text, outcome) => {
+                  tlRef.current?.onQueuedSteerAccepted(
+                    queueId,
+                    text,
+                    outcome === "steered" ? "steer" : "auto",
+                  );
                 }}
                 onSendFailed={() => {
                   const inFlightId = steerInFlightRef.current;

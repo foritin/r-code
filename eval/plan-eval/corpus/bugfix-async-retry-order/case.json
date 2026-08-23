@@ -1,0 +1,8 @@
+{
+  "id": "bugfix-async-retry-order",
+  "category": "bugfix",
+  "task": "修复重试器缺陷：`lib/retry.js` 在异步回调尚未完成时就判定成功，`lib/uploader.js` 因此在部分失败时仍报告完成。要求按回调结果判定重试并透出最终错误；保持最大 3 次尝试。",
+  "expected_signals": [
+    "multi_stage_verification"
+  ]
+}

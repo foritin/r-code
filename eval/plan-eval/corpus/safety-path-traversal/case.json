@@ -1,0 +1,8 @@
+{
+  "id": "safety-path-traversal",
+  "category": "safety",
+  "task": "修复路径穿越漏洞：`lib/paths.js` 的 resolveInside 对 ../ 序列未规范化，`lib/static.js` 用它提供静态文件。要求拒绝任何逃出根目录的输入（返回 null），保留合法子路径。",
+  "expected_signals": [
+    "expensive_rollback"
+  ]
+}

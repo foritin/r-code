@@ -1,0 +1,36 @@
+diff --git a/lib/idmap.js b/lib/idmap.js
+new file mode 100644
+index 0000000..4dbf53d
+--- /dev/null
++++ b/lib/idmap.js
+@@ -0,0 +1,9 @@
++export function createIdMap(pairs = []) {
++  const map = new Map(pairs);
++  return {
++    toNumeric(legacyId) {
++      return map.get(legacyId) ?? null;
++    },
++    register(legacyId, numericId) { map.set(legacyId, numericId); },
++  };
++}
+diff --git a/lib/refs.js b/lib/refs.js
+index 8494320..af72e09 100644
+--- a/lib/refs.js
++++ b/lib/refs.js
+@@ -1,3 +1,14 @@
+-export function rebind(edges) {
+-  return edges.map((edge) => ({ ...edge }));
++import { createIdMap } from "./idmap.js";
++
++export { createIdMap };
++
++export function rebindEdges(idMap, edges) {
++  const unresolved = [];
++  const rebound = edges.map((edge) => {
++    const from = idMap.toNumeric(edge.from);
++    const to = idMap.toNumeric(edge.to);
++    if (from == null || to == null) unresolved.push(edge);
++    return { from: from ?? edge.from, to: to ?? edge.to };
++  });
++  return { rebound, unresolved };
+ }

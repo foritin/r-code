@@ -201,9 +201,10 @@ test("project conversation keeps every control while using a flat workspace hier
     };
   });
 
-  assert.deepEqual(visualContract.boxBorder, ["0px", "0px", "0px", "0px"]);
-  assert.equal(visualContract.boxRadius, "0px");
-  assert.equal(visualContract.boxShadow, "none");
+  // 居中悬浮对话框：限定宽度的浮层卡（1px 描边 + 16px 圆角 + 投影），不再通栏贴底。
+  assert.deepEqual(visualContract.boxBorder, ["1px", "1px", "1px", "1px"]);
+  assert.equal(visualContract.boxRadius, "16px");
+  assert.notEqual(visualContract.boxShadow, "none", "the floating composer card must cast a shadow");
   assert.equal(visualContract.activityPresent, false, "the composer should not repeat tool activity above the input");
   assert.equal(visualContract.userShadow, "none");
   assert.equal(visualContract.titleMarkerDisplay, "none");

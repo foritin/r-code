@@ -1306,6 +1306,7 @@ fn runtime_contract_request(slot: &FrozenSubagentSlot) -> SubagentCandidateReque
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         },
         caller: "runtime-contract-test".to_string(),
         access_mode: SubagentAccessMode::ReadOnly,
@@ -1402,13 +1403,15 @@ fn runtime_contract_capabilities_and_tree_limits_fail_closed() {
         DelegationLimits::default(),
         DelegationLimits {
             max_depth: 2,
-            max_descendants: 12,
-            max_active_descendants: 5,
+            max_descendants: 4,
+            max_active_descendants: 3,
+            max_direct_subagents_per_run: 3,
         }
     );
     assert_eq!(MAX_SUBAGENT_DEPTH, 2);
-    assert_eq!(MAX_DESCENDANTS_PER_TREE, 12);
-    assert_eq!(MAX_ACTIVE_DESCENDANTS, 5);
+    assert_eq!(MAX_DESCENDANTS_PER_TREE, 4);
+    assert_eq!(MAX_ACTIVE_DESCENDANTS, 3);
+    assert_eq!(MAX_DIRECT_SUBAGENTS_PER_RUN, 3);
 }
 
 #[tokio::test]
@@ -1560,6 +1563,7 @@ async fn weighted_candidate_route_is_deterministic_and_executes_the_selected_slo
                 SubagentAccessMode::ReadOnly,
                 Some(format!("call-{expected_index}")),
                 routing_reason,
+                DelegationInitiator::Runtime,
             )
             .await
             .unwrap();
@@ -1615,6 +1619,7 @@ fn api_only_candidate_pool_delegate_spec_describes_the_configured_subagent_route
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -1684,6 +1689,7 @@ async fn native_candidate_uses_its_slot_request_profile_without_root_provider_le
             SubagentAccessMode::ReadOnly,
             None,
             "slot profile fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -1838,6 +1844,7 @@ async fn native_child_loop_compacts_before_the_provider_window_overflows() {
             SubagentAccessMode::FullAccess,
             None,
             "child compaction fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -1939,6 +1946,7 @@ async fn external_candidate_events_are_allowlisted_and_cannot_forge_control_even
             SubagentAccessMode::ReadOnly,
             None,
             "external event filter fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -2151,6 +2159,7 @@ async fn disabled_cross_engine_switch_blocks_external_candidate_pool_routes_and_
             SubagentAccessMode::ReadOnly,
             None,
             "direct stale route fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap_err();
@@ -2569,7 +2578,7 @@ fn active_plan_context_sets_the_runtime_continuation_gate() {
 #[test]
 fn plan_mode_policy_requires_functional_acceptance_slices() {
     // P0-A：plan mode 策略文本改为尾部 user 消息形态（不再拼进 system）。
-    let message = build_plan_mode_message(true);
+    let message = build_plan_mode_message(true, false);
     let prompt = message.text_content();
 
     assert_eq!(message.role, agent_contract::Role::User);
@@ -2584,14 +2593,30 @@ fn plan_mode_policy_requires_functional_acceptance_slices() {
 }
 
 #[test]
-fn agent_mode_policy_can_reduce_to_plan_but_cannot_bypass_approval() {
-    let message = build_plan_mode_message(false);
+fn agent_mode_policy_keeps_only_explicit_plan_entry_by_default() {
+    // M0-05/M0-08：自动复杂度路由不再调用 enter_plan_mode；默认（无建议资格）
+    // 只保留显式 Plan 入口，不注入复杂度建议策略。
+    let message = build_plan_mode_message(false, false);
     let prompt = message.text_content();
 
     assert_eq!(message.role, agent_contract::Role::User);
-    assert!(prompt.contains("call `enter_plan_mode` before making changes"));
+    assert!(prompt.contains("only when the user explicitly asked for a structured plan"));
+    assert!(!prompt.contains("propose_plan_mode"));
     assert!(prompt.contains("Do not call `plan_publish`"));
     assert!(prompt.contains("requires explicit user approval"));
+}
+
+#[test]
+fn agent_mode_policy_adds_suggestion_route_only_when_eligible() {
+    // 建议资格开启时才出现 propose_plan_mode 策略；显式 Plan 仍免二次确认。
+    let message = build_plan_mode_message(false, true);
+    let prompt = message.text_content();
+
+    assert!(prompt.contains("call `propose_plan_mode` once"));
+    assert!(prompt.contains("explicitly asked for a structured plan, call `enter_plan_mode`"));
+    assert!(prompt.contains("Never call `propose_plan_mode` for a single isolated fix"));
+    assert!(PLAN_SUGGESTION_TAIL.contains("do not suggest planning for isolated fixes"));
+    assert!(PLAN_SUGGESTION_TAIL.contains("Modifying multiple files alone is not complexity"));
 }
 
 #[test]
@@ -2755,6 +2780,7 @@ async fn workspace_free_suspend_tool_closes_the_per_run_tool_gate() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: gate.clone(),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -2801,6 +2827,7 @@ async fn external_tools_cannot_shadow_builtin_or_reserved_host_tools() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -3941,7 +3968,7 @@ async fn consecutive_tool_turns_keep_system_and_sent_prefix_byte_stable() {
             .collect::<Vec<_>>();
         assert!(texts[0].starts_with("Current local time: "));
         assert!(texts[1].contains("Agent mode is active"));
-        assert!(texts[2].contains("For independent investigation"));
+        assert!(texts[2].contains("Subagent use is opt-in by value"));
         assert!(messages_tail
             .iter()
             .all(|message| message.role == agent_contract::Role::User));
@@ -3984,6 +4011,7 @@ async fn stale_tool_calls_cannot_bypass_the_delegation_latch() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: disabled,
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4121,6 +4149,7 @@ async fn disabled_reasoning_visibility_filters_reasoning_but_keeps_answers() {
             access_mode: SubagentAccessMode::ReadOnly,
             require_approval: false,
             routing_reason: None,
+            goal: None,
         },
         event: Box::new(AgentEvent::Reasoning {
             text: "also hidden".into(),
@@ -4396,6 +4425,7 @@ async fn delegate_task_routes_explicit_codex_requests_through_the_host_runner() 
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4507,6 +4537,7 @@ async fn session_tool_host_tool_specs_is_stable_across_calls_and_registration_or
             caller: "agent".to_string(),
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(true)),
+            plan_suggestion_enabled: false,
             suspension_gate: Arc::new(AtomicBool::new(false)),
             continuation_gate: Arc::new(AtomicBool::new(false)),
         }
@@ -4714,6 +4745,7 @@ async fn codex_backend_forwards_scope_access_and_aliases_consistently() {
                 access,
                 Some(format!("call-{}", id.as_str())),
                 "fixture route".to_string(),
+                DelegationInitiator::Runtime,
             )
             .await
             .unwrap();
@@ -4795,6 +4827,7 @@ async fn delegation_codex_availability_is_frozen_within_a_run() {
         caller: "agent".to_string(),
         delegation: Some(supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -4865,6 +4898,7 @@ async fn delegation_codex_availability_is_frozen_within_a_run() {
         caller: "agent".to_string(),
         delegation: Some(fresh_supervisor),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -5267,6 +5301,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -5278,6 +5313,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
             "peer-child".to_string(),
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::ReadOnly,
+            false,
             false,
             test_native_options(provider),
             "peer-model".to_string(),
@@ -5295,6 +5331,7 @@ async fn peer_message_sender_and_id_are_runtime_owned_and_events_never_expose_co
         caller: "agent".to_string(),
         delegation: Some(supervisor.clone()),
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -5438,6 +5475,7 @@ async fn root_peer_mail_is_injected_once_without_entering_canonical_history() {
                 access_mode: SubagentAccessMode::ReadOnly,
                 require_approval: false,
                 routing_reason: None,
+                goal: None,
             },
             true,
         )
@@ -5447,6 +5485,7 @@ async fn root_peer_mail_is_injected_once_without_entering_canonical_history() {
             "manual-peer-child".to_string(),
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::ReadOnly,
+            false,
             false,
             test_native_options(root_supervisor.provider.clone()),
             "child-model".to_string(),
@@ -5549,6 +5588,7 @@ async fn child_completion_race_peer_mail_is_removed_after_exactly_one_provider_r
             SubagentAccessMode::ReadOnly,
             Some("completion-race-delegate".to_string()),
             "completion race fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -5609,6 +5649,7 @@ async fn native_child_can_delegate_and_collect_a_grandchild_in_the_same_root_tre
             SubagentAccessMode::ReadOnly,
             Some("delegate-level-one".to_string()),
             "nested delegation fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -5771,6 +5812,7 @@ async fn native_child_empty_final_after_tools_recovers_with_one_tool_free_summar
             SubagentAccessMode::FullAccess,
             None,
             "empty final recovery fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -5831,6 +5873,7 @@ async fn native_child_empty_final_recovery_failure_is_terminal_after_one_attempt
             SubagentAccessMode::FullAccess,
             None,
             "empty final recovery failure fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -5944,6 +5987,7 @@ async fn native_child_hosted_tools_without_answer_get_one_summary_recovery() {
             SubagentAccessMode::FullAccess,
             None,
             "hosted tool recovery fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -6008,6 +6052,7 @@ async fn native_api_candidate_uses_the_shared_tree_and_can_delegate_a_grandchild
             SubagentAccessMode::ReadOnly,
             None,
             "native candidate nested fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -6032,7 +6077,11 @@ async fn native_api_candidate_uses_the_shared_tree_and_can_delegate_a_grandchild
 async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     let supervisor = test_supervisor(Arc::new(NestedDelegationProvider), event_tx);
-    let parent_ids = (0..MAX_ACTIVE_DESCENDANTS)
+    // Two parents plus one grandchild each exactly fill the four-descendant lifetime budget. The
+    // separate direct-cap tests cover three first-level children; this fixture isolates permit
+    // handoff while a parent awaits its child.
+    let parent_count = 2;
+    let parent_ids = (0..parent_count)
         .map(|index| format!("parallel-parent-{index}"))
         .collect::<Vec<_>>();
     for parent_id in &parent_ids {
@@ -6045,6 +6094,7 @@ async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
                 SubagentAccessMode::ReadOnly,
                 Some(format!("delegate-{parent_id}")),
                 "full-parallel permit stress fixture".to_string(),
+                DelegationInitiator::Runtime,
             )
             .await
             .unwrap();
@@ -6060,7 +6110,7 @@ async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
     let payload: serde_json::Value = serde_json::from_str(&collected.content).unwrap();
     assert_eq!(
         payload["subagents"].as_array().map(Vec::len),
-        Some(MAX_ACTIVE_DESCENDANTS)
+        Some(parent_count)
     );
     assert!(
         payload["subagents"]
@@ -6077,8 +6127,56 @@ async fn active_native_children_delegate_and_collect_without_permit_deadlock() {
     );
     assert_eq!(
         supervisor.descendants_created.load(Ordering::SeqCst),
-        MAX_ACTIVE_DESCENDANTS * 2
+        parent_count * 2
     );
+}
+
+#[tokio::test]
+async fn external_main_rcode_child_is_a_leaf_and_cannot_fan_out() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(PendingProvider {
+        requests: requests.clone(),
+    });
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = test_supervisor(provider, event_tx);
+    let run_id = "external-main-leaf".to_string();
+
+    supervisor
+        .spawn_with_run_id(
+            run_id.clone(),
+            SubagentBackend::RCode,
+            Some("bounded_review".to_string()),
+            "bounded review from Codex main".to_string(),
+            SubagentAccessMode::ReadOnly,
+            Some("dynamic-tool-call".to_string()),
+            "external main leaf fixture".to_string(),
+            DelegationInitiator::ExternalMain,
+        )
+        .await
+        .unwrap();
+
+    let child = supervisor
+        .children
+        .lock()
+        .await
+        .get(&run_id)
+        .cloned()
+        .expect("external-main child must be registered");
+    let nested = child
+        .nested_supervisor
+        .as_ref()
+        .expect("native runtime carrier must remain available");
+    assert_eq!(nested.depth, MAX_SUBAGENT_DEPTH);
+    assert!(!nested.can_delegate());
+
+    supervisor.abort_all().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        supervisor.collect(Some(vec![run_id])),
+    )
+    .await
+    .expect("leaf child must settle during cleanup")
+    .unwrap();
 }
 
 #[tokio::test]
@@ -6099,6 +6197,7 @@ async fn cancelling_a_middle_node_recursively_stops_descendants_but_not_siblings
                 SubagentAccessMode::ReadOnly,
                 None,
                 "recursive cancellation fixture".to_string(),
+                DelegationInitiator::Runtime,
             )
             .await
             .unwrap();
@@ -6120,6 +6219,7 @@ async fn cancelling_a_middle_node_recursively_stops_descendants_but_not_siblings
             SubagentAccessMode::ReadOnly,
             None,
             "recursive cancellation fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap();
@@ -6174,6 +6274,7 @@ async fn spawn_rechecks_parent_cancellation_after_waiting_for_children_lock() {
         SubagentAccessMode::ReadOnly,
         None,
         "late registration race fixture".to_string(),
+        DelegationInitiator::Runtime,
     );
     tokio::pin!(spawn);
 
@@ -6234,6 +6335,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -6247,6 +6349,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
             parent_scope.run_id.clone(),
             parent_abort.clone(),
             SubagentAccessMode::ReadOnly,
+            false,
             false,
             test_native_options(provider),
             "parent-model".to_string(),
@@ -6265,6 +6368,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         access_mode: SubagentAccessMode::ReadOnly,
         require_approval: false,
         routing_reason: None,
+        goal: None,
     };
     supervisor
         .delegation_tree
@@ -6294,6 +6398,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         abort: grandchild_abort.clone(),
         nested_supervisor: None,
         result_rx: grandchild_result_rx,
+        goal_key: String::new(),
         join: Arc::new(StdMutex::new(Some(AbortOnDropJoinHandle::new(
             grandchild_abort,
             grandchild_join,
@@ -6326,6 +6431,7 @@ async fn wait_for_all_waits_for_slow_grandchildren_after_fast_parent_cancellatio
         abort: parent_abort.clone(),
         nested_supervisor: Some(nested),
         result_rx: parent_result_rx,
+        goal_key: String::new(),
         join: Arc::new(StdMutex::new(Some(AbortOnDropJoinHandle::new(
             parent_abort,
             parent_join,
@@ -6415,6 +6521,7 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
                 SubagentAccessMode::ReadOnly,
                 None,
                 "lifetime budget fixture".to_string(),
+                DelegationInitiator::Runtime,
             )
             .await
             .unwrap();
@@ -6430,6 +6537,7 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
             SubagentAccessMode::ReadOnly,
             None,
             "lifetime budget fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap_err();
@@ -6450,6 +6558,7 @@ async fn descendant_budget_is_lifetime_scoped_and_depth_three_is_rejected() {
             SubagentAccessMode::ReadOnly,
             None,
             "depth fixture".to_string(),
+            DelegationInitiator::Runtime,
         )
         .await
         .unwrap_err();
@@ -6573,14 +6682,25 @@ async fn external_main_runner_keeps_the_supplied_child_run_in_the_parent_tree() 
 
     assert_eq!(outcome.state, SubagentState::Completed);
     assert_eq!(outcome.summary, "子代理调查完成");
-    assert!(events.lock().unwrap().iter().any(|event| matches!(
-        event,
-        AgentEvent::Scoped { scope, .. }
-            if scope.run_id == "rcode-child-run"
-                && scope.parent_run_id.as_deref() == Some("codex-main-run")
-                && scope.delegated_by_tool_call_id.as_deref() == Some("dynamic-tool-call")
-                && scope.access_mode == SubagentAccessMode::FullAccess
-    )));
+    let events = events.lock().unwrap();
+    let scope = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::Scoped { scope, .. } if scope.run_id == "rcode-child-run" => Some(scope),
+            _ => None,
+        })
+        .expect("external main child must emit a scoped event");
+    assert_eq!(scope.parent_run_id.as_deref(), Some("codex-main-run"));
+    assert_eq!(
+        scope.delegated_by_tool_call_id.as_deref(),
+        Some("dynamic-tool-call")
+    );
+    assert_eq!(scope.access_mode, SubagentAccessMode::FullAccess);
+    assert_eq!(scope.runtime_kind, AgentRunRuntimeKind::Native);
+    assert!(
+        !matches!(scope.agent_label.as_deref(), Some("Self" | "本家")),
+        "an R-Code child of a Codex main agent is a peer runtime, not the parent's self"
+    );
 }
 
 #[tokio::test]
@@ -6749,6 +6869,7 @@ async fn abort_one_cancels_a_queued_child_while_it_is_waiting_for_an_activity_pe
                 SubagentAccessMode::ReadOnly,
                 None,
                 "queued permit cancellation fixture".to_string(),
+                DelegationInitiator::Runtime,
             )
             .await
             .unwrap();
@@ -6987,6 +7108,7 @@ async fn read_only_policy_never_trusts_mcp_read_only_hints() {
         caller: "subagent:child-read-only-mcp".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7035,6 +7157,7 @@ fn full_access_subagent_policy_exposes_bash_in_an_attached_workspace() {
         caller: "subagent:child-full-access".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7069,6 +7192,7 @@ fn request_approval_subagent_policy_exposes_bash_but_gates_through_approval() {
         caller: "subagent:child-request-approval".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7211,6 +7335,7 @@ fn native_supervisor_derives_and_enforces_the_parent_access_ceiling() {
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::FullAccess,
             true,
+            false,
             test_native_options(approval.provider.clone()),
             approval.model.clone(),
             "child prompt".to_string(),
@@ -7241,6 +7366,7 @@ fn native_supervisor_derives_and_enforces_the_parent_access_ceiling() {
             "read-only-child".to_string(),
             Arc::new(AtomicBool::new(false)),
             SubagentAccessMode::ReadOnly,
+            false,
             false,
             test_native_options(full.provider.clone()),
             full.model.clone(),
@@ -7279,6 +7405,7 @@ async fn full_access_parent_read_only_child_reads_without_approval() {
         caller: "subagent:child-full-access-read".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7334,6 +7461,7 @@ async fn request_approval_parent_read_only_child_still_asks_for_r1_read() {
         caller: "subagent:child-approval-read".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7402,6 +7530,7 @@ async fn request_approval_subagent_executes_bash_only_after_user_approval() {
         caller: "subagent:child-request-approval-exec".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(true)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7586,6 +7715,7 @@ fn registered_git_status_defaults_to_the_attached_workspace_root() {
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7624,6 +7754,7 @@ async fn registered_glob_defaults_to_workspace_and_keeps_input_errors_non_fatal(
         caller: "agent".to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -7769,6 +7900,7 @@ fn memory_context_is_an_independent_head_message_not_spliced_into_system() {
             main_agent: String::new(),
             subagent: String::new(),
         },
+        ContextInjectionProfile::Standard,
     );
     assert!(!prompt.contains("durable memory snapshot"));
 }
@@ -7905,8 +8037,20 @@ fn mcp_policy_presence_derives_from_run_frozen_tool_sources() {
     assert_eq!(mcp_policy_presence(&gateway, None), (false, false));
 
     // 同来源两次推导的 system 字节一致（P0-A 稳定前缀）。
-    let first = build_main_system_prompt(true, true, true, &AgentPromptPolicy::default());
-    let second = build_main_system_prompt(true, true, true, &AgentPromptPolicy::default());
+    let first = build_main_system_prompt(
+        true,
+        true,
+        true,
+        &AgentPromptPolicy::default(),
+        ContextInjectionProfile::Standard,
+    );
+    let second = build_main_system_prompt(
+        true,
+        true,
+        true,
+        &AgentPromptPolicy::default(),
+        ContextInjectionProfile::Standard,
+    );
     assert_eq!(first, second);
 }
 
@@ -7958,6 +8102,7 @@ fn mcp_confirmation_preparation_is_main_agent_only() {
         caller: caller.to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -8000,6 +8145,7 @@ fn mcp_save_draft_is_visible_to_the_main_agent_but_not_subagents() {
         caller: caller.to_string(),
         delegation: None,
         delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
@@ -8211,13 +8357,47 @@ fn explicit_user_delegation_opt_out_is_a_hard_runtime_boundary() {
 }
 
 #[test]
+fn delegation_hint_treats_permission_as_permission_not_instruction() {
+    let hint = build_delegation_hint_message(true, TaskMode::Auto, true, true, true)
+        .expect("delegation-enabled runs receive the conservative hint")
+        .text_content();
+    assert!(hint.contains("Default to zero subagents"));
+    assert!(hint.contains("authorization only"));
+    assert!(hint.contains("no more than THREE direct subagents"));
+    assert!(hint.contains("After one batch"));
+
+    let tools = delegation_tool_specs(&[], true, false);
+    let delegate = tools
+        .iter()
+        .find(|tool| tool.name == "delegate_task")
+        .expect("delegate tool is available");
+    assert!(delegate
+        .description
+        .contains("permission to use subagents is not an instruction"));
+    assert!(delegate
+        .description
+        .contains("at most three direct subagents"));
+    let plan = tools
+        .iter()
+        .find(|tool| tool.name == "plan_subagents")
+        .expect("plan tool is available");
+    assert!(plan.description.contains("direct-child ceiling is three"));
+}
+
+#[test]
 fn custom_agent_prompts_are_layered_without_replacing_safety_prompt() {
     let prompts = AgentPromptPolicy {
         main_agent: "MAIN CUSTOM RELATIONSHIP".to_string(),
         subagent: "CHILD CUSTOM RELATIONSHIP".to_string(),
     };
 
-    let main = build_main_system_prompt(true, false, false, &prompts);
+    let main = build_main_system_prompt(
+        true,
+        false,
+        false,
+        &prompts,
+        ContextInjectionProfile::Standard,
+    );
     assert!(main.contains("All file paths are relative to the attached workspace"));
     assert!(main.contains("MAIN CUSTOM RELATIONSHIP"));
 
@@ -8232,4 +8412,1450 @@ fn custom_agent_prompts_are_layered_without_replacing_safety_prompt() {
     );
     assert!(child.contains("read-only delegated subagent"));
     assert!(child.contains("CHILD CUSTOM RELATIONSHIP"));
+}
+
+// ---- plan_subagents：并行子代理批次的确认回路 ----
+
+struct LenientCodexRunner {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl CodexSubagentRunner for LenientCodexRunner {
+    async fn run(
+        &self,
+        request: CodexSubagentRequest,
+    ) -> Result<CodexSubagentOutcome, ProductError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CodexSubagentOutcome::Completed(format!(
+            "结论：{}",
+            request.goal
+        )))
+    }
+}
+
+fn plan_gate_tool_host(
+    directory: &TempDir,
+    runner: Arc<dyn ExternalAgentRunner>,
+) -> SessionToolHost {
+    let workspace_scope = WorkspaceScope {
+        guard: PathGuard::new(directory.path().to_path_buf()).unwrap(),
+        access_mode: ProjectAccessMode::RequestApproval,
+    };
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = Arc::new(SubagentSupervisor::new(
+        Arc::new(MockProvider::new("mock")),
+        test_gateway(),
+        None,
+        event_tx,
+        "task-1".to_string(),
+        "parent-run".to_string(),
+        "mock-model".to_string(),
+        512,
+        None,
+        InferenceOptions::default(),
+        Arc::new(AtomicBool::new(false)),
+        Some(workspace_scope.clone()),
+        Some(runner),
+        Arc::new(AtomicBool::new(true)),
+        OrchestrationPolicy::default(),
+        AgentPromptPolicy::default(),
+    ));
+    SessionToolHost {
+        gateway: test_gateway(),
+        external_tools: None,
+        task_id: "task-1".to_string(),
+        run_id: "parent-run".to_string(),
+        abort: Arc::new(AtomicBool::new(false)),
+        workspace_scope: Some(workspace_scope),
+        policy: ToolPolicy::Main,
+        caller: "agent".to_string(),
+        delegation: Some(supervisor),
+        delegation_disabled: Arc::new(AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
+        suspension_gate: Arc::new(AtomicBool::new(false)),
+        continuation_gate: Arc::new(AtomicBool::new(false)),
+    }
+}
+
+async fn delegate_via_host(
+    tool_host: &SessionToolHost,
+    goal: &str,
+) -> agent_error::Result<ToolCallOutcome> {
+    tool_host
+        .call_inner(
+            Some(&format!("call-{goal}")),
+            "delegate_task",
+            serde_json::json!({
+                "agent": "codex",
+                "goal": goal,
+                "access": "read_only"
+            }),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn plan_subagents_gates_second_delegate_without_confirmed_plan() {
+    let directory = TempDir::new().unwrap();
+    let runner = Arc::new(LenientCodexRunner {
+        calls: AtomicUsize::new(0),
+    });
+    let tool_host = plan_gate_tool_host(&directory, runner.clone());
+
+    let plan_spec = tool_host
+        .tool_specs()
+        .into_iter()
+        .find(|tool| tool.name == "plan_subagents")
+        .expect("delegation enabled so plan_subagents must be present");
+    assert!(plan_spec.input_schema["properties"]["confirm"]["default"] == false);
+
+    // 首个子代理免计划直接派生。
+    let first = delegate_via_host(&tool_host, "先摸清现状").await.unwrap();
+    assert!(!first.is_error);
+    let first_payload: serde_json::Value = serde_json::from_str(&first.content).unwrap();
+    assert!(first_payload["subagent_id"].as_str().is_some());
+
+    // 未确认计划前，第二个 delegate_task 被拦下并引导调用 plan_subagents。
+    let blocked = delegate_via_host(&tool_host, "再做点别的")
+        .await
+        .unwrap_err();
+    assert!(blocked.to_string().contains("plan_subagents"));
+
+    // 分析段：不锁定名额，返回数量与警告。保守上限只允许再加一个。
+    let analysis = tool_host
+        .call_inner(
+            Some("plan-analysis"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "再做点别的", "agent": "codex"}]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!analysis.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&analysis.content).unwrap();
+    assert_eq!(payload["status"], "needs_confirmation");
+    assert_eq!(payload["planned_entries"], 1);
+    assert_eq!(payload["existing_children"], 1);
+    assert_eq!(payload["allowed_total_after_confirm"], 2);
+    // 分析段之后门仍然关闭。
+    let still_blocked = delegate_via_host(&tool_host, "再做点别的")
+        .await
+        .unwrap_err();
+    assert!(still_blocked.to_string().contains("plan_subagents"));
+
+    // 确认段：锁定 1（已有）+ 1（计划）= 2 个总数。
+    let confirmed = tool_host
+        .call_inner(
+            Some("plan-confirm"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "再做点别的", "agent": "codex", "label": "补充调查"}],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!confirmed.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
+    assert_eq!(payload["status"], "confirmed");
+    assert_eq!(payload["allowed_total"], 2);
+    assert_eq!(payload["revision"], 1);
+
+    // 计划内的第二个子代理放行。
+    assert!(
+        !delegate_via_host(&tool_host, "再做点别的")
+            .await
+            .unwrap()
+            .is_error
+    );
+    // 超出计划被拒，并提示修订计划。
+    let exceeded = delegate_via_host(&tool_host, "计划外增量")
+        .await
+        .unwrap_err();
+    assert!(exceeded.to_string().contains("修订后的计划"));
+    // 收口后统计：只有 1 个免计划 + 1 个计划内子代理真正执行。
+    tool_host
+        .call_inner(
+            Some("plan-collect"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(runner.calls.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn plan_subagents_redispatch_after_collect_enforces_cumulative_direct_cap() {
+    let directory = TempDir::new().unwrap();
+    let runner = Arc::new(LenientCodexRunner {
+        calls: AtomicUsize::new(0),
+    });
+    let tool_host = plan_gate_tool_host(&directory, runner.clone());
+
+    // 首个免计划 + 计划内 1 个 = 累计派生 2，仍剩一个直接子级名额。
+    delegate_via_host(&tool_host, "初审方向甲").await.unwrap();
+    tool_host
+        .call_inner(
+            Some("plan-confirm-initial"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "初审方向乙", "agent": "codex"}],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    delegate_via_host(&tool_host, "初审方向乙").await.unwrap();
+
+    // 收集后 children 清空：活子代理数归零，但累计派生数保持 2。
+    tool_host
+        .call_inner(
+            Some("collect-initial"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+    // 第三个直接子代理仍在生命周期额度内，可以经新计划派生。
+    let redispatch = tool_host
+        .call_inner(
+            Some("plan-confirm-redispatch"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "重派方向甲", "agent": "codex", "label": "甲重派"}],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!redispatch.is_error, "{}", redispatch.content);
+    let third = delegate_via_host(&tool_host, "重派方向甲").await.unwrap();
+    assert!(!third.is_error, "{}", third.content);
+    tool_host
+        .call_inner(
+            Some("collect-redispatch"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+    // 累计派生数达到 3 后，再次收集也不会重置额度；第四个必须被拒绝。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-confirm-over-cap"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "重派方向乙", "agent": "codex", "label": "乙重派"}],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(rejected.is_error);
+    assert!(rejected.content.contains("上限 3"));
+    assert_eq!(runner.calls.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn plan_subagents_validates_entries_and_run_cap() {
+    let directory = TempDir::new().unwrap();
+    let tool_host = plan_gate_tool_host(
+        &directory,
+        Arc::new(LenientCodexRunner {
+            calls: AtomicUsize::new(0),
+        }),
+    );
+
+    let empty_entries = tool_host
+        .call_inner(
+            Some("plan-empty"),
+            "plan_subagents",
+            serde_json::json!({"entries": []}),
+        )
+        .await
+        .unwrap();
+    assert!(empty_entries.is_error);
+
+    let blank_goal = tool_host
+        .call_inner(
+            Some("plan-blank"),
+            "plan_subagents",
+            serde_json::json!({"entries": [{"goal": "   "}]}),
+        )
+        .await
+        .unwrap();
+    assert!(blank_goal.is_error);
+
+    // 超过单次运行上限（3）的确认计划被拒。
+    let over_cap_entries: Vec<serde_json::Value> = (0..4)
+        .map(|index| serde_json::json!({"goal": format!("方向 {index}")}))
+        .collect();
+    let over_cap = tool_host
+        .call_inner(
+            Some("plan-over-cap"),
+            "plan_subagents",
+            serde_json::json!({"entries": over_cap_entries, "confirm": true}),
+        )
+        .await
+        .unwrap();
+    assert!(over_cap.is_error);
+    assert!(over_cap.content.contains("上限"));
+
+    // 重复 goal / 未知槽位在分析段产生警告但不阻断。
+    let analysis = tool_host
+        .call_inner(
+            Some("plan-warn"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "slot:missing"},
+                    {"goal": "调研 A", "agent": "auto"}
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!analysis.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&analysis.content).unwrap();
+    let warnings = payload["warnings"].as_array().unwrap();
+    assert!(warnings
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("未知或未就绪的槽位")));
+    assert!(warnings
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("完全相同")));
+}
+
+/// 保持运行中的外部子代理 runner：进入执行后挂起，直到测试显式放行。
+struct HeldCodexRunner {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl CodexSubagentRunner for HeldCodexRunner {
+    async fn run(
+        &self,
+        _request: CodexSubagentRequest,
+    ) -> Result<CodexSubagentOutcome, ProductError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(CodexSubagentOutcome::Completed("已完成".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn plan_subagents_confirm_rejects_duplicate_goals() {
+    let directory = TempDir::new().unwrap();
+    let tool_host = plan_gate_tool_host(
+        &directory,
+        Arc::new(LenientCodexRunner {
+            calls: AtomicUsize::new(0),
+        }),
+    );
+
+    // 确认段：批内 goal 完全相同（大小写/空白差异归一后）被硬性退回，不锁定名额。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-dup"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "codex"},
+                    {"goal": "调研  a ", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!rejected.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&rejected.content).unwrap();
+    assert_eq!(payload["status"], "needs_revision");
+    assert!(payload["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("合并为一条")));
+
+    // 修订为不同方向后确认成功。
+    let confirmed = tool_host
+        .call_inner(
+            Some("plan-dup-fixed"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [
+                    {"goal": "调研 A", "agent": "codex"},
+                    {"goal": "验证 B", "agent": "codex"}
+                ],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&confirmed.content).unwrap();
+    assert_eq!(payload["status"], "confirmed");
+}
+
+#[tokio::test]
+async fn delegate_task_rejects_goal_of_running_child() {
+    let directory = TempDir::new().unwrap();
+    let runner = Arc::new(HeldCodexRunner {
+        started: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    });
+    let tool_host = plan_gate_tool_host(&directory, runner.clone());
+
+    // 免计划派生第一个子代理，并保持运行中。
+    let first = delegate_via_host(&tool_host, "保持运行的目标")
+        .await
+        .unwrap();
+    assert!(!first.is_error);
+    runner.started.notified().await;
+
+    // 与运行中子代理完全相同的 goal（含大小写/空白差异）被拒绝重复派生。
+    let dup = delegate_via_host(&tool_host, "保持运行的目标")
+        .await
+        .unwrap_err();
+    assert!(dup.to_string().contains("完全相同"));
+    let dup_case = delegate_via_host(&tool_host, "保持运行的  目标")
+        .await
+        .unwrap_err();
+    assert!(dup_case.to_string().contains("完全相同"));
+
+    // 不同 goal 仍走既有计划门（保持原有行为）。
+    let blocked = delegate_via_host(&tool_host, "全新方向").await.unwrap_err();
+    assert!(blocked.to_string().contains("plan_subagents"));
+
+    // 确认包含与运行中子代理相同 goal 的计划同样被退回修订。
+    let rejected = tool_host
+        .call_inner(
+            Some("plan-conflict"),
+            "plan_subagents",
+            serde_json::json!({
+                "entries": [{"goal": "保持运行的目标", "agent": "codex"}],
+                "confirm": true
+            }),
+        )
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&rejected.content).unwrap();
+    assert_eq!(payload["status"], "needs_revision");
+    assert!(payload["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("仍在运行")));
+
+    // 放行并收口，避免悬挂任务。
+    runner.release.notify_one();
+    tool_host
+        .call_inner(
+            Some("plan-collect"),
+            "collect_subagents",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 1.3（docs/harness-migration.md §1.3）：request/header 快照 + 派发前重建自检。
+// 三场景：a 正常轮追加且自检通过；b 篡改触发不一致但不阻断；c 尾部注入登记
+// 后不误报。纯函数直测判定逻辑，journal 集成测试走完整 run 循环。
+// ---------------------------------------------------------------------------
+
+/// 等待 run 收尾（轮询 is_running，与既有测试同一手法）。
+async fn wait_until_finished(rt: &LlmAgentRuntime) {
+    for _ in 0..300 {
+        if !rt.is_running() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("run did not finish in time");
+}
+
+#[test]
+fn request_envelope_fingerprint_is_stable_and_segment_sensitive() {
+    // 判等决策：serde_json 规范化字节级 SHA-256。同输入必须同指纹（跨调用稳定），
+    // 三段（system/tools/messages）必须独立可归因。
+    let goal = Message::user_text("goal");
+    let tools = vec![ToolSpec {
+        name: "read_file".to_string(),
+        description: "read".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+        source: ToolSource::Builtin,
+        requires_confirmation: false,
+    }];
+    let base = fingerprint_request_envelope("system-a", &tools, std::slice::from_ref(&goal));
+    let same = fingerprint_request_envelope("system-a", &tools, std::slice::from_ref(&goal));
+    assert_eq!(base, same);
+    assert_eq!(base.normalized_message_count, 1);
+    assert_eq!(base.system_sha256.len(), 64);
+    assert_eq!(base.tools_sha256.len(), 64);
+    assert_eq!(base.messages_sha256.len(), 64);
+    // 三段独立：只动 system 时其余两段不动。
+    let system_changed =
+        fingerprint_request_envelope("system-b", &tools, std::slice::from_ref(&goal));
+    assert_ne!(base.system_sha256, system_changed.system_sha256);
+    assert_eq!(base.tools_sha256, system_changed.tools_sha256);
+    assert_eq!(base.messages_sha256, system_changed.messages_sha256);
+    // 消息变化只动 messages 段。
+    let longer = [goal.clone(), Message::assistant_text("answer")];
+    let messages_changed = fingerprint_request_envelope("system-a", &tools, &longer);
+    assert_eq!(base.system_sha256, messages_changed.system_sha256);
+    assert_eq!(base.tools_sha256, messages_changed.tools_sha256);
+    assert_ne!(base.messages_sha256, messages_changed.messages_sha256);
+    assert_eq!(messages_changed.normalized_message_count, 2);
+}
+
+#[test]
+fn request_header_reason_covers_initial_resume_change() {
+    assert_eq!(request_header_reason(true, false), "initial");
+    // initial 优先：首轮即便带恢复语义也归 initial（会话的第一枚信封）。
+    assert_eq!(request_header_reason(true, true), "initial");
+    assert_eq!(request_header_reason(false, true), "resume");
+    assert_eq!(request_header_reason(false, false), "change");
+}
+
+#[test]
+fn request_rebuild_verification_passes_on_identical_projection() {
+    // 场景 a（纯函数半）：投影重建与派发一致 -> Ok。
+    let working_set = [
+        Message::user_text("goal"),
+        Message::assistant_text("answer"),
+    ];
+    let dispatch = fingerprint_request_envelope("system", &[], &working_set);
+    let rebuilt = working_set.clone();
+    assert!(verify_request_rebuild(&dispatch, &rebuilt, None).is_ok());
+    // system/tools 相对上一枚的漂移只是标注上下文，不触发不一致。
+    let previous = RequestEnvelope {
+        system_sha256: "old-system".to_string(),
+        tools_sha256: dispatch.tools_sha256.clone(),
+        messages_sha256: dispatch.messages_sha256.clone(),
+        normalized_message_count: dispatch.normalized_message_count,
+    };
+    assert!(verify_request_rebuild(&dispatch, &rebuilt, Some(&previous)).is_ok());
+}
+
+#[test]
+fn request_rebuild_verification_flags_tampered_memory() {
+    // 场景 b（纯函数半）：内存消息被篡改后，投影重建哈希必然对不上 ->
+    // Err 且差异描述带消息数与双端哈希、附 system/tools 漂移标注。
+    let working_set = [
+        Message::user_text("goal"),
+        Message::assistant_text("answer"),
+    ];
+    let dispatch = fingerprint_request_envelope("system", &[], &working_set);
+    let mut tampered = working_set.clone();
+    tampered[1] = Message::assistant_text("tampered answer");
+    let previous = RequestEnvelope {
+        system_sha256: "old-system".to_string(),
+        tools_sha256: "old-tools".to_string(),
+        messages_sha256: dispatch.messages_sha256.clone(),
+        normalized_message_count: dispatch.normalized_message_count,
+    };
+    let mismatch = verify_request_rebuild(&dispatch, &tampered, Some(&previous))
+        .expect_err("tampered rebuild must mismatch");
+    assert_eq!(mismatch.dispatch_message_count, 2);
+    assert_eq!(
+        mismatch.rebuilt_message_count, 2,
+        "条数相同但内容漂移也要报"
+    );
+    assert_ne!(
+        mismatch.dispatch_messages_sha256,
+        mismatch.rebuilt_messages_sha256
+    );
+    assert!(mismatch.system_changed_since_last);
+    assert!(mismatch.tools_changed_since_last);
+    // 消息条数漂移同样触发。
+    let shorter = [working_set[0].clone()];
+    assert!(verify_request_rebuild(&dispatch, &shorter, None).is_err());
+}
+
+#[test]
+fn tail_injection_registration_prevents_false_mismatch() {
+    // 场景 c（纯函数半）：memory 头 + 尾部注入（本地时钟 / plan mode）登记后，
+    // 规范化视图与投影一致 -> Ok；未登记（不排除）则必然误报。
+    let request_messages = [
+        Message::user_text("memory head"),
+        Message::user_text("goal"),
+        Message::user_text("local clock 2026-08-17"),
+        Message::user_text("plan mode"),
+    ];
+    let projection = [Message::user_text("goal")];
+    // 登记：头部 memory 1 条 + 尾部注入 2 条。
+    let normalized = normalized_dispatch_messages(&request_messages, true, 2);
+    let dispatch = fingerprint_request_envelope("system", &[], normalized);
+    assert_eq!(dispatch.normalized_message_count, 1);
+    assert!(verify_request_rebuild(&dispatch, &projection, None).is_ok());
+    // 未登记：全量 4 条参与哈希，投影只有 1 条 -> 误报（差异段：消息数）。
+    let unregistered = normalized_dispatch_messages(&request_messages, false, 0);
+    let mismatched = fingerprint_request_envelope("system", &[], unregistered);
+    let mismatch = verify_request_rebuild(&mismatched, &projection, None)
+        .expect_err("unregistered tails must produce a mismatch");
+    assert_eq!(mismatch.dispatch_message_count, 4);
+    assert_eq!(mismatch.rebuilt_message_count, 1);
+    // 防御性边界：尾部条数超过剩余长度时不 panic，切到空表报不一致。
+    let degenerate = normalized_dispatch_messages(&request_messages, true, 99);
+    assert!(degenerate.is_empty());
+}
+
+#[tokio::test]
+async fn request_header_journal_records_turns_and_self_check_passes() {
+    // 场景 a + c（集成半）：正常工具轮 run，每轮派发前追加 RequestHeader，
+    // 自检全程零误报（尾部时钟每轮变化也不误报），reason 序列 initial -> change。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("rh-1"));
+    provider.push_text_turn("final answer", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    // 附加工作区：目录构成审计断言要求首轮 tool_names 非空——纯聊天会话的
+    // 工具目录为空表，无法验证 A2 新字段。
+    let workspace = tempfile::tempdir().unwrap();
+    let journal = agent_store::SessionStore::new(journal_dir.path().to_path_buf());
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(journal);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "inspect then answer")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let (headers, mismatches) = rt.request_self_check_counters();
+    assert_eq!(headers, 2, "两轮派发应各追加一枚 RequestHeader");
+    assert_eq!(mismatches, 0, "正常轮自检必须零误报");
+    let events = rt.poll_events().await.unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
+    )));
+
+    // JSONL 侧：request_header 行可被 jq/正则抽取，reason 序列合理，
+    // excluded_tails 登记了本地时钟与 plan mode。
+    let jsonl = tokio::fs::read_to_string(
+        journal_dir
+            .path()
+            .join(format!("{}.jsonl", session.meta.id)),
+    )
+    .await
+    .unwrap();
+    let headers: Vec<serde_json::Value> = jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("request_header").is_some())
+        .collect();
+    assert_eq!(headers.len(), 2);
+    assert_eq!(headers[0]["request_header"]["reason"], "initial");
+    assert_eq!(headers[1]["request_header"]["reason"], "change");
+    let excluded = headers[0]["request_header"]["excluded_tails"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(excluded.iter().any(|tail| tail == "local_clock"));
+    assert!(excluded.iter().any(|tail| tail == "plan_mode"));
+
+    // A2：目录构成与输出预算字段已随每轮 header 落盘。工作区会话的主目录
+    // 非空（read_file 等）；max_tokens 是钳制后的实际派发值。
+    let first_names = headers[0]["request_header"]["tool_names"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !first_names.is_empty(),
+        "首轮 tool_names 必须登记派发目录清单"
+    );
+    assert!(first_names.iter().any(|name| name == "read_file"));
+    assert_eq!(
+        headers[1]["request_header"]["tool_names"], headers[0]["request_header"]["tool_names"],
+        "同 run 两轮目录一致（P1-C 排序冻结），清单也须逐字节一致"
+    );
+    assert_eq!(
+        headers[0]["request_header"]["hosted_tool_names"],
+        serde_json::json!([]),
+        "mock provider 无 hosted 工具，清单为空数组而非缺字段"
+    );
+    assert!(
+        headers[0]["request_header"]["max_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "max_tokens 必须记录钳制后的实际派发值"
+    );
+
+    // 消费侧 no-op：全新 store 句柄 load 该 JSONL，RequestHeader 不进投影，
+    // canonical 首条仍是 goal。
+    let reader = agent_store::SessionStore::new(journal_dir.path().to_path_buf());
+    let reloaded = reader.load(&session.meta.id).await.unwrap();
+    assert!(reloaded.messages.len() >= 2);
+    assert_eq!(reloaded.messages[0].text_content(), "inspect then answer");
+}
+
+#[tokio::test]
+async fn request_header_self_check_mismatch_is_logged_but_never_blocks() {
+    // 场景 b（集成半）：预置一条运行时不知道的「幽灵」Message 事件，每轮
+    // 自检都应报不一致（计数 > 0），但 run 不被阻断，正常收尾 ReviewReady。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("rh-block-1"));
+    provider.push_text_turn("still finishing", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal = agent_store::SessionStore::new(journal_dir.path().to_path_buf());
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ));
+    let session = rt.create_session(input()).await.unwrap();
+    // 篡改持久化侧：先补 Meta 行（load 的硬前提），再追加运行时工作集之外的
+    // Message（等价于投影多出一条），自检比对派发（内存）与重建（JSONL）时
+    // 必然发现消息数不一致。
+    journal
+        .append(
+            &session.meta.id,
+            SessionEvent::Meta(SessionMeta::new("mock-model", "mock")),
+        )
+        .await
+        .unwrap();
+    journal
+        .append(
+            &session.meta.id,
+            SessionEvent::Message(Message::user_text("[phantom] not in runtime memory")),
+        )
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "must not be blocked")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let (headers, mismatches) = rt.request_self_check_counters();
+    assert_eq!(headers, 2);
+    assert!(mismatches >= 2, "每轮都应发现不一致，实际 {mismatches}");
+    let events = rt.poll_events().await.unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Message { text, .. } if text.contains("still finishing")
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::State {
+            state: TaskState::ReviewReady
+        }
+    )));
+}
+
+#[tokio::test]
+async fn request_header_covers_memory_head_and_task_context_without_false_mismatch() {
+    // 场景 c（集成半补充）：memory 头部注入 + task_context 尾部注入同时在场，
+    // 规范化排除后自检零误报。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ));
+    let session = rt.create_session(input()).await.unwrap();
+    rt.set_next_memory_context(&session.meta.id, Some("frozen memory blob".to_string()))
+        .await
+        .unwrap();
+    rt.update_task_context(
+        &session.meta.id,
+        TaskMode::Ask,
+        Some("trusted task context".to_string()),
+    )
+    .await
+    .unwrap();
+    rt.start_run(&session.meta.id, "with head and tail injections")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let (headers, mismatches) = rt.request_self_check_counters();
+    assert_eq!(headers, 1);
+    assert_eq!(mismatches, 0, "memory 头与 task_context 尾登记后不得误报");
+}
+
+#[tokio::test]
+async fn request_journal_target_overrides_session_id_for_file_name() {
+    // A3.1：宿主声明映射后，journal 事件（Meta/goal/RequestHeader）全部落在
+    // {journal_id}.jsonl 而非 {session_id}.jsonl；未设映射的会话仍落在
+    // session_id 文件（unwrap_or 回退，既有行为不变）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let mut rt = LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ));
+    let mapped = rt.create_session(input()).await.unwrap();
+    let fallback = rt.create_session(input()).await.unwrap();
+    let storage_id = "host-branch-storage-id-001".to_string();
+    rt.set_request_journal_target(&mapped.meta.id, storage_id.clone())
+        .await
+        .unwrap();
+    rt.start_run(&mapped.meta.id, "mapped session goal")
+        .await
+        .unwrap();
+    rt.start_run(&fallback.meta.id, "fallback session goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let mapped_path = journal_dir.path().join(format!("{storage_id}.jsonl"));
+    let mapped_jsonl = tokio::fs::read_to_string(&mapped_path).await.unwrap();
+    assert!(
+        mapped_jsonl.contains("\"request_header\""),
+        "映射会话的 RequestHeader 应落在 {{storage_id}}.jsonl"
+    );
+    assert!(mapped_jsonl.contains("mapped session goal"));
+    // 孤儿文件不得出现：映射会话不落 {session_id}.jsonl。
+    let orphan = journal_dir.path().join(format!("{}.jsonl", mapped.meta.id));
+    assert!(
+        !orphan.exists(),
+        "映射会话不得再以 runtime session_id 落盘孤儿文件"
+    );
+    // 未设映射的会话维持既有行为：落在 {session_id}.jsonl。
+    let fallback_jsonl = tokio::fs::read_to_string(
+        journal_dir
+            .path()
+            .join(format!("{}.jsonl", fallback.meta.id)),
+    )
+    .await
+    .unwrap();
+    assert!(fallback_jsonl.contains("\"request_header\""));
+    assert!(fallback_jsonl.contains("fallback session goal"));
+}
+
+// ---------------------------------------------------------------------------
+// C4：首轮目录锚定（docs/request-audit-and-anchoring.md 阶段 C）。观测通道
+// 复用 A 阶段的审计 journal——每轮 RequestHeader.tool_names 即「模型实际看到
+// 的目录」的权威记录。
+// ---------------------------------------------------------------------------
+
+/// 读取 journal 中全部 RequestHeader 的 tool_names（按派发顺序）。
+async fn journal_tool_names(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
+    let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
+        .await
+        .unwrap();
+    jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("request_header").is_some())
+        .map(|value| {
+            value["request_header"]["tool_names"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| name.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// 带 journal 的 runtime（目录锚定观测复用审计 journal：每轮
+/// RequestHeader.tool_names 即「模型实际看到的目录」的权威记录）。
+fn journaled_runtime(provider: MockProvider, journal_dir: &tempfile::TempDir) -> LlmAgentRuntime {
+    LlmAgentRuntime::new(
+        Box::new(provider),
+        "mock-model".into(),
+        plan_native_test_gateway(),
+        None,
+        None,
+    )
+    .with_request_journal(agent_store::SessionStore::new(
+        journal_dir.path().to_path_buf(),
+    ))
+}
+
+/// 收集本轮 run 广播的目录锚定可见事件（phase, catalog, 收窄数, 完整数）。
+/// poll_events 只在 drain 前积压，wait_until_finished 不会消费通道。
+async fn anchor_events(
+    rt: &mut LlmAgentRuntime,
+) -> Vec<(r_code_core::dto::CatalogAnchorPhase, String, usize, usize)> {
+    rt.poll_events()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event {
+            AgentEvent::CatalogAnchor {
+                phase,
+                catalog,
+                tool_count,
+                full_tool_count,
+            } => Some((phase, catalog, tool_count, full_tool_count)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 读取 journal 中全部 RequestHeader 的 excluded_tails（按派发顺序）。
+async fn journal_excluded_tails(dir: &std::path::Path, id: &str) -> Vec<Vec<String>> {
+    let jsonl = tokio::fs::read_to_string(dir.join(format!("{id}.jsonl")))
+        .await
+        .unwrap();
+    jsonl
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("request_header").is_some())
+        .map(|value| {
+            value["request_header"]["excluded_tails"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| name.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+struct NamedStubTool {
+    name: &'static str,
+    /// 宿主生命周期工具（plan_publish 等）不要求工作区。
+    workspace_scoped: bool,
+}
+
+#[async_trait]
+impl Tool for NamedStubTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "stub tool used only to pin the catalog shape"
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+
+    fn requires_workspace_scope(&self) -> bool {
+        self.workspace_scoped
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+    ) -> Result<String, r_code_core::error::ProductError> {
+        Ok("stub".to_string())
+    }
+}
+
+/// 覆盖 Plan 原生 5→8 目录全部名称 + 完整目录对照组（edit/bash 等）。
+fn plan_native_test_gateway() -> Arc<ToolGateway> {
+    let engine = Arc::new(PermissionEngine::new());
+    let mut gateway = ToolGateway::new(engine);
+    gateway.register(Box::new(r_code_gateway::ReadFileTool));
+    // 宿主生命周期工具与真实注册一致：不要求工作区；工作区工具走默认。
+    for name in [
+        "plan_publish",
+        "request_user_input",
+        "enter_plan_mode",
+        "propose_plan_mode",
+    ] {
+        gateway.register(Box::new(NamedStubTool {
+            name,
+            workspace_scoped: false,
+        }));
+    }
+    for name in [
+        "glob",
+        "search",
+        "git_status",
+        "list_files",
+        "load_skill",
+        "edit",
+    ] {
+        gateway.register(Box::new(NamedStubTool {
+            name,
+            workspace_scoped: true,
+        }));
+    }
+    Arc::new(gateway)
+}
+
+// 测试环境无 hosted web search，本地内容搜索的派发名是 `search`（有 hosted
+// 别名时为 `search_files`；两者映射同一目录槽位）。
+const PLAN_NATIVE_BOOTSTRAP_NAMES: &[&str] = &[
+    "glob",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+];
+const PLAN_NATIVE_RESIDENT_NAMES: &[&str] = &[
+    "git_status",
+    "glob",
+    "list_files",
+    "load_skill",
+    "plan_publish",
+    "read_file",
+    "request_user_input",
+    "search",
+];
+
+#[tokio::test]
+async fn baseline_plan_mode_keeps_current_catalog_without_native_profile() {
+    // M0-01 characterization：baseline Plan（未传原生配置）保持现状——
+    // 目录不受 5→8 过滤影响，edit/enter_plan_mode 等照常可见。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "baseline plan goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 1);
+    // baseline Plan 保持现状：Plan policy 的只读边界（edit/bash 不在场），
+    // 目录与执行边界一致；没有锚定/晋升事件。
+    assert!(
+        !timelines[0]
+            .iter()
+            .any(|name| name == "edit" || name == "bash"),
+        "baseline Plan 的只读边界不变：{:?}",
+        timelines[0]
+    );
+    assert!(
+        timelines[0].iter().any(|name| name == "read_file"),
+        "baseline Plan 保留既有只读调查工具：{:?}",
+        timelines[0]
+    );
+    assert!(anchor_events(&mut rt).await.is_empty());
+}
+
+#[tokio::test]
+async fn plan_native_bootstrap_dispatches_five_tools_then_promotes_to_resident() {
+    // M0-10：bootstrap 精确 5 项；首次 durable outcome 后宿主 CAS 钩子确认，
+    // 下一轮目录为 resident 精确 8 项（docs §13.1/§14.3）。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("plan-read-1"));
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let promotions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hook_promotions = promotions.clone();
+    let mut rt = journaled_runtime(provider, &journal_dir).with_plan_catalog_promotion(Arc::new(
+        move |_task_id| {
+            hook_promotions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        },
+    ));
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Bootstrap,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "native plan goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(
+        timelines[0],
+        PLAN_NATIVE_BOOTSTRAP_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        "bootstrap 目录必须精确为 5 项：{:?}",
+        timelines[0]
+    );
+    assert_eq!(
+        timelines[1],
+        PLAN_NATIVE_RESIDENT_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        "晋升后目录必须精确为 8 项（不恢复完整目录）：{:?}",
+        timelines[1]
+    );
+    assert_eq!(
+        promotions.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "宿主晋升钩子恰好调用一次"
+    );
+    let events = anchor_events(&mut rt).await;
+    assert_eq!(events.len(), 2, "Narrowed + Promoted：{events:?}");
+    assert_eq!(events[0].1, "plan_native");
+    assert_eq!(events[0].2, 5);
+    assert_eq!(events[1].0, r_code_core::dto::CatalogAnchorPhase::Promoted);
+    assert_eq!(events[1].2, 5);
+}
+
+#[tokio::test]
+async fn plan_native_promotion_failure_fails_closed_before_next_request() {
+    // M0-09/M0-10：宿主 CAS 失败时 fail closed——不发下一轮 Provider 请求。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("plan-read-fail"));
+    provider.push_text_turn("must not dispatch", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir).with_plan_catalog_promotion(Arc::new(
+        |_task_id| Err("plan store CAS failed".to_string()),
+    ));
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Bootstrap,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "fail closed goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(
+        timelines.len(),
+        1,
+        "晋升失败后不得派发第二次请求：{timelines:?}"
+    );
+    assert_eq!(timelines[0].len(), 5);
+}
+
+#[tokio::test]
+async fn plan_native_resident_start_does_not_rearm_bootstrap() {
+    // M0-09：宿主传入权威 resident phase 时，run 直接以 8 项目录起步，
+    // 不重新经历 bootstrap（clear context / runtime rebuild / 重启同理）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir)
+        .with_plan_catalog_promotion(Arc::new(|_task_id| panic!("resident 起步不应触发晋升钩子")));
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Resident,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "resident goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 1);
+    assert_eq!(
+        timelines[0],
+        PLAN_NATIVE_RESIDENT_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        "resident 起步目录精确 8 项：{:?}",
+        timelines[0]
+    );
+}
+
+#[tokio::test]
+async fn plan_native_minimal_context_drops_clock_and_delegation_tails() {
+    // M0-10 最小上下文：plan_native_v1 期间不注入本地时钟与委派说明，
+    // 只保留任务上下文（docs §13.1）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("planned", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+
+    let mut baseline_rt = journaled_runtime(MockProvider::new("mock"), &journal_dir);
+    let baseline_session = baseline_rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    baseline_rt
+        .start_run(&baseline_session.meta.id, "baseline tails")
+        .await
+        .unwrap();
+    wait_until_finished(&baseline_rt).await;
+
+    let mut native_rt = journaled_runtime(provider, &journal_dir);
+    let native_session = native_rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    native_rt
+        .update_plan_native_catalog(
+            &native_session.meta.id,
+            Some(PlanNativeCatalogConfig {
+                phase: PlanNativeCatalogPhase::Resident,
+            }),
+        )
+        .await;
+    native_rt
+        .start_run(&native_session.meta.id, "native tails")
+        .await
+        .unwrap();
+    wait_until_finished(&native_rt).await;
+
+    let baseline_tails =
+        journal_excluded_tails(journal_dir.path(), &baseline_session.meta.id).await;
+    let native_tails = journal_excluded_tails(journal_dir.path(), &native_session.meta.id).await;
+    assert!(
+        baseline_tails[0].contains(&"local_clock".to_string()),
+        "baseline Plan 仍注入本地时钟：{:?}",
+        baseline_tails[0]
+    );
+    assert!(
+        !native_tails[0].contains(&"local_clock".to_string()),
+        "plan_native_v1 不注入本地时钟：{:?}",
+        native_tails[0]
+    );
+    assert!(
+        !native_tails[0].contains(&"delegation_hint".to_string()),
+        "plan_native_v1 不注入委派说明：{:?}",
+        native_tails[0]
+    );
+    // 权威任务上下文（PlanContextCapsule 投影）不属于最小上下文裁剪范围；
+    // 本测试未注入宿主 task_context，故只断言被裁剪项。
+}
+
+#[tokio::test]
+async fn propose_plan_mode_registered_only_for_suggestion_enabled_main_runs() {
+    // M0-05：propose_plan_mode 与建议提示同开关（docs §9：任一条件不满足时
+    // 工具和提示同时缺席）。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_entry_suggestion(&session.meta.id, true)
+        .await;
+    rt.start_run(&session.meta.id, "complex-ish goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert_eq!(timelines.len(), 1);
+    assert!(
+        timelines[0].iter().any(|name| name == "propose_plan_mode"),
+        "建议开关开启时目录含 propose_plan_mode：{:?}",
+        timelines[0]
+    );
+    let tails = journal_excluded_tails(journal_dir.path(), &session.meta.id).await;
+    assert!(
+        tails[0].contains(&"plan_suggestion".to_string()),
+        "建议策略尾部提示必须与工具同时在场：{:?}",
+        tails[0]
+    );
+}
+
+#[tokio::test]
+async fn propose_plan_mode_absent_without_suggestion_registration() {
+    // M0-01/M0-05 characterization：默认（未刷新建议开关）目录不含
+    // propose_plan_mode，也不注入建议提示——非 DeepSeek 的注册数为 0。
+    let provider = MockProvider::new("mock");
+    provider.push_text_turn("done", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir);
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Edit,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.start_run(&session.meta.id, "plain goal").await.unwrap();
+    wait_until_finished(&rt).await;
+
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert!(
+        !timelines[0].iter().any(|name| name == "propose_plan_mode"),
+        "默认目录不得含 propose_plan_mode：{:?}",
+        timelines[0]
+    );
+    let tails = journal_excluded_tails(journal_dir.path(), &session.meta.id).await;
+    assert!(
+        !tails[0].contains(&"plan_suggestion".to_string()),
+        "默认不得注入建议提示：{:?}",
+        tails[0]
+    );
+}
+
+#[tokio::test]
+async fn propose_plan_mode_execution_gate_rejects_unregistered_calls() {
+    // M0-05 红线：工具不在目录里不是安全边界——历史诱导调用必须在进入
+    // Gateway 前被拒绝（docs §9）。
+    let host = SessionToolHost {
+        gateway: plan_native_test_gateway(),
+        external_tools: None,
+        task_id: "task-propose".to_string(),
+        run_id: "run-propose".to_string(),
+        abort: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        workspace_scope: None,
+        policy: ToolPolicy::Main,
+        caller: "agent".to_string(),
+        delegation: None,
+        delegation_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        suspension_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        continuation_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        plan_suggestion_enabled: false,
+    };
+    let outcome = host
+        .call_inner(None, "propose_plan_mode", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(outcome.is_error);
+    assert!(outcome.content.contains("not available for this run"));
+}
+
+#[tokio::test]
+async fn plan_native_hidden_edit_call_is_rejected_at_execution_boundary() {
+    // M0-08：目录收窄是呈现层——隐藏的 edit/Shell/MCP/委派调用必须在
+    // 副作用前被 Plan policy 硬拒（docs §13.2 轨道 B）。
+    let provider = MockProvider::new("mock");
+    provider.push_turn(RecordedTurn::ok(vec![
+        StreamEvent::ToolUseStart {
+            id: "hidden-edit-1".to_string(),
+            name: "edit".to_string(),
+        },
+        StreamEvent::ToolUseComplete {
+            id: "hidden-edit-1".to_string(),
+            input: serde_json::json!({
+                "path": "stub.txt",
+                "old_string": "a",
+                "new_string": "b"
+            }),
+        },
+        StreamEvent::Stop {
+            reason: StopReason::ToolUse,
+        },
+    ]));
+    provider.push_text_turn("planned anyway", Usage::default());
+    let journal_dir = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut rt = journaled_runtime(provider, &journal_dir)
+        .with_plan_catalog_promotion(Arc::new(|_task_id| Ok(())));
+    let session = rt
+        .create_session(CreateSessionInput {
+            workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+            mode: TaskMode::Plan,
+            ..input()
+        })
+        .await
+        .unwrap();
+    rt.update_plan_native_catalog(
+        &session.meta.id,
+        Some(PlanNativeCatalogConfig {
+            phase: PlanNativeCatalogPhase::Bootstrap,
+        }),
+    )
+    .await;
+    rt.start_run(&session.meta.id, "hidden edit goal")
+        .await
+        .unwrap();
+    wait_until_finished(&rt).await;
+
+    let events = rt.poll_events().await.unwrap();
+    let rejected = events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolResult { call_id, is_error, .. } if call_id == "hidden-edit-1" && *is_error
+    ));
+    assert!(
+        rejected,
+        "Plan 模式的隐藏 edit 调用必须以错误工具结果拒绝（事件：{events:?}）"
+    );
+    // 目录不含 edit（呈现层），但执行边界才是权威。
+    let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
+    assert!(!timelines[0].iter().any(|name| name == "edit"));
 }

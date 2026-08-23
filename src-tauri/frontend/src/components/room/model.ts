@@ -19,7 +19,7 @@ import { displayPathsInText, toolTarget } from "../../lib/format";
 
 const CODEX_REASONING_SUMMARY_EVENT = "codex_reasoning_summary";
 const R_CODE_REASONING_EVENT = "r_code_reasoning";
-const R_CODE_REASONING_LABEL = "模型思考";
+const R_CODE_REASONING_LABEL = "思考过程";
 const R_CODE_INTERIM_EVENT = "r_code_interim";
 const R_CODE_INTERIM_LABEL = "执行过程";
 // 旧格式前缀（已持久化事件的兼容回退；新事件为结构化 JSON，见 codexReasoningSummary）。
@@ -478,6 +478,13 @@ export function buildTimeline(
             label: "上下文已自动压缩",
             detail: contextCompactionDetail(m.output_json),
           });
+        } else if (m.text === "r_code_catalog_anchor") {
+          const anchorRow = catalogAnchorRowFromJson(
+            m.output_json,
+            m.id ? `anchor-${m.id}` : nid("anchor"),
+            lastT,
+          );
+          if (anchorRow) items.push(anchorRow);
         } else if (m.text === R_CODE_REASONING_EVENT) {
           const detail = reasoningEventDetail(m.output_json);
           if (detail && !answerStartedSinceLastTool(items)) {
@@ -774,6 +781,72 @@ function contextCompactionDetail(value: string | null | undefined): string | nul
   }
 }
 
+/** Plan 目录锚定行（呈现层事实：档位 + 数量）。清单本身的权威记录在审计
+ * journal 的 RequestHeader.tool_names，这里只让「目录收敛在起作用」对用户可见；
+ * 时间线只是二级审计投影（docs §14.1）。 */
+function catalogAnchorTierLabel(catalog: string): string {
+  if (catalog === "plan_native") return "Plan 原生目录";
+  if (catalog === "readonly") return "只读清单";
+  if (catalog === "editor_pair") return "读写最小对";
+  return "收窄清单";
+}
+
+type CatalogAnchorContextRow = Extract<TimelineItem, { kind: "context" }>;
+
+function catalogAnchorRow(
+  phase: "narrowed" | "promoted",
+  catalog: string,
+  toolCount: number,
+  fullToolCount: number,
+  id: string,
+  t: number,
+): CatalogAnchorContextRow {
+  return phase === "narrowed"
+    ? {
+        kind: "context",
+        id,
+        t,
+        label: catalog === "plan_native" ? "Plan 原生目录已收敛" : "工具清单已收窄（锚定期）",
+        detail: `${catalogAnchorTierLabel(catalog)} · 仅 ${toolCount} / ${fullToolCount} 个工具`,
+      }
+    : {
+        kind: "context",
+        id,
+        t,
+        label: catalog === "plan_native" ? "Plan 目录晋升 resident" : "锚定期结束 · 工具清单恢复完整",
+        detail:
+          catalog === "plan_native"
+            ? `此后 ${toolCount} / ${fullToolCount} 个工具（只读，不恢复完整目录）`
+            : `此后 ${fullToolCount} 个工具，本会话内不再变化`,
+      };
+}
+
+/** journal System 事件（r_code_catalog_anchor）→ 时间线行；载荷损坏时静默跳过。 */
+function catalogAnchorRowFromJson(
+  value: string | null | undefined,
+  id: string,
+  t: number,
+): CatalogAnchorContextRow | null {
+  if (!value) return null;
+  try {
+    const payload = JSON.parse(value) as Record<string, unknown>;
+    const phase = payload.phase === "narrowed" || payload.phase === "promoted"
+      ? payload.phase
+      : null;
+    if (!phase) return null;
+    return catalogAnchorRow(
+      phase,
+      typeof payload.catalog === "string" ? payload.catalog : "plan_native",
+      typeof payload.tool_count === "number" ? payload.tool_count : 0,
+      typeof payload.full_tool_count === "number" ? payload.full_tool_count : 0,
+      id,
+      t,
+    );
+  } catch {
+    return null;
+  }
+}
+
 function codexReasoningSummaryDetail(value: string | null | undefined): string | null {
   return reasoningEventDetail(value);
 }
@@ -1054,6 +1127,17 @@ export function applyAgentEventInPlace(
         detail: ev.sha ? `可回滚到 ${ev.sha.slice(0, 8)}` : null,
       });
       return mutation(earliest(changedAt, items.length - 1));
+    }
+    case "catalog_anchor": {
+      items.push(catalogAnchorRow(
+        ev.phase,
+        ev.catalog,
+        ev.tool_count,
+        ev.full_tool_count,
+        nid(),
+        nowSec,
+      ));
+      return mutation(items.length - 1);
     }
     case "scoped":
     case "peer_message":

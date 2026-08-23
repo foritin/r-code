@@ -50,6 +50,11 @@ import { useAsyncAction } from "../../lib/hooks";
 import { usePoll } from "../../lib/poll";
 import { readComposerDraft, updateComposerDraft } from "../../lib/composer-drafts";
 import { usePlatformCapabilities } from "../../lib/platform-capabilities";
+import { useImageUnderstandingEngine } from "../../lib/image-understanding";
+import { resolveEffectiveImageEngine,
+  sendableAttachmentIds,
+} from "../Attachments";
+import { mainModelVisionConfirmed } from "./model-capabilities";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
 import { AnchoredSurface } from "../ui/AnchoredSurface";
@@ -138,6 +143,7 @@ interface Props {
   queuedMessages: QueuedMessage[];
   onAbort: () => Promise<void>;
   onSent: (text: string, mode: AgentSendMode, attachments?: SessionAttachmentMeta[]) => void;
+  onQueuedSteerAccepted: (queueId: string, text: string, outcome: "steered" | "started") => void;
   onSendFailed: () => void;
   onActivitySent: (mode: AgentSendMode) => void;
   onShowSubagents: () => void;
@@ -252,6 +258,7 @@ export function Composer({
   queuedMessages,
   onAbort,
   onSent,
+  onQueuedSteerAccepted,
   onSendFailed,
   onActivitySent,
   onShowSubagents,
@@ -316,9 +323,20 @@ export function Composer({
   const setThemeMode = useAppStore((s) => s.setThemeMode);
   const taskFileReference = useAppStore((s) => s.taskFileReferences[taskId]);
   const acknowledgeTaskFileReference = useAppStore((s) => s.acknowledgeTaskFileReference);
-  const attachments = useAttachments();
+  const attachments = useAttachments(taskId);
   const platformCapabilities = usePlatformCapabilities();
+  const configuredImageEngine = useImageUnderstandingEngine();
   const activeModel = resolveActive(providerChoices, providerFallback, providerName, model);
+  // 主模型目录确认多模态时原图直发：OCR/视觉模型引擎只服务文本主模型。
+  const imageEngine = resolveEffectiveImageEngine(
+    configuredImageEngine,
+    mainModelVisionConfirmed({
+      agentEngine,
+      codexPreferences,
+      provider: activeModel.provider,
+      model: activeModel.model,
+    }),
+  );
   const imageCapability = agentEngine === "codex"
     ? codexImageCapability(codexPreferences)
     : imageCapabilityFor(activeModel.provider, activeModel.model);
@@ -335,11 +353,19 @@ export function Composer({
     attachments.attachments,
     capabilityForAttachment,
     platformCapabilities,
+    imageEngine,
+  );
+  const sendableIds = sendableAttachmentIds(
+    attachments.attachments,
+    capabilityForAttachment,
+    platformCapabilities,
+    imageEngine,
   );
   const capabilityBlockedReason = firstBlockedAttachmentReason(
     attachments.attachments,
     capabilityForAttachment,
     platformCapabilities,
+    imageEngine,
   );
   const runBlockedReason = running
     && !goalMode
@@ -537,6 +563,7 @@ export function Composer({
     message: string,
     mode: AgentSendMode,
     files: AttachmentInput[] = [],
+    attachmentIds: string[] = [],
   ) => {
     if ((!message.trim() && files.length === 0) || sending) return false;
     setSending(true);
@@ -550,7 +577,15 @@ export function Composer({
         mode,
         optimisticAttachmentMeta(files),
       );
-      await agentSend(taskId, message, mode, files);
+      // docs §4.4：引用链路优先（IPC 只带 attachment id）；存在未 stage 的
+      // 可发送草稿（浏览器 mock/旧后端）时回退旧 Base64 载荷。
+      await agentSend(
+        taskId,
+        message,
+        mode,
+        attachmentIds.length > 0 ? [] : files,
+        attachmentIds,
+      );
       const firstTurnTitle = /^新对话(?:\s+\d+)?$/.test(task?.title.trim() ?? "") && !task?.goal.trim()
         ? (message.trim() || `分析 ${files[0]?.name ?? "附加文件"}`).slice(0, 48)
         : null;
@@ -576,6 +611,7 @@ export function Composer({
       setSending(false);
     }
   }, [sending, task, taskId, onSent, onSendFailed, onActivitySent, refreshDetail, refreshTasks, rememberInput]);
+
 
   const executeSlash = useCallback(async (
     parsed: ParsedSlashCommand,
@@ -847,6 +883,7 @@ export function Composer({
         normalized,
         running ? "send_now" : "auto",
         sendableAttachments,
+        sendableIds ?? [],
       );
       if (!sent) {
         setGoalSaveError("目标已经更新，但还没有成功交给 Agent；请重试执行。");
@@ -929,7 +966,12 @@ export function Composer({
     setSlashDismissed(false);
     leaveInputHistory();
     if (!parsed) {
-      const sent = await transmit(msg, mode, sendableAttachments);
+      const sent = await transmit(
+        msg,
+        mode,
+        sendableAttachments,
+        sendableIds ?? [],
+      );
       if (sent && attachments.attachments.length > 0) attachments.clear();
       if (!sent) setMessageText((current) => current.length > 0 ? current : draft);
       return;
@@ -1057,6 +1099,9 @@ export function Composer({
           ...current.filter((queued) => queued.id !== item.id),
         ];
       });
+      if (outcome === "steered" || outcome === "started") {
+        onQueuedSteerAccepted(item.id, item.message, outcome);
+      }
       try {
         await refreshDetail(taskId);
       } catch {
@@ -1611,10 +1656,20 @@ export function Composer({
           onKeyDown={onKeyDown}
         />
 
+        {sending
+          && attachments.attachments.some((attachment) => attachment.kind === "image")
+          && imageEngine.engine !== "direct" && (
+          <p className="composer-image-converting" role="status" aria-live="polite">
+            {imageEngine.engine === "model"
+              ? `正在由视觉模型 ${imageEngine.visionModelLabel ?? ""} 理解图片，完成后自动开始对话…`
+              : "正在用本机 OCR 识别图片文字，完成后自动开始对话…"}
+          </p>
+        )}
         <AttachmentTray
           attachments={sending ? [] : attachments.attachments}
           capabilityFor={capabilityForAttachment}
           platformCapabilities={platformCapabilities}
+          imageEngine={imageEngine}
           deferredReason={runBlockedReason}
           onRemove={attachments.remove}
         />
@@ -1698,8 +1753,8 @@ export function Composer({
             >
               {goalSaving || sending
                 ? <span className="send-loading-spinner" aria-hidden="true" />
-                : <IconSend width={15} height={15} />}
-              <span className="sr-only">{goalSaving || sending ? "执行中" : task?.goal_active ? "更新并执行目标" : "执行目标"}</span>
+                : <IconSend width={14} height={14} />}
+              <span className="send-label">{goalSaving || sending ? "执行中" : task?.goal_active ? "更新目标" : "执行目标"}</span>
             </button>
           ) : (
             <div className="running-send-actions" aria-label={running ? "运行中消息操作" : "消息发送操作"}>
@@ -1732,11 +1787,11 @@ export function Composer({
                   aria-busy={abort.busy || undefined}
                   title={abort.busy ? "正在停止当前运行" : "停止当前运行"}
                 >
-                  {abort.busy
-                    ? <span className="send-loading-spinner" aria-hidden="true" />
-                    : <IconStop width={22} height={22} />}
-                  <span className="sr-only">{abort.busy ? "停止中" : "停止"}</span>
-                </button>
+                {abort.busy
+                  ? <span className="send-loading-spinner" aria-hidden="true" />
+                  : <IconStop width={13} height={13} className="send-stop-icon" />}
+                <span className="send-label">{abort.busy ? "停止中" : "中断"}</span>
+              </button>
               ) : (
                 <button
                   className={`send composer-primary-button running-send-button mode-${sendMode}`}
@@ -1750,8 +1805,8 @@ export function Composer({
                   aria-label={running ? `${agentSendModeLabel(sendMode)}消息` : "发送消息"}
                   title={attachmentBlockedReason ?? `${agentSendModeTitle(sendMode, running)}（Enter）`}
                 >
-                  <IconSend width={15} height={15} />
-                  <span className="sr-only">发送</span>
+                  <IconSend width={14} height={14} />
+                  <span className="send-label">发送</span>
                 </button>
               )}
             </div>

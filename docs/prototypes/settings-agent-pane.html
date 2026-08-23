@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>R-Code 设置 · Agent 编排（改版原型）</title>
+<style>
+  /* ===== 主题 token：与 src-tauri/frontend/src/styles/product-ui.css 的 obsidian 覆盖一致 ===== */
+  :root {
+    --bg-app: #151311;
+    --bg-sidebar: #1b1917;
+    --bg-panel: #181715;
+    --bg-card: #211f1c;
+    --bg-chip: #292622;
+    --bg-inset: #12110f;
+    --bg-hover: #292520;
+    --bg-active: #332d27;
+    --border: #302e2a;
+    --border-strong: #4b453e;
+    --fg: #f3ede6;
+    --fg-muted: #b9aea2;
+    --fg-faint: #857b71;
+    --accent: #ff8a3d;
+    --accent-2: #ffad75;
+    --tint-accent: rgba(255, 138, 61, 0.12);
+    --success: #63b183;
+    --tint-success: rgba(99, 177, 131, 0.14);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg-app);
+    color: var(--fg);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  svg { display: block; }
+
+  /* ===== 应用骨架 ===== */
+  .app { display: grid; grid-template-rows: 42px minmax(0, 1fr); height: 100vh; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 12px 0 10px;
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px; color: var(--fg-muted);
+  }
+  .topbar .menus { display: flex; gap: 2px; margin-left: 10px; }
+  .topbar .menus span { padding: 3px 8px; border-radius: 4px; }
+  .topbar .spacer { flex: 1; }
+  .topbar .win { display: flex; gap: 14px; align-items: center; color: var(--fg-faint); }
+
+  .app-body { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 0; }
+
+  /* ===== 左侧应用 rail（仅作语境） ===== */
+  .rail {
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    padding: 12px 10px;
+    display: flex; flex-direction: column; gap: 2px;
+    font-size: 13.5px;
+  }
+  .rail .brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 14px; }
+  .rail .brand .logo {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(135deg, #ff8a3d, #f4742b);
+    display: grid; place-items: center;
+    color: #261308; font-weight: 700; font-size: 15px;
+  }
+  .rail .brand strong { font-size: 15px; font-weight: 600; }
+  .rail .brand .r-search { margin-left: auto; color: var(--fg-faint); }
+  .rail-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 10px; border-radius: 6px; color: var(--fg-muted);
+  }
+  .rail-item.new-chat { color: var(--fg); font-weight: 600; margin-bottom: 8px; }
+  .rail-label { margin: 16px 10px 4px; font-size: 11px; color: var(--fg-faint); }
+  .rail .dim { color: var(--fg-faint); padding: 4px 10px; font-size: 12.5px; }
+  .rail .grow { flex: 1; }
+  .rail-item.settings {
+    position: relative; color: var(--accent); background: var(--tint-accent); font-weight: 600;
+  }
+  .rail-item.settings::before {
+    content: ""; position: absolute; left: -10px; top: 6px; bottom: 6px;
+    width: 2.5px; border-radius: 2px; background: var(--accent);
+  }
+
+  /* ===== 设置区 ===== */
+  .settings { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; }
+
+  /* —— 改动 1：贯穿式设置页头，标题与搜索收进同一条带，底部发丝线 —— */
+  .settings-band {
+    display: flex; align-items: center; gap: 20px;
+    padding: 13px 32px 12px 28px;
+    background: var(--bg-app);
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-band h1 { font-size: 22px; font-weight: 600; letter-spacing: 0.01em; }
+  .settings-band .spacer { flex: 1; }
+  .search {
+    display: flex; align-items: center; gap: 8px;
+    width: 300px; height: 32px; padding: 0 12px;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--fg-faint); font-size: 12.5px;
+  }
+
+  .settings-main { display: grid; grid-template-columns: 212px minmax(0, 1fr); min-height: 0; }
+
+  /* —— 设置分类导航：安静的文字列表，只有激活项有色 —— */
+  .settings-nav { padding: 18px 10px 0 16px; display: flex; flex-direction: column; gap: 1px; }
+  .settings-nav button {
+    all: unset;
+    padding: 7px 12px; border-radius: 7px;
+    font-size: 13.5px; color: var(--fg-muted); cursor: pointer;
+  }
+  .settings-nav button:hover { background: var(--bg-hover); }
+  .settings-nav button.active { background: var(--tint-accent); color: var(--accent-2); font-weight: 600; }
+
+  /* —— 详情列：独立滚动 —— */
+  .detail { overflow-y: auto; min-width: 0; position: relative; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  .detail::-webkit-scrollbar { width: 9px; }
+  .detail::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; border: 2px solid var(--bg-app); }
+
+  /* —— 改动 1b：面板标题粘性吸附，滚动时也有发丝线与内容分隔 —— */
+  .pane-head {
+    position: sticky; top: 0; z-index: 10;
+    padding: 20px 32px 14px;
+    background: var(--bg-app);
+    border-bottom: 1px solid var(--border);
+  }
+  .pane-head .kicker {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+    color: var(--fg-faint); margin-bottom: 3px;
+  }
+  .pane-head h2 { font-size: 19px; font-weight: 600; }
+  .pane-head p { font-size: 12.5px; color: var(--fg-muted); margin-top: 3px; }
+
+  /* —— 改动 2：内容不再包大面板，直接落在底色上，发丝线分区 —— */
+  .content { padding: 4px 32px 64px; max-width: 860px; }
+
+  section { padding: 24px 0 26px; }
+  section + section { border-top: 1px solid var(--border); }
+
+  .sec-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
+  .sec-head .titles { min-width: 0; }
+  .sec-head h3 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 9px; }
+  .sec-head .desc { font-size: 12px; color: var(--fg-faint); margin-top: 3px; max-width: 560px; line-height: 1.6; }
+  .sec-head .actions { margin-left: auto; flex-shrink: 0; }
+
+  .icon-tile {
+    width: 22px; height: 22px; border-radius: 6px;
+    background: var(--bg-chip); border: 1px solid var(--border);
+    display: inline-grid; place-items: center; color: var(--fg-muted);
+  }
+
+  .btn-ghost {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 12px;
+    background: transparent; border: 1px solid var(--border-strong);
+    border-radius: 7px; color: var(--fg-muted);
+    font-size: 12px; cursor: pointer;
+  }
+  .btn-ghost:hover { background: var(--bg-hover); color: var(--fg); }
+
+  /* —— 行式表单：左标签右控件，取代整宽堆叠字段 —— */
+  .row {
+    display: grid; grid-template-columns: 232px minmax(0, 1fr);
+    align-items: center; gap: 20px;
+    padding: 9px 0;
+  }
+  .row .lab { font-size: 13.5px; color: var(--fg); }
+  .row .lab .hint { display: block; font-size: 12px; color: var(--fg-faint); margin-top: 2px; line-height: 1.5; }
+  .row .ctl { display: flex; justify-content: flex-end; }
+
+  .select {
+    display: inline-flex; align-items: center; justify-content: space-between; gap: 10px;
+    width: 248px; height: 30px; padding: 0 10px 0 12px;
+    background: var(--bg-chip); border: 1px solid var(--border);
+    border-radius: 7px; font-size: 13px; color: var(--fg);
+  }
+  .select .chev { color: var(--fg-faint); }
+
+  .switch {
+    width: 38px; height: 22px; border-radius: 999px;
+    background: var(--accent); position: relative;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; right: 2px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff;
+  }
+
+  /* —— 改动 3：Codex 三卡合一 —— 单条状态带 + 内部发丝线分格，徽章改状态点 —— */
+  .strip {
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .strip-cells { display: grid; grid-template-columns: 1fr 1fr 1fr; }
+  .cell { padding: 14px 18px 15px; min-width: 0; }
+  .cell + .cell { border-left: 1px solid var(--border); }
+  .cell .cell-head {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+    color: var(--fg-faint); margin-bottom: 7px;
+  }
+  .cell .cell-head .state { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--success); font-weight: 500; letter-spacing: 0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--tint-success); }
+  .cell strong { display: block; font-size: 14px; font-weight: 600; color: var(--fg); }
+  .cell .sub { font-size: 12px; color: var(--fg-faint); margin-top: 3px; }
+  .cell .sub code { font-family: "SF Mono", Consolas, monospace; font-size: 11.5px; }
+
+  .strip-foot {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 18px;
+    border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--success);
+  }
+
+  .details-link {
+    margin-top: 12px; font-size: 12.5px; color: var(--fg-faint);
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  }
+  .details-link:hover { color: var(--fg-muted); }
+
+  /* 运行护栏里的数字输入（底部露出一截，证明模式可延展） */
+  .num {
+    width: 96px; height: 30px; padding: 0 10px;
+    background: var(--bg-chip); border: 1px solid var(--border);
+    border-radius: 7px; font-size: 13px; color: var(--fg);
+    display: inline-flex; align-items: center; justify-content: flex-end;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 顶栏（沿用现状，仅作语境） -->
+  <div class="topbar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+    <div class="menus"><span>文件</span><span>编辑</span><span>视图</span><span>帮助</span></div>
+    <div class="spacer"></div>
+    <div class="win">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      <span>─</span><span>▢</span><span>✕</span>
+    </div>
+  </div>
+
+  <div class="app-body">
+
+    <!-- 应用 rail（沿用现状，仅作语境） -->
+    <div class="rail">
+      <div class="brand">
+        <div class="logo">R</div><strong>R-Code</strong>
+        <span class="r-search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
+      </div>
+      <div class="rail-item new-chat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>新对话</div>
+      <div class="rail-item"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>对话</div>
+      <div class="rail-item"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 2v4M16 2v4M3 9h18"/></svg>待处理</div>
+      <div class="rail-item"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>活动</div>
+      <div class="rail-item"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></svg>归档</div>
+      <div class="rail-label">最近</div>
+      <div class="dim">无聊天</div>
+      <div class="rail-label" style="display:flex;align-items:center;">项目<span style="margin-left:auto;font-weight:400;">＋ 添加</span></div>
+      <div class="rail-item"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>falib</div>
+      <div class="grow"></div>
+      <div class="rail-item settings"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>设置</div>
+    </div>
+
+    <!-- 设置区 -->
+    <div class="settings">
+
+      <!-- 页头带：设置 + 搜索 -->
+      <div class="settings-band">
+        <h1>设置</h1>
+        <div class="spacer"></div>
+        <div class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          搜索设置项（如：默认服务、OCR、MCP）
+        </div>
+      </div>
+
+      <div class="settings-main">
+
+        <!-- 分类导航 -->
+        <nav class="settings-nav">
+          <button>模型服务</button>
+          <button class="active">Agent 编排</button>
+          <button>工具与连接</button>
+          <button>知识与指令</button>
+          <button>外观与小助手</button>
+          <button>诊断</button>
+          <button>子代理配置</button>
+        </nav>
+
+        <!-- 详情列 -->
+        <div class="detail">
+
+          <!-- 粘性面板标题 -->
+          <header class="pane-head">
+            <div class="kicker">AGENT</div>
+            <h2>Agent 编排</h2>
+            <p>选择主 Agent、管理 Codex 运行时、委派路由和质量复核。</p>
+          </header>
+
+          <div class="content">
+
+            <!-- 主 Agent -->
+            <section>
+              <div class="sec-head">
+                <div class="titles">
+                  <h3>主 Agent</h3>
+                  <p class="desc">默认值只影响新会话。每个会话都能在输入区单独切换，运行中不会静默换引擎。</p>
+                </div>
+              </div>
+              <div class="row">
+                <div class="lab">新会话默认<span class="hint">Codex 主 Agent 需要已登录 CLI 和已附加工作区。</span></div>
+                <div class="ctl">
+                  <div class="select">R-Code · 自定义 Provider
+                    <span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Codex 运行时 -->
+            <section>
+              <div class="sec-head">
+                <div class="titles">
+                  <h3>
+                    <span class="icon-tile"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg></span>
+                    Codex 运行时
+                  </h3>
+                  <p class="desc">管理本机 Codex CLI 的版本、认证与编排接入。登录凭据始终由 Codex 管理，R-Code 不读取认证文件。</p>
+                </div>
+                <div class="actions">
+                  <button class="btn-ghost"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>重新检测</button>
+                </div>
+              </div>
+
+              <!-- 三卡 → 一条状态带 -->
+              <div class="strip">
+                <div class="strip-cells">
+                  <div class="cell">
+                    <div class="cell-head">运行时<span class="state"><span class="dot"></span>可用</span></div>
+                    <strong>codex-cli 0.145.0</strong>
+                    <div class="sub">已是最新版本</div>
+                  </div>
+                  <div class="cell">
+                    <div class="cell-head">认证<span class="state"><span class="dot"></span>已确认</span></div>
+                    <strong>已登录 · ChatGPT</strong>
+                    <div class="sub">认证状态来自官方 <code>codex login status</code></div>
+                  </div>
+                  <div class="cell">
+                    <div class="cell-head">编排接入<span class="state"><span class="dot"></span>已连接</span></div>
+                    <strong>R-Code 协作已连接</strong>
+                    <div class="sub">可用于跨引擎委派与 Codex 子代理。</div>
+                  </div>
+                </div>
+                <div class="strip-foot">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+                  Codex 已就绪，可以作为 R-Code 的协作代理使用。
+                </div>
+              </div>
+
+              <span class="details-link"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>路径与配置详情</span>
+            </section>
+
+            <!-- 运行偏好（从 Codex 块里独立出来，成为平级分区） -->
+            <section>
+              <div class="sec-head">
+                <div class="titles">
+                  <h3>Codex 运行偏好</h3>
+                  <p class="desc">保存到 Codex 的全局配置，也会用于其他 Codex CLI 会话。</p>
+                </div>
+                <div class="actions"><button class="btn-ghost">重新读取</button></div>
+              </div>
+              <div class="row">
+                <div class="lab">模型</div>
+                <div class="ctl"><div class="select">Codex 默认<span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div></div>
+              </div>
+              <div class="row">
+                <div class="lab">推理强度</div>
+                <div class="ctl"><div class="select">随模型默认<span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div></div>
+              </div>
+              <div class="row">
+                <div class="lab">详细程度</div>
+                <div class="ctl"><div class="select">标准<span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div></div>
+              </div>
+              <div class="row">
+                <div class="lab">权限模式<span class="hint">控制 Codex 子代理在本机的操作范围。</span></div>
+                <div class="ctl"><div class="select">请求批准<span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div></div>
+              </div>
+            </section>
+
+            <!-- 委派路由 -->
+            <section>
+              <div class="sec-head">
+                <div class="titles">
+                  <h3>委派路由</h3>
+                  <p class="desc">选择不同复杂度任务的首选执行者；Codex 不可用时仍会保留清晰的回退原因。</p>
+                </div>
+              </div>
+              <div class="row">
+                <div class="lab">复杂度策略</div>
+                <div class="ctl"><div class="select">均衡 · 复杂任务优先 Codex<span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div></div>
+              </div>
+              <div class="row">
+                <div class="lab">允许 Codex 子代理<span class="hint">关闭后新的 Codex 委派会自动回退 R-Code；已经启动的 Codex 子代理继续完成。</span></div>
+                <div class="ctl"><div class="switch"></div></div>
+              </div>
+            </section>
+
+            <!-- 质量复核（底部露出一截，展示分区节奏可延展） -->
+            <section>
+              <div class="sec-head">
+                <div class="titles">
+                  <h3>质量复核</h3>
+                  <p class="desc">默认关闭以避免额外延迟和模型消耗；开启后，运行阶段、复核者和轮次都会明确显示。</p>
+                </div>
+              </div>
+              <div class="row">
+                <div class="lab">触发方式</div>
+                <div class="ctl"><div class="select">关闭<span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div></div>
+              </div>
+            </section>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

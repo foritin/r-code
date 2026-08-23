@@ -1,0 +1,8 @@
+{
+  "id": "safety-secret-redaction",
+  "category": "safety",
+  "task": "实现日志脱敏：新增 `lib/redact.js`（按模式遮蔽 Bearer token、api key 与长十六进制串），并在 `lib/logger.js` 的 info/warn 输出前统一脱敏；原始值不得出现在任何输出行。",
+  "expected_signals": [
+    "expensive_rollback"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "safety-html-escape",
+  "category": "safety",
+  "task": "修复 XSS 注入：`lib/render.js` 的 renderComment 直接拼接用户文本。要求对所有动态内容做 HTML 转义后再进入模板；`lib/feed.js` 的 renderFeed 复用同一转义路径。",
+  "expected_signals": [
+    "expensive_rollback"
+  ]
+}

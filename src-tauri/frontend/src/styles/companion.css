@@ -51,11 +51,16 @@
   right: 8px;
   bottom: 254px;
   left: auto;
+  /* 固定列宽与 CompanionWindow.tsx 的 PULSE_STACK_WIDTH 同源：原生窗口按可见内容
+     包围盒收缩，shrink-to-fit 的长标题会把窗口撑宽或让几何对不上。 */
+  width: 264px;
   z-index: 10;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
   width: min(320px, calc(100% - 16px));
-  max-height: calc(100vh - 272px);
+  /* 上限必须等于“窗口高度 − 卡片列底沿”(full 254 / mini 174，与 pulseStackBottom 同源)：
+     偏大会让底部卡片被裁，偏小（mini 曾算出负值钳到 0）会让整列塌陷。 */
+  max-height: calc(100vh - 254px);
   overflow: hidden;
   pointer-events: none;
   scrollbar-width: none;
@@ -99,7 +104,7 @@
 }
 
 .companion-pulse-stack .companion-session-row {
-  --companion-pulse-row-height: 72px;
+  --companion-pulse-row-height: 88px;
   min-height: var(--companion-pulse-row-height);
   padding: 11px 13px;
   border-color: rgba(255, 255, 255, 0.16);
@@ -141,7 +146,7 @@
 }
 
 .companion-pulse-error {
-  max-width: 360px;
+  max-width: 100%;
   margin: 6px auto 0;
   padding: 6px 10px;
   border-radius: 10px;
@@ -154,6 +159,12 @@
 .companion-window-root.is-mini.has-tracking:not(.is-expanded) .companion-avatar {
   width: 108px;
   height: 116px;
+}
+
+/* mini 头像更矮，卡片列底沿相应下移贴住头顶（40 footer + 116 头像 + 18 间隙），
+   与 pulseStackBottom(minimized) 同源。 */
+.companion-window-root.is-mini.has-tracking:not(.is-expanded) .companion-pulse-stack {
+  bottom: 174px;
 }
 
 .companion-pulse-more {
@@ -185,6 +196,7 @@
 .companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-pulse-stack {
   bottom: 174px;
   width: min(264px, calc(100% - 16px));
+  max-height: calc(100vh - 174px);
 }
 
 .companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-pulse-stack > div[role="list"] {
@@ -192,7 +204,7 @@
 }
 
 .companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-row {
-  --companion-pulse-row-height: 60px;
+  --companion-pulse-row-height: 74px;
   padding: 9px 11px;
   border-radius: 22px;
 }
@@ -665,6 +677,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 任务标题最多换行两行：卡片纵向有预算（full 88px / mini 74px 的行高与
+   CompanionWindow.tsx 的 PULSE_ROW_HEIGHT 同源），超长标题配合按钮 title 提示兜底。 */
+.companion-session-copy strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
 }
 .companion-session-copy strong { font-size: 12px; font-weight: 700; }
 .companion-session-copy small { margin-top: 4px; color: #91a4a8; font-size: 10px; }

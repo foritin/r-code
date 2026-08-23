@@ -72,6 +72,7 @@ impl Fixture {
 
     fn context(&self, tool_call_id: &str) -> ToolExecutionContext {
         ToolExecutionContext {
+            origin_request_key: None,
             task_id: self.task.id.clone(),
             run_id: self.run.id.clone(),
             tool_call_id: tool_call_id.to_string(),

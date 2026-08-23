@@ -2,6 +2,7 @@ import type {
   AttachmentKind,
   CodexCliPreferences,
   InferenceOptions,
+  PresetModelInfo,
   TaskAgentEngine,
 } from "../../lib/types";
 import type { ProviderChoice } from "../../lib/provider";
@@ -210,9 +211,14 @@ export function capabilitiesFor(provider: ProviderChoice | undefined, model: str
 }
 
 /**
+ * 图片能力判定（C2 统一出口）。优先级：
+ * 1. 预设目录标注（provider + model 精确命中）→ 权威（人工核对的一手信息）；
+ * 2. Codex CLI 目录 supports_images → 权威（见 codexImageCapability）；
+ * 3. 现有名称启发式 → 兜底；
+ * 4. 其余 → unknown（让请求真实尝试，避免误判新模型）。
+ *
  * 图片能力不能从 OpenAI/Anthropic 线路协议本身推出：同一端点可以同时承载文本与
- * 多模态模型。这里只认模型族的明确声明；其余返回 unknown，让请求真实尝试，避免
- * 把一个新发布的多模态模型误判成不可用。
+ * 多模态模型。
  */
 export function imageCapabilityFor(
   provider: ProviderChoice | undefined,
@@ -222,6 +228,21 @@ export function imageCapabilityFor(
   const modelName = model.trim().toLowerCase();
   const modelLabel = model.trim() || provider?.model || "当前模型";
 
+  // 1) 预设目录标注：人工核对的一手信息，权威（由 ProviderChoice 注入，避免本
+  // 模块反向依赖 provider 目录装载）。
+  const annotated = findPresetModelAnnotation(provider?.presetModels, model);
+  if (annotated != null) {
+    return annotated
+      ? { state: "supported", modelLabel, reason: `${modelLabel} 支持图片输入。` }
+      : {
+          state: "unsupported",
+          modelLabel,
+          reason: `${modelLabel} 没有声明图片输入能力；图片会保留在草稿中，但不会发送。`,
+        };
+  }
+
+  // 2) Codex CLI 目录由 codexImageCapability 处理（调用方按 agentEngine 分派）。
+  // 3) 名称启发式兜底：目录未命中的同步/手填模型。
   const explicitVisionModel = [
     "vision",
     "qwen-vl",
@@ -300,6 +321,59 @@ export function codexImageCapability(preferences: CodexCliPreferences | null): I
         modelLabel,
         reason: `${modelLabel} 不支持图片；图片会保留在草稿中，但不会发送。`,
       };
+}
+
+/**
+ * 当前主模型是否**目录确认**多模态（决定图片是否原图直发、跳过理解引擎）：
+ * - Codex 主 Agent：看 Codex 模型目录的 supports_images（选中模型或目录首项）；
+ * - R-Code：只认预设目录 vision === true 的精确标注；启发式 supported 与能力
+ *   未知（同步/手填/中转）都不算确认，仍按配置引擎分派。
+ */
+export function mainModelVisionConfirmed(options: {
+  agentEngine: TaskAgentEngine;
+  codexPreferences?: CodexCliPreferences | null;
+  provider?: ProviderChoice;
+  model: string;
+}): boolean {
+  if (options.agentEngine === "codex") {
+    const preferences = options.codexPreferences ?? null;
+    const slug = preferences?.model ?? preferences?.models[0]?.slug;
+    const selected = preferences?.models.find((option) => option.slug === slug);
+    return selected?.supports_images === true;
+  }
+  return findPresetModelAnnotation(options.provider?.presetModels, options.model) === true;
+}
+
+/** 预设目录命中时返回其能力标注（true=多模态）；未命中返回 undefined。 */
+export function findPresetModelAnnotation(
+  presetModels: PresetModelInfo[] | undefined,
+  model: string,
+): boolean | null | undefined {
+  return presetModels?.find((candidate) => candidate.id === model.trim())?.vision;
+}
+
+/**
+ * C2 三态统一出口（设置页 / 图片理解配置用）：
+ * 1) 预设目录标注（精确命中）→ 权威；
+ * 2) 名称启发式 → 兜底；
+ * 3) 其余 → unknown。
+ * Codex 目录命中由调用方在 agentEngine == "codex" 时优先走 codexImageCapability。
+ */
+export function resolveImageCapability(
+  model: string,
+  opts?: { presetModels?: PresetModelInfo[] },
+): ImageCapabilityState {
+  const annotated = findPresetModelAnnotation(opts?.presetModels, model);
+  if (annotated != null) return annotated ? "supported" : "unsupported";
+  const heuristic = imageCapabilityFor(undefined, model);
+  return heuristic.state;
+}
+
+/** 模型候选徽标：未知能力不加标（前端下拉后缀用）。 */
+export function modalityLabel(cap: ImageCapabilityState): "多模态" | "文本" | null {
+  if (cap === "supported") return "多模态";
+  if (cap === "unsupported") return "文本";
+  return null;
 }
 
 /** 每个附件独立判定，避免一张不支持的图片把普通代码文件也一起划掉。 */

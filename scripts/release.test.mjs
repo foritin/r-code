@@ -206,7 +206,7 @@ test("macOS packaging keeps native window chrome and app/dmg targets", () => {
 });
 
 test("macOS local builder supports explicit ad-hoc and notarized modes", () => {
-  const script = fs.readFileSync(path.join(repoRoot, "scripts", "build-macos.sh"), "utf8");
+  const script = fs.readFileSync(path.join(repoRoot, "scripts", "manual", "package-macos.sh"), "utf8");
 
   assert.match(script, /aarch64-apple-darwin/);
   assert.match(script, /APPLE_SIGNING_IDENTITY/);
@@ -266,6 +266,7 @@ test("development launch and updater stay isolated from production", () => {
     "development must never download a production updater payload",
   );
   assert.match(development.plugins.updater.endpoints[0], /dev-latest\.json$/);
+  assert.match(manifest, /\[package\][\s\S]*?default-run\s*=\s*"r-code-host"/);
   assert.match(manifest, /\[features\][\s\S]*default\s*=\s*\["custom-protocol"\]/);
   assert.match(manifest, /custom-protocol\s*=\s*\["tauri\/custom-protocol"\]/);
   assert.match(windowsLauncher, /cargo tauri dev --config "src-tauri\/tauri\.dev\.conf\.json"/);
@@ -301,8 +302,8 @@ test("release workflow falls back per platform while preserving explicit unsigne
   assert.match(workflow, /windows_signed: \$\{\{ steps\.release-mode\.outputs\.windows_signed \}\}/);
   assert.match(workflow, /apple_signed: \$\{\{ steps\.release-mode\.outputs\.apple_signed \}\}/);
   assert.match(workflow, /prerelease: \$\{\{ steps\.release-type\.outputs\.prerelease \}\}/);
-  assert.match(workflow, /name: Detect pre-release marker/);
-  assert.match(workflow, /isPreReleaseVersion/);
+  assert.match(workflow, /name: Detect prerelease tag/);
+  assert.match(workflow, /\$RELEASE_TAG" == \*-unsigned\.\*[\s\S]*prerelease=true/);
   assert.match(workflow, /这是 1\.0 正式上线前的预上线版本/);
   assert.match(workflow, /Unsigned Windows artifacts/);
   assert.match(workflow, /Ad-hoc macOS artifacts/);
@@ -520,17 +521,32 @@ test("publish-release requires a public warning for unsigned stable releases", (
   assert.deepEqual(validateReleaseRecord(record, tag, tagInfo, signingPlan), []);
 });
 
-test("publish-release accepts a standard tag as a changelog-declared pre-release", () => {
-  const tag = "v0.9.0";
+test("publish-release accepts an unsigned tag as the only prerelease channel", () => {
+  const tag = "v0.9.1-unsigned.1";
   const tagInfo = parseReleaseTag(tag);
+  assert.equal(tagInfo.unsignedPrerelease, true);
   const record = {
     tagName: tag,
     isDraft: false,
     isPrerelease: true,
-    body: "Pre-release notes",
+    body: "Unsigned prerelease notes",
     assets: requiredReleaseAssets(tagInfo.version).map((name) => ({ name, size: 1 })),
   };
-  assert.deepEqual(validateReleaseRecord(record, tag, tagInfo, null, true), []);
+  assert.deepEqual(validateReleaseRecord(record, tag, tagInfo), []);
+});
+
+test("publish-release treats a standard tag as stable regardless of changelog markers", () => {
+  const tag = "v0.9.1";
+  const tagInfo = parseReleaseTag(tag);
+  assert.equal(tagInfo.unsignedPrerelease, false);
+  const record = {
+    tagName: tag,
+    isDraft: false,
+    isPrerelease: false,
+    body: "Stable notes",
+    assets: requiredReleaseAssets(tagInfo.version).map((name) => ({ name, size: 1 })),
+  };
+  assert.deepEqual(validateReleaseRecord(record, tag, tagInfo), []);
 });
 
 function updaterFixture(tag) {
@@ -837,8 +853,8 @@ test("CI authenticates every private agent-contracts checkout and covers Linux",
   );
   assert.match(
     workflow,
-    /name: Test Windows frontend[\s\S]*npm test/,
-    "the required Windows CI leg must run companion browser contracts",
+    /name: Test Windows frontend \(host-OS contracts\)[\s\S]*npm test -- app-shell\.test\.mjs companion-window-ui\.test\.mjs companion\.test\.mjs/,
+    "the Windows CI leg must keep proving host-OS browser contracts while ubuntu covers the full suite",
   );
   assert.match(
     workflow,

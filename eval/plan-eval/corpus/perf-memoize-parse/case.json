@@ -1,0 +1,8 @@
+{
+  "id": "perf-memoize-parse",
+  "category": "performance",
+  "task": "消除 `lib/parser.js` 的重复解析：相同输入反复全量解析。加入按原文缓存的结果复用，并在 `lib/stats.js` 统计多轮解析时生效；缓存不得改变解析语义。",
+  "expected_signals": [
+    "multi_stage_verification"
+  ]
+}

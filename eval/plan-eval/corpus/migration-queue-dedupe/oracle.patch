@@ -1,0 +1,26 @@
+diff --git a/lib/dedupe.js b/lib/dedupe.js
+new file mode 100644
+index 0000000..2efb638
+--- /dev/null
++++ b/lib/dedupe.js
+@@ -0,0 +1,8 @@
++export function dedupeByOperationId(entries) {
++  const seen = new Set();
++  return entries.filter((entry) => {
++    if (seen.has(entry.operation_id)) return false;
++    seen.add(entry.operation_id);
++    return true;
++  });
++}
+diff --git a/lib/queue.js b/lib/queue.js
+index 4f615ea..fe11367 100644
+--- a/lib/queue.js
++++ b/lib/queue.js
+@@ -1,3 +1,6 @@
++import { dedupeByOperationId } from "./dedupe.js";
++
+ export function migrate(entries) {
+-  return { entries: [...entries], dropped: 0 };
++  const unique = dedupeByOperationId(entries);
++  return { entries: unique, dropped: entries.length - unique.length };
+ }

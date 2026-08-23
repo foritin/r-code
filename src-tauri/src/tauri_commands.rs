@@ -17,6 +17,7 @@ use r_code_core::error::{ProductError, PROJECT_CONVERSATION_LIMIT_REACHED_CODE};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };
+use r_code_core::plan_entry::PlanEntryDecisionInput;
 use r_code_host::commands::{
     ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
     RecoveryCleanupResult, RecoveryPageData, SearchMatch, SessionMessage,
@@ -24,6 +25,7 @@ use r_code_host::commands::{
     TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard, WorkspaceForgetResult,
 };
 use r_code_host::log_buffer::LogEntry;
+use r_code_host::plan_entry_commands::{PlanEntryOfferView, PlanningStatusView};
 use r_code_host::replay::ReplayEntry;
 use r_code_store::{EnhancedReviewTarget, EnhancedReviewView, PlanRejectResult};
 use serde::Serialize;
@@ -276,6 +278,37 @@ pub async fn cmd_task_set_mode(
 }
 
 #[tauri::command]
+pub async fn cmd_plan_entry_offer_get(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<PlanEntryOfferView>, String> {
+    r_code_host::plan_entry_commands::plan_entry_offer_get(&state, &task_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_entry_decide(
+    state: State<'_, CommandState>,
+    input: PlanEntryDecisionInput,
+) -> Result<PlanEntryOfferView, String> {
+    r_code_host::plan_entry_commands::plan_entry_decide(&state, &input).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_entry_retry_continuation(
+    state: State<'_, CommandState>,
+    offer_id: String,
+) -> Result<PlanEntryOfferView, String> {
+    r_code_host::plan_entry_commands::plan_entry_retry_continuation(&state, &offer_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_planning_status(
+    state: State<'_, CommandState>,
+) -> Result<PlanningStatusView, String> {
+    r_code_host::plan_entry_commands::planning_status(&state).await
+}
+
+#[tauri::command]
 pub async fn cmd_plan_get(
     state: State<'_, CommandState>,
     task_id: String,
@@ -450,12 +483,23 @@ pub async fn cmd_agent_send(
     message: String,
     mode: Option<String>,
     attachments: Option<Vec<r_code_host::commands::AttachmentInput>>,
+    attachment_ids: Option<Vec<String>>,
 ) -> Result<(), String> {
     let mode = match mode {
         Some(value) => AgentSendMode::try_from_str(&value)
             .ok_or_else(|| format!("invalid agent send mode: {value}"))?,
         None => AgentSendMode::Auto,
     };
+    // 新引用链路（docs/multimodal-attachments §4.4）：只传 attachment id；
+    // 旧 Base64 载荷仅继续服务尚未迁移的调用方。
+    if let Some(ids) = attachment_ids.as_deref() {
+        if !ids.is_empty() {
+            return r_code_host::commands::agent_send_with_attachment_refs(
+                &state, &task_id, &message, mode, ids,
+            )
+            .await;
+        }
+    }
     r_code_host::commands::agent_send_with_mode_and_attachments(
         &state,
         &task_id,
@@ -464,6 +508,26 @@ pub async fn cmd_agent_send(
         attachments.as_deref().unwrap_or_default(),
     )
     .await
+}
+
+/// 附件 staging（docs §2.2 边界 1）：一次性 IPC Base64 → Blob 引用。
+#[tauri::command]
+pub async fn cmd_attachment_stage(
+    state: State<'_, CommandState>,
+    task_id: String,
+    attachment: r_code_host::commands::AttachmentInput,
+) -> Result<r_code_host::commands::AttachmentRefDto, String> {
+    r_code_host::commands::attachment_stage(&state, &task_id, attachment).await
+}
+
+/// 删除草稿附件：立即释放 staged 引用与 Blob 计数。
+#[tauri::command]
+pub async fn cmd_attachment_discard(
+    state: State<'_, CommandState>,
+    task_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::attachment_discard(&state, &task_id, &attachment_id).await
 }
 
 /// 按引用取回时间线图片附件预览（OCR 落盘原图或会话内联 Image 块）。
@@ -1577,6 +1641,16 @@ pub async fn cmd_rtk_status(
     r_code_host::commands::rtk_status(&state).await
 }
 
+/// A4：请求信封审计自检计数（headers_appended, mismatches）。Real runtime
+/// 不在场时返回 None；soak 期间经 devtools 消费，不进设置 UI。
+#[tauri::command]
+pub async fn cmd_request_audit_counters(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<(usize, usize)>, String> {
+    r_code_host::commands::request_audit_counters(&state, &task_id).await
+}
+
 /// Install RTK from its verified official release when needed, then atomically toggle policy.
 #[tauri::command]
 pub async fn cmd_rtk_set_enabled(
@@ -1613,6 +1687,14 @@ pub async fn cmd_codex_install_cli(
     state: State<'_, CommandState>,
 ) -> Result<serde_json::Value, String> {
     r_code_host::commands::codex_install_cli(&state).await
+}
+
+/// 进入 Codex 运行时设置时检查更新；已安装且有新版时由官方 CLI 自动升级。
+#[tauri::command]
+pub async fn cmd_codex_sync_cli(
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::codex_sync_cli(&state).await
 }
 
 /// 在用户可见的终端中发起 Codex CLI 登录。

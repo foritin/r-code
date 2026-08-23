@@ -1343,6 +1343,10 @@ pub struct QueuedMessage {
     /// 排队附件的 JSON 序列化载荷；为空表示纯文本消息。
     #[serde(default)]
     pub attachments_json: Option<String>,
+    /// 创建该排队消息的宿主请求键（docs/plan-mode-dual-track-gate.md §10）。
+    /// 领取分发时继承同一真实请求身份（host continuation 语义）。
+    #[serde(default)]
+    pub request_key: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1357,6 +1361,12 @@ impl QueuedMessage {
         Self::new_with_attachments(task_id, branch_id, message, priority, None)
     }
 
+    /// 为排队消息绑定宿主请求键（builder 风格，保持既有构造签名兼容）。
+    pub fn with_request_key(mut self, request_key: Option<String>) -> Self {
+        self.request_key = request_key;
+        self
+    }
+
     pub fn new_with_attachments(
         task_id: impl Into<String>,
         branch_id: impl Into<String>,
@@ -1366,6 +1376,7 @@ impl QueuedMessage {
     ) -> Self {
         let now = Utc::now();
         Self {
+            request_key: None,
             id: Uuid::new_v4().to_string(),
             task_id: task_id.into(),
             branch_id: branch_id.into(),
@@ -1536,6 +1547,21 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// 首轮工具清单锚定的可观察变化（docs/request-audit-and-anchoring.md 阶段 C）。
+    /// 每会话至多一条 promoted；narrowed 随每个仍处锚定期的 run 首个收窄请求
+    /// 派发（plan_complete 晋升信号下剥夺跨回合、跨 run 持续，收窄行可随 run
+    /// 重复直到模型调用 plan_ready）。只描述档位与数量；清单本身见审计 journal
+    /// 的 `RequestHeader.tool_names`。
+    CatalogAnchor {
+        /// 阶段（narrowed / promoted）。
+        phase: CatalogAnchorPhase,
+        /// 收窄档位的 serde 名（readonly / editor_pair / plan_gate）。
+        catalog: String,
+        /// 收窄清单的工具数。
+        tool_count: usize,
+        /// 完整清单的工具数。
+        full_tool_count: usize,
+    },
     /// Agent 树内受限的点对点消息活动。
     ///
     /// 完整正文只存在于 Worker 的有界内存 mailbox；跨进程事件仅携带字符数，
@@ -1631,6 +1657,10 @@ pub struct AgentEventScope {
     /// 为什么选择此子智能体执行器。仅记录策略结论，不记录思维链。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_reason: Option<String>,
+    /// 主代理下发给此子代理的任务提示词（goal 的有界摘要）。主运行 scope 恒为
+    /// `None`；旧事件缺省为空，前端按无任务提示处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
 }
 
 /// 子代理的可观察生命周期状态。
@@ -1692,6 +1722,19 @@ pub enum AgentActivityPhase {
     Reviewing,
     /// 正在结束本次运行并持久化已可见输出。
     Finalizing,
+}
+
+/// 首轮工具清单锚定的可观察阶段（呈现层事实，不承载清单内容）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogAnchorPhase {
+    /// 会话首个请求以收窄清单派发。
+    Narrowed,
+    /// 首轮结束，恢复完整清单（会话内此后不再变化）。
+    Promoted,
+    /// Plan 批准进入实施：implementation dispatch 事务成功后发出；下一 run
+    /// 验证完整目录已恢复（docs/multimodal-attachments §8.6）。
+    RestoredFull,
 }
 
 /// 计划步骤。

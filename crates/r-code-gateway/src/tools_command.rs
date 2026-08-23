@@ -593,6 +593,51 @@ async fn kill_tree(child: &mut tokio::process::Child) {
 
 /// 渲染给模型看的执行结果。
 ///
+/// 触发串联拆解提示的最低步骤数：两步串联（如 install && build）是常规用法，
+/// 三步及以上才值得提醒。
+const CHAINED_STEPS_HINT_THRESHOLD: usize = 3;
+
+/// 估算命令串联的步骤数：按引号外的 `&&`/`||`/`;`/`|` 切分。只服务于温和
+/// 提示，不做安全判定（风险分级由 classifier 负责）。
+fn count_chained_steps(command: &str) -> usize {
+    let mut segments = 1_usize;
+    let mut quote: Option<char> = None;
+    let mut in_escape = false;
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_escape {
+            in_escape = false;
+            continue;
+        }
+        match quote {
+            Some(q) => {
+                if ch == '\\' && q != '\'' {
+                    in_escape = true;
+                } else if ch == q {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '\'' | '"' | '`' => quote = Some(ch),
+                '&' if chars.peek() == Some(&'&') => {
+                    chars.next();
+                    segments += 1;
+                }
+                // `||` 与单管道 `|` 各计一次切分。
+                '|' => {
+                    if chars.peek() == Some(&'|') {
+                        chars.next();
+                    }
+                    segments += 1;
+                }
+                ';' => segments += 1,
+                _ => {}
+            },
+        }
+    }
+    segments
+}
+
 /// 用纯文本而非 JSON：同样的信息量下 token 更省，且模型读 shell 输出更自然。
 fn render_output(
     command: &str,
@@ -613,6 +658,17 @@ fn render_output(
             Some(0) => out.push_str("exit: 0\n"),
             Some(code) => out.push_str(&format!("exit: {code}（非零，命令失败）\n")),
             None => out.push_str("exit: 未知（进程被信号结束）\n"),
+        }
+        // 成功的长串联命令附一次温和提示：引导模型把多步流水线拆成逐次调用，
+        // 某一步失败时才容易定位，单次等待也更短。失败/超时本身已是信号，不再叠加。
+        if exit_code == Some(0) {
+            let steps = count_chained_steps(command);
+            if steps >= CHAINED_STEPS_HINT_THRESHOLD {
+                out.push_str(&format!(
+                    "[提示] 这条命令串联了约 {steps} 个步骤；后续建议拆分为多次调用、逐步检查输出，\
+避免单次长时间等待且失败时难以定位。\n"
+                ));
+            }
         }
     }
 
@@ -648,6 +704,34 @@ mod tests {
     fn static_risk_requires_confirmation() {
         assert_eq!(BashTool.risk_level(), RiskLevel::R3);
         assert!(BashTool.risk_level().requires_confirmation());
+    }
+
+    #[test]
+    fn chained_steps_counts_separators_outside_quotes() {
+        assert_eq!(count_chained_steps("cargo build"), 1);
+        assert_eq!(count_chained_steps("npm install && npm run build"), 2);
+        assert_eq!(
+            count_chained_steps("a && b && c || d; e"),
+            CHAINED_STEPS_HINT_THRESHOLD + 2
+        );
+        // 管道每段算一步。
+        assert_eq!(count_chained_steps("cat a | grep b | wc -l"), 3);
+        assert_eq!(count_chained_steps("a || b || c"), 3);
+        // 引号内的分隔符不算。
+        assert_eq!(count_chained_steps("echo \"a && b; c\""), 1);
+        assert_eq!(count_chained_steps("echo 'a | b' && echo c"), 2);
+    }
+
+    #[test]
+    fn render_output_appends_chained_hint_only_on_success() {
+        let stdout = b"done";
+        let chained = "a && b && c";
+        let ok = render_output(chained, Some(0), false, 1_000, stdout, b"");
+        assert!(ok.contains("串联了约 3 个步骤"));
+        let failed = render_output(chained, Some(1), false, 1_000, stdout, b"");
+        assert!(!failed.contains("串联"));
+        let short = render_output("a && b", Some(0), false, 1_000, stdout, b"");
+        assert!(!short.contains("串联"));
     }
 
     #[test]
@@ -847,6 +931,7 @@ mod tests {
             "timeout_ms": 60_000,
         });
         let context = ToolExecutionContext {
+            origin_request_key: None,
             task_id: "task-cancel-bash".to_string(),
             run_id: "run-cancel-bash".to_string(),
             tool_call_id: "call-cancel-bash".to_string(),
