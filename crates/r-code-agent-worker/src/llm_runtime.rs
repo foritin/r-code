@@ -3758,6 +3758,7 @@ const VISUAL_CHECKPOINT_ADJACENT_CHARS: usize = 2_000;
 /// attachment id 才替换摘要输入中的旧图。失败时保留旧块（引用以小体积序列化
 /// 进摘要输入，摘要仍可进行）；canonical transcript 的原图引用永不改写。
 /// exact tail 内的引用保留原样并在 Provider 边界重新物化。
+#[allow(clippy::too_many_arguments)]
 async fn visual_checkpoint_prefold(
     provider: &Arc<dyn LlmProvider>,
     model: &str,
@@ -3791,11 +3792,11 @@ async fn visual_checkpoint_prefold(
     let resolver = resolver?;
 
     let mut out = messages.to_vec();
-    for index in 0..tail_start {
+    for message in out.iter_mut().take(tail_start) {
         if abort.load(Ordering::Relaxed) {
             return None;
         }
-        let needs_checkpoint = out[index].content.iter().any(|block| {
+        let needs_checkpoint = message.content.iter().any(|block| {
             matches!(
                 block,
                 ContentBlock::Attachment { source }
@@ -3806,7 +3807,7 @@ async fn visual_checkpoint_prefold(
         if !needs_checkpoint {
             continue;
         }
-        let adjacent_text: String = out[index]
+        let adjacent_text: String = message
             .content
             .iter()
             .filter_map(|block| block.as_text())
@@ -3814,8 +3815,8 @@ async fn visual_checkpoint_prefold(
             .chars()
             .take(VISUAL_CHECKPOINT_ADJACENT_CHARS)
             .collect();
-        let mut content = Vec::with_capacity(out[index].content.len());
-        for block in &out[index].content {
+        let mut content = Vec::with_capacity(message.content.len());
+        for block in &message.content {
             match block {
                 ContentBlock::Attachment { source }
                     if source.kind == AttachmentKind::Image
@@ -3858,10 +3859,8 @@ async fn visual_checkpoint_prefold(
                 other => content.push(other.clone()),
             }
         }
-        out[index] = Message {
-            role: out[index].role,
-            content,
-        };
+        let role = message.role;
+        *message = Message { role, content };
     }
     Some(out)
 }
@@ -3920,6 +3919,7 @@ async fn describe_image_for_checkpoint(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn force_compaction_or_trim(
     provider: Arc<dyn LlmProvider>,
     model: &str,
@@ -5170,7 +5170,7 @@ async fn run_loop(mut ctx: RunLoopCtx) {
                 materialized_wire_bytes: request_budget.materialized_wire_bytes,
                 attachment_count: request_budget.attachment_count,
                 anchoring_phase: (ctx.plan_native_catalog.is_some() && policy == ToolPolicy::Plan)
-                    .then(|| match ctx.plan_native_catalog {
+                    .then_some(match ctx.plan_native_catalog {
                         Some(PlanNativeCatalogConfig {
                             phase: PlanNativeCatalogPhase::Bootstrap,
                         }) => "PlanBootstrap",
@@ -11691,9 +11691,8 @@ mod compaction_tests {
                 CONTEXT_GUARD_RESERVE_MARGIN,
                 8_192,
             );
-            match outcome {
-                Ok(resolved) => assert!(resolved.effective_output_tokens >= 8_192),
-                Err(_) => {}
+            if let Ok(resolved) = outcome {
+                assert!(resolved.effective_output_tokens >= 8_192);
             }
         }
     }

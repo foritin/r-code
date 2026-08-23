@@ -7558,6 +7558,7 @@ fn enqueue_message_with_attachments(
     Ok(queued)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enqueue_message_with_refs(
     db: &Database,
     task_id: &str,
@@ -24475,10 +24476,9 @@ mod tests {
         assert!(stored.contains("\"version\":2"));
         // 迁移产生的附件已 commit（可按 task 解析）。
         let store = r_code_store::AttachmentStore::new(&state.db, state.blobs_dir.clone());
-        let references: Vec<agent_contract::AttachmentRefV1> =
-            serde_json::from_str::<QueuedAttachmentsV2Ver>(&stored)
-                .unwrap()
-                .attachments;
+        let parsed_v2: QueuedAttachmentsV2Ver = serde_json::from_str(&stored).unwrap();
+        assert_eq!(parsed_v2.version, 2, "payload is v2");
+        let references = parsed_v2.attachments;
         for reference in &references {
             let record = store.get_owned("qt1", &reference.attachment_id).unwrap();
             assert_eq!(record.state, r_code_store::AttachmentState::Committed);
