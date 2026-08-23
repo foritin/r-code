@@ -363,6 +363,28 @@ jobs:
           security list-keychains -d user -s "$keychain_path"
           security default-keychain -d user -s "$keychain_path"
 
+      # plan_eval 是 r-code-host 的 cargo [[bin]]，会被 tauri-bundler 原样拷进 .app 的
+      # Contents/MacOS；bundler 只签主二进制，嵌套未签名二进制让 codesign 在 x86_64 上
+      # 确定性失败。先构建并预签它：签名只改 mtime，cargo 按输入指纹判定不会重链接，
+      # bundler 拷贝的就是已签名文件。身份与 bundler 将用的一致（正式证书或 ad-hoc）。
+      - name: Pre-sign nested plan_eval binary for macOS bundling
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        run: |
+          # plan_eval 依赖 r-code-host lib（generate_context! 分支），构建前需要前端 dist。
+          (cd src-tauri/frontend && npm run build)
+          cargo build --release --target "${{ matrix.rust-target }}" --manifest-path src-tauri/Cargo.toml --bin plan_eval
+          if [[ "${{ needs.validate.outputs.apple_signed }}" == "true" ]]; then
+            identity="${{ secrets.APPLE_SIGNING_IDENTITY }}"
+            timestamp_flag=(--timestamp)
+          else
+            identity="-"
+            timestamp_flag=(--timestamp=none)
+          fi
+          binary="target/${{ matrix.rust-target }}/release/plan_eval"
+          codesign --force --sign "$identity" "${timestamp_flag[@]}" "$binary"
+          codesign --verify --strict "$binary"
+
       # Keep platform-signed and fallback environments separate. Empty Apple notarization
       # variables still opt Tauri into notarization, so ad-hoc macOS builds must not export them.
       - name: Build and publish platform-signed artifacts
