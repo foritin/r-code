@@ -2,7 +2,7 @@
 
 > **状态更新（Phase 0）**：本文描述的首轮目录锚定实验（含「规划门 plan_gate /
 > plan_complete / plan_ready」扩展）已随 DeepSeek 复杂任务 Plan 建议与 Plan-only
-> 双轨（`docs/plan-mode-dual-track-gate.md`）整体下线：客户设置移除
+> 双轨（`docs/archive/implementation/plan-mode-dual-track-gate.md`）整体下线：客户设置移除
 > `first_round_*` 档位（legacy 输入只返回诊断警告），worker 不再收窄 Main 模式
 > 目录，`plan_ready` 工具与门铃注入已删除。请求信封审计（`diagnostics.request_audit`）
 > 继续有效。本文保留为实验记录与请求审计协议的权威。
@@ -875,7 +875,7 @@ dsh 的实证只在 DeepSeek V4 Pro 上成立；机制（轨迹策略与可见�
 - 上游洞见与实证：`xiaobright/dsh-anchored-standard`（README.zh-CN 的
   「为什么这样做 / 实测结果 / 验证加载」三节）及其证据仓库
   `xiaobright/modeltest`
-- 承接的本地文档：`docs/harness-migration.md`（§0.3 子模块 bump 流程、
+- 承接的本地文档：`docs/archive/implementation/harness-migration.md`（§0.3 子模块 bump 流程、
   §1.3 本方案的合同半/运行时半、风险表的 log-only soak 策略）
 - 前缀缓存设计依据：`docs/archive/deepseek-prefix-cache.md`（P0-A/P1-C/P2-G/P2-H）
 - 相关代码入口（行号基准 2026-08-18）：

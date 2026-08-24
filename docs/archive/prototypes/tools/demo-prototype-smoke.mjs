@@ -1,20 +1,22 @@
 /**
  * 原型 Demo 交互冒烟（不纳入 npm test —— 文件名刻意不带 .test.mjs）。
- * 直接用 file:// 打开 docs/prototypes/room-redesign-c.html，
+ * 直接用 file:// 打开 docs/archive/prototypes/room-redesign-c.html，
  * 把每个可点击区域都点一遍，断言状态变化并输出关键截图。
  *
- *   node scripts/demo-prototype-smoke.mjs
+ *   node docs/archive/prototypes/tools/demo-prototype-smoke.mjs
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 
-const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const repoRoot = path.resolve(frontendDir, "..", "..");
-const demoPath = path.join(repoRoot, "docs", "prototypes", "room-redesign-c.html");
-const shotDir = path.join(repoRoot, "docs", "prototypes", "screenshots", "demo-interactions");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+const frontendDir = path.join(repoRoot, "src-tauri", "frontend");
+const requireFromFrontend = createRequire(path.join(frontendDir, "package.json"));
+const { chromium } = requireFromFrontend("playwright-core");
+const demoPath = path.join(repoRoot, "docs", "archive", "prototypes", "room-redesign-c.html");
+const shotDir = path.join(repoRoot, "docs", "archive", "prototypes", "screenshots", "demo-interactions");
 fs.mkdirSync(shotDir, { recursive: true });
 
 function browserExecutable() {

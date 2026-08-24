@@ -157,7 +157,7 @@ pub trait AgentRuntime: Send + Sync {
         Ok(())
     }
 
-    /// docs/multimodal-attachments §5.1/§6.2：宿主在 run 启动前注入冻结能力
+    /// docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.1/§6.2：宿主在 run 启动前注入冻结能力
     /// 派生物——主模型的视觉预算 profile 与路由审计描述。默认 no-op 保持
     /// 轻量 runtime 兼容。
     async fn update_vision_budget_and_route(

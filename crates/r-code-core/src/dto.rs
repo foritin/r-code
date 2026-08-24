@@ -1343,7 +1343,7 @@ pub struct QueuedMessage {
     /// 排队附件的 JSON 序列化载荷；为空表示纯文本消息。
     #[serde(default)]
     pub attachments_json: Option<String>,
-    /// 创建该排队消息的宿主请求键（docs/plan-mode-dual-track-gate.md §10）。
+    /// 创建该排队消息的宿主请求键（docs/archive/implementation/plan-mode-dual-track-gate.md §10）。
     /// 领取分发时继承同一真实请求身份（host continuation 语义）。
     #[serde(default)]
     pub request_key: Option<String>,
@@ -1547,7 +1547,7 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
-    /// 首轮工具清单锚定的可观察变化（docs/request-audit-and-anchoring.md 阶段 C）。
+    /// 首轮工具清单锚定的可观察变化（docs/archive/implementation/request-audit-and-anchoring.md 阶段 C）。
     /// 每会话至多一条 promoted；narrowed 随每个仍处锚定期的 run 首个收窄请求
     /// 派发（plan_complete 晋升信号下剥夺跨回合、跨 run 持续，收窄行可随 run
     /// 重复直到模型调用 plan_ready）。只描述档位与数量；清单本身见审计 journal
@@ -1733,7 +1733,7 @@ pub enum CatalogAnchorPhase {
     /// 首轮结束，恢复完整清单（会话内此后不再变化）。
     Promoted,
     /// Plan 批准进入实施：implementation dispatch 事务成功后发出；下一 run
-    /// 验证完整目录已恢复（docs/multimodal-attachments §8.6）。
+    /// 验证完整目录已恢复（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §8.6）。
     RestoredFull,
 }
 

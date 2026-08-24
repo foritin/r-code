@@ -490,7 +490,7 @@ pub async fn cmd_agent_send(
             .ok_or_else(|| format!("invalid agent send mode: {value}"))?,
         None => AgentSendMode::Auto,
     };
-    // 新引用链路（docs/multimodal-attachments §4.4）：只传 attachment id；
+    // 新引用链路（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4）：只传 attachment id；
     // 旧 Base64 载荷仅继续服务尚未迁移的调用方。
     if let Some(ids) = attachment_ids.as_deref() {
         if !ids.is_empty() {

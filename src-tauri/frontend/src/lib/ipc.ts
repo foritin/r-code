@@ -352,7 +352,7 @@ export const agentSend = (
   return result;
 });
 
-/** 附件 staging（docs/multimodal-attachments §2.2 边界 1）：一次性 Base64 → Blob 引用。 */
+/** 附件 staging（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §2.2 边界 1）：一次性 Base64 → Blob 引用。 */
 export const attachmentStage = (taskId: string, attachment: AttachmentInput) =>
   ipc<import("./types").AttachmentRefDto>("cmd_attachment_stage", { taskId, attachment });
 

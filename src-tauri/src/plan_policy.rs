@@ -1,6 +1,6 @@
 //! DeepSeek Plan 入口建议与双轨的资格解析与内部发布控制。
 //!
-//! 权威层次（docs/settings-ux-and-image-understanding.md A3）：
+//! 权威层次（docs/archive/implementation/settings-ux-and-image-understanding.md A3）：
 //! - `vendor/agent-contracts` 只定义配置 schema（客户布尔偏好）；
 //! - 本模块集中实现 eligibility 与内部 release control；
 //! - 客户滑钮 `planning.suggest_complex_tasks` 是唯一开关，打开即生效；
@@ -235,7 +235,7 @@ pub fn resolve_plan_runtime_profile(
     workspace_bound: bool,
     anchoring_preference: bool,
 ) -> ResolvedPlanRuntimeProfile {
-    // docs/multimodal-attachments §8.1/§8.2：`deepseek_plan_anchoring` 与
+    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §8.1/§8.2：`deepseek_plan_anchoring` 与
     // `suggest_complex_tasks` 互不替代——建议开关只控制是否注册
     // propose_plan_mode；锚定开关控制实际进入 DeepSeek Plan 后是否启用最小
     // 轨迹。急停（R_CODE_PLANNING_EMERGENCY_OFF=1）同时关闭两者，但不关闭

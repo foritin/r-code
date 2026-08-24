@@ -1,0 +1,55 @@
+schema_version: ai-worklist-freeze.v1
+skill_contract:
+  name: prd-to-ai-worklist
+  version: 1.1.0
+
+status: draft # draft | frozen | stale；M0-01 交付 digest 工具并通过文档门禁自查后转 frozen
+
+source_document: docs/archive/implementation/breadth-orchestration-and-thinking-efficiency.md
+
+normative_input:
+  files:
+    - docs/archive/implementation/breadth-orchestration-and-thinking-efficiency.md
+  refs:
+    - docs/archive/implementation/breadth-orchestration-and-thinking-efficiency.md#2-已冻结决策固定约束实施不得推翻
+    - docs/archive/implementation/breadth-orchestration-and-thinking-efficiency.md#5-机器契约
+    - docs/archive/implementation/breadth-orchestration-and-thinking-efficiency.md#8-主-checklist唯一状态源
+    - docs/archive/implementation/breadth-orchestration-and-thinking-efficiency.md#9-详细任务卡
+    - vendor/agent-contracts/crates/agent-config/src/lib.rs
+    - vendor/agent-contracts/crates/agent-contract/src/session.rs
+  digest_algorithm: sha256
+  normalization: ai-worklist-norm.v1
+  digest: null # 由 scripts/verify-breadth.mjs digest 按确定性规范化计算（M0-01 交付）；禁止手填
+
+worklist:
+  task_count: 13
+  required_task_count: 13
+  digest_algorithm: sha256
+  normalization: ai-worklist-contract-norm.v1
+  digest: null # 同上，由 M0-01 工具计算
+
+completion_gate:
+  passed: false
+  blocking_issues: null
+  major_issues: null
+  report_path: null # M0-01 门禁自查报告：artifacts/ai-tasks/verification/implementation/M0-01.json
+
+material_change_triggers:
+  - normative_requirement_changed
+  - repository_fact_invalidates_task
+  - blocking_or_major_gate_failure
+  - state_or_evidence_contradiction
+  - explicit_scope_change
+
+volatile_fields_excluded:
+  - checkbox_state
+  - progress_counts
+  - current_task
+  - evidence_paths
+  - run_metadata
+
+notes: >-
+  首次转换于 2026-08-24 完成（原 PRD §6 阶段方案重构为 13 张任务卡）。冻结文案
+  （M1-02 探测纪律提示、M3-01 三件套语义）计入规范输入；三件套完整文本落在
+  M3-01 证据文件后同样计入。子模块文件（agent-config / agent-contract）以
+  gitlink 指针参与指纹。

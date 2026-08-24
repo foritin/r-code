@@ -374,7 +374,7 @@
 
 /* 手册跳转后，目标设置卡短暂高亮以定位。 */
 /* ---------------------------------------------------------------------------
-   Plan 入口建议决策弹窗（docs/plan-mode-dual-track-gate.md §6.1）。
+   Plan 入口建议决策弹窗（docs/archive/implementation/plan-mode-dual-track-gate.md §6.1）。
    复用 GuideSheet 的可访问壳层惯例（portal、scrim、popIn、reduced-motion）。
    --------------------------------------------------------------------------- */
 .plan-entry-overlay {

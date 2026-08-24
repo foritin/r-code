@@ -2116,7 +2116,7 @@ impl<'a> BlobStore<'a> {
 
     /// 写入内容，返回 blake3 哈希。相同内容去重（不覆盖已存在的文件）。
     ///
-    /// 原子安装（docs/multimodal-attachments §4.3）：临时文件 + `sync_all()` +
+    /// 原子安装（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.3）：临时文件 + `sync_all()` +
     /// 同目录 rename。目标已存在时删除临时文件并复用目标。崩溃窗口只会留下
     /// 无 ledger 的临时/半装文件，由 `prune_unreferenced_files()` 回收——绝无
     /// 「数据库已提交但 Blob 尚未安装」的顺序。

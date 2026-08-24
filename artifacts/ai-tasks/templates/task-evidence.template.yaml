@@ -1,0 +1,31 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: replace-with-task-id
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs: []
+
+revision:
+  git_revision: null
+  worktree_digest: null
+
+deliverables: []
+changed_paths: []
+
+assertions:
+  - id: replace-with-task-id.A1
+    passed: true
+    command: replace-with-executed-command
+    exit_code: 0
+    report_path: replace-with-repository-relative-report-path
+
+cumulative_verification:
+  command: replace-with-through-milestone-command
+  exit_code: 0
+  report_path: replace-with-repository-relative-report-path
+
+decisions: []
+external_gates_remaining: []
+notes: []

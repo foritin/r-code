@@ -1,12 +1,12 @@
 # Plan 双轨三臂评估（M0-11 / M0-12）
 
 > **定位变更（2026-08-22）**：预注册证据门已移除（见
-> `docs/settings-ux-and-image-understanding.md` A3）——客户滑钮是唯一开关，
+> `docs/archive/implementation/settings-ux-and-image-understanding.md` A3）——客户滑钮是唯一开关，
 > 评估结果**不再阻塞功能启用**。本目录降级为**可选的事后质量回归工具**：
 > 用户反馈建议异常时先 `R_CODE_PLANNING_EMERGENCY_OFF=1` 急停，再用本协议
 > 复测质量后再恢复。
 
-对应设计文档：`docs/plan-mode-dual-track-gate.md` §16（能力实验、路由实验、
+对应设计文档：`docs/archive/implementation/plan-mode-dual-track-gate.md` §16（能力实验、路由实验、
 Provider 来源与原始证据、预注册发布门）。本目录是**冻结协议**：任何改动阈值、
 case 或 probe 都必须以新证据版本重跑完整评估，不能挑 case 补跑覆盖原结论。
 

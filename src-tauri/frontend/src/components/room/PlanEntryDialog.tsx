@@ -1,5 +1,5 @@
 /**
- * Plan 入口建议的客户决策弹窗（docs/plan-mode-dual-track-gate.md §6.1）。
+ * Plan 入口建议的客户决策弹窗（docs/archive/implementation/plan-mode-dual-track-gate.md §6.1）。
  *
  * 合同要点：
  * - 只有一个通俗原因（宿主模板）+ 两个动作（直接继续 / 先制定计划）+ 一个低层级

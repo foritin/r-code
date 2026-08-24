@@ -94,7 +94,7 @@ const STREAM_RECOVERY_BASE_MS: u64 = 500;
 const MAX_EMPTY_RESPONSE_RECOVERIES: u32 = 0;
 /// 空响应恢复退避基数（500ms * 2^(n-1)）。
 const EMPTY_RESPONSE_RECOVERY_BASE_MS: u64 = 500;
-/// MaxTokens 终态分类上下文（docs/multimodal-attachments §6.5）。
+/// MaxTokens 终态分类上下文（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.5）。
 ///
 /// 旧的「任意空 MaxTokens 回合盲目 ×2 升档两次」策略已删除——它会把 headroom
 /// 钳制成 1 的伪预算请求放大成 `1 → 2 → 4` 的无效重试序列。新规则：
@@ -1100,7 +1100,7 @@ where
                         || !tool_calls.is_empty();
                     let retryable_provider_error =
                         provider_error == Some(ProviderStreamErrorDisposition::Retryable);
-                    // MaxTokens 截断（docs/multimodal-attachments §6.5）：不再自动
+                    // MaxTokens 截断（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.5）：不再自动
                     // ×2 升档重放。空回合的终态分类在迭代收尾处按
                     // `output_budget.headroom_clamped` 完成——headroom 钳制后推理
                     // 仍耗尽属于上下文预算问题，重放只会再次超窗；正常上限耗尽

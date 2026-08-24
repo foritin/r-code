@@ -1,5 +1,5 @@
 /**
- * 图片理解引擎的全局配置读取（docs/settings-ux-and-image-understanding.md D）。
+ * 图片理解引擎的全局配置读取（docs/archive/implementation/settings-ux-and-image-understanding.md D）。
  *
  * 默认引擎是本机 OCR；`model` 引擎下 chip 文案需要展示 `服务/模型` 标签。
  * 配置变化通过 RUNTIME_SETTINGS_CHANGED_EVENT 事件推进代际；会话内快照复用

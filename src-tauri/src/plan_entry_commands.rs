@@ -1,4 +1,4 @@
-//! Plan 入口建议的宿主运行时接线与 IPC（docs/plan-mode-dual-track-gate.md
+//! Plan 入口建议的宿主运行时接线与 IPC（docs/archive/implementation/plan-mode-dual-track-gate.md
 //! §9–§12）。
 //!
 //! 职责：

@@ -26,7 +26,7 @@ export interface AttachmentInput {
   nativeOcr?: boolean;
 }
 
-/** cmd_attachment_stage 返回的 Blob 引用（docs/multimodal-attachments §4.4）。
+/** cmd_attachment_stage 返回的 Blob 引用（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4）。
  * 发送 IPC 只携带 attachmentId 列表；Base64 仅存在于 staging 的一次性载荷。 */
 export interface AttachmentRefDto {
   attachmentId: string;

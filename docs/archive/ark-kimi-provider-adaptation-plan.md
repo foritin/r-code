@@ -153,7 +153,7 @@ OpenAI/Anthropic 方言（保证不回归）。映射表与第 2 节冻结结果
   `is_ark_provider`（kind ∈ ark/ark_coding/ark_coding_openai/ark_agent）与
   `is_kimi_provider`（kind = kimi）分派到新变体；
 - 构造时把 `provider_preset(name)` 的 `context_window` / `max_output_tokens`
-  传入，覆盖方言默认值——这一步让 [llm_runtime.rs](D:/project/rust/r-code/crates/r-code-agent-worker/src/llm_runtime.rs:2941)
+  传入，覆盖方言默认值——这一步让 [llm_runtime.rs](../../crates/r-code-agent-worker/src/llm_runtime.rs#L2941)
   的压缩窗口从 128K 修正为 256K/1M。
 
 验收：Ark 按量会话的压缩窗口按 262144 计；Agent Plan 按 1048576 计；DeepSeek

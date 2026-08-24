@@ -3,7 +3,7 @@
 - 状态：已实施（2026-08-22；含 A/B/C/D/E 全部 P0-P2 条目与测试改写）
 - 日期：2026-08-22
 - 基线分支：`feat/request-audit-anchoring`（含 `706f131` DeepSeek 复杂任务 Plan 建议双轨 Phase 0）
-- 关联文档：[plan-mode-dual-track-gate.md](./plan-mode-dual-track-gate.md)、[plan-mode.md](./plan-mode.md)、[architecture.md](./architecture.md)
+- 关联文档：[plan-mode-dual-track-gate.md](./plan-mode-dual-track-gate.md)、[plan-mode.md](../../plan-mode.md)、[architecture.md](../../architecture.md)
 - 行号为撰写当日快照，实施时以符号搜索为准。
 
 本方案回答两个使用疑问（规划建议卡的"验证中"与"默认 provider"、子代理连通测试），并落地三项需求：
@@ -22,7 +22,7 @@
 
 ### 0.1 为什么"复杂任务先建议制定计划"显示"功能仍在验证中，暂不可启用"？
 
-这不是 bug，是刻意 fail-closed 的**证据门**设计（`docs/plan-mode-dual-track-gate.md` §3.3/§16）：
+这不是 bug，是刻意 fail-closed 的**证据门**设计（`docs/archive/implementation/plan-mode-dual-track-gate.md` §3.3/§16）：
 
 - 开关可用性由后端命令 `cmd_planning_status` 返回的 `PlanningStatusView` 决定，前端 `SettingsScene.tsx:1451-1462` 按级联提示渲染，`SettingsScene.tsx:1502` 以 `customer_switch_enabled` 控制禁用。
 - `evidence_validated == release_state == Validated`（`src-tauri/src/plan_entry_commands.rs:444-445`）。而 `release_state` 恒为 `off`，因为构建期要嵌入的 DeepSeek 三臂评估证据文件 `eval/plan-eval/artifacts/manifest.json` **尚不存在**：`src-tauri/build.rs:49-52` 读不到时嵌入字面 `"null"`，`plan_policy.rs` 的 `load_validated_manifest()` 返回 `None`，兜底 `Off`。
@@ -429,7 +429,7 @@ async fn apply_image_understanding(
 
 ---
 
-## 实施状态修订（2026-08，docs/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md 生效后）
+## 实施状态修订（2026-08，docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md 生效后）
 
 本文以下旧语义已被新实施**取代**，以新合同为准：
 

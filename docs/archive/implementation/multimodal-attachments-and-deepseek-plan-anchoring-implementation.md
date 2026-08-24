@@ -834,7 +834,7 @@ DeepSeek Plan 锚定
 2. 先开启 AttachmentRef 新写，确认迁移完成，再允许移除 legacy write。
 3. Plan 锚定保持默认 false，由用户滑钮开启。
 4. 保留 attachment write emergency flag 与 `R_CODE_PLANNING_EMERGENCY_OFF`。
-5. 同步更新 `docs/settings-ux-and-image-understanding.md`、`docs/plan-mode-dual-track-gate.md` 和 `docs/readme.md`：删除“多模态失败自动 OCR”、单一 Planning 开关和旧 Base64 持久化语义，避免实现完成后仍有相互矛盾的操作文档。
+5. 同步更新 `docs/archive/implementation/settings-ux-and-image-understanding.md`、`docs/archive/implementation/plan-mode-dual-track-gate.md` 和 `docs/readme.md`：删除“多模态失败自动 OCR”、单一 Planning 开关和旧 Base64 持久化语义，避免实现完成后仍有相互矛盾的操作文档。
 
 完成条件：所有自动验收通过，真实 DeepSeek vision smoke test 通过，支持包不含附件正文，回滚演练通过。
 

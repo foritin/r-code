@@ -1,0 +1,39 @@
+schema_version: ai-task-packet.v1
+project_id: r-code-codex-rich-interaction
+task_id: replace-with-task-id
+status: active # active | verification_failed | needs_authority | passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs: []
+
+objective: replace-with-one-observable-task-outcome
+depends_on: []
+fixed_constraints: []
+decision_criteria: []
+
+inputs: []
+deliverables: []
+
+steps:
+  - id: replace-with-task-id.S1
+    status: pending # pending | active | completed
+    action: replace-with-concrete-action
+    expected_result: replace-with-observable-result
+
+acceptance_assertions:
+  - id: replace-with-task-id.A1
+    level: unit # contract | unit | integration | security | migration | e2e | visual | reliability | regression
+    command: replace-with-non-interactive-command
+    expected: replace-with-binary-pass-condition
+    evidence_path: replace-with-repository-relative-path
+
+completed_assertions: []
+remaining_assertions:
+  - replace-with-task-id.A1
+
+changed_paths: []
+decisions: []
+attempts: []
+evidence: []
+last_verified_revision: null

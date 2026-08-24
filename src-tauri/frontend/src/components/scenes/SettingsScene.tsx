@@ -1093,7 +1093,7 @@ function ProviderSection({
     : "尚未保存";
   const deepSeekV4 = isDeepSeekV4(fields.base_url, fields.model, presetName);
   const outputValue = Number(fields.max_tokens.trim());
-  // docs/multimodal-attachments §6.4：本字段是「每轮最大输出」（用户可编辑，
+  // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.4：本字段是「每轮最大输出」（用户可编辑，
   // 范围 2,048 到厂商上限）；Provider 的服务端上限只作为上界展示，不再锁死
   // 输入框。未填写时后端采用目录 recommended_output_tokens（如 DeepSeek 65,536）。
   const providerMaxOutput = activePreset?.max_output_tokens ?? null;
@@ -1977,7 +1977,7 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
   );
 }
 
-/** DeepSeek Plan 锚定滑钮（docs/multimodal-attachments §9）。与建议开关互不
+/** DeepSeek Plan 锚定滑钮（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §9）。与建议开关互不
  * 替代：锚定控制实际进入 DeepSeek Plan 后是否启用最小轨迹与批准后的完整恢复；
  * 开关值在 Plan 创建时冻结，运行中切换只影响之后新建的 Plan。 */
 function AnchoringToggle({ config, reload, status, busy, setBusy }: {

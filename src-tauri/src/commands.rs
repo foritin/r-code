@@ -919,7 +919,7 @@ pub struct CommandState {
     pub agent_event_sink: Mutex<Option<AgentEventSink>>,
     /// 工具门（内置工具 + 权限门 + 审计账本），真实 runtime 的 ToolHost 来源
     pub tool_gateway: Arc<r_code_gateway::ToolGateway>,
-    /// Plan 入口建议与双轨的宿主运行时状态（docs/plan-mode-dual-track-gate.md）。
+    /// Plan 入口建议与双轨的宿主运行时状态（docs/archive/implementation/plan-mode-dual-track-gate.md）。
     pub planning: Arc<PlanningRuntimeState>,
     /// 本机 MCP / 联网工具管理器。配置热更新由同一个长生命周期实例承载。
     pub mcp_manager: Arc<McpManager>,
@@ -4976,7 +4976,7 @@ async fn ensure_real_runtime(
                 .map_err(|error| error.to_string())
         }));
     }
-    // docs/multimodal-attachments §6.3：注入附件解析器。发送时的所有权与元数据
+    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.3：注入附件解析器。发送时的所有权与元数据
     // 校验已在 build_ref_send_plan 完成（task-local lock 内 get_owned）；此处
     // 解析器只服务 Provider 请求构造期的物化（attachment_id → Blob 字节），
     // 物化副本随请求结束丢弃，Base64 不进任何持久层。blobs 目录与 sessions
@@ -5972,7 +5972,7 @@ async fn ensure_runtime_session(
         .set_request_journal_target(&session.meta.id, branch.storage_id.clone())
         .await
         .map_err(err_str)?;
-    // docs/multimodal-attachments §5.1/§6.2：会话建立时注入冻结能力派生物——
+    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.1/§6.2：会话建立时注入冻结能力派生物——
     // 视觉预算 profile（目录确认多模态时）与路由审计描述。能力解析只经
     // model_capabilities 单一入口；同 run 内不再随设置热变化。
     {
@@ -6576,7 +6576,7 @@ fn main_model_handles_images_natively(
     resolved.vision == crate::model_capabilities::CapabilityTruth::Confirmed
 }
 
-/// 图片理解引擎（docs/settings-ux-and-image-understanding.md D4）：把"图片怎么被
+/// 图片理解引擎（docs/archive/implementation/settings-ux-and-image-understanding.md D4）：把"图片怎么被
 /// 理解"从隐式降级变成显式配置分派。
 ///
 /// **前置短路**：主模型原生处理图片（Codex 主 Agent，或目录确认多模态的主模型）
@@ -6783,7 +6783,7 @@ async fn apply_vision_model_understanding(
         .collect::<Vec<_>>();
     let described_results = futures::future::join_all(requests).await;
 
-    // docs/multimodal-attachments §5.2：辅助视觉模型失败必须原样返回可操作
+    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.2：辅助视觉模型失败必须原样返回可操作
     // 错误——**没有**「失败后自动 OCR 降级」分支。用户选择视觉模型引擎后，
     // 静默换引擎等于绕过显式配置；需要 OCR 时由用户在设置中显式切换。
     let mut failures: Vec<String> = Vec::new();
@@ -6863,7 +6863,7 @@ fn user_message_with_attachments(text: &str, attachments: &[ValidatedAttachment]
 }
 
 // ============================================================================
-// 附件引用链路（docs/multimodal-attachments §4.4/§5.2）
+// 附件引用链路（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4/§5.2）
 // ============================================================================
 
 /// staging 命令返回的引用 DTO（camelCase 对齐前端）。
@@ -14502,7 +14502,7 @@ fn effective_max_tokens(name: &str, provider: &agent_config::ProviderConfig) -> 
             );
             Some(limit)
         }
-        // docs/multimodal-attachments §6.4：未显式配置时采用目录的
+        // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.4：未显式配置时采用目录的
         // recommended_output_tokens（如 DeepSeek V4 的 65,536），**不得**自动
         // 采用服务端硬上限——无条件预留 393,216 会把 1M 窗口的可用输入压掉
         // 近 40%，过早触发伪压缩。目录未给推荐值时保持 runtime 侧 8,192
@@ -30041,7 +30041,7 @@ kind = "codex_cli"
             .unwrap();
     }
 
-    /// 阶段 A 冒烟的 cargo 级等价物（docs/request-audit-and-anchoring.md 完成定义
+    /// 阶段 A 冒烟的 cargo 级等价物（docs/archive/implementation/request-audit-and-anchoring.md 完成定义
     /// 第 3 条）：开启 diagnostics.request_audit 后跑一条真实 run（本地 SSE
     /// provider），验证 sidecar 落在 sessions/request-audit/{storage_id}.jsonl、
     /// 首行 reason=="initial"、canonical 文件零污染、自检计数 (N, 0)；关闭开关后

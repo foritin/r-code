@@ -516,7 +516,7 @@ fn main() {
                 }
                 _ => {}
             }
-            // docs/multimodal-attachments §7.3/§4.3：会话附件 JSONL 原子迁移 +
+            // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.3/§4.3：会话附件 JSONL 原子迁移 +
             // 过期 staged 附件 GC。同步文件 IO 放在启动维护线程（当前即为阻塞
             // 上下文）；failed 会话保留原文件并在日志中报告 storage id。
             {

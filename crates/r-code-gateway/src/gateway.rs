@@ -90,7 +90,7 @@ pub struct ToolExecutionContext {
     pub caller: Option<String>,
     pub access_mode: ProjectAccessMode,
     /// Origin request key bound by the trusted host for the current run
-    /// (docs/plan-mode-dual-track-gate.md §10). Host-owned identity data: tools must
+    /// (docs/archive/implementation/plan-mode-dual-track-gate.md §10). Host-owned identity data: tools must
     /// use this field for request-scoped dedup instead of accepting keys from
     /// model-controlled JSON input.
     #[serde(default, skip_serializing_if = "Option::is_none")]

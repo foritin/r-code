@@ -3,7 +3,7 @@
 > 文档类型：产品需求文档（PRD）+ 实施设计，二合一。
 >
 > 状态：Phase 0 已按第 17 节顺序实施（M0-00…M0-11 基建完成；`plan_ready` 与 Main 模式首轮收窄已下线）。
-> **证据门已废弃（2026-08-22，见 `docs/settings-ux-and-image-understanding.md` A3）**：
+> **证据门已废弃（2026-08-22，见 `docs/archive/implementation/settings-ux-and-image-understanding.md` A3）**：
 > §14.1 的 manifest 嵌入、§16 的预注册发布门与 experiment 环境变量均已移除，相关
 > 章节仅作历史设计记录保留。客户滑钮 `planning.suggest_complex_tasks` 是唯一开关，
 > 打开即生效；`R_CODE_PLANNING_EMERGENCY_OFF=1` 急停是唯一宿主级兜底。
@@ -915,13 +915,13 @@ M0-00 必须位于所有 Rust M0 任务之前。证据 gate 之后仍保留正�
 
 ## 相关文档
 
-- [Plan 模式、人工确认与增强审核](./plan-mode.md)
+- [Plan 模式、人工确认与增强审核](../../plan-mode.md)
 - [请求构成审计与首轮锚定实验](./request-audit-and-anchoring.md)
-- [架构与实现细节](./architecture.md)
+- [架构与实现细节](../../architecture.md)
 
 ---
 
-## 实施状态修订（2026-08，docs/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md 生效后）
+## 实施状态修订（2026-08，docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md 生效后）
 
 新增独立客户滑钮 `planning.deepseek_plan_anchoring`（默认关闭）：
 

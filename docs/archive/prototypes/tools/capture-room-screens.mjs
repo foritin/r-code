@@ -1,10 +1,10 @@
 /**
- * 手动脚本：为主交互页复刻验收刷新 docs/prototypes/screenshots/impl-room-*.png。
+ * 手动脚本：为主交互页复刻验收刷新 docs/archive/prototypes/screenshots/impl-room-*.png。
  *
- * 用法：node scripts/manual/capture-room-screens.mjs
+ * 历史用法：node docs/archive/prototypes/tools/capture-room-screens.mjs
  * 依赖 src-tauri/frontend/node_modules（vite + playwright-core），无需 Tauri 后端：
  * 走 mock 数据通道（与 room-file-activity.test.mjs 同一套基建）。
- * - mock-task-complete 折叠/展开 两张 → 覆盖 docs/prototypes/screenshots/impl-room-*.png
+ * - mock-task-complete 折叠/展开 两张 → 覆盖 docs/archive/prototypes/screenshots/impl-room-*.png
  * - mock-task-permission / mock-task-queue → target-qa/room-parity/（仅供人工核验，不提交）
  */
 import { spawn } from "node:child_process";
@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const frontendDir = path.join(repoRoot, "src-tauri", "frontend");
 const requireFromFrontend = createRequire(path.join(frontendDir, "package.json"));
 const { chromium } = requireFromFrontend("playwright-core");
@@ -86,14 +86,14 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await openRoom(page, baseUrl, "mock-task-complete");
     await page.waitForTimeout(400);
-    await page.screenshot({ path: path.join(repoRoot, "docs", "prototypes", "screenshots", "impl-room-1440.png") });
+    await page.screenshot({ path: path.join(repoRoot, "docs", "archive", "prototypes", "screenshots", "impl-room-1440.png") });
     const toggle = page.locator(".timeline-process-toggle").first();
     if (await toggle.count()) {
       await toggle.click();
       await page.locator(".timeline-process-body").waitFor({ state: "visible" });
       await page.waitForTimeout(400);
     }
-    await page.screenshot({ path: path.join(repoRoot, "docs", "prototypes", "screenshots", "impl-room-expanded.png") });
+    await page.screenshot({ path: path.join(repoRoot, "docs", "archive", "prototypes", "screenshots", "impl-room-expanded.png") });
     await page.close();
 
     // 人工核验用：权限卡场景 + 运行中场景（不提交）。

@@ -1,7 +1,7 @@
 //! Plan 入口建议（PlanEntryOffer）与 Plan 冻结运行 profile 的领域合同。
 //!
 //! 本模块只定义持久化形态与稳定枚举；资格解析、证据门与客户文案模板位于宿主
-//! `r_code_host::plan_policy`（见 docs/plan-mode-dual-track-gate.md 第 11、14 节）。
+//! `r_code_host::plan_policy`（见 docs/archive/implementation/plan-mode-dual-track-gate.md 第 11、14 节）。
 //! 持久化拼写是 SQLite 与 IPC 合同的一部分，保持 `as_str`/serde 同步。
 
 use std::fmt;
@@ -242,7 +242,7 @@ pub struct ResolvedPlanRuntimeProfile {
     pub provider_kind: String,
     pub model_id: String,
     pub endpoint_class: String,
-    /// v2（docs/multimodal-attachments §8.2）：用户显式选择的协议标识。
+    /// v2（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §8.2）：用户显式选择的协议标识。
     #[serde(default)]
     pub protocol: String,
     /// v2：冻结 route revision（route 漂移按此比较，§8.7）。

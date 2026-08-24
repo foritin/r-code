@@ -592,7 +592,7 @@ const PLAN_NATIVE_RESIDENT_TOOLS: &[&str] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// 上下文注入闸门（docs/multimodal-attachments §8.5）
+// 上下文注入闸门（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §8.5）
 // ---------------------------------------------------------------------------
 
 /// 统一上下文注入 profile：所有 system 与 tail 构造先经过同一闸门，不得在各
@@ -1109,7 +1109,7 @@ fn build_main_system_prompt(
     prompts: &AgentPromptPolicy,
     profile: ContextInjectionProfile,
 ) -> String {
-    // docs/multimodal-attachments §8.5：PlanMinimal 从固定最小模板正向构造，
+    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §8.5：PlanMinimal 从固定最小模板正向构造，
     // 不先构造 Standard 再做字符串删除。MCP 文案与用户协作文案在 PlanMinimal
     // 下缺席（ContextSource::McpPolicy / UserAgentPrompt 均被闸门禁止）。
     match profile {
@@ -1929,7 +1929,7 @@ pub struct LlmAgentRuntime {
     /// 行为与接入前一致；Some 时 run 循环每轮派发前追加
     /// `SessionEvent::RequestHeader` 并做重建自检。agent-store 的追加锁按
     /// 进程内文件路径归一，天然支持与宿主写方并存（接线时仍需收敛单写方策略，
-    /// 见 docs/harness-migration.md 阶段 1.3 与本文 `with_request_journal`）。
+    /// 见 docs/archive/implementation/harness-migration.md 阶段 1.3 与本文 `with_request_journal`）。
     /// `SessionStore` 非 Clone，包 Arc 以便随 RunLoopCtx 分享。
     request_journal: Option<Arc<agent_store::SessionStore>>,
     /// 1.3 自检观测计数（headers / mismatches）。自检只记录不阻断，计数供
@@ -3041,7 +3041,7 @@ impl CompactionState {
 /// P2-G：推导每轮请求的输出预留。优先使用 provider 声明的单次输出上限；
 /// 未声明（0）时回退到 `max_tokens`（旧的启发式），保持既有 provider 行为不变。
 fn compaction_output_reserve(provider_max_output_tokens: u32, max_tokens: u32) -> u32 {
-    // docs/multimodal-attachments §2.3：压缩与发送闸门只预留本次
+    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §2.3：压缩与发送闸门只预留本次
     // requested_output_tokens，不得无条件预留 Provider 服务端上限（DeepSeek
     // 393,216 预留会把 1M 窗口的可用输入压掉近 40%，过早触发伪压缩）。
     // provider_max_output_tokens 只用于限制单轮输出（resolve_request_max_tokens
@@ -3053,7 +3053,7 @@ fn compaction_output_reserve(provider_max_output_tokens: u32, max_tokens: u32) -
     }
 }
 
-/// P2-G：Provider 可见内容**文本**字符数（docs/multimodal-attachments §6.1 重构）。
+/// P2-G：Provider 可见内容**文本**字符数（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.1 重构）。
 ///
 /// 二进制附件绝不按 Base64 字符计入——图片 token 由 `VisionBudgetProfile` 的
 /// 确定性 tile 上界单独核算，引用块只统计名称等少量可见元数据，物化发送副本
@@ -3751,7 +3751,7 @@ const VISUAL_CHECKPOINT_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// 检查点请求携带的相邻用户文本上限。
 const VISUAL_CHECKPOINT_ADJACENT_CHARS: usize = 2_000;
 
-/// docs/multimodal-attachments §7.1：VisualCheckpointV1 —— 图片即将移出
+/// docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.1：VisualCheckpointV1 —— 图片即将移出
 /// exact tail（进入分层摘要）时，用**当前同一个多模态主模型**生成视觉检查点
 /// 文本。这是模型自身的视觉理解，不是 OCR：请求携带物化原图与相邻用户文本，
 /// 使用同一冻结 provider/model route；只有完整 stop 且非空、检查点文本记录了
@@ -4004,7 +4004,7 @@ fn capture_run_prefix_shape(system: &str, tools: &[ToolSpec], rewrite_version: u
 }
 
 // ---------------------------------------------------------------------------
-// 1.3（docs/harness-migration.md §1.3）：request/header 快照 + 派发前重建自检。
+// 1.3（docs/archive/implementation/harness-migration.md §1.3）：request/header 快照 + 派发前重建自检。
 //
 // 每轮派发前对 system + tools + 规范化消息列表算 SHA-256，作为
 // `SessionEvent::RequestHeader` 追加进会话 JSONL；随后用
@@ -4160,7 +4160,7 @@ fn request_header_reason(is_initial: bool, is_recovery_redispatch: bool) -> &'st
 /// 只有消息段（条数或哈希）不一致才返回 [`RequestRebuildMismatch`]；差异描述
 /// 附带 system/tools 相对上一枚 RequestHeader 的漂移标注（见结构体注释，仅
 /// 上下文，不作为触发条件）。首期策略是**只记录不阻断**
-/// （docs/harness-migration.md 风险表：自检器先跑一周观察误报，确认零误报再
+/// （docs/archive/implementation/harness-migration.md 风险表：自检器先跑一周观察误报，确认零误报再
 /// 升级为阻断——升级点即调用方把 Err 变为终止条件）。
 fn verify_request_rebuild(
     dispatch: &RequestEnvelope,
@@ -4400,7 +4400,7 @@ async fn run_loop(mut ctx: RunLoopCtx) {
     // 重置点（跨 run 生效，见 PRD §3 A13③），因此这里不需要按轮重建。
     // MCP 档位由 run 冻结的工具来源推导：无 MCP 时不为整本 MCP 规则付费。
     //
-    // docs/multimodal-attachments §8.5：统一上下文注入闸门。Plan 锚定 run
+    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §8.5：统一上下文注入闸门。Plan 锚定 run
     // （plan_native_catalog 在场）使用 PlanMinimalV1——system 从固定最小模板
     // **正向构造**，绝不由 Standard 删除得到；MCP 文案与用户协作文案全部缺席。
     let context_profile = if ctx.plan_native_catalog.is_some() {

@@ -202,7 +202,7 @@ impl Tool for EnterPlanModeTool {
 }
 
 // ---------------------------------------------------------------------------
-// Plan 入口建议（docs/plan-mode-dual-track-gate.md §9）。模型只能建议「先制定
+// Plan 入口建议（docs/archive/implementation/plan-mode-dual-track-gate.md §9）。模型只能建议「先制定
 // 计划」，不能替客户切换模式：建议是 pending offer，任务保持原 Agent 模式。
 // ---------------------------------------------------------------------------
 

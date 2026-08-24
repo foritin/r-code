@@ -1,4 +1,4 @@
-//! 模型能力解析的唯一入口（docs/multimodal-attachments §5.1）。
+//! 模型能力解析的唯一入口（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.1）。
 //!
 //! `provider_kind + model_id + selected protocol` 是能力键；显示名、URL 子串
 //! 和错误消息中的厂商名不参与判定。以下调用方必须全部经由本模块，不得再

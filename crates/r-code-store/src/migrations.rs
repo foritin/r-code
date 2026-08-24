@@ -1520,7 +1520,7 @@ ALTER TABLE agent_runs ADD COLUMN checkpoint_sha TEXT;
 ALTER TABLE agent_runs ADD COLUMN checkpoint_base_head TEXT;
 "#;
 
-/// Migration 032: Plan 入口建议（docs/plan-mode-dual-track-gate.md §10、§11）。
+/// Migration 032: Plan 入口建议（docs/archive/implementation/plan-mode-dual-track-gate.md §10、§11）。
 /// - `origin_requests`：所有发送分支之前创建的统一宿主请求信封（request key 是
 ///   幂等与恢复边界）；
 /// - `plan_entry_offers`：待决建议聚合。pending 不切任务模式、不建 Plan；决策用
@@ -1606,7 +1606,7 @@ ALTER TABLE plans ADD COLUMN catalog_phase TEXT
 ALTER TABLE plans ADD COLUMN profile_version INTEGER;
 "#;
 
-/// Migration 034: 附件引用账本与 JSONL 迁移状态机（docs/multimodal-attachments §4.2）。
+/// Migration 034: 附件引用账本与 JSONL 迁移状态机（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.2）。
 ///
 /// `attachments` 是逻辑引用（同一内容可在多条消息中各有一条记录），物理 Blob
 /// 因内容 hash 相同只存一份——因此 `blob_hash` **不得**加唯一约束。

@@ -10,8 +10,6 @@
 | [联网工具与 MCP](./mcp.md) | 原生联网、MCP 管理、Registry、安全确认、跨平台启动和故障恢复 |
 | [演进记忆](./memory.md) | 全局/项目作用域、自动触发、Reviewer、审批、注入、持久化与隐私边界 |
 | [Plan 模式与增强审核](./plan-mode.md) · [English](./plan-mode.en.md) | 目标、结构化人工确认、Plan 投影、功能待办、增强审核、并发与崩溃恢复 |
-| [DeepSeek 复杂任务 Plan 建议与 Plan-only 双轨](./plan-mode-dual-track-gate.md) | PRD + 实施设计：DeepSeek 首发、低打扰用户确认、内置指引、Plan-only 轨迹锚定与原生硬门 |
-| [设置体验优化与图片理解引擎](./settings-ux-and-image-understanding.md) | 实施方案：规划建议卡语义修正、子代理自动连通、模型能力标注、OCR/视觉模型双引擎与设置指引 |
 | [macOS 真机验证清单](./macos-validation.md) | Windows/Linux 无法替代的本地加密凭据、Finder、终端、RTK、MCP 与安装包运行验证 |
 | [发布手册](./releasing.md) | 版本、CHANGELOG、tag、GitHub Release、签名、失败恢复和首次发布清单 |
 | [安装、备份、恢复与卸载](./operations.md) · [English](./operations.en.md) | 用户/运维人员的安装、升级、完整数据备份、迁移恢复、卸载和支持包流程 |
@@ -19,6 +17,12 @@
 | [Security Policy](../SECURITY.md) | 支持范围、私密漏洞报告和安全边界 |
 | [Privacy Notice](../PRIVACY.md) | 本地存储、模型 Provider、Codex、更新和支持包的数据流 |
 | [English README](../README.md) / [简体中文 README](../README.zh-CN.md) | 产品概览、快速开发、验证命令和仓库导航 |
+
+## 当前实施合同
+
+| 文档 | 状态 |
+| --- | --- |
+| [Codex 主代理丰富交互 PRD / AI 实施清单](./codex-rich-interaction-prd.md) | `frozen`，产品尚未按 Checklist 实施；唯一状态源在文档 §9 |
 
 ## UI 参考图
 
@@ -29,18 +33,6 @@
 
 ## 历史归档
 
-[`archive/`](./archive/) 保存已经实施的一次性方案、基线和历史决策记录。归档文档
-不再作为当前实现或待办清单；当前行为应以本页列出的维护文档与代码测试为准。
-DeepSeek harness 评估与 Ark/Kimi 适配方案已归档，见 [`archive/readme.md`](./archive/readme.md)。
-
----
-
-## 实施状态修订（2026-08，docs/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md 生效后）
-
-新增独立客户滑钮 `planning.deepseek_plan_anchoring`（默认关闭）：
-
-- 与 `suggest_complex_tasks` 互不替代：建议开关只控制是否注册 propose_plan_mode；锚定开关控制实际进入 DeepSeek Plan 后是否启用 5→8 最小只读目录 + PlanMinimal 上下文注入，以及批准实施后的完整能力恢复（`RestoredFull` 事件 + worker 侧 fail-closed 断言 `PLAN_FULL_CATALOG_NOT_RESTORED`）。
-- 开关值、Provider route（kind/model/protocol/route revision）在 Plan 创建时冻结进 `ResolvedPlanRuntimeProfile`（profile_version=2）；运行中切换设置只影响之后新建的 Plan。
-- `R_CODE_PLANNING_EMERGENCY_OFF=1` 同时关闭建议与锚定，Plan 只读安全硬门保持。
-- 上下文注入统一经 `ContextInjectionProfile` 闸门（Standard / PlanMinimalV1）：PlanMinimal 从固定最小模板正向构造 system，禁止 memory、本地时钟、普通 task context、用户协作文案、MCP 文案、peer mailbox（保持 pending 不消费）、Plan 建议尾部、工具进度 checkpoint、委派提示、hosted web fallback 与 governor 尾部。
-- 关闭开关时与 baseline Plan 请求形状一致（目录与注入均不受影响）。
+[`archive/`](./archive/) 保存已实施的一次性方案、实验基线、历史原型和阶段性决策记录。
+归档内容不再作为当前实现或待办清单；当前行为以本页维护文档与通过的代码测试为准。
+完整目录和归档原因见 [`archive/readme.md`](./archive/readme.md)。
