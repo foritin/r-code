@@ -1,0 +1,61 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M2-02
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M2-02)
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M2-02.json revision.worktree_digest 记录
+
+deliverables:
+  - dto.rs：AgentEvent::CodexContextEvent{event, data}
+  - commands.rs：PlanUpdated→Plan（explanation 决策丢弃）；DiffUpdated→ContextEvent{codex_diff, 800 字符预览+截断标记}；ContextCompacted→ContextEvent{r_code_context_compacted}（复用原生行）；Warning→ContextEvent{codex_warning}；UsageUpdated→Usage（键形与原生 usage_json 一致）；persist arm → SessionEvent::System
+  - frontend：codexContextRow 共享构建器（live/历史单一规则）；reducer case codex_context_event；buildTimeline codex_warning/codex_diff 分支；plan 历史分支改幂等替换
+  - 测试：rust e2e m2_02_a1 + 前端 m2_22→m2_02 a2/a3（codex-context-events.test.mjs）
+
+changed_paths:
+  - crates/r-code-core/src/dto.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/frontend/src/lib/types.ts
+  - src-tauri/frontend/src/components/room/model.ts
+  - src-tauri/frontend/src/components/room/activity.ts
+  - src-tauri/frontend/scripts/codex-context-events.test.mjs
+  - scripts/codex-interaction/registry.mjs
+
+assertions:
+  - id: M2-02.A1
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m2_02_a1 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-02.json
+  - id: M2-02.A2
+    passed: true
+    command: node --test scripts/codex-context-events.test.mjs --test-name-pattern m2_02_a2
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-02.json
+  - id: M2-02.A3
+    passed: true
+    command: node --test scripts/codex-context-events.test.mjs --test-name-pattern m2_02_a3
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-02.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M2 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2.json
+  note: M2 里程碑 6/6 全绿（M2-01 3 + M2-02 3）
+
+decisions:
+  - 非聊天事件走通用 CodexContextEvent（event 稳定行类型 + 已脱敏 data），持久化为同名 SessionEvent::System，live 与历史共用 codexContextRow 单一构建规则（§4.4）
+  - diff 只落引用/摘要：800 字符预览 + chars + truncated 标记，全文不进时间线（§5.1/决策空间"引用/摘要"）
+  - 压缩复用原生 r_code_context_compacted 行；thread/compacted 无消息计数时降级固定说明
+  - usage 键形与原生 usage_json 完全一致（runUsageLabel 直接解析 run 摘要）
+  - plan：UI 卡无 explanation 字段，归一化事件保留（合同层），映射丢弃（决策）；历史 plan 分支改为幂等替换（与 live 一致）
+  - 发现并修复 registry 笔误：A3 name-pattern 曾写成 m2_22_a3（匹配 0 测试的假绿），修正后复验 3/3
+
+external_gates_remaining: []

@@ -1,0 +1,115 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-25T04:08:41.967Z",
+  "mode": {
+    "kind": "task",
+    "id": "M3-03",
+    "tasks": [
+      "M3-03"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "b2002f3fa302fa5c024339ccbf7860fb678bb21d1e5bfc10f04632dacf07eafe"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-03.A1",
+      "task": "M3-03",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "timeout/resolved/迟到提交竞态：唯一 writer 结果 + 唯一 UI 终态",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_03_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 976,
+      "output_sha256": "868d9f1fa77caf3f33077a55cc4f64446b4174b0dc14ffdf2ab436726414f7d3",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-03.A2",
+      "task": "M3-03",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "pending 期间 steer 与问题回答双链路独立、顺序可追踪",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_03_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 559,
+      "output_sha256": "c01c9a7111dafef494e3b6355bcd48a6c8f0be16b2f160c6573437a6580281a6",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-03.A3",
+      "task": "M3-03",
+      "level": "recovery",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "reload 保留 pending；restart 后 expired 只读、迟到提交拒绝",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m3-03-recovery.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4980,
+      "output_sha256": "7d9b71b29e4c4d63ba1a6b23c368fcded25eb3d7d0c3fd71fa2ceb8d7f11bbd1",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

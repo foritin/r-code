@@ -195,6 +195,9 @@ function applyEvent(state: ActivityTraceState, event: AgentEvent, at: number): A
       return applyActivityEvent(base, event.phase, event.detail);
     case "message":
       return { ...base, phase: "streaming", label: "正在生成回复" };
+    case "codex_agent_message":
+      // Codex agentMessage 流（commentary 进度与 final 交付）与原生流式同层。
+      return { ...base, phase: "streaming", label: "正在生成回复" };
     case "reasoning":
       return { ...base, phase: "streaming", label: "模型正在思考" };
     case "tool_call": {
@@ -207,6 +210,15 @@ function applyEvent(state: ActivityTraceState, event: AgentEvent, at: number): A
         phase: "tool",
         label: event.is_error ? "工具执行失败" : "工具已完成",
       };
+    case "tool_output_delta":
+      return { ...base, phase: "tool", label: "工具输出中" };
+    case "codex_context_event":
+      // 非聊天上下文行（diff/压缩/warning）不改运行相位，只刷新活跃时间。
+      return base;
+    case "codex_user_input_requested":
+      return { ...base, phase: "finalizing", label: "等待你的回答" };
+    case "codex_user_input_resolved":
+      return { ...base, phase: "streaming", label: "回答已交付，继续运行" };
     case "plan":
       return { ...base, phase: "finalizing", label: "正在更新可见计划" };
     case "peer_message":

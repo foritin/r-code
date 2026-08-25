@@ -1,0 +1,62 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M1-02
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M1-02)
+    - docs/codex-rich-interaction-prd.md#53-进度播报合同
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M1-02.json revision.worktree_digest 记录
+
+deliverables:
+  - crates/r-code-core/src/progress_contract.rs（PUBLIC_PROGRESS_CONTRACT 单一事实源 + 四类 fixture 断言）
+  - crates/r-code-agent-worker/src/llm_runtime.rs（workspace_system_prompt() 注入共享合同；主/子代理文本与旧版逐字一致）
+  - src-tauri/src/commands.rs（codex_main_prompt 注入共享合同 + 公开通道限定 + 简单任务静默条款）
+  - 测试：host m1_02_a1/a2/a3、worker m1_02_a3、core m1_02_a3
+  - scripts/codex-interaction/m1-02-regression.mjs（A3 三 crate 包装）
+
+changed_paths:
+  - crates/r-code-core/src/progress_contract.rs
+  - crates/r-code-core/src/lib.rs
+  - crates/r-code-agent-worker/src/llm_runtime.rs
+  - crates/r-code-agent-worker/src/llm_runtime_tests.rs
+  - src-tauri/src/commands.rs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/m1-02-regression.mjs
+
+assertions:
+  - id: M1-02.A1
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m1_02_a1 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-02.json
+  - id: M1-02.A2
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m1_02_a2 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-02.json
+  - id: M1-02.A3
+    passed: true
+    command: node scripts/codex-interaction/m1-02-regression.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-02.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M1 --profile implementation
+  exit_code: 1
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1.json
+  note: M1-01+M1-02 共 6 断言通过；剩余失败全部是 M1-03 not_implemented（同里程碑下一任务）
+
+decisions:
+  - 共享常量放 r-code-core（两侧 crate 均已依赖，零新增依赖）；注入点只拼接文本，不复制副本
+  - 原生 WORKSPACE_SYSTEM_PROMPT 改为占位符 + workspace_system_prompt() 替换：主/子代理最终文本与旧版逐字一致（行为零变化）
+  - Codex 主提示在委托规则后注入完整共享合同，另加两条 Codex 专属限定：播报以公开 assistant 消息承载（对齐 M1-01 commentary 投影）、简单任务静默直接交付
+  - 子代理委托提示不注入进度合同（简洁交付边界不变）；纯聊天提示不含合同（行为不变）
+  - 最终回答规则与用户语言合同断言保留（worker 测试验证 LANGUAGE_POLICY 与 final-answer 段仍在）
+
+external_gates_remaining: []

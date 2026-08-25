@@ -1406,3 +1406,24 @@ export const logsTail = async (limit = 200, level?: string) => {
     return [];
   }
 };
+
+/** M3-02：提交 Codex requestUserInput 答案；answers 为 null 表示取消。 */
+export async function codexSubmitUserInput(
+  taskId: string,
+  runId: string,
+  requestKey: string,
+  answers: Record<string, string[]> | null
+): Promise<"delivered" | "rejected"> {
+  const encoded = answers
+    ? Object.fromEntries(
+        Object.entries(answers).map(([id, values]) => [id, { answers: values }])
+      )
+    : null;
+  const outcome = await ipc<string>("cmd_codex_submit_user_input", {
+    taskId,
+    runId,
+    requestKey,
+    answers: encoded,
+  });
+  return outcome === "delivered" ? "delivered" : "rejected";
+}

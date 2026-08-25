@@ -1,0 +1,122 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-24T19:57:24.267Z",
+  "mode": {
+    "kind": "task",
+    "id": "M3-01",
+    "tasks": [
+      "M3-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "f715cfeb0ba3a311983bb8f9e17fdcf79845d222efed7d35d844b156538bd3aa"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-01.A1",
+      "task": "M3-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "单/多题答案按 question id 返回且 turn 继续",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_01_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 589,
+      "output_sha256": "f0d2f64fdc1b28b29ae0214157740b118da941881f82bf41ebeda3407f0ddf00",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A2",
+      "task": "M3-01",
+      "level": "security",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "secret 只进单次 writer 响应，不进事件流/JSONL",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_01_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 590,
+      "output_sha256": "f9c6d68835187e9c9ee063c44b8a91ae9fd3c091fda97c0497244f8be55a1a01",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A3",
+      "task": "M3-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "重复提交/未知 key 原子 claim，唯一确定终态",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_01_a3",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 563,
+      "output_sha256": "bbcf3e8f25a725c6cef86344979a327f003d4b82889d38b32e6e205faf07965d",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

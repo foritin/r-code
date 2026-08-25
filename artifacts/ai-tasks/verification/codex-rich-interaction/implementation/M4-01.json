@@ -1,0 +1,137 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-25T05:26:25.910Z",
+  "mode": {
+    "kind": "task",
+    "id": "M4-01",
+    "tasks": [
+      "M4-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "9701bddf45a992a9d9d89fa68942292c00351a69e15248f49d8b7ab69a0902aa"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-01.A1",
+      "task": "M4-01",
+      "level": "security-negative",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "raw reasoning/secret/凭据在投影与持久化 oracle 中 0 命中",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m4-01-security.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1172,
+      "output_sha256": "096a418656b75bf371deca0e01bf40af9aa8b8cf579543099758e80f926133e8",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A2",
+      "task": "M4-01",
+      "level": "security",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "诊断仅元数据；unknown/overflow/timeout/duplicate 类别可定位",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m4_01_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 467,
+      "output_sha256": "a3f50022ce4d68117d6a4fdc4ffd095e0606f4b753e70f6cab22c16bcde4d9cd",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A3",
+      "task": "M4-01",
+      "level": "replay",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "乱序/重复/断流/跨 run 最终状态确定",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m4_01_a3",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 452,
+      "output_sha256": "a4b2cc1bc0bf829cdf64a24b2be50506cd094afdb08783b9736bf3c67ad67c59",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A4",
+      "task": "M4-01",
+      "level": "performance",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "§6 延迟/密度/有界指标 + 机器可读 performance.json",
+      "evidence_path": "artifacts/ai-tasks/verification/codex-rich-interaction/implementation/performance.json",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-performance.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4674,
+      "output_sha256": "22343bd515fdc7f34b41e922a94fb24bfa35e296a85ce06287514c3b33a07435",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

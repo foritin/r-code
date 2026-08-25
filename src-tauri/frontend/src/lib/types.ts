@@ -835,9 +835,48 @@ export interface AgentEventScope {
 
 export type AgentEvent =
   | { type: "message"; text: string; delta: boolean }
+  | {
+      /** Codex 主代理 agentMessage 流（M1-03）：item 级身份 + phase。 */
+      type: "codex_agent_message";
+      item_id: string;
+      /** "commentary" | "final_answer" | "unknown"。 */
+      phase: string;
+      text: string;
+      /** delta=true 时 text 为增量；false 为封口（非空 text = 权威全文替换）。 */
+      delta: boolean;
+    }
   | { type: "reasoning"; text: string; delta: boolean }
   | { type: "tool_call"; name: string; input: unknown; call_id: string }
   | { type: "tool_result"; call_id: string; output: unknown; is_error: boolean }
+  | {
+      /** 工具有界输出增量（M2-01）：运行中流式追加的安全文本片段。 */
+      type: "tool_output_delta";
+      call_id: string;
+      safe_delta: string;
+    }
+  | {
+      /** Codex 非聊天上下文行（M2-02）：diff/压缩/warning 的紧凑过程事件。 */
+      type: "codex_context_event";
+      event: string;
+      data: unknown;
+    }
+  | {
+      /** Codex requestUserInput 反向请求（M3-02）：问题非敏感，答案不回流。 */
+      type: "codex_user_input_requested";
+      run_id: string;
+      request_key: string;
+      item_id: string;
+      request_id: string;
+      questions: CodexUserQuestion[];
+      auto_resolution_ms: number | null;
+    }
+  | {
+      /** pending 用户提问终态（answered/cancelled/resolved/expired）。 */
+      type: "codex_user_input_resolved";
+      request_key: string;
+      item_id: string;
+      outcome: string;
+    }
   | { type: "plan"; steps: { description: string; completed: boolean }[] }
   | { type: "activity"; phase: AgentActivityPhase; detail?: string }
   | { type: "scoped"; scope: AgentEventScope; event: AgentEvent }
@@ -868,6 +907,21 @@ export type AgentEvent =
   | { type: "checkpoint"; sha: string; base_head?: string };
 
 /** "agent-event" Tauri 事件的信封（后端 drain 循环 emit）。 */
+/** Codex requestUserInput 的问题卡数据（M3-02；问题非敏感）。 */
+export interface CodexUserOption {
+  label: string;
+  description: string;
+}
+
+export interface CodexUserQuestion {
+  id: string;
+  header: string;
+  question: string;
+  is_other: boolean;
+  is_secret: boolean;
+  options: CodexUserOption[];
+}
+
 export interface AgentEventEnvelope {
   task_id: string;
   event: AgentEvent;
@@ -1018,7 +1072,14 @@ export interface SessionMessage {
   id?: string;
   /** 当前读取的会话分支。 */
   branch_id: string;
-  kind: "meta" | "message" | "tool_call" | "tool_result" | "system";
+  kind:
+    | "meta"
+    | "message"
+    | "codex_commentary"
+    | "codex_question"
+    | "tool_call"
+    | "tool_result"
+    | "system";
   role?: "user" | "assistant" | "system";
   /** message 的文本内容 */
   text?: string;

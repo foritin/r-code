@@ -1,0 +1,76 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M0-01
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M0-01)
+    - docs/codex-rich-interaction-prd.md#8-verification-harness-与里程碑
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M0-01.json revision.worktree_digest 记录
+
+deliverables:
+  - scripts/verify-codex-interaction.mjs（--task/--through/--profile/--list CLI）
+  - scripts/codex-interaction/registry.mjs（12 任务 × 35 断言注册表 + 结构校验）
+  - scripts/codex-interaction/runner.mjs（编排引擎、脱敏 JSON 报告、git/fixture 元数据）
+  - scripts/codex-interaction/extract-protocol-fixture.mjs（codex 生成 schema → 冻结 fixture）
+  - scripts/codex-interaction/check-protocol-fixture.mjs（离线 fixture 一致性校验）
+  - scripts/codex-interaction/schema-mini-validate.mjs（draft-07 子集校验器）
+  - scripts/codex-interaction/smoke-orchestration.mjs（真实 Rust+前端编排冒烟）
+  - scripts/verify-codex-interaction.test.mjs（12 个 node:test 自测）
+  - fixtures/codex-interaction/protocol-0.145.0.json（20 通知 + requestUserInput + 4 样例帧）
+  - .github/workflows/ci.yml（frontend job 接入 runner 自测）
+
+changed_paths:
+  - scripts/verify-codex-interaction.mjs
+  - scripts/verify-codex-interaction.test.mjs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/runner.mjs
+  - scripts/codex-interaction/extract-protocol-fixture.mjs
+  - scripts/codex-interaction/check-protocol-fixture.mjs
+  - scripts/codex-interaction/schema-mini-validate.mjs
+  - scripts/codex-interaction/smoke-orchestration.mjs
+  - fixtures/codex-interaction/protocol-0.145.0.json
+  - .github/workflows/ci.yml
+  - artifacts/ai-tasks/current.yaml
+
+assertions:
+  - id: M0-01.A1
+    passed: true
+    command: node --test scripts/verify-codex-interaction.test.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-01.json
+  - id: M0-01.A2
+    passed: true
+    command: node scripts/codex-interaction/check-protocol-fixture.mjs fixtures/codex-interaction/protocol-0.145.0.json
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-01.json
+  - id: M0-01.A3
+    passed: true
+    command: node scripts/codex-interaction/smoke-orchestration.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-01-smoke.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M0 --profile implementation
+  exit_code: 1
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0.json
+  note: M0-01 断言全过；剩余失败全部是 M0-02 not_implemented（显式失败），属于同一里程碑下一任务的预期状态
+
+decisions:
+  - harness 复用仓库 node:test 自研 runner 模式，薄 Node orchestrator 编排 cargo/前端既有测试入口
+  - fixture 冻结自 codex-cli 0.145.0 generate-json-schema（含来源 sha256），离线校验不依赖 CLI/账号
+  - 未实现断言 not_implemented 显式失败；M0-01-smoke 编入 selftest 里程碑，不进 --through 累计门禁
+  - 报告不落 stdout/stderr 全文：仅 output_sha256 + 失败时 1200 字符脱敏节选；command argv 同样脱敏
+  - 发现并修复 Windows 两个真实缺陷：check-protocol-fixture 入口守卫假绿（file:// 斜杠数）、runner 绝对 reportRoot 拼接
+
+external_gates_remaining: []
+
+notes:
+  - 冒烟 Rust 测试：cargo test -p r-code-host --all-features codex_app_server_input_keeps_text_and_local_images_in_order -- --exact
+  - 冒烟前端测试：node scripts/run-tests.mjs usage-label.test.mjs（src-tauri/frontend）
+  - fixture 生成命令（schema 升级时复跑）：codex app-server generate-json-schema --out <dir> && node scripts/codex-interaction/extract-protocol-fixture.mjs --schema-dir <dir> --cli-version <ver> --out fixtures/codex-interaction/protocol-<ver>.json

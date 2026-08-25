@@ -10,6 +10,7 @@
 pub mod app_paths;
 pub mod attachment_migration;
 pub mod codex_app_server;
+pub mod codex_interaction;
 pub mod codex_mcp;
 pub mod codex_permissions;
 pub mod commands;

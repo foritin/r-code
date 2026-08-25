@@ -1,0 +1,216 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-25T05:03:24.129Z",
+  "mode": {
+    "kind": "through",
+    "id": "M0",
+    "tasks": [
+      "M0-01",
+      "M0-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "9701bddf45a992a9d9d89fa68942292c00351a69e15248f49d8b7ab69a0902aa"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 7,
+    "passed": 7,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "runner 自测：未知 task、缺失 required 断言、失败子命令、报告脱敏",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/verify-codex-interaction.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1286,
+      "output_sha256": "f81bdd0ca726d70428c747d6331cb021b6b0151468ca9ccea165ebee605193ce",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A2",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "0.145.0 requestUserInput fixture 离线一致性",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/check-protocol-fixture.mjs",
+        "fixtures/codex-interaction/protocol-0.145.0.json"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 51,
+      "output_sha256": "47c9fb991d8905b84a624662f43b16bcdfa77ec2b601803c6224dd2900d08816",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A3",
+      "task": "M0-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Harness 编排 ≥1 Rust + ≥1 前端测试并产出无 secret JSON 索引",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/smoke-orchestration.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 12214,
+      "output_sha256": "4d2d25343cea9657147fca682a86366397b8db6a45d073adbd13cf96f0884e86",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A1",
+      "task": "M0-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "§4.1 已知帧→宿主事件转换 contract（含方法表对齐与 fixture 样例帧）",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 521,
+      "output_sha256": "7df4337988b189e3125704e35c5ed1caeb3d565b2fb200733df7e1735d721a9d",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A2",
+      "task": "M0-02",
+      "level": "compatibility",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "缺可选字段/未知字段/缺 scope fail-closed",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 528,
+      "output_sha256": "01f5fff1eeca851365ab7568bab51078526274349e242cddb96ef80f0a71440d",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A3",
+      "task": "M0-02",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "超限 payload 有界 + 重复完成幂等",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a3",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 535,
+      "output_sha256": "0af65fda5253b03832b942566c13313b1bbf20d7c9abc644766aa19986319496",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A4",
+      "task": "M0-02",
+      "level": "security",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "诊断脱敏 + 能力快照保守默认",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a4",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 538,
+      "output_sha256": "959425c29fd10e6a48bf54b2adde437bd852acaef0305fd3d57ee85e6265a0bf",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

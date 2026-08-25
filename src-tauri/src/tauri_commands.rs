@@ -631,6 +631,32 @@ pub async fn cmd_agent_queue_steer(
     r_code_host::commands::agent_queue_steer(&state, &task_id, &queue_id).await
 }
 
+/// M3-01：提交 Codex `requestUserInput` 的用户答案。answers 形如
+/// `{ "<questionId>": ["答案"] }`；传 None 表示取消（编码为空答案集）。
+/// 返回 "delivered" 或 "rejected"（迟到/未知/重复提交）。
+#[tauri::command]
+pub async fn cmd_codex_submit_user_input(
+    state: State<'_, CommandState>,
+    task_id: String,
+    run_id: String,
+    request_key: String,
+    answers: Option<serde_json::Value>,
+) -> Result<String, String> {
+    let external_agents = state.external_agents.clone();
+    let outcome = r_code_host::commands::submit_codex_user_input_for_task(
+        &external_agents,
+        &task_id,
+        &run_id,
+        &request_key,
+        answers,
+    )
+    .await;
+    Ok(match outcome {
+        r_code_host::commands::ExternalUserInputOutcome::Delivered => "delivered".to_string(),
+        r_code_host::commands::ExternalUserInputOutcome::Rejected => "rejected".to_string(),
+    })
+}
+
 /// 编辑历史用户消息，并创建新分支后重跑。
 #[tauri::command]
 pub async fn cmd_agent_resend(

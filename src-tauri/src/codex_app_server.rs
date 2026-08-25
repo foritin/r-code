@@ -631,24 +631,9 @@ pub(crate) fn recognized_protocol_progress(value: &Value) -> bool {
     let Some(method) = value.get("method").and_then(Value::as_str) else {
         return false;
     };
-    matches!(
-        method,
-        "initialized"
-            | "thread/started"
-            | "thread/status/changed"
-            | "turn/started"
-            | "turn/completed"
-            | "turn/plan/updated"
-            | "item/started"
-            | "item/completed"
-            | "item/agentMessage/delta"
-            | "item/reasoning/summaryTextDelta"
-            | "item/commandExecution/requestApproval"
-            | "item/fileChange/requestApproval"
-            | "item/permissions/requestApproval"
-            | "item/tool/call"
-            | "requestUserInput"
-    )
+    // M0-02：方法表唯一事实源移至 codex_interaction；本函数保持
+    // “识别为协议进度”的旧语义，同时覆盖丰富交互新增的事件方法。
+    crate::codex_interaction::is_recognized_protocol_progress(method)
 }
 
 async fn join_bounded(task: Option<JoinHandle<()>>) {

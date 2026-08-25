@@ -1,0 +1,994 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-25T06:13:12.849Z",
+  "mode": {
+    "kind": "through",
+    "id": "M4",
+    "tasks": [
+      "M0-01",
+      "M0-02",
+      "M1-01",
+      "M1-02",
+      "M1-03",
+      "M2-01",
+      "M2-02",
+      "M3-01",
+      "M3-02",
+      "M3-03",
+      "M4-01",
+      "M4-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "9701bddf45a992a9d9d89fa68942292c00351a69e15248f49d8b7ab69a0902aa"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 38,
+    "passed": 38,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "runner 自测：未知 task、缺失 required 断言、失败子命令、报告脱敏",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/verify-codex-interaction.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1152,
+      "output_sha256": "60308642e6bb8f03fbad7a304cb52059c5d951df43fce07bf199401154a9d438",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A2",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "0.145.0 requestUserInput fixture 离线一致性",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/check-protocol-fixture.mjs",
+        "fixtures/codex-interaction/protocol-0.145.0.json"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 48,
+      "output_sha256": "47c9fb991d8905b84a624662f43b16bcdfa77ec2b601803c6224dd2900d08816",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A3",
+      "task": "M0-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Harness 编排 ≥1 Rust + ≥1 前端测试并产出无 secret JSON 索引",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/smoke-orchestration.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 44781,
+      "output_sha256": "4d2d25343cea9657147fca682a86366397b8db6a45d073adbd13cf96f0884e86",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A1",
+      "task": "M0-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "§4.1 已知帧→宿主事件转换 contract（含方法表对齐与 fixture 样例帧）",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 503,
+      "output_sha256": "425cd35c9c5afc979abe8dbb7f2d3affcf9b208fdffbb8cdf615fdc6a1fc3be4",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A2",
+      "task": "M0-02",
+      "level": "compatibility",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "缺可选字段/未知字段/缺 scope fail-closed",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 457,
+      "output_sha256": "f919d2513d56faf1e46a9357c17f6821036d2d625d962bb2501ffa3d582dfa7e",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A3",
+      "task": "M0-02",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "超限 payload 有界 + 重复完成幂等",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a3",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 452,
+      "output_sha256": "24ef7d88fccce2246f2629a26ff45505123f40ef3f37c66f1d46ac1084aa84f8",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A4",
+      "task": "M0-02",
+      "level": "security",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "诊断脱敏 + 能力快照保守默认",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "codex_interaction::tests::a4",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 478,
+      "output_sha256": "433cdfa344a72b51e68ef1535687b531ce9bee5aaa76c960b8aee8ed7d7ccaf8",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A1",
+      "task": "M1-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "commentary/final 字符按序各出现一次 + phase 正确（投影器单测 + e2e 流式）",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m1_01_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 527,
+      "output_sha256": "279bc9e316f18a29ea9863d9cf4341eecd3b8d8cf8808ebe58e8ef23fe7f7f88",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A2",
+      "task": "M1-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "重复 delta/completed、迟到帧、交错 item/run 不重复不串线",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m1_01_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 557,
+      "output_sha256": "48d705abf9d83d06cba9a10d895bf55076a176165fc39757f976177e96a70b66",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A3",
+      "task": "M1-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "既有 Codex final / 原生 R-Code / 子代理消息测试回归",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m1-01-regression.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 7450,
+      "output_sha256": "9c54edf0498aee51db3b2ec4c164587a85b7254b161bde0ab23543a09a56630d",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A1",
+      "task": "M1-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Codex prompt 含首次实质批次/阶段变化/新发现/低噪声/私有推理禁令",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m1_02_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 441,
+      "output_sha256": "f26ce58cefdb1652c980e6dc37a97c59bc232e123674689d83e6745c01e48492",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A2",
+      "task": "M1-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "简单任务不播报；例行继续播报被禁止",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m1_02_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 421,
+      "output_sha256": "7c4fabfe652f4760327021791a676fbc42d41723988340541ddad5f05d2faa4c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A3",
+      "task": "M1-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "原生/Codex 共享语义（core+worker+host）且无重复合同",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m1-02-regression.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1145,
+      "output_sha256": "30b069b1ad4183ad6afc7439db6c3b99abf417b5e65394f6cd7dece7d0dcde0c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-03.A1",
+      "task": "M1-03",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "10k delta 单节点、全文完整、可见刷新 ≤10Hz",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-message-stream.test.mjs",
+        "--test-name-pattern",
+        "m1_03_a1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3623,
+      "output_sha256": "42f750f25254a93cc02d9e39cb34daef7fc8aec007a75365309893f15303dac4",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-03.A2",
+      "task": "M1-03",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "live 应用序列与历史重建结构/顺序/phase 一致",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-message-stream.test.mjs",
+        "--test-name-pattern",
+        "m1_03_a2"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3776,
+      "output_sha256": "01018b3e3284a09cbbc46aee1c748ad943b824aee3218525f1835be52e54eccc",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-03.A3",
+      "task": "M1-03",
+      "level": "visual",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "真实 Timeline 分层渲染 + 1280×800 无横向溢出",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-message-stream.test.mjs",
+        "--test-name-pattern",
+        "m1_03_a3"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3952,
+      "output_sha256": "fd8785cd6f1fdacc807a7f2361f358bb9b48edd7a5189c42b8f37ec07c87104c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A1",
+      "task": "M2-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "全部支持 kind 的 started/completed 映射 + 失败/退出码状态",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m2_01_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 729,
+      "output_sha256": "25b43e812912cdfc9c6c473188d817a97c7498c1b2c0c6b7175c67e560f8b1d2",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A2",
+      "task": "M2-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "命令输出按序/可展开/截断可见 + 失败与 exit code 一致（rust e2e + 前端）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m2-01-integration.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3596,
+      "output_sha256": "1410355c449e4ece881f36d69adffa757eaf4c10e88ec926a3f74972d3712116",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A3",
+      "task": "M2-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "超大/高频输出有界 + 迟到输出丢弃 + 终态不丢",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m2-01-reliability.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 265088,
+      "output_sha256": "368dfb455e634b524c32b9578ffe14d6bb9c0c6c19ead460cae83c4654af694b",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A1",
+      "task": "M2-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "计划/diff/压缩/warning/usage 各自生成非聊天事件",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m2_02_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 561,
+      "output_sha256": "4af1c393cfe837a26a0288c26124bec97ede8c0537b99e0526118a3c9b40387d",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A2",
+      "task": "M2-02",
+      "level": "replay",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "重复 plan 幂等；live/历史重建结构一致",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-context-events.test.mjs",
+        "--test-name-pattern",
+        "m2_02_a2"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2956,
+      "output_sha256": "94fa8cda5309950bf8f782cba02799c61bc2079f28f74bd601ae5e18c0776ca0",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A3",
+      "task": "M2-02",
+      "level": "visual",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "紧凑上下文行 + 长 diff 截断 + 无横向溢出",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-context-events.test.mjs",
+        "--test-name-pattern",
+        "m2_02_a3"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2955,
+      "output_sha256": "101c8a47c4e4857644f53e30c4b31db2de59953b8d5f192cc78922db5d939985",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A1",
+      "task": "M3-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "单/多题答案按 question id 返回且 turn 继续",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_01_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 592,
+      "output_sha256": "6bacb2c80f20264a33d94fd40ce409bfbe1a816140bbdefe1f8718e600bc02c6",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A2",
+      "task": "M3-01",
+      "level": "security",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "secret 只进单次 writer 响应，不进事件流/JSONL",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_01_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 619,
+      "output_sha256": "41899a907982906f4a07584c59c8d2f1502bc6ac34b3ff5c9822ec8c49325c65",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A3",
+      "task": "M3-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "重复提交/未知 key 原子 claim，唯一确定终态",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_01_a3",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 592,
+      "output_sha256": "b21310ca1ac47b39c0778152f59ab731c56c0e68200ce9b4b4f1061e852bdbc8",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A1",
+      "task": "M3-02",
+      "level": "component",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "选项/其他/secret 编码正确；secret 不回显",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-question-card.test.mjs",
+        "--test-name-pattern",
+        "m3_02_a1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4344,
+      "output_sha256": "bd6f9961c230f8b16387bf0ee3b87886cd729593056c471bc6131c8c1a5175e5",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A2",
+      "task": "M3-02",
+      "level": "e2e",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "仅键盘完成提交；resolved 后同 turn 继续",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-question-card.test.mjs",
+        "--test-name-pattern",
+        "m3_02_a2"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4340,
+      "output_sha256": "371711266f25a5ab36e187459e848d72b52c98b72bce109478b0706d89b18bf5",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A3",
+      "task": "M3-02",
+      "level": "visual",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "1280×800/390×844 无溢出 + aria-live",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-question-card.test.mjs",
+        "--test-name-pattern",
+        "m3_02_a3"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4941,
+      "output_sha256": "620cf5454a2d97835f76fab13c2d52016dec1fa22e23b199e754467726649e12",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-03.A1",
+      "task": "M3-03",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "timeout/resolved/迟到提交竞态：唯一 writer 结果 + 唯一 UI 终态",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_03_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 985,
+      "output_sha256": "598067fa18f3dfdd874dd556e5d11f6a485ee85cdf0235f365a2b94793cc1e1b",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-03.A2",
+      "task": "M3-03",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "pending 期间 steer 与问题回答双链路独立、顺序可追踪",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m3_03_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 594,
+      "output_sha256": "0279e44afe62b7da097e41fdacf5a203001fa590097586a141b02ccf9482fa20",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-03.A3",
+      "task": "M3-03",
+      "level": "recovery",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "reload 保留 pending；restart 后 expired 只读、迟到提交拒绝",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m3-03-recovery.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4785,
+      "output_sha256": "38519bacda0ed580b94cfd4db0d7cbc5b665b36673050b18a7e5436eca71fa8a",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A1",
+      "task": "M4-01",
+      "level": "security-negative",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "raw reasoning/secret/凭据在投影与持久化 oracle 中 0 命中",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m4-01-security.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1128,
+      "output_sha256": "e64c7b409c21144e8d04706c844387077c6cdeee00d4d1bca56d3eb9e70c3b64",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A2",
+      "task": "M4-01",
+      "level": "security",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "诊断仅元数据；unknown/overflow/timeout/duplicate 类别可定位",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m4_01_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 482,
+      "output_sha256": "b21327faf96e198e5f72252688ab4784cc4e43c8f35f17ca389bd47272abb390",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A3",
+      "task": "M4-01",
+      "level": "replay",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "乱序/重复/断流/跨 run 最终状态确定",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m4_01_a3",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 478,
+      "output_sha256": "350d5811369c8d75651bcf1af5ba3d0226747f07448c4e34b426f4c8aa20f008",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A4",
+      "task": "M4-01",
+      "level": "performance",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "§6 延迟/密度/有界指标 + 机器可读 performance.json",
+      "evidence_path": "artifacts/ai-tasks/verification/codex-rich-interaction/implementation/performance.json",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-performance.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4644,
+      "output_sha256": "857fb34eebce195d1c1acc48866d9991ab651e6dce92efbced5e70fe131dd257",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A1",
+      "task": "M4-02",
+      "level": "cross-platform",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "共用断言本机全绿 + 无平台 cfg 分叉 + CI 三平台矩阵覆盖",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m4-02-cross-platform.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 245098,
+      "output_sha256": "9992b034b3e7c14a914e80cd4b992e2d8c24bd10588edcd4a928857f52805a11",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A2",
+      "task": "M4-02",
+      "level": "e2e",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "完整 commentary→tool→question→answer→final 亮/暗视觉证据（Rust 侧闭环见 m4_02_a2 e2e）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-full-flow-visual.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2287,
+      "output_sha256": "71b66c62ad6b82cda6fb73a84195c34040f6a78f9e0fc2d8e560a661dc6aa626",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A3",
+      "task": "M4-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "workspace/frontend 回归 + 文档一致性门禁",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m4-02-regression.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 293348,
+      "output_sha256": "e7390e6153463d642e126efa234272f778c1be2a735aedbbf0736be3cb43a19c",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

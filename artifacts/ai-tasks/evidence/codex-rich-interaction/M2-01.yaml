@@ -1,0 +1,66 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M2-01
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M2-01)
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M2-01.json revision.worktree_digest 记录
+
+deliverables:
+  - dto.rs：AgentEvent::ToolOutputDelta{call_id, safe_delta}
+  - codex_interaction.rs：ToolCompleted 增加 exit_code；codex_tool_display_title 映射表（10 kind）；safe_input 扩展（summary/tool_name/input_json + rcode_delegate 白名单）；CodexToolOutputBuffer（头尾 64k+64k 保留 + 截断标记）；RunProjection.accumulate/take_tool_output
+  - commands.rs：观察器工具生命周期改由归一化事件驱动（ToolCall/ToolOutputDelta/ToolResult），删除旧 item tool 分支与 codex_item_tool_input（白名单逻辑移入 codex_interaction）；persist arm no-op for output delta
+  - frontend：types/reducer tool_output_delta（原位追加、终态覆盖、迟到丢弃）+ activity 状态
+  - 测试：m2_01_a1/a2/a3（Rust 4 + e2e 1 + 前端 2）
+
+changed_paths:
+  - crates/r-code-core/src/dto.rs
+  - src-tauri/src/codex_interaction.rs
+  - src-tauri/src/codex_interaction_tests.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/frontend/src/lib/types.ts
+  - src-tauri/frontend/src/components/room/model.ts
+  - src-tauri/frontend/src/components/room/activity.ts
+  - src-tauri/frontend/scripts/codex-tool-output.test.mjs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/m2-01-integration.mjs
+  - scripts/codex-interaction/m2-01-reliability.mjs
+
+assertions:
+  - id: M2-01.A1
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m2_01_a1 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-01.json
+  - id: M2-01.A2
+    passed: true
+    command: node scripts/codex-interaction/m2-01-integration.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-01.json
+  - id: M2-01.A3
+    passed: true
+    command: node scripts/codex-interaction/m2-01-reliability.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-01.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M2 --profile implementation
+  exit_code: 1
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2.json
+  note: M2-01 断言全过；剩余失败为 M2-02 not_implemented（同里程碑下一任务）
+
+decisions:
+  - 映射表单一事实源在 codex_interaction（标题 + safe_input 摘要 + rcode_delegate 白名单），观察器只转发 AgentEvent；旧 codex_item_tool 保留给 exec JSON 降级路径
+  - 失败语义与旧 codex_item_failed 对齐：failed/declined 或非零 exit_code → is_error；payload 携带 status/exit_code/output
+  - 输出缓冲宿主侧有界（头 64k + 尾 64k + “已截断约 N 字符”标记），终态优先 item 权威聚合输出
+  - 前端输出增量原位追加到活动卡（state 保持 active，status=streaming），终态 ToolResult 权威覆盖；迟到/无卡增量丢弃
+  - 发现并修正：raw_kind_name 曾被改成 Rust 枚举名导致 M0-02 contract 测试红灯，改回 wire 名（schema 对齐）
+  - 传输层对跨作用域陈旧帧 fail-closed（终止 run），比归一化器更严——重复终态用同作用域重复帧覆盖（m2_01_a2）
+
+external_gates_remaining: []

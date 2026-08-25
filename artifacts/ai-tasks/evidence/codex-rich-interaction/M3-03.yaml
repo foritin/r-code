@@ -1,0 +1,61 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M3-03
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M3-03)
+    - docs/codex-rich-interaction-prd.md#44-持久化与回放
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M3-03.json revision.worktree_digest 记录
+
+deliverables:
+  - commands.rs：处理器落 codex_pending_question 恢复标记（pending/终态合并）；session_messages_for_task 按 run 存活裁决 pending→expired（async 化）；run 收尾 drain 任务（结束后迟到提交显式 Rejected 而非通道关闭）；autoResolutionMs 由 tokio::time::sleep 单调时钟驱动（M3-01 已含）
+  - parse_session_messages：codex_question 合并解析（同 request_key 终态覆盖、单条产出）
+  - frontend model.ts：codex_question 历史重建分支（state 透传，expired 只读）
+  - e2e：m3_03_a1（timeout+resolved 竞态、迟到拒绝）/ a2（steer+答案双链路）/ a3（标记合并 + 前端重建）
+
+changed_paths:
+  - src-tauri/src/commands.rs
+  - src-tauri/frontend/src/components/room/model.ts
+  - src-tauri/frontend/src/lib/types.ts
+  - src-tauri/frontend/scripts/codex-question-card.test.mjs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/m3-03-recovery.mjs
+
+assertions:
+  - id: M3-03.A1
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m3_03_a1 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-03.json
+  - id: M3-03.A2
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m3_03_a2 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-03.json
+  - id: M3-03.A3
+    passed: true
+    command: node scripts/codex-interaction/m3-03-recovery.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-03.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M3 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3.json
+  note: M3 里程碑 9/9 全绿（M3-01/02/03 各 3）
+
+decisions:
+  - 恢复标记协议：System{codex_pending_question}（request_key/run_id/item_id/questions/state）；同 request_key 终态标记就地合并（单条、位置取首见）；secret 只有问题与标志，答案值永不落盘
+  - 过期裁决在读取层：session_messages_for_task 按注册表 run 存活把 pending 改标 expired——transport/app 重启（注册表清空）天然全部过期；恢复的 pending 不是原 JSON-RPC 请求（§4.4 不伪恢复）
+  - run 结束后的迟到提交：收尾 drain 任务持续 reject 到 sender 释放——提交方永远得到明确 Rejected 而非通道关闭错误
+  - autoResolutionMs 用 tokio 单调时钟 sleep；用户提交与超时经同一 select，单胜者（M3-01 原子 claim 兜底）
+  - steer 与答案提交物理分离（不同 channel 不同 select 分支）；a2 e2e 验证 pending 期间 steer 正常且顺序可追踪
+  - parse_page_messages/session_messages_for_task async 化（读取层需查注册表）；既有 reasoning-visibility 测试同步加 .await
+
+external_gates_remaining: []
