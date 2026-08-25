@@ -1,0 +1,110 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-24T18:47:36.689Z",
+  "mode": {
+    "kind": "task",
+    "id": "M1-03",
+    "tasks": [
+      "M1-03"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "9d391374ae2ccdffb0d69a13c583ec8d004d441250c0926061a537e8e9feaf60"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-03.A1",
+      "task": "M1-03",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "10k delta 单节点、全文完整、可见刷新 ≤10Hz",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-message-stream.test.mjs",
+        "--test-name-pattern",
+        "m1_03_a1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3595,
+      "output_sha256": "6fe1bc8dc4c8fc97e23dffc1e9d4c9e29a6106f0fa9e13cf6311f232a605f449",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-03.A2",
+      "task": "M1-03",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "live 应用序列与历史重建结构/顺序/phase 一致",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-message-stream.test.mjs",
+        "--test-name-pattern",
+        "m1_03_a2"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3614,
+      "output_sha256": "bf727276c5bf31f3ca31f527f924001fe52d7593d13823ae22cfe78cffbf021b",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-03.A3",
+      "task": "M1-03",
+      "level": "visual",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "真实 Timeline 分层渲染 + 1280×800 无横向溢出",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-message-stream.test.mjs",
+        "--test-name-pattern",
+        "m1_03_a3"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3572,
+      "output_sha256": "b5a0d929fbb399000cc5fe58417b56f3fe11c1cfe7aee2c91870f0ddd203328b",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

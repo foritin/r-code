@@ -31,6 +31,9 @@ import type {
 import { useTasksStore } from "../../store/tasks";
 import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
 import { ImageLightbox } from "../ImageLightbox";
+import { CodexQuestionCard } from "./CodexQuestionCard";
+import { codexSubmitUserInput } from "../../lib/ipc";
+import { markQuestionAnsweredInPlace, markQuestionStateInPlace } from "./model";
 import { parseWorkflowInvocation } from "../../lib/slash-commands";
 import { isCjkText, type ToolDisplayLanguage } from "../../lib/format";
 import { useSharedNow } from "../../lib/shared-clock";
@@ -38,6 +41,7 @@ import {
   applyAgentEventInPlace,
   buildTimeline,
   compactInstruction,
+  createAgentEventCoalescer,
   mergeRunItems,
   type PlanStep,
   type TimelineItem,
@@ -177,6 +181,26 @@ export function runUsageLabel(value: string | null): string | null {
  * 仅在 >0 时返回「重试 N 次」，否则返回 null（与用量文案同一 JSON，缺键/非法
  * 输入一律不展示）。导出仅供前端回归测试直接断言。
  */
+/** M4 子代理可靠性：usage_json 的 degraded_reason → 用户可读降级标签。 */
+export function runDegradedLabel(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const usage = JSON.parse(value) as Record<string, unknown>;
+    const reason = typeof usage.degraded_reason === "string" ? usage.degraded_reason : null;
+    if (!reason) return null;
+    const labels: Record<string, string> = {
+      tool_budget: "工具预算耗尽",
+      idle_timeout: "空闲超时",
+      deadline: "时长上限截断",
+      stream_retries: "流中断重试",
+      loop_guard: "循环护栏触发",
+    };
+    return labels[reason] ?? "降级运行";
+  } catch {
+    return null;
+  }
+}
+
 export function runStreamRetriesLabel(value: string | null): string | null {
   if (!value) return null;
   try {
@@ -586,6 +610,31 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         refreshTimers.add(timer);
       }
     };
+    // §4.2 可见刷新 ≤10Hz：高频流式事件先入合并器，按 100ms 批量应用与
+    // 呈现；内部累计不丢字（每个事件都按序进入 reducer）。终态事件由
+    // 监听器立即冲刷，运行结束语义不延迟。
+    let coalesceTimer: ReturnType<typeof window.setTimeout> | null = null;
+    const coalescer = createAgentEventCoalescer(
+      (batch) => {
+        coalesceTimer = null;
+        if (dead || batch.length === 0) return;
+        const items = itemsRef.current;
+        let startIndex = -1;
+        for (const event of batch) {
+          const result = applyAgentEventInPlace(items, event, nowSec(), nid);
+          if (result.changed) {
+            startIndex = startIndex < 0 ? result.startIndex : Math.min(startIndex, result.startIndex);
+          }
+        }
+        if (startIndex >= 0) {
+          presentationRef.current.update(items, startIndex);
+          setTimelineRevision((current) => current + 1);
+        }
+      },
+      (flush) => {
+        coalesceTimer = window.setTimeout(flush, 100);
+      },
+    );
     listenAgentEvent((tid, ev) => {
       if (tid !== taskId) return;
       onAgentEvent?.(ev);
@@ -598,17 +647,13 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       }
       if (ev.type === "state") {
         liveRef.current = false;
+        coalescer.flush();
         void refreshDetail(taskId);
         void reload();
         return;
       }
       liveRef.current = true;
-      const items = itemsRef.current;
-      const result = applyAgentEventInPlace(items, ev, nowSec(), nid);
-      if (result.changed) {
-        presentationRef.current.update(items, result.startIndex);
-        setTimelineRevision((current) => current + 1);
-      }
+      coalescer.push(ev);
     })
       .then((u) => {
         if (dead) u();
@@ -617,6 +662,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       .catch(() => {});
     return () => {
       dead = true;
+      if (coalesceTimer != null) window.clearTimeout(coalesceTimer);
       un?.();
       refreshTimers.forEach((timer) => window.clearTimeout(timer));
     };
@@ -940,11 +986,40 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         return (
           <PlanTodoCard key={it.id} steps={it.steps} t={it.t} dim={dim(it.t)} />
         );
+      case "question":
+        return (
+          <CodexQuestionCard
+            key={it.id}
+            questions={it.questions}
+            state={it.state}
+            answerSummary={it.answerSummary}
+            onSubmit={async (answers) => {
+              try {
+                const outcome = await codexSubmitUserInput(taskId, it.runId, it.requestKey, answers);
+                if (outcome === "delivered") {
+                  // 本地即时进入终态（非敏感摘要）；后端 resolved 事件幂等确认。
+                  const items = itemsRef.current;
+                  const result = answers
+                    ? markQuestionAnsweredInPlace(items, it.requestKey, it.questions, answers)
+                    : markQuestionStateInPlace(items, it.requestKey, "cancelled");
+                  if (result.changed) {
+                    presentationRef.current.update(items, result.startIndex);
+                    setTimelineRevision((current) => current + 1);
+                  }
+                }
+                return outcome;
+              } catch {
+                return "rejected";
+              }
+            }}
+          />
+        );
       case "run": {
         const expanded = expandedRunIds.has(it.id);
         const detailId = `${it.id}-details`;
         const usage = runUsageLabel(it.usageJson);
         const streamRetries = runStreamRetriesLabel(it.usageJson);
+        const degraded = runDegradedLabel(it.usageJson);
         const abnormal = it.state === "failed" || it.state === "aborted";
         return (
           <div
@@ -963,6 +1038,11 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
               <span className={`run-summary-mark${it.state === "active" ? " active" : ""}`} aria-hidden="true" />
               <span className="run-name">{it.state === "active" ? "处理中" : "已处理"}</span>
               <RunDuration startedAt={it.startedAt} endedAt={it.endedAt} />
+              {degraded && (
+                <span className="run-status run-status-degraded" role="status" title="完成但质量受损，结论需复核">
+                  降级 · {degraded}
+                </span>
+              )}
               {abnormal && <span className="run-status">{it.label}</span>}
               <span className="run-chevron" aria-hidden="true">
                 {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
@@ -1103,7 +1183,9 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                       </div>
                       <div className="timeline-turn-trace has-activity">
                         {turn.items.slice(0, processTraceEnd).map((item, index) => {
-                          const progressUpdate = item.kind === "agent" && index < lastExecutionActivity;
+                          const progressUpdate =
+                            item.kind === "agent" &&
+                            (item.phase === "commentary" || index < lastExecutionActivity);
                           return renderTimelineItem(item, false, progressUpdate);
                         })}
                       </div>
@@ -1114,7 +1196,9 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                   <div className="timeline-turn-trace timeline-process-final">
                     {turn.items.slice(finalResponseIndex).map((item, index) => {
                       const originalIndex = finalResponseIndex + index;
-                      const progressUpdate = item.kind === "agent" && originalIndex < lastExecutionActivity;
+                      const progressUpdate =
+                        item.kind === "agent" &&
+                        (item.phase === "commentary" || originalIndex < lastExecutionActivity);
                       return renderTimelineItem(item, originalIndex === finalResponseIndex, progressUpdate);
                     })}
                   </div>
@@ -1129,7 +1213,9 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                 )}
                 <div className={`timeline-turn-trace${turn.hasActivity ? " has-activity" : ""}`}>
                   {turn.items.map((item, index) => {
-                    const progressUpdate = item.kind === "agent" && index < lastExecutionActivity;
+                    const progressUpdate =
+                            item.kind === "agent" &&
+                            (item.phase === "commentary" || index < lastExecutionActivity);
                     return renderTimelineItem(item, index === finalResponseIndex, progressUpdate);
                   })}
                 </div>

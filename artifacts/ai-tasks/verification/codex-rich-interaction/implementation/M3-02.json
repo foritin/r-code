@@ -1,0 +1,110 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-24T20:03:16.701Z",
+  "mode": {
+    "kind": "task",
+    "id": "M3-02",
+    "tasks": [
+      "M3-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "9e4b4ec345b7706481032e9254d6f873104713482a375c8442ae43cad4fa0f3d"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-02.A1",
+      "task": "M3-02",
+      "level": "component",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "选项/其他/secret 编码正确；secret 不回显",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-question-card.test.mjs",
+        "--test-name-pattern",
+        "m3_02_a1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3505,
+      "output_sha256": "5a4e64cc98a184aa41fe00e8af7a9a33210886e0a6e0d3bc2298ecbb8a38af61",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A2",
+      "task": "M3-02",
+      "level": "e2e",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "仅键盘完成提交；resolved 后同 turn 继续",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-question-card.test.mjs",
+        "--test-name-pattern",
+        "m3_02_a2"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3540,
+      "output_sha256": "706fdbc0d11353ac3749254496f4ff536848f96d944737c7dd425a0d4a768a53",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A3",
+      "task": "M3-02",
+      "level": "visual",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "1280×800/390×844 无溢出 + aria-live",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-question-card.test.mjs",
+        "--test-name-pattern",
+        "m3_02_a3"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3553,
+      "output_sha256": "8558b2bc1fb909210dc660a565fe906f2ad027b1773014970d8503765bc1e85e",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

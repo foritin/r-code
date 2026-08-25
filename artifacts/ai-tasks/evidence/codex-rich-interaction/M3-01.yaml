@@ -1,0 +1,63 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M3-01
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M3-01)
+    - docs/codex-rich-interaction-prd.md#43-requestuserinput-合同
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M3-01.json revision.worktree_digest 记录
+
+deliverables:
+  - codex_interaction.rs：parse_user_input_request（schema 严格解析：必需 questions、问题 ID 唯一、数量/长度上限）与归一化器共用；wire_request_id pub
+  - dto.rs：AgentEvent::CodexUserInputRequested{run_id, request_key, item_id, request_id, questions, auto_resolution_ms} / CodexUserInputResolved + CodexUserQuestionDto/CodexUserOptionDto
+  - commands.rs：ExternalAgentRegistry 答案通道（enable_user_input/submit_user_input_for_task）；handle_codex_app_server_user_input（pending 注册→前端事件→select 等待→{answers:{qid:{answers:[…]}}} 编码回 writer）；CodexPendingUserInputs（capacity=1 原子 claim + serverRequest/resolved 精确取消 + run 终止回收）；主循环 dispatch/router/收尾
+  - tauri_commands.rs + main.rs：cmd_codex_submit_user_input（"delivered"/"rejected"）
+  - e2e：m3_01_a1/a2/a3
+
+changed_paths:
+  - src-tauri/src/codex_interaction.rs
+  - crates/r-code-core/src/dto.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/tauri_commands.rs
+  - src-tauri/src/main.rs
+  - scripts/codex-interaction/registry.mjs
+
+assertions:
+  - id: M3-01.A1
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m3_01_a1 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-01.json
+  - id: M3-01.A2
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m3_01_a2 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-01.json
+  - id: M3-01.A3
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m3_01_a3 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-01.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M3 --profile implementation
+  exit_code: 1
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3.json
+  note: M3-01 断言全过；剩余失败为 M3-02/M3-03 not_implemented（同里程碑后续任务）
+
+decisions:
+  - request_key = "{run_id}:{item_id}"；答案通道按 task→run→request_key 三级路由，与 steer 同生命周期
+  - 原子 claim：pending 槽 capacity=1 的 mpsc——重复/迟到提交在路由层拒绝，一个请求只有一次 writer 响应
+  - 取消编码冻结：用户取消与超时都返回 result {answers:{}}（§4.3 允许的空答案）；serverRequest/resolved 与 run 取消返回 -32600 协议错误
+  - schema 严格化：缺 questions/重复问题 ID/超限 → -32602 立即拒绝（fail-closed）；这同时是旧 -32601 行为的语义等价替代（既有 approval-pending 回归测试因此恢复通过）
+  - secret：答案只存在于内存通道与单次 writer 响应；事件流只带 is_secret 标志，pending 不落 JSONL（恢复标记属 M3-03）
+  - 等待期间 idle watchdog 不误杀：in_flight 非空沿用审批豁免；等待上限 = autoResolutionMs 或 20min 默认（M3-03 统一调度接管）
+  - 未知 server request 仍返回 -32601（未触碰 handle_codex_app_server_request 的未知分支）
+
+external_gates_remaining: []

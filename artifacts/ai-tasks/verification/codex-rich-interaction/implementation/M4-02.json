@@ -1,0 +1,102 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-25T05:35:41.656Z",
+  "mode": {
+    "kind": "task",
+    "id": "M4-02",
+    "tasks": [
+      "M4-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "9701bddf45a992a9d9d89fa68942292c00351a69e15248f49d8b7ab69a0902aa"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-02.A1",
+      "task": "M4-02",
+      "level": "cross-platform",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "共用断言本机全绿 + 无平台 cfg 分叉 + CI 三平台矩阵覆盖",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m4-02-cross-platform.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 245192,
+      "output_sha256": "172cd4cc94e37256bf57278a2cfc4b20644ef6448bdd5d30f93a31369d795cf2",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A2",
+      "task": "M4-02",
+      "level": "e2e",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "完整 commentary→tool→question→answer→final 亮/暗视觉证据（Rust 侧闭环见 m4_02_a2 e2e）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-full-flow-visual.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2246,
+      "output_sha256": "d3c4379522e395690c5d75b7fa1a7c57f3a20f58e48d95c33d5cac8d55b36bc5",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A3",
+      "task": "M4-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "workspace/frontend 回归 + 文档一致性门禁",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m4-02-regression.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 292711,
+      "output_sha256": "d127677333aff4f879f13772bb30eb74db5c17907695233cc727fcbbc9fa1739",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

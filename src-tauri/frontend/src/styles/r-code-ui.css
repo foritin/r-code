@@ -787,3 +787,132 @@ button, input, textarea, select { font-family: var(--font-ui); }
   .conversation-project, .conversation-state { display: none; }
   .conversation-list-page { padding-top: 32px; }
 }
+
+/* ===== Codex requestUserInput 问题卡（M3-02，§5.2）===== */
+.codex-question-card {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  background: var(--surface-raised, rgba(127, 127, 127, 0.08));
+}
+.codex-question-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.codex-question-state {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.codex-question-card.state-answered .codex-question-state,
+.codex-question-card.state-cancelled .codex-question-state,
+.codex-question-card.state-expired .codex-question-state,
+.codex-question-card.state-resolved .codex-question-state {
+  opacity: 0.6;
+}
+.codex-question {
+  border: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.codex-question legend {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 0;
+  font-weight: 600;
+}
+.codex-question legend small {
+  display: block;
+  font-weight: 400;
+  opacity: 0.8;
+}
+.codex-question-index {
+  min-width: 18px;
+  text-align: center;
+  border-radius: 999px;
+  background: var(--accent-soft, rgba(127, 127, 127, 0.25));
+  font-size: 12px;
+}
+.codex-question-options {
+  display: grid;
+  gap: 4px;
+}
+.codex-question-options label,
+.codex-question-custom,
+.codex-question-secret {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  max-width: 100%;
+}
+.codex-question-options label.is-selected {
+  border-color: var(--accent, rgba(127, 127, 127, 0.6));
+  background: var(--accent-soft, rgba(127, 127, 127, 0.18));
+}
+.codex-question-options label span,
+.codex-question-custom,
+.codex-question-secret {
+  min-width: 0;
+}
+.codex-question-options label small {
+  display: block;
+  opacity: 0.75;
+}
+.codex-question-custom,
+.codex-question-secret {
+  display: grid;
+  gap: 2px;
+  cursor: default;
+}
+.codex-question-input-label {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.codex-question-custom input,
+.codex-question-secret input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.codex-question-summary {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  opacity: 0.9;
+}
+.codex-question-error {
+  color: var(--danger, #e5484d);
+  margin: 6px 0 0;
+}
+.codex-question-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.codex-question-hint {
+  opacity: 0.7;
+}
+.codex-question-card.state-answered fieldset,
+.codex-question-card.state-cancelled fieldset,
+.codex-question-card.state-expired fieldset,
+.codex-question-card.state-resolved fieldset {
+  opacity: 0.65;
+}
+
+/* M4 子代理可靠性：降级徽章（完成但质量受损，与失败态区分）。 */
+.run-status-degraded {
+  color: var(--warning, #e5a000);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 11px;
+}

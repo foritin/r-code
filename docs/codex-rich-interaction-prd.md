@@ -21,9 +21,9 @@
 
 <!-- AI_WORKLIST_VOLATILE_START -->
 
-- 当前进度：`0 / 12` 项完成。
-- 下一执行项：`M0-01`。
-- 当前任务包：尚未创建；首次实施时从 `artifacts/ai-tasks/templates/current-task.template.yaml` 生成 `artifacts/ai-tasks/current.yaml`。
+- 当前进度：`12 / 12` 项完成（implementation_verified）。
+- 下一执行项：无——全部实施任务完成；剩余为 production profile 外部放行。
+- 当前任务包：`artifacts/ai-tasks/current.yaml`（M4-02 已通过；总门禁报告 `artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4.json`：38/38 全绿）。
 
 <!-- AI_WORKLIST_VOLATILE_END -->
 
@@ -363,18 +363,18 @@ M0-01 自身在 Harness 尚未存在时，先用任务卡列出的直接 Rust/No
 
 ## 9. 主 Checklist（唯一状态源）
 
-- [ ] **M0-01** 建立统一验证 Harness、官方协议 fixture 与 AI 任务证据入口。证据：待生成
-- [ ] **M0-02** 冻结版本化事件归一化、作用域、能力协商与诊断合同。证据：待生成
-- [ ] **M1-01** 后端投影 `agentMessage` started/delta/completed，保留 phase 并保证幂等顺序。证据：待生成
-- [ ] **M1-02** 对齐 Codex 主代理与原生 R-Code 的低噪声公开进度合同。证据：待生成
-- [ ] **M1-03** 前端实现 commentary/final 流式呈现、稳定 key 与历史一致回放。证据：待生成
-- [ ] **M2-01** 完整投影工具生命周期与有界命令/工具输出增量。证据：待生成
-- [ ] **M2-02** 投影计划、diff、上下文压缩、warning、错误和 usage 状态。证据：待生成
-- [ ] **M3-01** 实现 `item/tool/requestUserInput` 后端反向请求桥与原子响应。证据：待生成
-- [ ] **M3-02** 实现可访问的问题卡、选项/自由/secret 输入和提交状态。证据：待生成
-- [ ] **M3-03** 完成取消、自动解决、turn/transport/app 失效与 steer 分离。证据：待生成
-- [ ] **M4-01** 完成 reasoning/secret 安全、有界队列、乱序/重复/断流与性能加固。证据：待生成
-- [ ] **M4-02** 完成跨平台累计 E2E、视觉/可访问性、兼容文档与发布候选门禁。证据：待生成
+- [x] **M0-01** 建立统一验证 Harness、官方协议 fixture 与 AI 任务证据入口。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M0-01.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-01.json`
+- [x] **M0-02** 冻结版本化事件归一化、作用域、能力协商与诊断合同。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M0-02.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-02.json`
+- [x] **M1-01** 后端投影 `agentMessage` started/delta/completed，保留 phase 并保证幂等顺序。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M1-01.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json`
+- [x] **M1-02** 对齐 Codex 主代理与原生 R-Code 的低噪声公开进度合同。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M1-02.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-02.json`
+- [x] **M1-03** 前端实现 commentary/final 流式呈现、稳定 key 与历史一致回放。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M1-03.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-03.json`
+- [x] **M2-01** 完整投影工具生命周期与有界命令/工具输出增量。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M2-01.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-01.json`
+- [x] **M2-02** 投影计划、diff、上下文压缩、warning、错误和 usage 状态。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M2-02.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M2-02.json`
+- [x] **M3-01** 实现 `item/tool/requestUserInput` 后端反向请求桥与原子响应。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M3-01.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-01.json`
+- [x] **M3-02** 实现可访问的问题卡、选项/自由/secret 输入和提交状态。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M3-02.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-02.json`
+- [x] **M3-03** 完成取消、自动解决、turn/transport/app 失效与 steer 分离。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M3-03.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-03.json`
+- [x] **M4-01** 完成 reasoning/secret 安全、有界队列、乱序/重复/断流与性能加固。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M4-01.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/performance.json`
+- [x] **M4-02** 完成跨平台累计 E2E、视觉/可访问性、兼容文档与发布候选门禁。证据：`artifacts/ai-tasks/evidence/codex-rich-interaction/M4-02.yaml`、`artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4.json`
 
 ## 10. 详细任务卡
 

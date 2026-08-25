@@ -1,0 +1,85 @@
+schema_version: ai-task-packet.v1
+project_id: r-code-codex-rich-interaction
+task_id: M1-02
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M1-01)
+    - docs/codex-rich-interaction-prd.md#42-commentary-状态机
+
+objective: 后端投影 agentMessage started/delta/completed，保留 phase 并保证幂等顺序
+depends_on: [M0-02]
+fixed_constraints:
+  - phase 不丢失；item identity 稳定；迟到/重复完成幂等；作用域不匹配丢弃并计数
+decision_criteria:
+  - 复用 Message{delta} 通道与 interim 折叠机制，不改 AgentEvent DTO / vendor 协议
+
+inputs:
+  - M0-02 归一化层（CodexTimelineEventV1）
+  - 既有 PendingRuntimeText / R_CODE_INTERIM_EVENT 机制
+deliverables:
+  - CodexAgentMessageProjector + CodexRunProjection + observer/主循环接线 + 8 个 m1_01 测试
+
+steps:
+  - id: M1-01.S1
+    status: completed
+    action: agentMessage started/delta/completed 转换与 phase 保留
+    expected_result: 投影器消费 Assistant* 事件，phase 枚举贯穿发射
+  - id: M1-01.S2
+    status: completed
+    action: 按 item 维护有界累计文本与完成状态
+    expected_result: per-item 缓冲（1024 上限 + sealed 淘汰）
+  - id: M1-01.S3
+    status: completed
+    action: completed 一致只封口；不一致权威替换 + mismatch 计数
+    expected_result: Sealed{corrected,streamed} 语义 + mismatch_count
+  - id: M1-01.S4
+    status: completed
+    action: turn 完成/中断冲刷残留；多 item 交错覆盖
+    expected_result: 主循环收尾 finish_turn；m1_01_a2 交错/重复/迟到测试
+
+acceptance_assertions:
+  - id: M1-01.A1
+    level: integration
+    command: cargo test -p r-code-host --all-features --lib m1_01_a1 -- --test-threads=1
+    expected: commentary/final 字符按序各出现一次，phase 正确
+    evidence_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json
+  - id: M1-01.A2
+    level: reliability
+    command: cargo test -p r-code-host --all-features --lib m1_01_a2 -- --test-threads=1
+    expected: 重复/迟到/交错不重复不串线
+    evidence_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json
+  - id: M1-01.A3
+    level: regression
+    command: node scripts/codex-interaction/m1-01-regression.mjs
+    expected: 既有 Codex final / 原生 / 子代理消息测试通过
+    evidence_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json
+
+completed_assertions: [M1-01.A1, M1-01.A2, M1-01.A3]
+remaining_assertions: []
+
+changed_paths:
+  - src-tauri/src/codex_interaction.rs
+  - src-tauri/src/codex_interaction_tests.rs
+  - src-tauri/src/commands.rs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/m1-01-regression.mjs
+
+decisions:
+  - id: M1-01.D1
+    note: final→SessionEvent::Message；commentary/unknown→R_CODE_INTERIM_EVENT（复用原生 interim 折叠，history 与 live 一致）
+  - id: M1-01.D2
+    note: 封口帧 streamed=true 零长度 / streamed=false 携带全文（子代理一次性 completed 兼容）
+  - id: M1-01.D3
+    note: 不改 AgentEvent DTO 与 vendor 协议；transport_generation 以 0 占位，真实绑定属 M3
+  - id: M1-01.D4
+    note: 迟到增量终态墓碑丢弃计数；重复 completed 双层拦截（normalizer 诊断 + 投影器计数）
+
+attempts: []
+evidence:
+  - artifacts/ai-tasks/evidence/codex-rich-interaction/M1-01.yaml
+  - artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json
+  - artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1.json
+last_verified_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c

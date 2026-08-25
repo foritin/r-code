@@ -8,6 +8,7 @@ import type {
   AgentEvent,
   AgentSendMode,
   AgentRun,
+  CodexUserQuestion,
   GuardTripReason,
   QueuedMessage,
   QueuedMessageState,
@@ -137,8 +138,33 @@ export type TimelineItem =
       queuedState?: QueuedMessageState;
       queueId?: string;
     }
-  | { kind: "agent"; id: string; t: number; text: string; streaming: boolean }
+  | {
+      kind: "agent";
+      id: string;
+      t: number;
+      text: string;
+      streaming: boolean;
+      /**
+       * Codex agentMessage 的 wire phase（M1-03）。commentary 渲染为无
+       * 作者头的轻量 Markdown 层（§5.1）；缺省表示原生 Provider 消息，
+       * 沿用既有“最后一条为正式回答”的呈现。
+       */
+      phase?: "commentary" | "final_answer" | "unknown";
+    }
   | { kind: "plan"; id: string; t: number; steps: PlanStep[] }
+  | {
+      /** Codex requestUserInput 问题卡（M3-02，§5.2）。 */
+      kind: "question";
+      id: string;
+      t: number;
+      runId: string;
+      requestKey: string;
+      questions: CodexUserQuestion[];
+      /** pending | submitting | answered | cancelled | expired | resolved */
+      state: string;
+      /** 已交付答案的非敏感摘要（secret 只记“已安全提交”）。 */
+      answerSummary: string[];
+    }
   | {
       kind: "run";
       id: string;
@@ -452,6 +478,52 @@ export function buildTimeline(
         }
         break;
       }
+      case "codex_commentary": {
+        // M1-03：Codex commentary 历史——轻量 Markdown 进度层（无作者头），
+        // 与 live 的 phase 条目同一渲染层。
+        const text = (m.text ?? "").trim();
+        if (text) {
+          items.push({
+            kind: "agent",
+            id: m.id ? `msg-${m.id}` : nid("cx"),
+            t: lastT,
+            text,
+            streaming: false,
+            phase: "commentary",
+          });
+        }
+        break;
+      }
+      case "codex_question": {
+        // M3-03（§4.4）：pending 问题的历史重建——run 存活时可答，否则
+        // 后端已把 state 标记为 expired（只读）。
+        try {
+          const payload = m.output_json
+            ? (JSON.parse(m.output_json) as {
+                request_key?: string;
+                run_id?: string;
+                questions?: CodexUserQuestion[];
+                state?: string;
+              })
+            : null;
+          const requestKey = payload?.request_key ?? m.text ?? "";
+          const questions = Array.isArray(payload?.questions) ? payload!.questions! : [];
+          if (!requestKey || questions.length === 0) break;
+          items.push({
+            kind: "question",
+            id: m.id ? `cxq-${m.id}` : nid("cxq"),
+            t: lastT,
+            runId: payload?.run_id ?? "",
+            requestKey,
+            questions,
+            state: payload?.state ?? "expired",
+            answerSummary: [],
+          });
+        } catch {
+          /* 无法解析的问题标记直接跳过 */
+        }
+        break;
+      }
       case "system": {
         if (m.text === "r_code_user_message_mode") {
           const mode = parseUserSendMode(m.output_json) ?? "auto";
@@ -465,7 +537,20 @@ export function buildTimeline(
           try {
             const data = JSON.parse(m.output_json) as { steps?: PlanStep[] };
             if (Array.isArray(data.steps)) {
-              items.push({ kind: "plan", id: nid("pl"), t: lastT, steps: data.steps });
+              // 重复 plan 更新幂等：与 live reducer 一致，替换上一张计划卡
+              // 而不是逐次追加（M2-02.A2）。
+              let lastIndex = -1;
+              for (let i = items.length - 1; i >= 0; i -= 1) {
+                if (items[i].kind === "plan") {
+                  lastIndex = i;
+                  break;
+                }
+              }
+              if (lastIndex >= 0) {
+                items[lastIndex] = { kind: "plan", id: items[lastIndex].id, t: lastT, steps: data.steps };
+              } else {
+                items.push({ kind: "plan", id: nid("pl"), t: lastT, steps: data.steps });
+              }
             }
           } catch {
             /* 无法解析的 plan 负载直接跳过 */
@@ -478,6 +563,25 @@ export function buildTimeline(
             label: "上下文已自动压缩",
             detail: contextCompactionDetail(m.output_json),
           });
+        } else if (m.text === "codex_warning" || m.text === "codex_diff") {
+          // M2-02：与 live 同一构建规则（codexContextRow）。
+          let parsed: unknown = null;
+          try {
+            parsed = m.output_json ? JSON.parse(m.output_json) : null;
+          } catch {
+            parsed = null;
+          }
+          const row = codexContextRow(m.text, parsed);
+          if (row) {
+            items.push({
+              kind: "context",
+              id: m.id ? `cxctx-${m.id}` : nid("cxctx"),
+              t: lastT,
+              label: row.label,
+              detail: row.detail,
+              collapsible: row.collapsible,
+            });
+          }
         } else if (m.text === "r_code_catalog_anchor") {
           const anchorRow = catalogAnchorRowFromJson(
             m.output_json,
@@ -781,6 +885,37 @@ function contextCompactionDetail(value: string | null | undefined): string | nul
   }
 }
 
+/**
+ * Codex 非聊天上下文行（M2-02，R-ACT-02）：diff/压缩/warning 的紧凑呈现。
+ * live 事件与历史 system 条目共用同一构建规则（§4.4 单一 reducer 合同）。
+ */
+export function codexContextRow(
+  event: string,
+  data: unknown
+): { label: string; detail: string; collapsible: boolean } | null {
+  const obj = (data && typeof data === "object" ? (data as Record<string, unknown>) : {}) as Record<string, unknown>;
+  if (event === "codex_warning") {
+    const message = typeof obj.message === "string" ? obj.message.trim() : "";
+    if (!message) return null;
+    const code = typeof obj.code === "string" && obj.code ? ` · ${obj.code}` : "";
+    return { label: `Codex 警告${code}`, detail: message, collapsible: true };
+  }
+  if (event === "codex_diff") {
+    const chars = typeof obj.chars === "number" ? obj.chars : 0;
+    const preview = typeof obj.preview === "string" ? obj.preview : "";
+    const truncated = obj.truncated === true;
+    const note = truncated ? `\n…[diff 共 ${chars} 字符，已截断，完整变更见文件工作台]` : "";
+    if (!preview && !truncated) return null;
+    return { label: "Codex 变更摘要", detail: preview + note, collapsible: true };
+  }
+  if (event === "r_code_context_compacted") {
+    const detail = contextCompactionDetail(typeof data === "string" ? data : JSON.stringify(data));
+    // Codex thread/compacted 不携带消息计数：降级为固定说明行。
+    return { label: "上下文已自动压缩", detail: detail ?? "Codex 已压缩本轮上下文", collapsible: false };
+  }
+  return null;
+}
+
 /** Plan 目录锚定行（呈现层事实：档位 + 数量）。清单本身的权威记录在审计
  * journal 的 RequestHeader.tool_names，这里只让「目录收敛在起作用」对用户可见；
  * 时间线只是二级审计投影（docs §14.1）。 */
@@ -922,6 +1057,8 @@ function finishStreamingAgents(items: TimelineItem[], exceptIndex = -1): number 
 /**
  * 工具调用前的过渡性叙述折叠为“执行过程”。与 `Reasoning` 同一折叠语义：只保留
  * 可展开的 context 条目，不再逐条渲染成正式回答；真正的最终总结仍走 agent 气泡。
+ * Codex commentary（phase 已标记）例外：§5.1 要求保持 Markdown 与流式语义，
+ * 折叠为静态的轻量 agent 条目而不是纯文本过程。
  */
 function foldStreamingAgentsAsInterim(items: TimelineItem[]): number {
   const indexes = streamingAgentIndexes(items);
@@ -931,7 +1068,9 @@ function foldStreamingAgentsAsInterim(items: TimelineItem[]): number {
     const item = items[index];
     if (item.kind === "agent" && item.streaming) {
       const text = item.text.trim();
-      if (text) {
+      if (item.phase === "commentary") {
+        items[index] = { ...item, text: item.text, streaming: false };
+      } else if (text) {
         items[index] = {
           kind: "context",
           id: item.id,
@@ -954,6 +1093,95 @@ export interface TimelineEventMutation {
   changed: boolean;
   /** 受影响的最早原始条目；增量呈现只需从其所属轮次向后重建。 */
   startIndex: number;
+}
+
+/** M3-02：问题卡本地终态（delivered 后即时只读 + 非敏感摘要）。 */
+export function markQuestionAnsweredInPlace(
+  items: TimelineItem[],
+  requestKey: string,
+  questions: CodexUserQuestion[],
+  answers: Record<string, string[]>
+): TimelineEventMutation {
+  const index = items.findIndex(
+    (item) => item.kind === "question" && item.requestKey === requestKey
+  );
+  if (index < 0) return mutation(-1);
+  const item = items[index];
+  if (item.kind !== "question") return mutation(-1);
+  items[index] = {
+    ...item,
+    state: "answered",
+    answerSummary: questions
+      .map((question) => {
+        const values = answers[question.id];
+        if (!values || values.length === 0) return null;
+        return question.is_secret
+          ? `${question.header}：已安全提交`
+          : `${question.header}：${values.join("、")}`;
+      })
+      .filter((line): line is string => line != null),
+  };
+  return mutation(index);
+}
+
+/** M3-02：问题卡状态直写（本地取消等）。 */
+export function markQuestionStateInPlace(
+  items: TimelineItem[],
+  requestKey: string,
+  state: string
+): TimelineEventMutation {
+  const index = items.findIndex(
+    (item) => item.kind === "question" && item.requestKey === requestKey
+  );
+  if (index < 0) return mutation(-1);
+  const item = items[index];
+  if (item.kind !== "question") return mutation(-1);
+  items[index] = { ...item, state };
+  return mutation(index);
+}
+
+/**
+ * 事件合并器（§4.2：单 item 可见刷新 ≤10Hz，内部累计不丢字）。高频
+ * delta 先进入缓冲，按 intervalMs 批量应用；调度器注入以便测试用假时钟。
+ * 终态类事件（state）不入缓冲，立即冲刷保证运行结束语义不延迟。
+ */
+export interface AgentEventCoalescer {
+  push(ev: AgentEvent): void;
+  flush(): void;
+}
+
+export function createAgentEventCoalescer(
+  apply: (events: AgentEvent[]) => void,
+  schedule: (flush: () => void, delayMs: number) => void,
+  intervalMs = 100,
+): AgentEventCoalescer {
+  let buffer: AgentEvent[] = [];
+  let scheduled = false;
+  const flush = () => {
+    scheduled = false;
+    if (buffer.length === 0) return;
+    const batch = buffer;
+    buffer = [];
+    apply(batch);
+  };
+  return {
+    push(ev) {
+      if (ev.type === "state") {
+        const batch = buffer;
+        buffer = [];
+        batch.push(ev);
+        scheduled = false;
+        apply(batch);
+        return;
+      }
+      buffer.push(ev);
+      if (!scheduled) {
+        scheduled = true;
+        schedule(flush, intervalMs);
+      }
+    },
+    flush,
+  };
 }
 
 function mutation(startIndex: number): TimelineEventMutation {
@@ -1015,6 +1243,41 @@ export function applyAgentEventInPlace(
       changedAt = earliest(changedAt, items.length - 1);
       return mutation(changedAt);
     }
+    case "codex_agent_message": {
+      // M1-03（§4.2）：item 级身份归位——一 item 一节点，按 id 从尾部查找，
+      // 与工具/其他 item 增量交错时不会串线。封口帧非空 text 为权威全文
+      // （一次性交付或 mismatch 校正），按替换语义处理。phase 只显式标记
+      // commentary（轻量层偏差项）；final 是默认呈现，与历史重建的普通
+      // assistant 消息保持同构（history 无 phase 可还原）。
+      const id = `codex-${ev.item_id}`;
+      const phase = ev.phase === "commentary" ? "commentary" : undefined;
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        const it = items[i];
+        if (it.kind !== "agent" || it.id !== id) continue;
+        if (ev.delta) {
+          // 已折叠（工具边界）但未封口的 item 继续原位追加；已封口条目
+          // 不会收到增量（后端终态墓碑拦截），这里防御性继续原位合并。
+          items[i] = { ...it, text: it.text + ev.text, streaming: true, phase };
+          streamingAgentsByItems.set(items, [i]);
+          return mutation(i);
+        }
+        const text = ev.text ? ev.text : it.text;
+        items[i] = { ...it, text, streaming: false, phase };
+        streamingAgentsByItems.set(items, []);
+        return mutation(i);
+      }
+      if (!ev.delta && !ev.text) return mutation(-1);
+      items.push({
+        kind: "agent",
+        id,
+        t: nowSec,
+        text: ev.text,
+        streaming: ev.delta,
+        phase,
+      });
+      streamingAgentsByItems.set(items, ev.delta ? [items.length - 1] : []);
+      return mutation(items.length - 1);
+    }
     case "tool_call": {
       // 工具调用前的过渡性叙述折叠为“执行过程”，不逐条渲染成正式回答。
       let changedAt = foldStreamingAgentsAsInterim(items);
@@ -1039,6 +1302,31 @@ export function applyAgentEventInPlace(
       });
       changedAt = earliest(changedAt, items.length - 1);
       return mutation(changedAt);
+    }
+    case "tool_output_delta": {
+      // M2-01：命令/文件工具输出增量原位追加到活动工具卡；迟到输出（无
+      // 活动卡片）丢弃。终态 ToolResult 权威覆盖流式内容。
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        const it = items[i];
+        if (it.kind === "tool" && it.callId === ev.call_id && it.state === "active") {
+          let currentOutput = "";
+          try {
+            const parsed = it.outputJson ? (JSON.parse(it.outputJson) as { output?: unknown }) : null;
+            if (parsed && typeof parsed.output === "string") currentOutput = parsed.output;
+          } catch {
+            currentOutput = "";
+          }
+          items[i] = {
+            ...it,
+            outputJson: JSON.stringify({
+              status: "streaming",
+              output: currentOutput + ev.safe_delta,
+            }),
+          };
+          return mutation(i);
+        }
+      }
+      return mutation(-1);
     }
     case "tool_result": {
       let changedAt = finishStreamingAgents(items);
@@ -1082,6 +1370,55 @@ export function applyAgentEventInPlace(
       items.push({ kind: "plan", id: nid(), t: nowSec, steps: ev.steps });
       changedAt = earliest(changedAt, items.length - 1);
       return mutation(changedAt);
+    }
+    case "codex_user_input_requested": {
+      // M3-02：问题卡出现在触发它的 turn 内（§5.2）；不抢编辑器焦点
+      // （纯数据事件，无 autofocus）。
+      const changedAt = finishStreamingAgents(items);
+      items.push({
+        kind: "question",
+        id: `codex-question-${ev.request_key}`,
+        t: nowSec,
+        runId: ev.run_id,
+        requestKey: ev.request_key,
+        questions: ev.questions,
+        state: "pending",
+        answerSummary: [],
+      });
+      return mutation(earliest(changedAt, items.length - 1));
+    }
+    case "codex_user_input_resolved": {
+      const id = `codex-question-${ev.request_key}`;
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        const it = items[i];
+        if (it.kind === "question" && it.id === id) {
+          if (it.state === "submitting" && ev.outcome !== "answered") {
+            // 提交中遇到外部终态：以外部终态为准（迟到回答已被后端拒绝）。
+            items[i] = { ...it, state: ev.outcome };
+          } else if (it.state === "pending" || it.state === "submitting") {
+            items[i] = { ...it, state: ev.outcome };
+          }
+          // answered/cancelled/… 只读，不再变化。
+          return mutation(i);
+        }
+      }
+      return mutation(-1);
+    }
+    case "codex_context_event": {
+      // M2-02：非聊天上下文行（diff/压缩/warning）——紧凑、可展开，
+      // 绝不伪装成 agent 消息（R-ACT-02）。
+      const row = codexContextRow(ev.event, ev.data);
+      if (!row) return mutation(-1);
+      const changedAt = finishStreamingAgents(items);
+      items.push({
+        kind: "context",
+        id: nid(),
+        t: nowSec,
+        label: row.label,
+        detail: row.detail,
+        collapsible: row.collapsible,
+      });
+      return mutation(earliest(changedAt, items.length - 1));
     }
     case "activity": {
       // streaming/steer_accepted 仍属于当前输出；其余活动阶段已离开文本生成前沿。

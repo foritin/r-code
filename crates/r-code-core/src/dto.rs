@@ -1488,6 +1488,20 @@ pub enum AgentEvent {
         /// 是否为增量
         delta: bool,
     },
+    /// Codex 主代理 agentMessage 流（M1-03，§4.1/§4.2）：item 级稳定身份
+    /// 与 phase，供前端按 item 归位渲染。
+    ///
+    /// - `delta=true`：text 为该 item 的增量片段；
+    /// - `delta=false`：封口帧。text 非空表示权威全文（一次性交付，或与
+    ///   已累计增量不一致时的全文校正，前端/持久化按替换语义处理）；
+    ///   text 为空表示增量已交付完整正文，只需封口。
+    /// - phase 取 wire 枚举："commentary" | "final_answer" | "unknown"。
+    CodexAgentMessage {
+        item_id: String,
+        phase: String,
+        text: String,
+        delta: bool,
+    },
     /// Provider 明确返回的可展示思考内容或推理摘要。
     ///
     /// 该事件与最终回答分开，以便 UI 折叠展示；不得承载加密块、签名或其它
@@ -1514,6 +1528,41 @@ pub enum AgentEvent {
         output: serde_json::Value,
         /// 是否为错误
         is_error: bool,
+    },
+    /// 工具有界输出增量（M2-01，R-ACT-01）：命令/文件工具在运行中流式
+    /// 追加的安全文本片段。宿主已按帧脱敏与截断；前端原位追加到活动工具卡，
+    /// 终态仍由 ToolResult 权威覆盖。
+    ToolOutputDelta {
+        /// 调用 ID（App Server item id）
+        call_id: String,
+        /// 已脱敏的增量文本
+        safe_delta: String,
+    },
+    /// Codex 非聊天上下文行（M2-02，R-ACT-02）：diff/压缩/warning 等过程
+    /// 事件的紧凑呈现。`event` 是稳定行类型（codex_diff / codex_warning /
+    /// r_code_context_compacted…），`data` 已脱敏有界；持久化为同名
+    /// SessionEvent::System，live 与历史共用同一重建规则。
+    CodexContextEvent {
+        event: String,
+        data: serde_json::Value,
+    },
+    /// Codex `item/tool/requestUserInput` 反向请求（M3-01，R-HITL-01）：
+    /// 问题本身非敏感（§4.4），答案绝不进入事件流或持久化。
+    /// request_key = "{run_id}:{item_id}"，答案提交按此精确路由。
+    CodexUserInputRequested {
+        run_id: String,
+        request_key: String,
+        item_id: String,
+        request_id: String,
+        questions: Vec<CodexUserQuestionDto>,
+        auto_resolution_ms: Option<u64>,
+    },
+    /// pending 用户提问的终态（answered/cancelled/resolved/expired）；
+    /// 过期卡片只读，不能再次提交。
+    CodexUserInputResolved {
+        request_key: String,
+        item_id: String,
+        outcome: String,
     },
     /// Agent 计划
     Plan {
@@ -1619,6 +1668,23 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         base_head: String,
     },
+}
+
+/// 可提交问题卡的结构化数据（M3-01：0.145.0 schema 的脱敏子集）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexUserQuestionDto {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub is_other: bool,
+    pub is_secret: bool,
+    pub options: Vec<CodexUserOptionDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexUserOptionDto {
+    pub label: String,
+    pub description: String,
 }
 
 /// 嵌套 Agent 事件的运行树作用域。

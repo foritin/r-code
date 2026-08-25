@@ -1,0 +1,115 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-25T11:48:31.902Z",
+  "mode": {
+    "kind": "task",
+    "id": "M1-02",
+    "tasks": [
+      "M1-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "6d186a6431b6243f5bbec6073b3c57696371f81c91566eea1d04f548f04ff5d8"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-02.A1",
+      "task": "M1-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Codex prompt 含首次实质批次/阶段变化/新发现/低噪声/私有推理禁令",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m1_02_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 25511,
+      "output_sha256": "ea045c541720c7b5956b39d1cbf32c23cbd7a71cafa81acebb0113055182abf1",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A2",
+      "task": "M1-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "简单任务不播报；例行继续播报被禁止",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m1_02_a2",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 524,
+      "output_sha256": "5e33b0f04b41afba1adfd2a43ff4cc6e71c7e411e4bc4e326426b46533781344",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A3",
+      "task": "M1-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "原生/Codex 共享语义（core+worker+host）且无重复合同",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m1-02-regression.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 29056,
+      "output_sha256": "3580450515a20c40e0185247c1ace1286bae371051ba430d85eafc53b92b9d3f",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

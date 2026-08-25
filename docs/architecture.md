@@ -290,6 +290,25 @@ Codex 集成包含 CLI 探测、安装、登录状态、模型偏好、App Serve
 
 Codex App Server 不是每次发送都新建 CLI。`CodexAppServerRegistry` 以 `task_id` 为 key 保存已初始化的进程传输，每个 Task 使用独占 lease 串行运行，不同 Task 不共享传输但可以并行。Registry 只拥有进程、stdin/stdout broker 与初始化身份；审批、委派、观察、steer 和取消仍是单次 Run 的状态，不能泄漏到下一次 lease。只有匹配当前 thread/turn 的正常 completion 且 Run-local 回调全部收束后，调用方才会把 lease 标记为可复用；EOF、脏帧、协议错配或未收束回调都会销毁传输。
 
+### 7.1 Codex 丰富交互（codex_interaction.rs）
+
+原始 App Server JSON-RPC 帧先经归一化层（src-tauri/src/codex_interaction.rs）转换为宿主拥有的版本化事件，前端与持久化只消费归一化结果，不直接理解 wire JSON。四类呈现的区别与降级：
+
+- **commentary**（公开阶段更新）：item/agentMessage 带 phase=commentary 的 started/delta/completed 流式投影为无作者头的轻量 Markdown 层；历史持久化为 System{codex_commentary}，live 与重建共用同一规则。缺 phase 的兼容帧归为 commentary（保守），并记 PhaseMissing 诊断。
+- **final answer**：phase=final_answer 是正式交付，落 SessionEvent::Message（作者头 + 完整 Markdown）。item/completed 是权威封口：与累计增量一致时只封口（零长度封口帧），不一致时以全文校正并计 mismatch。
+- **reasoning**：只接受公开 summary/summaryTextDelta（“Codex 思考摘要”折叠行）；raw content/textDelta 按合同丢弃，仅产生 ReasoningRawDropped 计数诊断。commentary 不得标成 reasoning，反之亦然。
+- **非聊天上下文行**：计划（Plan 卡，重复更新幂等替换）、diff（codex_diff，800 字符预览 + 截断标记，全文留在 Files workbench）、上下文压缩（复用 r_code_context_compacted 行）、warning/错误（codex_warning，脱敏正文）与 usage（键形与原生 usage_json 一致）。
+
+**反向提问（requestUserInput，0.145.0）**：合法请求经 parse_user_input_request 严格校验（必需 questions、问题 ID 唯一、数量/长度上限），失败以 -32602 fail-closed，未知方法仍 -32601。合法请求进入 pending（run_id:item_id 为 request_key），前端收到非敏感问题卡事件；答案按 request_key 原子 claim（capacity=1 通道），以 {answers:{<qid>:{answers:[…]}}} 编码回原 request id。用户取消与超时编码为空答案集；serverRequest/resolved 与 run 终止回 -32600 并回收 pending。secret 答案只存在于内存通道与单次 writer 响应，事件流/JSONL/诊断均不落值。运行中的普通 composer 消息仍走 turn/steer——steer 与问题回答是两条独立链路。
+
+**恢复**：pending 问题以 System{codex_pending_question}（问题 + 状态，无答案）持久化为 UI 恢复标记；读取层按 run 存活裁决——run 结束（含 transport/app 重启）后重建为 expired 只读卡，迟到提交被显式拒绝，绝不伪恢复原 JSON-RPC 请求。
+
+**能力降级**：启动记录 CLI 版本能力快照；低于 0.145.0 时 requestUserInput 显式降级（LegacyName 诊断），不影响 final/工具卡等既有投影。schema fixture 冻结于 fixtures/codex-interaction/protocol-0.145.0.json，升级 CLI 后重跑 scripts/codex-interaction/extract-protocol-fixture.mjs 并用 check-protocol-fixture.mjs 做 drift 门禁。
+
+**验证入口**：node scripts/verify-codex-interaction.mjs --through M4 --profile implementation（离线 fixture 全绿）与 --profile production（真实登录/安装包为外部放行）。
+
+**子代理可靠性（M4 后续加固）**：子代理终态区分「正常完成」与「降级完成」（工具预算耗尽/空闲超时/时长截断/流重试/循环护栏）——降级原因写入 run 行 usage_json 的 degraded_reason 键并在 run 条目上显示徽章；降级且无实质总结时子代理直接报错，不再用兜底文案伪装完成。子代理报告合同（r-code-core::SUBAGENT_REPORTING_CONTRACT，注入原生与 Codex 两条路径）强制三档输出：已验证（必须附 file:line 或复现步骤）/推断/无法验证（固定 `### 无法验证` 段）；动态桥从该段有界提取 unresolved 数组随 inner JSON 透传，Codex 主代理的编排规则要求对每条 unresolved 转派带数据源的后续任务或在最终回答显式列为 dropped，不得静默丢弃。子代理 Codex 内置 web_search 可通过宿主设置文件 `<config_dir>/codex.toml` 的 `web_search = true` 按需放开（默认关闭；只影响 thread config，绝不改写用户全局 Codex 配置）。
+
 ## 8. Tool Gateway、安全与权限
 
 ### 8.1 单一执行入口

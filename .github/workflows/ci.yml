@@ -28,7 +28,7 @@ jobs:
           cache-dependency-path: src-tauri/frontend/package-lock.json
       - name: Verify release metadata
         run: |
-          node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs scripts/icon-assets.test.mjs
+          node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs scripts/icon-assets.test.mjs scripts/verify-codex-interaction.test.mjs
           node scripts/check-installer-frontend.mjs
           node scripts/release.mjs check
       - name: Install frontend dependencies

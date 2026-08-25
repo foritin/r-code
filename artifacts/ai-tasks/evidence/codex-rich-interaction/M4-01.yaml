@@ -1,0 +1,62 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M4-01
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M4-01)
+    - docs/codex-rich-interaction-prd.md#6-质量性能与安全门禁
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M4-01.json revision.worktree_digest 记录
+
+deliverables:
+  - codex_interaction_tests.rs：m4_01_a1（敌意流投影 oracle）/ a2（诊断元数据白名单 + 五类类别定位）/ a3（双 run 交错、重复完成、迟到增量、陈旧帧、断流 finish 的确定性终态）
+  - frontend scripts/codex-performance.test.mjs：真实定时器延迟采样 + 密度 + reducer/DOM 有界；产出 performance.json
+  - scripts/codex-interaction/m4-01-security.mjs（A1 双 oracle 包装）
+
+changed_paths:
+  - src-tauri/src/codex_interaction_tests.rs
+  - src-tauri/frontend/scripts/codex-performance.test.mjs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/m4-01-security.mjs
+  - artifacts/ai-tasks/verification/codex-rich-interaction/implementation/performance.json
+
+assertions:
+  - id: M4-01.A1
+    passed: true
+    command: node scripts/codex-interaction/m4-01-security.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4-01.json
+  - id: M4-01.A2
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m4_01_a2 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4-01.json
+  - id: M4-01.A3
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m4_01_a3 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4-01.json
+  - id: M4-01.A4
+    passed: true
+    command: node --test scripts/codex-performance.test.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/performance.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M4 --profile implementation
+  exit_code: 1
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4.json
+  note: M4-01 断言全过；剩余失败为 M4-02 not_implemented（最后任务）
+
+decisions:
+  - A1 双 oracle：投影层（敌意帧 → 全部 emissions/events/diagnostics 文本扫描 0 命中）+ 持久化层（复跑 m3_01_a2 的 JSONL/事件流 secret 扫描）；harness 报告本身的设计性脱敏（M0-01）覆盖支持包面
+  - A2 诊断合同：UnknownMethod/PayloadTruncated/DuplicateCompleted/ScopeStale/ReasoningRawDropped 五类计数可定位；detail 黑名单断言禁止任何 payload 正文
+  - A3 确定性：双 projection 交错（文本不跨 run）、重复 completed 幂等、终态后迟到增量丢弃、陈旧帧拒绝、断流（无 completed）finish_turn 以累计文本封口且 unknown 归 commentary
+  - A4 实测（Windows/node24/Chromium）：10k delta → 18 次可见应用（≤10Hz）、传播 p95 105ms（≤250ms）、reducer 单节点全文 10000 字符、长消息真实 Timeline DOM 11 节点；指标含阈值写入 performance.json（机器可读）
+
+external_gates_remaining: []

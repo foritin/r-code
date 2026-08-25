@@ -722,6 +722,7 @@ fn main() {
             tauri_commands::cmd_agent_queue_reorder,
             tauri_commands::cmd_agent_queue_update,
             tauri_commands::cmd_agent_queue_steer,
+            tauri_commands::cmd_codex_submit_user_input,
             tauri_commands::cmd_agent_resend,
             tauri_commands::cmd_permission_approve,
             tauri_commands::cmd_permission_pending,

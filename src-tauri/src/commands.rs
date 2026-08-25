@@ -62,13 +62,15 @@ use r_code_agent_worker::{
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEngine, AgentEvent, AgentEventScope, AgentKind, AgentRun,
-    AgentRunRuntimeKind, AgentSendMode, CatalogAnchorPhase, CreateSessionInput, FileChange,
-    FileChangeType, Notification, NotificationKind, PermissionDecision, PermissionRequest,
-    PlanStep, ProjectAccessMode, QueuedMessage, QueuedMessageState, ReviewState, RiskLevel,
-    SessionBranch, SubagentAccessMode, SubagentState, Task, TaskEvent, TaskEventType, TaskMode,
-    TaskState, ToolCall, VerificationRecord, Workspace, WorkspaceMemoryMode,
+    AgentRunRuntimeKind, AgentSendMode, CatalogAnchorPhase, CodexUserOptionDto,
+    CodexUserQuestionDto, CreateSessionInput, FileChange, FileChangeType, Notification,
+    NotificationKind, PermissionDecision, PermissionRequest, PlanStep, ProjectAccessMode,
+    QueuedMessage, QueuedMessageState, ReviewState, RiskLevel, SessionBranch, SubagentAccessMode,
+    SubagentState, Task, TaskEvent, TaskEventType, TaskMode, TaskState, ToolCall,
+    VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
 use r_code_core::error::ProductError;
+use r_code_core::progress_contract::{PUBLIC_PROGRESS_CONTRACT, SUBAGENT_REPORTING_CONTRACT};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput,
     PlanExecutionContext, PlanExecutionStatus, PlanImplementationDispatchState, PlanItemState,
@@ -108,6 +110,10 @@ use crate::codex_app_server::{
     recognized_protocol_progress, CodexAppServerError, CodexAppServerLease,
     CodexAppServerLineEvent, CodexAppServerRegistry, CodexAppServerTransport,
     CODEX_DISABLE_R_CODE_MCP_OVERRIDE,
+};
+use crate::codex_interaction::{
+    codex_tool_display_title, CodexAssistantPhase, CodexInteractionCapabilities,
+    CodexMessageEmission, CodexRunProjection, CodexTimelineEventV1, CodexToolStatus,
 };
 use crate::codex_mcp::{CodexMcpCallOutcome, CodexMcpRegistry};
 use crate::codex_permissions::{CodexDelegationPermissions, CodexPermissionMode};
@@ -451,12 +457,42 @@ struct ExternalAgentHandle {
     parent_run_id: String,
     cancellation: CancellationToken,
     steer: Option<tokio::sync::mpsc::Sender<ExternalSteerRequest>>,
+    user_input: Option<tokio::sync::mpsc::Sender<ExternalUserInputAnswer>>,
 }
 
 struct ExternalSteerRequest {
     operation_id: String,
     message: String,
     response: tokio::sync::oneshot::Sender<ExternalSteerOutcome>,
+}
+
+/// M3-01：前端提交的 requestUserInput 答案（内存直达，绝不持久化；
+/// answers 为 None 表示用户取消）。
+struct ExternalUserInputAnswer {
+    request_key: String,
+    answers: Option<serde_json::Value>,
+    response: tokio::sync::oneshot::Sender<ExternalUserInputOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalUserInputOutcome {
+    /// 答案已按原 request id 编码回 writer。
+    Delivered,
+    /// 无 pending 请求 / 已被claim / 运行已结束——迟到提交拒绝。
+    Rejected,
+}
+
+/// Tauri command 的入口（M3-01）：答案按 request_key 精确路由。
+pub async fn submit_codex_user_input_for_task(
+    external_agents: &Arc<ExternalAgentRegistry>,
+    task_id: &str,
+    run_id: &str,
+    request_key: &str,
+    answers: Option<serde_json::Value>,
+) -> ExternalUserInputOutcome {
+    external_agents
+        .submit_user_input_for_task(task_id, run_id, request_key, answers)
+        .await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -498,9 +534,72 @@ impl ExternalAgentRegistry {
                 parent_run_id: parent_run_id.to_string(),
                 cancellation: cancellation.clone(),
                 steer: None,
+                user_input: None,
             },
         );
         Ok(cancellation)
+    }
+
+    /// M3-01：为 App Server 主运行安装 requestUserInput 答案通道。
+    async fn enable_user_input(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<tokio::sync::mpsc::Receiver<ExternalUserInputAnswer>, String> {
+        let mut runs = self.runs.lock().await;
+        let handle = runs
+            .get_mut(run_id)
+            .filter(|handle| handle.task_id == task_id)
+            .ok_or_else(|| "Codex 运行已经结束".to_string())?;
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        handle.user_input = Some(sender);
+        Ok(receiver)
+    }
+
+    /// 用户答案提交入口（Tauri command 调用）：按 request_key 精确路由到
+    /// pending 请求；迟到/未知/已 claim 的提交被拒绝，绝不发往其他请求。
+    async fn submit_user_input_for_task(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        request_key: &str,
+        answers: Option<serde_json::Value>,
+    ) -> ExternalUserInputOutcome {
+        let sender = self
+            .runs
+            .lock()
+            .await
+            .get(run_id)
+            .filter(|handle| handle.task_id == task_id)
+            .and_then(|handle| handle.user_input.clone());
+        let Some(sender) = sender else {
+            return ExternalUserInputOutcome::Rejected;
+        };
+        let (response, received) = tokio::sync::oneshot::channel();
+        if sender
+            .send(ExternalUserInputAnswer {
+                request_key: request_key.to_string(),
+                answers,
+                response,
+            })
+            .await
+            .is_err()
+        {
+            return ExternalUserInputOutcome::Rejected;
+        }
+        match received.await {
+            Ok(outcome) => outcome,
+            Err(_) => ExternalUserInputOutcome::Rejected,
+        }
+    }
+
+    /// M3-03：run 是否仍存活（历史重建判定 pending 问题卡可答/过期）。
+    async fn run_is_live(&self, task_id: &str, run_id: &str) -> bool {
+        self.runs
+            .lock()
+            .await
+            .get(run_id)
+            .is_some_and(|handle| handle.task_id == task_id)
     }
 
     /// 为长驻的 Codex App Server 主运行安装同轮引导通道。`codex exec` 子代理不
@@ -5563,6 +5662,52 @@ async fn persist_runtime_event(
                     .await;
             }
         }
+        AgentEvent::CodexAgentMessage {
+            item_id: _,
+            phase,
+            text,
+            delta,
+        } => {
+            flush_pending_reasoning_text(
+                session_store,
+                &mut pending_text.reasoning,
+                &scope_key,
+                &event_storage_id,
+            )
+            .await;
+            if *delta {
+                let entry = pending_text.assistant.entry(scope_key).or_default();
+                if entry.storage_id.is_empty() {
+                    entry.storage_id = event_storage_id;
+                }
+                entry.text.push_str(text);
+                entry.saw_delta = true;
+            } else {
+                // 封口（§4.2）：非空 text 是权威全文（一次性交付或 mismatch
+                // 校正）——按替换语义落一条完整条目，绝不拼接已累计增量。
+                let pending = pending_text
+                    .assistant
+                    .remove(&scope_key)
+                    .unwrap_or_default();
+                let storage_id = if pending.storage_id.is_empty() {
+                    event_storage_id
+                } else {
+                    pending.storage_id
+                };
+                let full = if text.is_empty() { pending.text } else { text.clone() };
+                if !full.trim().is_empty() {
+                    let event = if phase == "final_answer" {
+                        SessionEvent::Message(Message::assistant_text(&full))
+                    } else {
+                        SessionEvent::System {
+                            event: CODEX_COMMENTARY_EVENT.into(),
+                            data: serde_json::json!({ "text": full }),
+                        }
+                    };
+                    let _ = session_store.append(&storage_id, event).await;
+                }
+            }
+        }
         AgentEvent::ToolCall {
             name,
             input,
@@ -5632,6 +5777,32 @@ async fn persist_runtime_event(
                     TaskEventType::ToolCall,
                 );
             }
+        }
+        AgentEvent::CodexUserInputRequested { .. } => {
+            // M3-01：pending 问题不落会话 JSONL（§4.4 的恢复标记属于 M3-03
+            // 的 reload/restart 合同）；live 事件只走前端通道。
+        }
+        AgentEvent::CodexUserInputResolved { .. } => {
+            // 终态只对 live UI 有意义；不持久化。
+        }
+        AgentEvent::ToolOutputDelta { .. } => {
+            // 工具输出增量只在 live UI 原位追加；持久化以终态 ToolResult 的
+            // 权威输出为准（历史重建不重放流式输出）。
+        }
+        AgentEvent::CodexContextEvent { event, data } => {
+            flush_pending_runtime_text(session_store, pending_text, &scope_key, &event_storage_id)
+                .await;
+            // 非聊天上下文行（diff/压缩/warning）：live 与历史共用同一
+            // SessionEvent::System 形状，重建规则一致。
+            let _ = session_store
+                .append(
+                    &event_storage_id,
+                    SessionEvent::System {
+                        event: event.clone(),
+                        data: data.clone(),
+                    },
+                )
+                .await;
         }
         AgentEvent::ToolResult {
             call_id,
@@ -12025,7 +12196,7 @@ fn task_provider_shows_reasoning(state: &CommandState, task_id: &str) -> bool {
         .unwrap_or(true)
 }
 
-fn session_messages_for_task(
+async fn session_messages_for_task(
     state: &CommandState,
     task_id: &str,
     content: &str,
@@ -12037,6 +12208,34 @@ fn session_messages_for_task(
         messages.retain(|message| {
             message.kind != "system" || message.text.as_deref() != Some(R_CODE_REASONING_EVENT)
         });
+    }
+    // M3-03（§4.4）：重建时 pending 问题按 run 存活裁决——存活即可答，
+    // 已随 transport/app 终止的统一标记 expired（只读，迟到提交被拒绝）。
+    for message in messages.iter_mut() {
+        if message.kind != "codex_question" {
+            continue;
+        }
+        let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(
+            message.output_json.as_deref().unwrap_or("{}"),
+        ) else {
+            continue;
+        };
+        if payload.get("state").and_then(serde_json::Value::as_str) != Some("pending") {
+            continue;
+        }
+        let run_id = payload
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let live = !run_id.is_empty()
+            && state.external_agents.run_is_live(task_id, &run_id).await;
+        if !live {
+            if let Some(target) = payload.as_object_mut() {
+                target.insert("state".to_string(), serde_json::Value::String("expired".into()));
+            }
+            message.output_json = Some(payload.to_string());
+        }
     }
     messages
 }
@@ -12060,7 +12259,7 @@ pub async fn session_messages(
         &content,
         &branch.id,
         &branch.storage_id,
-    ))
+    ).await)
 }
 
 /// Read one branch without activating it. The task/branch ownership check prevents a caller from
@@ -12088,7 +12287,7 @@ pub async fn session_messages_for_branch(
         &content,
         &branch.id,
         &branch.storage_id,
-    ))
+    ).await)
 }
 
 /// 时间线图片附件的按需预览载荷。`data` 是不含 data URL 前缀的标准 Base64。
@@ -12567,6 +12766,78 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                             });
                         }
                     }
+                } else if event == CODEX_COMMENTARY_EVENT {
+                    // M1-03：Codex commentary 历史——保留 Markdown 文本与
+                    // 轻量层语义，重建为无作者头的进度条目而非纯文本过程。
+                    let text = data
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    if !text.trim().is_empty() {
+                        out.push(SessionMessage {
+                            id: message_id,
+                            branch_id: branch_id.to_string(),
+                            kind: "codex_commentary".into(),
+                            role: Some("assistant".into()),
+                            text: Some(text),
+                            image_count: None,
+                            image_media_types: None,
+                            attachments: None,
+                            tool_name: None,
+                            call_id: None,
+                            input_json: None,
+                            output_json: None,
+                            is_error: None,
+                            timestamp: None,
+                        });
+                    }
+                } else if event == CODEX_PENDING_QUESTION_EVENT {
+                    // M3-03：pending 问题的恢复标记。同一 request_key 的
+                    // 终态标记覆盖状态；只产出一条（位置取最后标记）。
+                    let request_key = data
+                        .get("request_key")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    if !request_key.is_empty() {
+                        let merged = if let Some(existing) = out
+                            .iter_mut()
+                            .rev()
+                            .find(|message| {
+                                message.kind == "codex_question" && message.text == Some(request_key.clone())
+                            })
+                        {
+                            let mut merged: serde_json::Value =
+                                serde_json::from_str(existing.output_json.as_deref().unwrap_or("{}"))
+                                    .unwrap_or_default();
+                            if let (Some(target), Some(source)) = (merged.as_object_mut(), data.as_object()) {
+                                for (key, value) in source {
+                                    target.insert(key.clone(), value.clone());
+                                }
+                            }
+                            existing.output_json = Some(merged.to_string());
+                            continue;
+                        } else {
+                            data.clone()
+                        };
+                        out.push(SessionMessage {
+                            id: message_id,
+                            branch_id: branch_id.to_string(),
+                            kind: "codex_question".into(),
+                            role: None,
+                            text: Some(request_key),
+                            image_count: None,
+                            image_media_types: None,
+                            attachments: None,
+                            tool_name: None,
+                            call_id: None,
+                            input_json: None,
+                            output_json: Some(merged.to_string()),
+                            is_error: None,
+                            timestamp: None,
+                        });
+                    }
                 } else if event != DURABLE_USER_MESSAGE_CANCEL_EVENT {
                     out.push(SessionMessage {
                         id: message_id,
@@ -12965,7 +13236,7 @@ impl SubagentJsonlFile {
     }
 }
 
-fn parse_page_messages(
+async fn parse_page_messages(
     state: &CommandState,
     task_id: &str,
     range: &SubagentJsonlRange,
@@ -12976,7 +13247,7 @@ fn parse_page_messages(
         return Vec::new();
     }
     let mut messages =
-        session_messages_for_task(state, task_id, &range.content, branch_id, storage_id);
+        session_messages_for_task(state, task_id, &range.content, branch_id, storage_id).await;
     for message in &mut messages {
         let Some(id) = message.id.as_deref() else {
             continue;
@@ -13091,7 +13362,7 @@ async fn latest_subagent_message_page(
         leading_tool_result_ids,
     )?;
     Ok(SubagentSessionMessagePage {
-        messages: parse_page_messages(state, task_id, &range, branch_id, storage_id),
+        messages: parse_page_messages(state, task_id, &range, branch_id, storage_id).await,
         call_id_updates,
         next_cursor: Some(cursor.clone()),
         previous_cursor: Some(cursor),
@@ -13200,7 +13471,7 @@ pub async fn subagent_session_message_page(
             &mut remaining_leading_results,
         ));
     }
-    let messages = parse_page_messages(state, task_id, &range, &branch_id, &storage_id);
+    let messages = parse_page_messages(state, task_id, &range, &branch_id, &storage_id).await;
     let (next_range, next_pending) = if after_mode {
         (
             SubagentJsonlRange {
@@ -13316,7 +13587,7 @@ pub async fn subagent_session_messages(
         &content,
         &branch.id,
         &storage_id,
-    ))
+    ).await)
 }
 
 // ============================================================================
@@ -17934,6 +18205,12 @@ const CODEX_REASONING_SUMMARY_EVENT: &str = "codex_reasoning_summary";
 const R_CODE_REASONING_EVENT: &str = "r_code_reasoning";
 /// 工具调用前的过渡性叙述。UI 折叠为可展开的“过程”条目，而不是逐条渲染成正式回答。
 const R_CODE_INTERIM_EVENT: &str = "r_code_interim";
+/// Codex 主代理 commentary 阶段消息（M1-03）：历史重建为无作者头的轻量
+/// Markdown 进度条目（保持 Markdown 与流式语义），与原生 r_code_interim
+/// 的纯文本“过程”折叠不同层。
+const CODEX_COMMENTARY_EVENT: &str = "codex_commentary";
+/// M3-03：pending requestUserInput 的非敏感恢复标记（问题 + 状态）。
+const CODEX_PENDING_QUESTION_EVENT: &str = "codex_pending_question";
 const CODEX_RCODE_DELEGATE_TOOL: &str = "rcode_delegate_subagent";
 /// Codex 主运行的直接 R-Code 子代理上限。动态 Codex → R-Code 桥的每次回调都新建
 /// worker supervisor，因此必须在共享宿主注册表按父运行执行更小的直接子级预算；
@@ -17985,6 +18262,9 @@ struct CodexExecLimits {
     /// Host-verified exact model override for a configured candidate slot. It is never accepted
     /// from an unprobed renderer request.
     model_override: Option<String>,
+    /// 子代理是否放开 Codex 内置 web_search（宿主 codex.toml 的 web_search
+    /// 键；默认关闭）。只影响 thread config，不改任何全局 Codex 配置。
+    web_search_enabled: bool,
 }
 
 impl Default for CodexExecLimits {
@@ -17995,8 +18275,33 @@ impl Default for CodexExecLimits {
             hard_timeout: None,
             policy: CodexRunPolicy::Main,
             model_override: None,
+            web_search_enabled: false,
         }
     }
+}
+
+/// 宿主侧 Codex 选项文件（`<config_dir>/codex.toml`）。与 Codex 自身的
+/// `~/.codex/config.toml` 完全分离——R-Code 绝不读写用户全局 Codex 配置。
+fn load_codex_host_web_search(config_dir: &Path) -> bool {
+    let path = config_dir.join("codex.toml");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(value) = content.parse::<toml::Table>() else {
+        return false;
+    };
+    value
+        .get("web_search")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(false)
+}
+
+/// thread/start 的 config 注入（单一构造点，测试直接断言两种形态）。
+fn codex_thread_config(web_search_enabled: bool) -> serde_json::Value {
+    serde_json::json!({
+        "model_reasoning_effort": "medium",
+        "web_search": if web_search_enabled { "enabled" } else { "disabled" },
+    })
 }
 
 impl CodexExecLimits {
@@ -18009,6 +18314,7 @@ impl CodexExecLimits {
                 max_tool_calls: None,
             },
             model_override: None,
+            web_search_enabled: false,
         }
     }
 }
@@ -18051,6 +18357,109 @@ enum CodexExecFailure {
     ExitStatus,
 }
 
+/// 子代理“完成但质量受损”的降级原因（区别于 outright failure）：这类运行
+/// 会给出看似正常的总结，但结果不可全信，必须在 UI 与父代理侧可见。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexDegradedReason {
+    /// 工具预算耗尽后强制收尾（无工具总结）。
+    ToolBudget,
+    /// 连续空闲超时后由宿主终止。
+    IdleTimeout,
+    /// 硬性总时长上限截断。
+    Deadline,
+    /// 流断开后重放续跑（上下文可能重复/缺失）。
+    StreamRetries,
+    /// 原生长任务循环护栏触发（NoProgress 强制总结）。
+    LoopGuard,
+}
+
+impl CodexDegradedReason {
+    fn wire_label(self) -> &'static str {
+        match self {
+            Self::ToolBudget => "tool_budget",
+            Self::IdleTimeout => "idle_timeout",
+            Self::Deadline => "deadline",
+            Self::StreamRetries => "stream_retries",
+            Self::LoopGuard => "loop_guard",
+        }
+    }
+
+    fn user_label(self) -> &'static str {
+        match self {
+            Self::ToolBudget => "工具预算耗尽",
+            Self::IdleTimeout => "空闲超时",
+            Self::Deadline => "时长上限截断",
+            Self::StreamRetries => "流中断重试",
+            Self::LoopGuard => "循环护栏触发",
+        }
+    }
+}
+
+/// 失败/重试信号 → 降级原因（完成但质量受损的可 labeling 口径）。
+fn codex_degraded_from(
+    failure: Option<CodexExecFailure>,
+    stream_retries: usize,
+) -> Option<CodexDegradedReason> {
+    if stream_retries > 0 {
+        return Some(CodexDegradedReason::StreamRetries);
+    }
+    match failure {
+        Some(CodexExecFailure::IdleTimeout) => Some(CodexDegradedReason::IdleTimeout),
+        Some(CodexExecFailure::Deadline) => Some(CodexDegradedReason::Deadline),
+        Some(CodexExecFailure::ToolBudget) => Some(CodexDegradedReason::ToolBudget),
+        _ => None,
+    }
+}
+
+/// 把降级原因并入 usage_json（与 tool_calls/stream_retries 同一列）。
+fn codex_usage_with_degraded(
+    usage_json: Option<String>,
+    degraded: Option<CodexDegradedReason>,
+) -> Option<String> {
+    let Some(degraded) = degraded else {
+        return usage_json;
+    };
+    let mut usage = usage_json
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    usage.insert(
+        "degraded_reason".to_string(),
+        serde_json::Value::String(degraded.wire_label().to_string()),
+    );
+    Some(serde_json::Value::Object(usage).to_string())
+}
+
+/// 三档报告合同中“无法验证”段的有界提取（子代理 prompt 冻结的标记段：
+/// `### 无法验证` 起始，至下一个 `#` 标题结束）。返回最多 8 条、每条
+/// ≤200 字符的脱敏条目；无标记段时为空——父代理据此转派或显式丢弃。
+fn extract_unresolved_items(report: &str) -> Vec<String> {
+    const MAX_ITEMS: usize = 8;
+    const MAX_ITEM_CHARS: usize = 200;
+    let Some(index) = ["### 无法验证", "## 无法验证"].iter().find_map(|marker| report.find(marker)) else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    for line in report[index..].lines().skip(1) {
+        let trimmed = line
+            .trim()
+            .trim_start_matches(['-', '*', '•'])
+            .trim();
+        if trimmed.starts_with('#') {
+            break;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if items.len() >= MAX_ITEMS {
+            break;
+        }
+        items.push(bounded_text(&redact_text(trimmed), MAX_ITEM_CHARS));
+    }
+    items
+}
+
 #[derive(Debug, Default)]
 struct CodexExecCompletion {
     cancelled: bool,
@@ -18061,6 +18470,9 @@ struct CodexExecCompletion {
     failure: Option<CodexExecFailure>,
     tool_calls: usize,
     stream_retries: usize,
+    /// 完成但降级的原因；None = 正常完成。写入 usage_json 的 degraded_reason
+    /// 键并在动态桥响应里透传给父代理。
+    degraded: Option<CodexDegradedReason>,
 }
 
 /// Codex CLI backend exposed to the native R-Code agent's `delegate_task` tool.
@@ -18266,6 +18678,7 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
         };
         let mut limits = CodexExecLimits::subagent();
         limits.model_override = self.model_override.clone();
+        limits.web_search_enabled = load_codex_host_web_search(&self.config_dir);
         let completion = run_codex_delegation_process(
             &workspace,
             &build_codex_delegation_prompt(
@@ -18317,6 +18730,20 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
             return Err(ProductError::Other(codex_exec_failure_message(
                 completion.failure,
                 completion.stream_retries,
+            )));
+        }
+        // 降级（预算耗尽/超时截断/流重试）且没有实质总结时，不能再用兜底
+        // 文案伪装成正常完成——父代理会把占位摘要当结论。
+        let degraded_reason = completion.degraded;
+        if degraded_reason.is_some()
+            && completion
+                .summary
+                .as_deref()
+                .is_none_or(|text| text.trim().len() < 20)
+        {
+            return Err(ProductError::Other(format!(
+                "Codex 子代理降级结束（{}），且未产出实质总结；请按未完成处理",
+                degraded_reason.map(|reason| reason.user_label()).unwrap_or("未知原因")
             )));
         }
         Ok(CodexSubagentOutcome::Completed(
@@ -18529,47 +18956,6 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
         _ => return None,
     };
     Some((call_id, name.to_string(), summary))
-}
-
-/// Preserve the concrete dynamic-delegation goal in the parent timeline. Other Codex tools keep
-/// the compact summary-only projection used by the existing audit UI.
-fn codex_item_tool_input(item: &serde_json::Value, summary: &str) -> serde_json::Value {
-    let is_rcode_delegate = item
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|kind| matches!(kind, "dynamic_tool_call" | "dynamicToolCall"))
-        && item.get("tool").and_then(serde_json::Value::as_str) == Some(CODEX_RCODE_DELEGATE_TOOL);
-    if !is_rcode_delegate {
-        return serde_json::json!({ "summary": summary });
-    }
-
-    let mut safe = serde_json::Map::new();
-    safe.insert(
-        "agent".to_string(),
-        serde_json::Value::String("r_code".to_string()),
-    );
-    if let Some(arguments) = item.get("arguments").and_then(serde_json::Value::as_object) {
-        for (key, max_chars) in [("label", 80), ("goal", 4_000), ("access", 40)] {
-            if let Some(value) = arguments
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                safe.insert(
-                    key.to_string(),
-                    serde_json::Value::String(bounded_text(&redact_text(value), max_chars)),
-                );
-            }
-        }
-    }
-    if !safe.contains_key("goal") {
-        safe.insert(
-            "summary".to_string(),
-            serde_json::Value::String(summary.to_string()),
-        );
-    }
-    serde_json::Value::Object(safe)
 }
 
 /// 从 `codex-cli 0.145.0` 之类的版本行解析 `(major, minor, patch)`。
@@ -18819,7 +19205,8 @@ each batch, synthesize the evidence and decide whether it already supports the r
 Stop immediately once the assignment is supported. Do not invoke \
 unrelated skills, MCP servers, or web research. {CODEX_PARALLEL_EXECUTION_HINT} \
 {rtk} {CODEX_FILE_LINK_HINT} {report_guidance} \
-Do not expose private chain-of-thought. {CODEX_CROSS_PLATFORM_SHELL_HINT}{editable}{memory}\n\nAssignment:\n{goal}"
+Do not expose private chain-of-thought. {CODEX_CROSS_PLATFORM_SHELL_HINT} 
+{SUBAGENT_REPORTING_CONTRACT}{editable}{memory}\n\nAssignment:\n{goal}"
     )
 }
 
@@ -19242,6 +19629,9 @@ modify this snapshot unless the user asks about memory.\n{value}"
         })
         .unwrap_or_default();
     let efficiency = codex_efficiency_hint();
+    // M1-02：与原生 R-Code 共用 r-code-core 的低噪声公开进度合同（§5.3），
+    // 通过 Codex 的公开 assistant 消息承载，不暴露私有推理；简单任务直接
+    // 交付最终回答，不为播报而播报。
     format!(
         "You are the selected main coding agent inside the independent R-Code desktop client. \
 Work directly on the user's request inside the attached workspace. You may call the built-in \
@@ -19250,8 +19640,13 @@ this same task and run tree. Delegate each goal once; an equivalent repeated goa
 reuses the original child result instead of starting another child. Its access defaults to the \
 parent's access and can never exceed it. Do \
 not use configured global R-Code MCP delegation tools from this hosted run: those tools are for \
-standalone external sessions and create separate top-level tasks. Keep tool activity observable, do not expose \
-private chain-of-thought, and finish with a concise result and verification summary.\n\n\
+standalone external sessions and create separate top-level tasks. Keep tool activity observable \
+through public progress commentary: emit these updates as ordinary public assistant messages \
+during the turn, never as private reasoning.\n\n{PUBLIC_PROGRESS_CONTRACT}\n\nFor a simple task \
+that needs no staging, stay silent and deliver the final answer directly. Do not expose private \
+chain-of-thought, and finish with a concise result and verification summary.
+
+Subagent report handling (host-enforced): when a rcode_delegate_subagent result carries a non-empty unresolved array or a degraded field, treat it as a machine-readable signal — for each unresolved item either re-delegate a new bounded task with the concrete data source it says is missing, or list it explicitly as dropped in your final answer. Never silently discard an unresolved item, and never treat a degraded report as fully trustworthy evidence.\n\n\
 {efficiency}\n\n{CODEX_PARALLEL_EXECUTION_HINT}\n\n{rtk}\n\n{CODEX_FILE_LINK_HINT}{editable}{memory}\n\n\
 Session title: {}\n\nVisible conversation context:\n{}\n\nCurrent user request:\n{}{}",
         task.title, transcript, request, attachment_context
@@ -19351,6 +19746,14 @@ async fn start_codex_main_with_resources(
             return Err(error);
         }
     };
+    // M3-01：requestUserInput 答案通道（与 steer 同一生命周期边界）。
+    let user_input_requests = match external_agents.enable_user_input(&task.id, &run.id).await {
+        Ok(receiver) => Some(receiver),
+        Err(error) => {
+            external_agents.remove(&run.id).await;
+            return Err(error);
+        }
+    };
     if let Err(error) = AgentRunRepository::new(&db).create(&run).map_err(err_str) {
         external_agents.remove(&run.id).await;
         return Err(error);
@@ -19429,6 +19832,7 @@ async fn start_codex_main_with_resources(
         prepared_attachments,
         cancellation,
         steer_requests,
+        user_input_requests,
         sink,
         prepared_memory.prompt,
         prepared_memory.capture,
@@ -20308,16 +20712,18 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
     if !cancelled && failure.is_none() && !status.as_ref().is_ok_and(|value| value.success()) {
         failure = Some(CodexExecFailure::ExitStatus);
     }
+    let degraded = codex_degraded_from(failure, 0);
 
     CodexExecCompletion {
         cancelled,
         succeeded: !cancelled && failure.is_none(),
         thread_id,
         summary,
-        usage_json,
+        usage_json: codex_usage_with_degraded(usage_json, degraded),
         failure,
         tool_calls,
         stream_retries: 0,
+        degraded,
     }
 }
 
@@ -20330,6 +20736,268 @@ const CODEX_APP_SERVER_START_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 // bounded artifact-aware ceiling. Observable events never persist or emit that base64 field.
 const CODEX_APP_SERVER_MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
 const CODEX_APP_SERVER_APPROVAL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// requestUserInput 无 autoResolutionMs 时的宿主默认等待上限（M3-01 冻结；
+/// M3-03 引入完整生命周期后由统一调度接管）。
+const CODEX_USER_INPUT_DEFAULT_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+/// pending requestUserInput 的运行内注册表（M3-01）：request_key → 单槽
+/// 答案通道 + resolved/取消信号。capacity=1 的通道即原子 claim——重复
+/// 提交在路由层被拒绝，不存在双重响应。
+#[derive(Clone, Default)]
+struct CodexPendingUserInputs {
+    slots: Arc<std::sync::Mutex<HashMap<String, CodexPendingUserInputSlot>>>,
+}
+
+struct CodexPendingUserInputSlot {
+    respond: tokio::sync::mpsc::Sender<ExternalUserInputAnswer>,
+    resolved: CancellationToken,
+    request_id: String,
+}
+
+impl CodexPendingUserInputs {
+    fn cancel_all(&self) {
+        let mut slots = self.slots.lock().expect("pending user input lock");
+        for (_, slot) in slots.drain() {
+            slot.resolved.cancel();
+        }
+    }
+
+    /// serverRequest/resolved 到达时按 request id 精确终止对应等待。
+    fn cancel_by_request_id(&self, request_id: &str) -> bool {
+        let mut slots = self.slots.lock().expect("pending user input lock");
+        let key = slots
+            .iter()
+            .find(|(_, slot)| slot.request_id == request_id)
+            .map(|(key, _)| key.clone());
+        match key {
+            Some(key) => {
+                if let Some(slot) = slots.remove(&key) {
+                    slot.resolved.cancel();
+                }
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// M3-01（R-HITL-01）：`item/tool/requestUserInput` 反向请求桥。
+/// 合法请求进入 pending 并向前端发出非敏感问题事件；答案按 request_key
+/// 精确路由、以 `{answers:{<qid>:{answers:[...]}}}` 编码回原 request id；
+/// 取消/超时/resolved/运行结束各自只有一个确定终态。
+#[allow(clippy::too_many_arguments)]
+async fn handle_codex_app_server_user_input(
+    value: &serde_json::Value,
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
+    cancellation: &CancellationToken,
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    pending: &CodexPendingUserInputs,
+    run_id: &str,
+) -> CodexAppServerRequestHandling {
+    const METHOD: &str = "item/tool/requestUserInput";
+    let Some(request_id) = value.get("id").cloned() else {
+        tracing::warn!(run_id, method = METHOD, "requestUserInput without id");
+        return CodexAppServerRequestHandling::Failed;
+    };
+    // schema 严格校验（§4.3）：重复/空问题 ID、超限或缺失必需字段以协议
+    // 错误结束——fail-closed，不进入等待。
+    let (parsed, issues) = crate::codex_interaction::parse_user_input_request(value);
+    if !issues.is_empty() {
+        tracing::warn!(run_id, count = issues.len(), "rejecting invalid requestUserInput payload");
+        let _ = writer.try_send(serde_json::json!({
+            "id": request_id,
+            "error": { "code": -32602, "message": "invalid requestUserInput payload" },
+        }));
+        return CodexAppServerRequestHandling::Handled;
+    }
+    let Some(parsed) = parsed else {
+        return CodexAppServerRequestHandling::Failed;
+    };
+    let request_key = format!("{run_id}:{}", parsed.item_id);
+    let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
+    let resolved_token = CancellationToken::new();
+    pending.slots.lock().expect("pending user input lock").insert(
+        request_key.clone(),
+        CodexPendingUserInputSlot {
+            respond: answer_tx,
+            resolved: resolved_token.clone(),
+            request_id: parsed.request_id.clone(),
+        },
+    );
+    // 前端事件：问题本身非敏感（§4.4）；答案只经内存通道与单次 writer 响应。
+    let questions = parsed
+        .questions
+        .iter()
+        .map(|question| CodexUserQuestionDto {
+            id: question.id.clone(),
+            header: question.header.clone(),
+            question: question.question.clone(),
+            is_other: question.is_other,
+            is_secret: question.is_secret,
+            options: question
+                .options
+                .iter()
+                .map(|option| CodexUserOptionDto {
+                    label: option.label.clone(),
+                    description: option.description.clone(),
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let questions_json = serde_json::to_value(&questions).unwrap_or_default();
+    emit_codex_observable_event(
+        observer,
+        event_sink,
+        AgentEvent::CodexUserInputRequested {
+            run_id: run_id.to_string(),
+            request_key: request_key.clone(),
+            item_id: parsed.item_id.clone(),
+            request_id: parsed.request_id.clone(),
+            questions,
+            auto_resolution_ms: parsed.auto_resolution_ms,
+        },
+    )
+    .await;
+    // M3-03（§4.4）：非敏感问题与状态持久化为 UI 恢复标记；run 存活时
+    // reload 重建为可答 pending 卡，app/transport 重启后由重建层标记 expired。
+    // secret 答案永不落盘——这里只有问题结构与状态。
+    if let Some(observer) = observer {
+        let _ = observer
+            .session_store
+            .append(
+                observer.parent_storage_id,
+                SessionEvent::System {
+                    event: CODEX_PENDING_QUESTION_EVENT.into(),
+                    data: serde_json::json!({
+                        "request_key": request_key,
+                        "run_id": run_id,
+                        "item_id": parsed.item_id,
+                        "questions": questions_json,
+                        "state": "pending",
+                    }),
+                },
+            )
+            .await;
+    }
+
+    enum WaitOutcome {
+        Answered(ExternalUserInputAnswer),
+        CancelledByUser(ExternalUserInputAnswer),
+        ResolvedExternally,
+        RunCancelled,
+        TimedOut,
+    }
+    let wait_ms = parsed
+        .auto_resolution_ms
+        .map(Duration::from_millis)
+        .unwrap_or(CODEX_USER_INPUT_DEFAULT_TIMEOUT);
+    let outcome = tokio::select! {
+        _ = cancellation.cancelled() => WaitOutcome::RunCancelled,
+        _ = resolved_token.cancelled() => WaitOutcome::ResolvedExternally,
+        answer = answer_rx.recv() => match answer {
+            Some(answer) => match answer.answers {
+                Some(_) => WaitOutcome::Answered(answer),
+                None => WaitOutcome::CancelledByUser(answer),
+            },
+            // 槽被 cancel_by_request_id 移除时 resolved_token 与通道关闭几乎
+            // 同时发生；按 token 归因，保证终态标签确定（M4-02 全链路发现的
+            // 真竞态：select 偏随机会让 resolved 报成 cancelled）。
+            None if resolved_token.is_cancelled() => WaitOutcome::ResolvedExternally,
+            None => WaitOutcome::RunCancelled,
+        },
+        _ = tokio::time::sleep(wait_ms) => WaitOutcome::TimedOut,
+    };
+    pending
+        .slots
+        .lock()
+        .expect("pending user input lock")
+        .remove(&request_key);
+
+    let (frame, outcome_label, request_key_for_marker): (serde_json::Value, &'static str, String) = match outcome {
+        WaitOutcome::Answered(answer) => {
+            // 权威编码：{answers:{<questionId>:{answers:[string]}}}（§4.3）。
+            let _ = answer
+                .response
+                .send(ExternalUserInputOutcome::Delivered);
+            (
+                serde_json::json!({
+                    "id": request_id,
+                    "result": { "answers": answer.answers },
+                }),
+                "answered",
+                request_key.clone(),
+            )
+        }
+        WaitOutcome::CancelledByUser(answer) => {
+            // 用户显式取消：提交者仍得到 Delivered（取消被编码为空答案集）。
+            let _ = answer
+                .response
+                .send(ExternalUserInputOutcome::Delivered);
+            (
+                serde_json::json!({
+                    "id": request_id,
+                    "result": { "answers": {} },
+                }),
+                "cancelled",
+                request_key.clone(),
+            )
+        }
+        WaitOutcome::TimedOut => (
+            serde_json::json!({
+                "id": request_id,
+                "result": { "answers": {} },
+            }),
+            "expired",
+            request_key.clone(),
+        ),
+        WaitOutcome::ResolvedExternally => (
+            serde_json::json!({
+                "id": request_id,
+                "error": { "code": -32600, "message": "request already resolved" },
+            }),
+            "resolved",
+            request_key.clone(),
+        ),
+        WaitOutcome::RunCancelled => (
+            serde_json::json!({
+                "id": request_id,
+                "error": { "code": -32600, "message": "run cancelled" },
+            }),
+            "cancelled",
+            request_key.clone(),
+        ),
+    };
+    emit_codex_observable_event(
+        observer,
+        event_sink,
+        AgentEvent::CodexUserInputResolved {
+            request_key,
+            item_id: parsed.item_id,
+            outcome: outcome_label.to_string(),
+        },
+    )
+    .await;
+    if let Some(observer) = observer {
+        let _ = observer
+            .session_store
+            .append(
+                observer.parent_storage_id,
+                SessionEvent::System {
+                    event: CODEX_PENDING_QUESTION_EVENT.into(),
+                    data: serde_json::json!({
+                        "request_key": request_key_for_marker,
+                        "state": outcome_label,
+                    }),
+                },
+            )
+            .await;
+    }
+    if writer.try_send(frame).is_err() {
+        return CodexAppServerRequestHandling::Failed;
+    }
+    CodexAppServerRequestHandling::Handled
+}
 /// Bounds long-lived approval/delegation futures even if a broken or hostile App Server floods
 /// reverse requests. The stdout channel is separately bounded, so total queued work stays finite.
 const MAX_CODEX_IN_FLIGHT_REQUESTS: usize = 32;
@@ -20860,6 +21528,7 @@ enum CodexAppServerRequestHandling {
 enum CodexInFlightOutcome {
     Delegate(CodexAppServerRequestHandling),
     Approval(CodexAppServerRequestHandling),
+    UserInput(CodexAppServerRequestHandling),
 }
 
 /// User approvals have their own explicit deadline and must not be mistaken for a stalled engine.
@@ -21954,6 +22623,7 @@ async fn handle_codex_rcode_single_dynamic_tool(
     let mut child_cancelled = false;
     let mut events_open = true;
     let mut child_pending_text = PendingRuntimeText::default();
+    let mut child_degraded: Option<CodexDegradedReason> = None;
     let outcome = loop {
         tokio::select! {
             outcome = &mut child_run => break outcome,
@@ -21987,6 +22657,21 @@ async fn handle_codex_rcode_single_dynamic_tool(
         }
     };
     for event in drain_codex_child_events_in_order(&mut child_events_rx, &mut terminal_events_rx) {
+        // 子代理降级信号（GuardTrip=循环护栏、StreamReplay=流重试）在此捕获，
+        // 随 inner JSON 透传给父代理（区别于 outright failure 的完成但降级）。
+        if child_degraded.is_none() {
+            if matches!(
+                event,
+                AgentEvent::GuardTrip { .. }
+            ) {
+                child_degraded = Some(CodexDegradedReason::LoopGuard);
+            } else if matches!(
+                event,
+                AgentEvent::StreamReplay { .. }
+            ) {
+                child_degraded = Some(CodexDegradedReason::StreamRetries);
+            }
+        }
         emit_codex_rcode_child_event(observer, event_sink, event, &mut child_pending_text).await;
     }
     let dropped = dropped_events.load(Ordering::Relaxed);
@@ -22048,15 +22733,24 @@ async fn handle_codex_rcode_single_dynamic_tool(
     // Native child reports already pass through the adaptive 6k direct / long-summary policy.
     // Keep the JSON envelope intact here instead of applying a second, silent character cut.
     let terminal = matches!(status, "completed" | "failed" | "cancelled");
+    // 三档报告合同中"无法验证"段的有界提取——父代理据此决定转派或显式丢弃。
+    let unresolved = extract_unresolved_items(&summary);
     let next_action = if status == "completed" {
-        stable_label
-            .as_deref()
-            .map(|label| {
-                format!(
-                    "委派键 {label} 已完成；请直接综合这份结果。同一键再次调用只会回放，不会创建新子代理。"
-                )
-            })
-            .unwrap_or_else(|| "该子代理已完成；请直接综合这份结果，不要重复委派。".to_string())
+        if !unresolved.is_empty() {
+            format!(
+                "该子代理报告了 {} 条无法验证项（unresolved 字段）：请转派带数据源的后续任务，或在最终回答中显式列为 dropped，不得静默丢弃。",
+                unresolved.len()
+            )
+        } else {
+            stable_label
+                .as_deref()
+                .map(|label| {
+                    format!(
+                        "委派键 {label} 已完成；请直接综合这份结果。同一键再次调用只会回放，不会创建新子代理。"
+                    )
+                })
+                .unwrap_or_else(|| "该子代理已完成；请直接综合这份结果，不要重复委派。".to_string())
+        }
     } else {
         "该子代理调用已经结束；需要新的交付方向时请使用新的稳定 label。".to_string()
     };
@@ -22067,6 +22761,9 @@ async fn handle_codex_rcode_single_dynamic_tool(
         "summary": redact_text(&summary),
         "terminal": terminal,
         "next_action": next_action,
+        // null = 正常完成；非 null 表示完成但质量受损（预算/超时/护栏/流重试）。
+        "degraded": child_degraded.map(|reason| reason.wire_label()),
+        "unresolved": unresolved,
     });
     let response_text = serde_json::to_string(&response_text).unwrap_or_default();
     execution.complete(CodexRCodeDelegateCachedResult {
@@ -22304,9 +23001,190 @@ async fn observe_codex_app_server_event(
     observer: Option<&CodexExecObserver<'_>>,
     event_sink: Option<&CodexSubagentEventSink>,
     summary: &mut Option<String>,
+    projection: &mut CodexRunProjection,
 ) -> Option<CodexExecFailure> {
     let method = value.get("method").and_then(serde_json::Value::as_str)?;
     let params = value.get("params").cloned().unwrap_or_default();
+
+    // M1-01：agentMessage 生命周期（started/delta/completed）经归一化层投影。
+    // 同一 item 的增量原位累计，completed 是权威封口——全文与累计一致时只
+    // 封口不重发正文，不一致时以全文修正并计数（§4.2）。
+    // M2-01：工具生命周期（started/outputDelta/completed）同样由归一化
+    // 事件驱动：作用域门禁、重复完成拦截、有界输出与安全映射在归一化层
+    // 收口，观察器只负责转成 AgentEvent。
+    let (emissions, events, _diagnostics) = projection.feed_frame(value);
+    if !emissions.is_empty() {
+        handle_codex_message_emissions(emissions, observer, event_sink, summary).await;
+    }
+    for event in events {
+        match event {
+            CodexTimelineEventV1::ToolStarted {
+                item_id, kind, safe_input, ..
+            } => {
+                let input = safe_input
+                    .input_json
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({ "summary": safe_input.summary }));
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::ToolCall {
+                        name: codex_tool_display_title(kind).to_string(),
+                        input,
+                        call_id: item_id,
+                    },
+                )
+                .await;
+            }
+            CodexTimelineEventV1::ToolOutputDelta { item_id, safe_delta, .. } => {
+                // 宿主侧有界累计（头尾保留 + 截断标记）；增量同时下发前端
+                // 原位追加，终态由 ToolResult 权威覆盖。
+                let _ = projection.accumulate_tool_output(&item_id, &safe_delta);
+                emit_codex_frontend_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::ToolOutputDelta {
+                        call_id: item_id,
+                        safe_delta,
+                    },
+                )
+                .await;
+            }
+            CodexTimelineEventV1::ToolCompleted {
+                item_id,
+                kind: _,
+                status,
+                exit_code,
+                safe_output,
+                ..
+            } => {
+                let output_text = projection.take_tool_output(&item_id, safe_output);
+                // 失败语义与旧 codex_item_failed 对齐：failed/declined 终态或
+                // 非零退出码视为错误；cancelled 映射为失败状态展示。
+                let is_error = matches!(status, CodexToolStatus::Failed | CodexToolStatus::Declined)
+                    || exit_code.is_some_and(|code| code != 0);
+                let mut payload = serde_json::Map::new();
+                payload.insert(
+                    "status".to_string(),
+                    serde_json::Value::String(match status {
+                        CodexToolStatus::InProgress => "inProgress".to_string(),
+                        CodexToolStatus::Completed => "completed".to_string(),
+                        CodexToolStatus::Failed => "failed".to_string(),
+                        CodexToolStatus::Declined => "declined".to_string(),
+                        CodexToolStatus::Unknown => {
+                            if is_error { "failed".to_string() } else { "completed".to_string() }
+                        }
+                    }),
+                );
+                if let Some(exit_code) = exit_code {
+                    payload.insert(
+                        "exit_code".to_string(),
+                        serde_json::Value::from(exit_code),
+                    );
+                }
+                if let Some(output) = output_text {
+                    payload.insert("output".to_string(), serde_json::Value::String(output));
+                }
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::ToolResult {
+                        call_id: item_id,
+                        output: serde_json::Value::Object(payload),
+                        is_error,
+                    },
+                )
+                .await;
+            }
+            CodexTimelineEventV1::PlanUpdated { steps, .. } => {
+                // explanation 保留在归一化事件里（§4.1 合同）；UI 卡片当前
+                // 只有步骤列表，映射时按决策丢弃说明文本。
+                let steps = steps
+                    .iter()
+                    .map(|step| PlanStep {
+                        description: step.text.clone(),
+                        completed: step.status == crate::codex_interaction::CodexPlanStepStatus::Completed,
+                    })
+                    .collect::<Vec<_>>();
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::Plan { steps },
+                )
+                .await;
+            }
+            CodexTimelineEventV1::DiffUpdated {
+                unified_diff_or_reference,
+                ..
+            } => {
+                // 长文本只落引用/摘要：预览有界，全文留在 Files workbench
+                // 的变更数据里，不把超大 diff 撑进时间线。
+                let chars = unified_diff_or_reference.chars().count();
+                let preview: String = unified_diff_or_reference.chars().take(800).collect();
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::CodexContextEvent {
+                        event: "codex_diff".to_string(),
+                        data: serde_json::json!({
+                            "chars": chars,
+                            "truncated": chars > 800,
+                            "preview": preview,
+                        }),
+                    },
+                )
+                .await;
+            }
+            CodexTimelineEventV1::ContextCompacted { .. } => {
+                // 复用原生 r_code_context_compacted 行：前端历史分支现成。
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::CodexContextEvent {
+                        event: "r_code_context_compacted".to_string(),
+                        data: serde_json::json!({}),
+                    },
+                )
+                .await;
+            }
+            CodexTimelineEventV1::Warning { code, safe_message, .. } => {
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::CodexContextEvent {
+                        event: "codex_warning".to_string(),
+                        data: serde_json::json!({
+                            "message": safe_message,
+                            "code": code,
+                        }),
+                    },
+                )
+                .await;
+            }
+            CodexTimelineEventV1::UsageUpdated { safe_usage, .. } => {
+                // 键形与原生 usage_json 一致（runUsageLabel 直接解析）。
+                let total = safe_usage.total;
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::Usage {
+                        usage_json: serde_json::json!({
+                            "input_tokens": total.input_tokens,
+                            "cached_input_tokens": total.cached_input_tokens,
+                            "cache_write_tokens": total.cache_write_input_tokens,
+                            "output_tokens": total.output_tokens,
+                            "reasoning_output_tokens": total.reasoning_output_tokens,
+                            "total_tokens": total.total_tokens,
+                        })
+                        .to_string(),
+                    },
+                )
+                .await;
+            }
+            _ => {}
+        }
+    }
+
     match method {
         "item/started" => {
             let item = params.get("item").unwrap_or(&params);
@@ -22324,49 +23202,13 @@ async fn observe_codex_app_server_event(
                     },
                 )
                 .await;
-            } else if let Some((call_id, name, action)) = codex_item_tool(item) {
-                let input = codex_item_tool_input(item, &action);
-                emit_codex_observable_event(
-                    observer,
-                    event_sink,
-                    AgentEvent::ToolCall {
-                        name,
-                        input,
-                        call_id,
-                    },
-                )
-                .await;
-            } else {
-                emit_codex_observable_event(
-                    observer,
-                    event_sink,
-                    AgentEvent::Activity {
-                        phase: AgentActivityPhase::Requesting,
-                        detail: Some("Codex 正在处理委派任务".to_string()),
-                    },
-                )
-                .await;
             }
+            // 工具类 item 由上方归一化事件驱动；agentMessage 在 M1-01 接线。
         }
         "item/completed" => {
             let item = params.get("item").unwrap_or(&params);
             let item_type = item.get("type").and_then(serde_json::Value::as_str);
-            if matches!(item_type, Some("agentMessage") | Some("agent_message")) {
-                if let Some(text) = item
-                    .get("text")
-                    .or_else(|| item.get("content"))
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(codex_agent_message_text)
-                {
-                    *summary = Some(text.clone());
-                    emit_codex_observable_event(
-                        observer,
-                        event_sink,
-                        AgentEvent::Message { text, delta: false },
-                    )
-                    .await;
-                }
-            } else if item_type == Some("reasoning") {
+            if item_type == Some("reasoning") {
                 let event = safe_codex_reasoning_summary(item)
                     .map(codex_reasoning_activity)
                     .unwrap_or_else(|| AgentEvent::Activity {
@@ -22374,19 +23216,8 @@ async fn observe_codex_app_server_event(
                         detail: Some("Codex 已完成一轮分析".to_string()),
                     });
                 emit_codex_observable_event(observer, event_sink, event).await;
-            } else if let Some((call_id, _, _)) = codex_item_tool(item) {
-                let is_error = codex_item_failed(item);
-                emit_codex_observable_event(
-                    observer,
-                    event_sink,
-                    AgentEvent::ToolResult {
-                        call_id,
-                        output: codex_tool_result_payload(is_error, safe_codex_tool_output(item)),
-                        is_error,
-                    },
-                )
-                .await;
             }
+            // 工具类 item 由上方归一化事件驱动。
         }
         "turn/completed" => {
             let turn = params.get("turn").unwrap_or(&params);
@@ -22402,6 +23233,121 @@ async fn observe_codex_app_server_event(
         _ => {}
     }
     None
+}
+
+/// 投影器发射事件的统一出口：delta 携带 item 身份与 phase 流式下发；
+/// 封口按 phase 落一条完整条目（final→assistant message，commentary→
+/// codex_commentary 轻量 Markdown 层），并向前端发送封口帧关闭光标。
+async fn handle_codex_message_emissions(
+    emissions: Vec<CodexMessageEmission>,
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    summary: &mut Option<String>,
+) {
+    for emission in emissions {
+        match emission {
+            CodexMessageEmission::Delta {
+                item_id,
+                phase,
+                delta,
+            } => {
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::CodexAgentMessage {
+                        item_id,
+                        phase: codex_phase_wire(phase),
+                        text: delta,
+                        delta: true,
+                    },
+                )
+                .await;
+            }
+            CodexMessageEmission::Sealed {
+                item_id,
+                phase,
+                authoritative_text,
+                corrected,
+                streamed,
+            } => {
+                if corrected {
+                    tracing::warn!(
+                        mismatch_count = ?phase,
+                        "Codex agentMessage authoritative text replaced accumulated deltas"
+                    );
+                }
+                if !authoritative_text.trim().is_empty() {
+                    *summary = Some(authoritative_text.clone());
+                }
+                if let Some(observer) = observer {
+                    let storage_id = observer.parent_storage_id;
+                    if let Err(error) =
+                        ensure_session_log(observer.session_store, observer.sessions_dir, storage_id)
+                            .await
+                    {
+                        tracing::warn!(storage_id, %error, "failed to init codex session log");
+                    }
+                    // final → 正式消息；commentary/unknown → codex_commentary
+                    // 轻量层（历史重建为无作者头的 Markdown 进度条目）。
+                    if !authoritative_text.trim().is_empty() {
+                        let event = match phase {
+                            CodexAssistantPhase::FinalAnswer => SessionEvent::Message(
+                                Message::assistant_text(&authoritative_text),
+                            ),
+                            _ => SessionEvent::System {
+                                event: CODEX_COMMENTARY_EVENT.into(),
+                                data: serde_json::json!({ "text": authoritative_text }),
+                            },
+                        };
+                        let _ = observer.session_store.append(storage_id, event).await;
+                    }
+                }
+                // 封口帧：增量已完整交付（streamed 且无校正）时零长度；
+                // 否则携带权威全文（一次性交付或 mismatch 替换）。
+                emit_codex_frontend_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::CodexAgentMessage {
+                        item_id,
+                        phase: codex_phase_wire(phase),
+                        text: if streamed && !corrected {
+                            String::new()
+                        } else {
+                            authoritative_text
+                        },
+                        delta: false,
+                    },
+                )
+                .await;
+            }
+        }
+    }
+}
+
+fn codex_phase_wire(phase: CodexAssistantPhase) -> String {
+    match phase {
+        CodexAssistantPhase::Commentary => "commentary".to_string(),
+        CodexAssistantPhase::FinalAnswer => "final_answer".to_string(),
+        CodexAssistantPhase::Unknown => "unknown".to_string(),
+    }
+}
+
+/// 仅前端通道（不触发 persist_runtime_event 的拼接语义）：observer 的
+/// sink 与子代理 event_sink 二选一或都发，与 emit_codex_observable_event
+/// 的可达性保持一致。
+async fn emit_codex_frontend_event(
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    event: AgentEvent,
+) {
+    if let Some(event_sink) = event_sink {
+        event_sink(event.clone());
+    }
+    if let Some(observer) = observer {
+        if let Some(sink) = observer.sink.as_ref() {
+            sink(&observer.run.task_id, &event);
+        }
+    }
 }
 
 fn codex_app_server_starts_tool(value: &serde_json::Value) -> bool {
@@ -22516,6 +23462,7 @@ async fn run_codex_app_server_process_with_images(
         event_sink,
         approval,
         steer_requests,
+        None,
         limits,
         None,
     )
@@ -22534,6 +23481,7 @@ async fn run_codex_app_server_process_with_images_and_registry(
     event_sink: Option<&CodexSubagentEventSink>,
     mut approval: CodexAppServerApprovalContext,
     mut steer_requests: Option<tokio::sync::mpsc::Receiver<ExternalSteerRequest>>,
+    mut user_input_requests: Option<tokio::sync::mpsc::Receiver<ExternalUserInputAnswer>>,
     limits: CodexExecLimits,
     registered: Option<(&CodexAppServerRegistry, &str, &Path)>,
 ) -> CodexExecCompletion {
@@ -22701,10 +23649,7 @@ async fn run_codex_app_server_process_with_images_and_registry(
             .expect("thread/start params are an object")
             .insert(
                 "config".to_string(),
-                serde_json::json!({
-                    "model_reasoning_effort": "medium",
-                    "web_search": "disabled",
-                }),
+                codex_thread_config(limits.web_search_enabled),
             );
     }
     let dynamic_tools = codex_app_server_dynamic_tools(approval.rcode_delegate.is_some());
@@ -22749,6 +23694,19 @@ async fn run_codex_app_server_process_with_images_and_registry(
         let _ = AgentRunRepository::new(observer.db)
             .set_external_session_id(&observer.run.id, Some(&thread_id));
     }
+    // M1-01：本 run 的 agentMessage 投影状态（归一化器 + item 缓冲）。
+    // transport_generation 先以 0 固定——server request 绑定真实 generation
+    // 属于 M3 反向请求桥的接线点，此处不伪造精度。
+    let mut codex_projection = CodexRunProjection::new(
+        CodexInteractionCapabilities::for_cli_version(None),
+        0,
+        approval.run_id.clone(),
+        &thread_id,
+        &turn_id,
+    );
+    // M3-01：requestUserInput pending 注册表（run 生命周期内有效）。
+    let pending_user_inputs = CodexPendingUserInputs::default();
+    let user_input_run_id = approval.run_id.clone();
     emit_codex_observable_event(
         observer.as_ref(),
         event_sink,
@@ -23055,6 +24013,39 @@ async fn run_codex_app_server_process_with_images_and_registry(
                             }));
                             continue;
                         }
+                        if frame_method == Some("item/tool/requestUserInput") {
+                            // M3-01：反向请求桥并发 dispatch（F7 同构）——
+                            // 等待用户输入期间主循环继续消费事件；idle watchdog
+                            // 因 in_flight 非空而不会误杀（等待有自身上限）。
+                            let writer = writer_tx.clone();
+                            let cancellation = cancellation.clone();
+                            let observer_ref = observer.as_ref();
+                            let pending = pending_user_inputs.clone();
+                            let run_id = user_input_run_id.clone();
+                            in_flight.push(Box::pin(async move {
+                                CodexInFlightOutcome::UserInput(
+                                    handle_codex_app_server_user_input(
+                                        &value,
+                                        &writer,
+                                        &cancellation,
+                                        observer_ref,
+                                        event_sink,
+                                        &pending,
+                                        &run_id,
+                                    )
+                                    .await,
+                                )
+                            }));
+                            continue;
+                        }
+                        if frame_method == Some("serverRequest/resolved") {
+                            // 请求已被他处解决：终止对应等待并让桥回协议错误。
+                            let request_id =
+                                crate::codex_interaction::wire_request_id(value.pointer("/params/requestId"));
+                            if !request_id.is_empty() {
+                                pending_user_inputs.cancel_by_request_id(&request_id);
+                            }
+                        }
                         match handle_codex_app_server_request(
                             &value,
                             &writer_tx,
@@ -23082,6 +24073,7 @@ async fn run_codex_app_server_process_with_images_and_registry(
                             observer.as_ref(),
                             event_sink,
                             &mut summary,
+                            &mut codex_projection,
                         ).await {
                             failure = Some(event_failure);
                             break;
@@ -23135,8 +24127,60 @@ async fn run_codex_app_server_process_with_images_and_registry(
                             | CodexAppServerRequestHandling::Ignored => {}
                         }
                     }
+                    CodexInFlightOutcome::UserInput(handling) => {
+                        // M3-01：与审批同一收尾语义（writer 失败终态见 A3）。
+                        match handling {
+                            CodexAppServerRequestHandling::Cancelled => {
+                                cancelled = true;
+                                break;
+                            }
+                            CodexAppServerRequestHandling::Failed => {
+                                failure = Some(CodexExecFailure::ApprovalBridge);
+                                break;
+                            }
+                            CodexAppServerRequestHandling::Handled
+                            | CodexAppServerRequestHandling::Ignored => {}
+                        }
+                    }
                 }
                 idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
+            }
+            // M3-01：用户答案路由——按 request_key 精确投递到 pending 槽；
+            // capacity=1 的槽即原子 claim，重复/迟到提交在此被拒绝。
+            answer = async {
+                match user_input_requests.as_mut() {
+                    Some(receiver) => receiver.recv().await,
+                    None => std::future::pending::<Option<ExternalUserInputAnswer>>().await,
+                }
+            } => {
+                let Some(answer) = answer else {
+                    user_input_requests = None;
+                    continue;
+                };
+                let slot_sender = {
+                    let slots = pending_user_inputs.slots.lock().expect("pending user input lock");
+                    slots
+                        .get(&answer.request_key)
+                        .map(|slot| slot.respond.clone())
+                };
+                match slot_sender {
+                    Some(sender) => {
+                        if let Err(returned) = sender.try_send(answer) {
+                            // 槽已被占用（重复提交）或处理器刚结束：拒绝。
+                            let answer = match returned {
+                                tokio::sync::mpsc::error::TrySendError::Full(answer) => answer,
+                                tokio::sync::mpsc::error::TrySendError::Closed(answer) => answer,
+                            };
+                            let _ = answer
+                                .response
+                                .send(ExternalUserInputOutcome::Rejected);
+                        }
+                    }
+                    None => {
+                        // 无 pending（未知 key / 已终态 / 已过期）。
+                        let _ = answer.response.send(ExternalUserInputOutcome::Rejected);
+                    }
+                }
             }
         }
     }
@@ -23186,21 +24230,50 @@ async fn run_codex_app_server_process_with_images_and_registry(
         }
     }
     drop(writer_tx);
+    // M3-01：run 终止（完成/取消/失败）时回收全部 pending 用户提问——
+    // 迟到答案此后只会被拒绝，绝不发往其他请求。
+    pending_user_inputs.cancel_all();
+    // run 结束后的任何提交（排队中或此后到达）都必须得到明确拒绝而不是
+    // 通道关闭：留一个 drain 任务守到 sender 全部释放（注册表移除时）。
+    if let Some(mut receiver) = user_input_requests.take() {
+        while let Ok(answer) = receiver.try_recv() {
+            let _ = answer.response.send(ExternalUserInputOutcome::Rejected);
+        }
+        tokio::spawn(async move {
+            while let Some(answer) = receiver.recv().await {
+                let _ = answer.response.send(ExternalUserInputOutcome::Rejected);
+            }
+        });
+    }
+    // turn 完成/中断后冲刷未封口的 agentMessage item（§4.2 残留 flush）：
+    // 未收到 completed 帧的增量按累计文本封口，防止文本滞留缓冲丢失。
+    let residual_emissions = codex_projection.finish_turn();
+    if !residual_emissions.is_empty() {
+        handle_codex_message_emissions(
+            residual_emissions,
+            observer.as_ref(),
+            event_sink,
+            &mut summary,
+        )
+        .await;
+    }
     let run_succeeded = completed && !cancelled && failure.is_none();
     let transport_reusable = run_succeeded
         && transport_scope_clean
         && !had_unsettled_callbacks
         && !had_pending_steers
         && !child_join_timed_out;
+    let degraded = codex_degraded_from(failure, 0);
     let completion = CodexExecCompletion {
         cancelled,
         succeeded: run_succeeded,
         thread_id: Some(thread_id),
         summary,
-        usage_json: None,
+        usage_json: codex_usage_with_degraded(None, degraded),
         failure,
         tool_calls,
         stream_retries: 0,
+        degraded,
     };
     transport_owner.finish(transport_reusable).await;
     completion
@@ -23397,6 +24470,7 @@ fn spawn_codex_main(
     prepared_images: Option<PreparedCodexAttachments>,
     cancellation: CancellationToken,
     steer_requests: tokio::sync::mpsc::Receiver<ExternalSteerRequest>,
+    user_input_requests: Option<tokio::sync::mpsc::Receiver<ExternalUserInputAnswer>>,
     sink: Option<AgentEventSink>,
     memory_context: Option<String>,
     memory: ActiveMemoryCapture,
@@ -23408,6 +24482,10 @@ fn spawn_codex_main(
             .map(|prepared| prepared.paths.as_slice())
             .unwrap_or_default();
         let codex_config_path = codex_home_dir().join("config.toml");
+        let codex_limits = CodexExecLimits {
+            web_search_enabled: load_codex_host_web_search(&config_dir),
+            ..CodexExecLimits::default()
+        };
         // 主 Agent 统一使用长驻 App Server：它支持所有权限预设，同时提供官方
         // `turn/steer` 同轮介入语义。一次性子代理仍可按预设选择轻量 `codex exec`。
         let completion = run_codex_app_server_process_with_images_and_registry(
@@ -23458,7 +24536,8 @@ fn spawn_codex_main(
                 }),
             },
             Some(steer_requests),
-            CodexExecLimits::default(),
+            user_input_requests,
+            codex_limits,
             Some((&codex_app_server, &run.task_id, &codex_config_path)),
         )
         .await;
@@ -31504,6 +32583,7 @@ suggest_complex_tasks = false
             "branch-hidden",
             "storage-hidden",
         )
+        .await
         .is_empty());
         assert_eq!(
             session_messages_for_task(
@@ -31513,6 +32593,7 @@ suggest_complex_tasks = false
                 "branch-default",
                 "storage-default",
             )
+            .await
             .len(),
             1
         );
@@ -31524,6 +32605,7 @@ suggest_complex_tasks = false
                 "branch-visible",
                 "storage-visible",
             )
+            .await
             .len(),
             1
         );
@@ -33711,18 +34793,36 @@ command = "r-code-host"
                 "storage_review · 审查 database/cache/vector/storage 配置边界".to_string(),
             ))
         );
-        assert_eq!(
-            codex_item_tool_input(
-                &dynamic_delegate,
-                "storage_review · 审查 database/cache/vector/storage 配置边界"
-            ),
-            serde_json::json!({
-                "agent": "r_code",
-                "label": "storage_review",
-                "goal": "审查 database/cache/vector/storage 配置边界",
-                "access": "read_only"
-            })
+        // M2-01：rcode_delegate 的白名单输入负载由归一化层构建
+        // （codex_interaction::rcode_delegate_safe_input）。
+        let mut codex_projection = crate::codex_interaction::CodexRunProjection::new(
+            crate::codex_interaction::CodexInteractionCapabilities::for_cli_version(Some("0.145.0")),
+            0,
+            "run_m2",
+            "thr_demo",
+            "turn_demo",
         );
+        let (_, events, _) = codex_projection.feed_frame(&serde_json::json!({
+            "method": "item/started",
+            "params": { "threadId": "thr_demo", "turnId": "turn_demo", "item": dynamic_delegate }
+        }));
+        match events.iter().find(|event| matches!(
+            event,
+            crate::codex_interaction::CodexTimelineEventV1::ToolStarted { .. }
+        )) {
+            Some(crate::codex_interaction::CodexTimelineEventV1::ToolStarted { safe_input, .. }) => {
+                assert_eq!(
+                    safe_input.input_json,
+                    Some(serde_json::json!({
+                        "agent": "r_code",
+                        "label": "storage_review",
+                        "goal": "审查 database/cache/vector/storage 配置边界",
+                        "access": "read_only"
+                    }))
+                );
+            }
+            _ => panic!("expected ToolStarted from dynamic delegate item"),
+        }
         let completed_delegate = serde_json::json!({
             "type": "dynamicToolCall",
             "id": "delegate-call",
@@ -36001,6 +37101,7 @@ process.stdin.on('end', () => {
         .await;
 
         assert_eq!(completion.failure, Some(CodexExecFailure::ToolBudget));
+        assert_eq!(completion.degraded, Some(CodexDegradedReason::ToolBudget), "budget runs must carry a degraded reason");
         assert!(!completion.succeeded);
         assert_eq!(
             observed
@@ -36199,6 +37300,7 @@ input.on('line', (line) => {
                         max_tool_calls: None,
                     },
                     model_override: None,
+                    web_search_enabled: false,
                 },
             )
             .await
@@ -36287,6 +37389,7 @@ input.on('line', (line) => {
                     max_tool_calls: None,
                 },
                 model_override: None,
+                web_search_enabled: false,
             },
         )
         .await;
@@ -36370,11 +37473,13 @@ input.on('line', (line) => {
                     max_tool_calls: Some(2),
                 },
                 model_override: None,
+                web_search_enabled: false,
             },
         )
         .await;
 
         assert_eq!(completion.failure, Some(CodexExecFailure::ToolBudget));
+        assert_eq!(completion.degraded, Some(CodexDegradedReason::ToolBudget), "budget runs must carry a degraded reason");
         assert!(!completion.succeeded);
         assert_eq!(
             observed
@@ -36456,6 +37561,7 @@ input.on('line', (line) => {
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
                     model_override: None,
+                    web_search_enabled: false,
                 },
             )
             .await
@@ -36480,6 +37586,1303 @@ input.on('line', (line) => {
             .unwrap();
         assert!(completion.succeeded, "completion: {completion:?}");
         assert_eq!(completion.summary.as_deref(), Some("Steered main result"));
+    }
+
+    // M1-01.A1：commentary 与 final 的增量按序各出现一次，权威完成帧只
+    // 封口不重复正文；phase 正确落到封口发射（interim/message 语义）。
+    #[tokio::test]
+    async fn m1_01_a1_codex_app_server_projects_commentary_and_final_each_once() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-message-stream",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-msg' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-msg' } } });
+    send({ method: 'item/started', params: { threadId: 'thread-msg', turnId: 'turn-msg', item: { id: 'c1', type: 'agentMessage', phase: 'commentary' } } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-msg', turnId: 'turn-msg', itemId: 'c1', delta: '先检查构建。' } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-msg', turnId: 'turn-msg', itemId: 'c1', delta: '入口在配置模块。' } });
+    send({ method: 'item/completed', params: { threadId: 'thread-msg', turnId: 'turn-msg', item: { id: 'c1', type: 'agentMessage', phase: 'commentary', text: '先检查构建。入口在配置模块。' } } });
+    send({ method: 'item/started', params: { threadId: 'thread-msg', turnId: 'turn-msg', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer' } } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-msg', turnId: 'turn-msg', itemId: 'f1', delta: '已修复，' } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-msg', turnId: 'turn-msg', itemId: 'f1', delta: '测试全绿。' } });
+    send({ method: 'item/completed', params: { threadId: 'thread-msg', turnId: 'turn-msg', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text: '已修复，测试全绿。' } } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-msg', turn: { id: 'turn-msg', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let completion = run_codex_app_server_process_with_images(
+            &workspace,
+            "stream the answer",
+            &[],
+            Some(shim),
+            permissions,
+            CancellationToken::new(),
+            None,
+            Some(&event_sink),
+            CodexAppServerApprovalContext {
+                permission_engine: Arc::new(PermissionEngine::new()),
+                task_id: "task-msg".to_string(),
+                run_id: "run-msg".to_string(),
+                caller: "main:codex:run-msg".to_string(),
+                workspace: Some(directory.path().to_path_buf()),
+                rcode_delegate: None,
+            },
+            None,
+            CodexExecLimits {
+                startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                policy: CodexRunPolicy::Main,
+                model_override: None,
+                web_search_enabled: false,
+            },
+        )
+        .await;
+        assert!(completion.succeeded, "completion: {completion:?}");
+
+        let mut messages = Vec::new();
+        while let Ok(event) = capture_rx.try_recv() {
+            if let AgentEvent::CodexAgentMessage {
+                text, delta, item_id, ..
+            } = event
+            {
+                messages.push((text, delta, item_id));
+            }
+        }
+        let streamed: String = messages
+            .iter()
+            .filter(|(_, delta, _)| *delta)
+            .map(|(text, _, _)| text.as_str())
+            .collect();
+        assert_eq!(
+            streamed, "先检查构建。入口在配置模块。已修复，测试全绿。",
+            "deltas stream every character once, in order"
+        );
+        let seals: Vec<&(String, bool, String)> =
+            messages.iter().filter(|(_, delta, _)| !*delta).collect();
+        assert_eq!(seals.len(), 2, "one seal per item, empty body (streamed already)");
+        assert!(
+            seals.iter().all(|(text, _, _)| text.is_empty()),
+            "authoritative text must not be re-appended"
+        );
+        assert_eq!(seals[0].2, "c1");
+        assert_eq!(seals[1].2, "f1");
+        assert_eq!(completion.summary.as_deref(), Some("已修复，测试全绿。"));
+    }
+
+    // M1-01.A2：重复 completed 帧与终态后的迟到增量不产生重复正文。
+    #[tokio::test]
+    async fn m1_01_a2_codex_app_server_duplicate_completed_keeps_single_text() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-message-duplicate",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-dup' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-dup' } } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-dup', turnId: 'turn-dup', itemId: 'm1', delta: '唯一正文' } });
+    const completed = { method: 'item/completed', params: { threadId: 'thread-dup', turnId: 'turn-dup', item: { id: 'm1', type: 'agentMessage', phase: 'final_answer', text: '唯一正文' } } };
+    send(completed);
+    send(completed);
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-dup', turnId: 'turn-dup', itemId: 'm1', delta: '迟到增量' } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-dup', turn: { id: 'turn-dup', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let completion = run_codex_app_server_process_with_images(
+            &workspace,
+            "dedupe frames",
+            &[],
+            Some(shim),
+            permissions,
+            CancellationToken::new(),
+            None,
+            Some(&event_sink),
+            CodexAppServerApprovalContext {
+                permission_engine: Arc::new(PermissionEngine::new()),
+                task_id: "task-dup".to_string(),
+                run_id: "run-dup".to_string(),
+                caller: "main:codex:run-dup".to_string(),
+                workspace: Some(directory.path().to_path_buf()),
+                rcode_delegate: None,
+            },
+            None,
+            CodexExecLimits {
+                startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                policy: CodexRunPolicy::Main,
+                model_override: None,
+                web_search_enabled: false,
+            },
+        )
+        .await;
+        assert!(completion.succeeded, "completion: {completion:?}");
+        let mut messages = Vec::new();
+        while let Ok(event) = capture_rx.try_recv() {
+            if let AgentEvent::CodexAgentMessage { text, delta, .. } = event {
+                messages.push((text, delta));
+            }
+        }
+        let streamed: String = messages
+            .iter()
+            .filter(|(_, delta)| *delta)
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(streamed, "唯一正文", "duplicate completed and late delta add nothing");
+        assert_eq!(
+            messages.iter().filter(|(_, delta)| !*delta).count(),
+            1,
+            "exactly one seal despite the duplicated completed frame"
+        );
+        assert_eq!(completion.summary.as_deref(), Some("唯一正文"));
+    }
+
+    // M2-01.A2：命令工具生命周期——started→输出增量（按序）→completed
+    // （失败状态 + exit code 与输出一致）。
+    #[tokio::test]
+    async fn m2_01_a2_codex_app_server_tool_lifecycle_streams_bounded_output() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-tool-lifecycle",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-tool' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-tool' } } });
+    send({ method: 'item/started', params: { threadId: 'thread-tool', turnId: 'turn-tool', item: { id: 'cmd-1', type: 'commandExecution', command: ['cargo', 'test'], cwd: '/w', status: 'inProgress', commandActions: [] } } });
+    send({ method: 'item/commandExecution/outputDelta', params: { threadId: 'thread-tool', turnId: 'turn-tool', itemId: 'cmd-1', delta: 'running 2 tests\n' } });
+    send({ method: 'item/commandExecution/outputDelta', params: { threadId: 'thread-tool', turnId: 'turn-tool', itemId: 'cmd-1', delta: 'test result: FAILED. 1 passed; 1 failed\n' } });
+    send({ method: 'item/completed', params: { threadId: 'thread-tool', turnId: 'turn-tool', item: { id: 'cmd-1', type: 'commandExecution', command: ['cargo', 'test'], cwd: '/w', status: 'failed', exitCode: 101, aggregatedOutput: 'running 2 tests\ntest result: FAILED. 1 passed; 1 failed\n', commandActions: [] } } });
+    send({ method: 'item/completed', params: { threadId: 'thread-tool', turnId: 'turn-tool', item: { id: 'cmd-1', type: 'commandExecution', command: ['cargo'], cwd: '/w', status: 'failed', exitCode: 101, commandActions: [] } } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-tool', turn: { id: 'turn-tool', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let completion = run_codex_app_server_process_with_images(
+            &workspace,
+            "run the suite",
+            &[],
+            Some(shim),
+            permissions,
+            CancellationToken::new(),
+            None,
+            Some(&event_sink),
+            CodexAppServerApprovalContext {
+                permission_engine: Arc::new(PermissionEngine::new()),
+                task_id: "task-tool".to_string(),
+                run_id: "run-tool".to_string(),
+                caller: "main:codex:run-tool".to_string(),
+                workspace: Some(directory.path().to_path_buf()),
+                rcode_delegate: None,
+            },
+            None,
+            CodexExecLimits {
+                startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                policy: CodexRunPolicy::Main,
+                model_override: None,
+                web_search_enabled: false,
+            },
+        )
+        .await;
+        assert!(completion.succeeded, "completion: {completion:?}");
+
+        let mut tool_events = Vec::new();
+        while let Ok(event) = capture_rx.try_recv() {
+            match event {
+                AgentEvent::ToolCall { name, call_id, .. } => {
+                    tool_events.push((name, call_id, String::new(), false))
+                }
+                AgentEvent::ToolOutputDelta { call_id, safe_delta } => {
+                    tool_events.push((String::new(), call_id, safe_delta, false))
+                }
+                AgentEvent::ToolResult { call_id, output, is_error } => tool_events.push((
+                    String::new(),
+                    call_id,
+                    serde_json::to_string(&output).unwrap_or_default(),
+                    is_error,
+                )),
+                _ => {}
+            }
+        }
+        // 生命周期顺序：ToolCall → 两个输出增量（按序）→ 唯一 ToolResult；
+        // 重复 completed（同作用域）不产生第二条终态。跨作用域陈旧帧由
+        // 传输层 fail-closed（终止 run），不属本断言范围。
+        assert_eq!(tool_events.len(), 4, "events: {tool_events:?}");
+        assert_eq!(tool_events[0].0, "Codex 命令");
+        assert_eq!(tool_events[0].1, "cmd-1");
+        assert_eq!(tool_events[1].2, "running 2 tests\n");
+        assert_eq!(tool_events[2].2, "test result: FAILED. 1 passed; 1 failed\n");
+        let (final_output, is_error) = (tool_events[3].2.clone(), tool_events[3].3);
+        assert!(is_error, "failed status + exit code 101 must mark error");
+        assert!(final_output.contains("\"status\":\"failed\""));
+        assert!(final_output.contains("\"exit_code\":101"));
+        assert!(
+            final_output.contains("test result: FAILED"),
+            "aggregated output carries the full text"
+        );
+    }
+
+    // M2-02.A1：计划/diff/压缩/warning/usage 各自投影为非聊天事件，
+    // 绝不伪装成 agent 消息。
+    #[tokio::test]
+    async fn m2_02_a1_codex_app_server_context_events_are_not_agent_messages() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-context-events",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-ctx' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-ctx' } } });
+    send({ method: 'turn/plan/updated', params: { threadId: 'thread-ctx', turnId: 'turn-ctx', explanation: '两步走', plan: [ { step: '扫描', status: 'completed' }, { step: '修复', status: 'pending' } ] } });
+    send({ method: 'turn/diff/updated', params: { threadId: 'thread-ctx', turnId: 'turn-ctx', diff: '--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n' } });
+    send({ method: 'thread/compacted', params: { threadId: 'thread-ctx', turnId: 'turn-ctx' } });
+    send({ method: 'warning', params: { message: '磁盘空间偏低' } });
+    send({ method: 'thread/tokenUsage/updated', params: { threadId: 'thread-ctx', turnId: 'turn-ctx', tokenUsage: { last: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 }, total: { inputTokens: 100, cachedInputTokens: 50, outputTokens: 30, reasoningOutputTokens: 10, totalTokens: 190 } } } });
+    send({ method: 'item/completed', params: { threadId: 'thread-ctx', turnId: 'turn-ctx', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text: '完成' } } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-ctx', turn: { id: 'turn-ctx', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let completion = run_codex_app_server_process_with_images(
+            &workspace,
+            "project the context events",
+            &[],
+            Some(shim),
+            permissions,
+            CancellationToken::new(),
+            None,
+            Some(&event_sink),
+            CodexAppServerApprovalContext {
+                permission_engine: Arc::new(PermissionEngine::new()),
+                task_id: "task-ctx".to_string(),
+                run_id: "run-ctx".to_string(),
+                caller: "main:codex:run-ctx".to_string(),
+                workspace: Some(directory.path().to_path_buf()),
+                rcode_delegate: None,
+            },
+            None,
+            CodexExecLimits {
+                startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                policy: CodexRunPolicy::Main,
+                model_override: None,
+                web_search_enabled: false,
+            },
+        )
+        .await;
+        assert!(completion.succeeded, "completion: {completion:?}");
+
+        let mut plans = 0usize;
+        let mut context_rows: Vec<(String, serde_json::Value)> = Vec::new();
+        let mut usages = 0usize;
+        let mut messages = 0usize;
+        while let Ok(event) = capture_rx.try_recv() {
+            match event {
+                AgentEvent::Plan { steps } => {
+                    plans += 1;
+                    assert_eq!(steps.len(), 2);
+                    assert!(steps[0].completed);
+                    assert!(!steps[1].completed);
+                }
+                AgentEvent::CodexContextEvent { event, data } => context_rows.push((event, data)),
+                AgentEvent::Usage { usage_json } => {
+                    usages += 1;
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(&usage_json).expect("usage json parses");
+                    assert_eq!(parsed["total_tokens"], serde_json::json!(190));
+                    assert_eq!(parsed["input_tokens"], serde_json::json!(100));
+                }
+                AgentEvent::Message { .. } | AgentEvent::CodexAgentMessage { .. } => {
+                    messages += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(plans, 1, "plan projects once as a plan event");
+        assert_eq!(usages, 1, "usage projects once");
+        let names: Vec<&str> = context_rows.iter().map(|(event, _)| event.as_str()).collect();
+        assert_eq!(names, vec!["codex_diff", "r_code_context_compacted", "codex_warning"]);
+        let diff_data = &context_rows[0].1;
+        assert_eq!(diff_data["truncated"], serde_json::json!(false));
+        assert!(diff_data["preview"].as_str().unwrap_or("").starts_with("--- a/src/lib.rs"));
+        let warning_data = &context_rows[2].1;
+        assert_eq!(warning_data["message"], serde_json::json!("磁盘空间偏低"));
+        // 上下文事件绝不进入 agent 消息通道（唯一消息是 final）。
+        assert_eq!(messages, 1, "only the final agentMessage becomes message events");
+    }
+
+    // M3-01.A1：合法单/多题答案按 question id 返回，Codex 随后继续并完成 turn。
+    #[tokio::test]
+    async fn m3_01_a1_codex_app_server_user_input_answers_resume_the_turn() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-user-input",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-ui' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-ui' } } });
+    send({ jsonrpc: '2.0', id: 41, method: 'item/tool/requestUserInput', params: {
+      threadId: 'thread-ui', turnId: 'turn-ui', itemId: 'item_q', autoResolutionMs: null,
+      questions: [
+        { id: 'scope', header: '范围', question: '本次处理哪一部分？', isOther: true, isSecret: false,
+          options: [ { label: '当前模块', description: '限制变更范围' } ] },
+        { id: 'note', header: '备注', question: '补充说明？', isOther: false, isSecret: false, options: null },
+      ],
+    } });
+  } else if (message.id === 41 && message.result) {
+    const answers = message.result.answers || {};
+    const scope = answers.scope && answers.scope.answers && answers.scope.answers[0];
+    const note = answers.note && answers.note.answers && answers.note.answers[0];
+    if (scope !== '当前模块' || note !== '顺带补一条注释') {
+      send({ method: 'item/completed', params: { threadId: 'thread-ui', turnId: 'turn-ui', item: { id: 'bad', type: 'agentMessage', phase: 'final_answer', text: '答案编码错误' } } });
+    } else {
+      send({ method: 'item/completed', params: { threadId: 'thread-ui', turnId: 'turn-ui', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text: '已按当前模块处理。' } } });
+    }
+    send({ method: 'turn/completed', params: { threadId: 'thread-ui', turn: { id: 'turn-ui', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (answer_tx, answer_rx) = tokio::sync::mpsc::channel(4);
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process_with_images_and_registry(
+                &workspace,
+                "ask me anything",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                Some(&event_sink),
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-ui".to_string(),
+                    run_id: "run-ui".to_string(),
+                    caller: "main:codex:run-ui".to_string(),
+                    workspace: None,
+                    rcode_delegate: None,
+                },
+                None,
+                Some(answer_rx),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                    policy: CodexRunPolicy::Main,
+                    model_override: None,
+                    web_search_enabled: false,
+                },
+                None,
+            )
+            .await
+        });
+        // 等待前端请求事件（问题非敏感）后按 question id 提交答案。
+        let mut request_key = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while request_key.is_none() && std::time::Instant::now() < deadline {
+            while let Ok(event) = capture_rx.try_recv() {
+                if let AgentEvent::CodexUserInputRequested {
+                    request_key: key,
+                    questions,
+                    ..
+                } = event
+                {
+                    assert_eq!(questions.len(), 2);
+                    assert_eq!(questions[0].id, "scope");
+                    assert!(questions[0].is_other);
+                    assert_eq!(questions[0].options[0].label, "当前模块");
+                    assert_eq!(questions[1].id, "note");
+                    request_key = Some(key);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let request_key = request_key.expect("requestUserInput event must reach the frontend");
+        let (response, received) = tokio::sync::oneshot::channel();
+        answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key,
+                answers: Some(serde_json::json!({
+                    "scope": { "answers": ["当前模块"] },
+                    "note": { "answers": ["顺带补一条注释"] },
+                })),
+                response,
+            })
+            .await
+            .unwrap();
+        let outcome = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, received)
+            .await
+            .expect("answer outcome timed out")
+            .expect("answer channel closed");
+        assert_eq!(outcome, ExternalUserInputOutcome::Delivered);
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("user input run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert_eq!(completion.summary.as_deref(), Some("已按当前模块处理。"));
+        // 终态事件：answered。
+        let mut resolved_outcomes = Vec::new();
+        while let Ok(event) = capture_rx.try_recv() {
+            if let AgentEvent::CodexUserInputResolved { outcome, .. } = event {
+                resolved_outcomes.push(outcome);
+            }
+        }
+        assert_eq!(resolved_outcomes, vec!["answered".to_string()]);
+    }
+
+    // M3-01.A2：secret 答案只出现在单次 writer 响应；不进事件流/持久化。
+    #[tokio::test]
+    async fn m3_01_a2_codex_app_server_secret_answer_never_persists() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let sessions = directory.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-user-input-secret",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-sec' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-sec' } } });
+    send({ jsonrpc: '2.0', id: 77, method: 'item/tool/requestUserInput', params: {
+      threadId: 'thread-sec', turnId: 'turn-sec', itemId: 'item_sec',
+      questions: [ { id: 'token', header: '凭据', question: '访问密钥？', isOther: false, isSecret: true, options: null } ],
+    } });
+  } else if (message.id === 77 && message.result) {
+    send({ method: 'item/completed', params: { threadId: 'thread-sec', turnId: 'turn-sec', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text: '已使用密钥。' } } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-sec', turn: { id: 'turn-sec', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (answer_tx, answer_rx) = tokio::sync::mpsc::channel(4);
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let session_store = SessionStore::new(sessions.clone());
+        let workspace = directory.path().to_path_buf();
+        let run_storage = "storage-secret";
+        let sessions_dir_for_assert = sessions.clone();
+        let run = tokio::spawn(async move {
+            let parent = AgentRun::new_for_branch("task-sec", "branch-sec", "test-model");
+            run_codex_app_server_process_with_images_and_registry(
+                &workspace,
+                "use the secret",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                Some(CodexExecObserver {
+                    db: &Database::open_in_memory().expect("in-memory db"),
+                    session_store: &session_store,
+                    sessions_dir: &sessions,
+                    parent_storage_id: run_storage,
+                    run: &parent,
+                    sink: &None,
+                }),
+                Some(&event_sink),
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-sec".to_string(),
+                    run_id: "run-sec".to_string(),
+                    caller: "main:codex:run-sec".to_string(),
+                    workspace: None,
+                    rcode_delegate: None,
+                },
+                None,
+                Some(answer_rx),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                    policy: CodexRunPolicy::Main,
+                    model_override: None,
+                    web_search_enabled: false,
+                },
+                None,
+            )
+            .await
+        });
+        let secret_value = "sk-super-secret-do-not-leak";
+        let mut request_key = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while request_key.is_none() && std::time::Instant::now() < deadline {
+            while let Ok(event) = capture_rx.try_recv() {
+                if let AgentEvent::CodexUserInputRequested {
+                    request_key: key, questions, ..
+                } = event
+                {
+                    assert!(questions[0].is_secret, "secret flag must survive to the UI event");
+                    request_key = Some(key);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (response, received) = tokio::sync::oneshot::channel();
+        answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key: request_key.expect("secret request event"),
+                answers: Some(serde_json::json!({
+                    "token": { "answers": [secret_value] },
+                })),
+                response,
+            })
+            .await
+            .unwrap();
+        let outcome = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, received)
+            .await
+            .expect("secret answer outcome timed out")
+            .expect("secret answer channel closed");
+        assert_eq!(outcome, ExternalUserInputOutcome::Delivered);
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("secret run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+
+        // 事件流快照不含 secret（只在单次 writer 响应存在过）。
+        let mut leaked_in_events = false;
+        while let Ok(event) = capture_rx.try_recv() {
+            if format!("{event:?}").contains(secret_value) {
+                leaked_in_events = true;
+            }
+        }
+        assert!(!leaked_in_events, "secret must never enter the event stream");
+        // 会话 JSONL 不含 secret。
+        let jsonl = sessions_dir_for_assert.join(format!("{run_storage}.jsonl"));
+        let persisted = std::fs::read_to_string(&jsonl).unwrap_or_default();
+        assert!(
+            !persisted.contains(secret_value),
+            "secret must never persist to the session log"
+        );
+    }
+
+    // M4-02.A2：完整流程 e2e——commentary → 命令工具（含输出增量）→
+    // requestUserInput（含 secret）→ 回答 → final，一个 turn 内闭环。
+    #[tokio::test]
+    async fn m4_02_a2_codex_app_server_full_rich_interaction_flow() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-full-flow",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const fs = require('node:fs');
+const secretEchoed = [];
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-full' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-full' } } });
+    // 1. commentary 流。
+    send({ method: 'item/started', params: { threadId: 'thread-full', turnId: 'turn-full', item: { id: 'c1', type: 'agentMessage', phase: 'commentary' } } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-full', turnId: 'turn-full', itemId: 'c1', delta: '先跑一遍测试。' } });
+    send({ method: 'item/completed', params: { threadId: 'thread-full', turnId: 'turn-full', item: { id: 'c1', type: 'agentMessage', phase: 'commentary', text: '先跑一遍测试。' } } });
+    // 2. 命令工具 + 输出增量 + 失败终态。
+    send({ method: 'item/started', params: { threadId: 'thread-full', turnId: 'turn-full', item: { id: 'cmd1', type: 'commandExecution', command: ['npm', 'test'], cwd: '/w', status: 'inProgress', commandActions: [] } } });
+    send({ method: 'item/commandExecution/outputDelta', params: { threadId: 'thread-full', turnId: 'turn-full', itemId: 'cmd1', delta: '2 failing\n' } });
+    send({ method: 'item/completed', params: { threadId: 'thread-full', turnId: 'turn-full', item: { id: 'cmd1', type: 'commandExecution', command: ['npm', 'test'], cwd: '/w', status: 'failed', exitCode: 1, aggregatedOutput: '2 failing\n', commandActions: [] } } });
+    // 3. 反向提问（secret）。
+    send({ jsonrpc: '2.0', id: 900, method: 'item/tool/requestUserInput', params: {
+      threadId: 'thread-full', turnId: 'turn-full', itemId: 'item_full',
+      questions: [ { id: 'regress', header: '修复方式', question: '怎么处理？', isOther: false, isSecret: false,
+        options: [ { label: '只修测试', description: '' }, { label: '连实现一起改', description: '' } ] } ],
+    } });
+  } else if (message.id === 900 && message.result) {
+    const answers = message.result.answers || {};
+    const answer = answers.regress && answers.regress.answers && answers.regress.answers[0];
+    // 4. final：按回答分叉。
+    const text = answer === '只修测试' ? '已按最小范围修复，测试全绿。' : 'unexpected answer: ' + answer;
+    send({ method: 'item/started', params: { threadId: 'thread-full', turnId: 'turn-full', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer' } } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-full', turnId: 'turn-full', itemId: 'f1', delta: text } });
+    send({ method: 'item/completed', params: { threadId: 'thread-full', turnId: 'turn-full', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text } } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-full', turn: { id: 'turn-full', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (answer_tx, answer_rx) = tokio::sync::mpsc::channel(4);
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process_with_images_and_registry(
+                &workspace,
+                "run the full rich interaction arc",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                Some(&event_sink),
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-full".to_string(),
+                    run_id: "run-full".to_string(),
+                    caller: "main:codex:run-full".to_string(),
+                    workspace: None,
+                    rcode_delegate: None,
+                },
+                None,
+                Some(answer_rx),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                    policy: CodexRunPolicy::Main,
+                    model_override: None,
+                    web_search_enabled: false,
+                },
+                None,
+            )
+            .await
+        });
+        // 等问题卡事件后回答；早期事件先缓存，最后统一断言。
+        let mut captured: Vec<AgentEvent> = Vec::new();
+        let mut request_key = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while request_key.is_none() && std::time::Instant::now() < deadline {
+            while let Ok(event) = capture_rx.try_recv() {
+                if let AgentEvent::CodexUserInputRequested { request_key: ref key, ref questions, .. } = event {
+                    assert_eq!(questions[0].options.len(), 2);
+                    request_key = Some(key.clone());
+                }
+                captured.push(event);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (response, received) = tokio::sync::oneshot::channel();
+        answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key: request_key.expect("question event in full flow"),
+                answers: Some(serde_json::json!({ "regress": { "answers": ["只修测试"] } })),
+                response,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            received.await.expect("full-flow answer outcome"),
+            ExternalUserInputOutcome::Delivered
+        );
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("full-flow run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert_eq!(completion.summary.as_deref(), Some("已按最小范围修复，测试全绿。"));
+
+        // 全弧事件序列断言：commentary 流/封口、工具卡+增量+失败终态、
+        // 提问与 answered 终态、final 封口。
+        let mut saw_commentary_delta = false;
+        let mut saw_commentary_seal = false;
+        let mut saw_tool_call = false;
+        let mut saw_tool_output_delta = false;
+        let mut saw_tool_failed = false;
+        let mut saw_question = false;
+        let mut saw_answered = false;
+        let mut saw_final_seal = false;
+        while let Ok(event) = capture_rx.try_recv() {
+            captured.push(event.clone());
+        }
+        for event in captured {
+            match event {
+                AgentEvent::CodexAgentMessage { phase, delta, item_id, text } => {
+                    if item_id == "c1" && delta {
+                        saw_commentary_delta = true;
+                        assert_eq!(phase, "commentary");
+                        assert_eq!(text, "先跑一遍测试。");
+                    }
+                    if item_id == "c1" && !delta {
+                        saw_commentary_seal = true;
+                        assert!(text.is_empty(), "streamed seal carries no body");
+                    }
+                    if item_id == "f1" && !delta {
+                        saw_final_seal = true;
+                        assert!(text.is_empty());
+                    }
+                }
+                AgentEvent::ToolCall { call_id, name, .. } => {
+                    saw_tool_call = true;
+                    assert_eq!(call_id, "cmd1");
+                    assert_eq!(name, "Codex 命令");
+                }
+                AgentEvent::ToolOutputDelta { call_id, safe_delta } => {
+                    saw_tool_output_delta = true;
+                    assert_eq!(call_id, "cmd1");
+                    assert_eq!(safe_delta, "2 failing\n");
+                }
+                AgentEvent::ToolResult { call_id, is_error, output } => {
+                    saw_tool_failed = true;
+                    assert_eq!(call_id, "cmd1");
+                    assert!(is_error);
+                    assert_eq!(output["exit_code"], serde_json::json!(1));
+                    assert_eq!(output["status"], serde_json::json!("failed"));
+                }
+                AgentEvent::CodexUserInputRequested { .. } => saw_question = true,
+                AgentEvent::CodexUserInputResolved { outcome, .. } => {
+                    saw_answered = true;
+                    assert_eq!(outcome, "answered");
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_commentary_delta && saw_commentary_seal, "commentary arc");
+        assert!(saw_tool_call && saw_tool_output_delta && saw_tool_failed, "tool arc");
+        assert!(saw_question && saw_answered, "question arc");
+        assert!(saw_final_seal, "final arc");
+    }
+
+    // M3-01.A3：重复提交只有一个确定终态；未知 key 的提交被拒绝。
+    #[tokio::test]
+    async fn m3_01_a3_codex_app_server_duplicate_submissions_have_one_terminal_state() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-user-input-dup",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+let answered = false;
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-dupq' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-dupq' } } });
+    send({ jsonrpc: '2.0', id: 90, method: 'item/tool/requestUserInput', params: {
+      threadId: 'thread-dupq', turnId: 'turn-dupq', itemId: 'item_dq',
+      questions: [ { id: 'pick', header: '选择', question: '选哪个？', isOther: false, isSecret: false,
+        options: [ { label: 'A', description: '' } ] } ],
+    } });
+  } else if (message.id === 90 && message.result) {
+    if (!answered) { answered = true; }
+    send({ method: 'item/completed', params: { threadId: 'thread-dupq', turnId: 'turn-dupq', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text: '完成' } } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-dupq', turn: { id: 'turn-dupq', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (answer_tx, answer_rx) = tokio::sync::mpsc::channel(8);
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process_with_images_and_registry(
+                &workspace,
+                "dup submissions",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                Some(&event_sink),
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-dupq".to_string(),
+                    run_id: "run-dupq".to_string(),
+                    caller: "main:codex:run-dupq".to_string(),
+                    workspace: None,
+                    rcode_delegate: None,
+                },
+                None,
+                Some(answer_rx),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                    policy: CodexRunPolicy::Main,
+                    model_override: None,
+                    web_search_enabled: false,
+                },
+                None,
+            )
+            .await
+        });
+        let mut request_key = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while request_key.is_none() && std::time::Instant::now() < deadline {
+            while let Ok(event) = capture_rx.try_recv() {
+                if let AgentEvent::CodexUserInputRequested { request_key: key, .. } = event {
+                    request_key = Some(key);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let request_key = request_key.expect("request event");
+        // 未知 key：立即拒绝，不影响 pending。
+        let (ghost_response, ghost_received) = tokio::sync::oneshot::channel();
+        answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key: "run-dupq:ghost".to_string(),
+                answers: Some(serde_json::json!({ "pick": { "answers": ["X"] } })),
+                response: ghost_response,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            ghost_received.await.expect("ghost outcome"),
+            ExternalUserInputOutcome::Rejected
+        );
+        // 正确答案交付。
+        let (first_response, first_received) = tokio::sync::oneshot::channel();
+        answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key: request_key.clone(),
+                answers: Some(serde_json::json!({ "pick": { "answers": ["A"] } })),
+                response: first_response,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            first_received.await.expect("first outcome"),
+            ExternalUserInputOutcome::Delivered
+        );
+        // 重复提交：拒绝（原子 claim，只交付一次）。
+        let (dup_response, dup_received) = tokio::sync::oneshot::channel();
+        answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key,
+                answers: Some(serde_json::json!({ "pick": { "answers": ["B"] } })),
+                response: dup_response,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            dup_received.await.expect("duplicate outcome"),
+            ExternalUserInputOutcome::Rejected,
+            "duplicate submission must be rejected"
+        );
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("dup run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+        // 唯一终态事件。
+        let mut resolved = Vec::new();
+        while let Ok(event) = capture_rx.try_recv() {
+            if let AgentEvent::CodexUserInputResolved { outcome, .. } = event {
+                resolved.push(outcome);
+            }
+        }
+        assert_eq!(resolved, vec!["answered".to_string()]);
+    }
+
+    // M3-03.A1：answer vs timeout/resolved 竞态只有一个 writer 结果与一个
+    // UI 终态；迟到答案被拒绝。
+    #[tokio::test]
+    async fn m3_03_a1_timeout_and_resolved_races_have_single_terminals() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-user-input-races",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const responses = [];
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-race' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-race' } } });
+    send({ jsonrpc: '2.0', id: 500, method: 'item/tool/requestUserInput', params: {
+      threadId: 'thread-race', turnId: 'turn-race', itemId: 'item_timeout', autoResolutionMs: 300,
+      questions: [ { id: 'q', header: '超时', question: '等超时', isOther: false, isSecret: false, options: null } ],
+    } });
+    send({ jsonrpc: '2.0', id: 501, method: 'item/tool/requestUserInput', params: {
+      threadId: 'thread-race', turnId: 'turn-race', itemId: 'item_resolved',
+      questions: [ { id: 'r', header: '已解决', question: '会被别处解决', isOther: false, isSecret: false, options: null } ],
+    } });
+    setTimeout(() => send({ method: 'serverRequest/resolved', params: { threadId: 'thread-race', requestId: '501' } }), 150);
+  } else if ((message.id === 500 || message.id === 501) && !message.method) {
+    responses.push({ id: message.id, body: message.result !== undefined ? message.result : message.error });
+    if (responses.length === 2) {
+      const timeoutEmpty = responses.find((r) => r.id === 500 && r.body && r.body.answers && Object.keys(r.body.answers).length === 0);
+      const resolvedError = responses.find((r) => r.id === 501 && r.body && r.body.code === -32600);
+      const text = (timeoutEmpty && resolvedError) ? 'race terminals ok' : 'race terminals wrong';
+      send({ method: 'item/completed', params: { threadId: 'thread-race', turnId: 'turn-race', item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text } } });
+      send({ method: 'turn/completed', params: { threadId: 'thread-race', turn: { id: 'turn-race', items: [], status: 'completed' } } });
+    }
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (answer_tx, answer_rx) = tokio::sync::mpsc::channel(8);
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process_with_images_and_registry(
+                &workspace,
+                "race the terminals",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                Some(&event_sink),
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-race".to_string(),
+                    run_id: "run-race".to_string(),
+                    caller: "main:codex:run-race".to_string(),
+                    workspace: None,
+                    rcode_delegate: None,
+                },
+                None,
+                Some(answer_rx),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                    policy: CodexRunPolicy::Main,
+                    model_override: None,
+                    web_search_enabled: false,
+                },
+                None,
+            )
+            .await
+        });
+        let mut keys = std::collections::HashMap::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while keys.len() < 2 && std::time::Instant::now() < deadline {
+            while let Ok(event) = capture_rx.try_recv() {
+                if let AgentEvent::CodexUserInputRequested { request_key, item_id, .. } = event {
+                    keys.insert(item_id, request_key);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // 等 resolved 竞态落地（150ms 定时）后再迟到提交。
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let (late_response, late_received) = tokio::sync::oneshot::channel();
+        let _ = answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key: keys.get("item_resolved").cloned().unwrap_or_default(),
+                answers: Some(serde_json::json!({ "r": { "answers": ["迟到"] } })),
+                response: late_response,
+            })
+            .await;
+        assert_eq!(
+            late_received.await.expect("late outcome"),
+            ExternalUserInputOutcome::Rejected,
+            "late answer after external resolution must be rejected"
+        );
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("race run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert_eq!(completion.summary.as_deref(), Some("race terminals ok"));
+        let mut outcomes = Vec::new();
+        while let Ok(event) = capture_rx.try_recv() {
+            if let AgentEvent::CodexUserInputResolved { item_id, outcome, .. } = event {
+                outcomes.push((item_id, outcome));
+            }
+        }
+        outcomes.sort();
+        assert_eq!(
+            outcomes,
+            vec![
+                ("item_resolved".to_string(), "resolved".to_string()),
+                ("item_timeout".to_string(), "expired".to_string()),
+            ]
+        );
+    }
+
+    // M3-03.A2：pending 期间普通 composer 消息走 steer，问题提交只回答
+    // request；两者顺序可追踪且互不串线。
+    #[tokio::test]
+    async fn m3_03_a2_pending_question_and_steer_stay_separate_channels() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-question-steer",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const order = [];
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-qs' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-qs' } } });
+    send({ jsonrpc: '2.0', id: 600, method: 'item/tool/requestUserInput', params: {
+      threadId: 'thread-qs', turnId: 'turn-qs', itemId: 'item_qs',
+      questions: [ { id: 'scope', header: '范围', question: '处理哪部分？', isOther: false, isSecret: false,
+        options: [ { label: '模块', description: '' } ] } ],
+    } });
+  } else if (message.method === 'turn/steer') {
+    order.push('steer');
+    send({ id: message.id, result: { turnId: 'turn-qs' } });
+  } else if (message.id === 600 && message.result) {
+    order.push('answer');
+    const ok = message.result.answers && message.result.answers.scope
+      && message.result.answers.scope.answers[0] === '模块' && order[0] === 'steer';
+    send({ method: 'item/completed', params: { threadId: 'thread-qs', turnId: 'turn-qs',
+      item: { id: 'f1', type: 'agentMessage', phase: 'final_answer', text: ok ? 'order: steer then answer' : 'order broken' } } });
+    send({ method: 'turn/completed', params: { threadId: 'thread-qs', turn: { id: 'turn-qs', items: [], status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (answer_tx, answer_rx) = tokio::sync::mpsc::channel(4);
+        let (steer_sender, steer_receiver) = tokio::sync::mpsc::channel(2);
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process_with_images_and_registry(
+                &workspace,
+                "separate the channels",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                Some(&event_sink),
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-qs".to_string(),
+                    run_id: "run-qs".to_string(),
+                    caller: "main:codex:run-qs".to_string(),
+                    workspace: None,
+                    rcode_delegate: None,
+                },
+                Some(steer_receiver),
+                Some(answer_rx),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
+                    policy: CodexRunPolicy::Main,
+                    model_override: None,
+                    web_search_enabled: false,
+                },
+                None,
+            )
+            .await
+        });
+        let mut request_key = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while request_key.is_none() && std::time::Instant::now() < deadline {
+            while let Ok(event) = capture_rx.try_recv() {
+                if let AgentEvent::CodexUserInputRequested { request_key: key, .. } = event {
+                    request_key = Some(key);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let request_key = request_key.expect("question event");
+        // pending 期间先 steer（普通 composer 语义），再回答问题。
+        let (steer_response, steer_received) = tokio::sync::oneshot::channel();
+        steer_sender
+            .send(ExternalSteerRequest {
+                operation_id: "op-qs".to_string(),
+                message: "同时关注测试覆盖率".to_string(),
+                response: steer_response,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            steer_received.await.expect("steer outcome"),
+            ExternalSteerOutcome::Accepted,
+            "composer messages during a pending question still steer the run"
+        );
+        let (answer_response, answer_received) = tokio::sync::oneshot::channel();
+        answer_tx
+            .send(ExternalUserInputAnswer {
+                request_key,
+                answers: Some(serde_json::json!({ "scope": { "answers": ["模块"] } })),
+                response: answer_response,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            answer_received.await.expect("answer outcome"),
+            ExternalUserInputOutcome::Delivered
+        );
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("steer+answer run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert_eq!(completion.summary.as_deref(), Some("order: steer then answer"));
+    }
+
+    // M3-03.A3：恢复标记持久化 + 解析合并（run 存活裁决在 session 重建层，
+    // 见 session_messages_for_task；此处冻结标记协议本身）。
+    #[test]
+    fn m3_03_a3_pending_question_markers_merge_in_history() {
+        let content = [
+            r#"{"message":{"role":"user","content":[{"type":"input_text","text":"开始"}]}}"#,
+            r#"{"system":{"event":"codex_pending_question","data":{"request_key":"run-x:item_a","run_id":"run-x","item_id":"item_a","questions":[{"id":"q1","header":"范围","question":"哪部分？","is_other":false,"is_secret":false,"options":[]}],"state":"pending"}}}"#,
+            r#"{"system":{"event":"codex_pending_question","data":{"request_key":"run-x:item_a","state":"answered"}}}"#,
+            r#"{"system":{"event":"codex_pending_question","data":{"request_key":"run-x:item_b","run_id":"run-x","item_id":"item_b","questions":[{"id":"q2","header":"凭据","question":"密钥？","is_other":false,"is_secret":true,"options":[]}],"state":"pending"}}}"#,
+        ]
+        .join("\n");
+        let messages = parse_session_messages(&content, "branch-a", "storage-a");
+        let questions: Vec<&SessionMessage> = messages
+            .iter()
+            .filter(|message| message.kind == "codex_question")
+            .collect();
+        assert_eq!(questions.len(), 2, "one entry per request_key, terminal state merged");
+        let answered = questions
+            .iter()
+            .find(|message| message.text.as_deref() == Some("run-x:item_a"))
+            .expect("answered entry");
+        let payload: serde_json::Value =
+            serde_json::from_str(answered.output_json.as_deref().unwrap()).unwrap();
+        assert_eq!(payload["state"], serde_json::json!("answered"));
+        assert_eq!(payload["questions"][0]["id"], serde_json::json!("q1"));
+        let still_pending = questions
+            .iter()
+            .find(|message| message.text.as_deref() == Some("run-x:item_b"))
+            .expect("pending entry keeps its questions");
+        let pending_payload: serde_json::Value =
+            serde_json::from_str(still_pending.output_json.as_deref().unwrap()).unwrap();
+        assert_eq!(pending_payload["state"], serde_json::json!("pending"));
+        assert_eq!(pending_payload["questions"][0]["is_secret"], serde_json::json!(true));
     }
 
     #[cfg(windows)]
@@ -36544,6 +38947,7 @@ input.on('line', (line) => {
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
                     model_override: None,
+                    web_search_enabled: false,
                 },
             )
             .await
@@ -36619,6 +39023,7 @@ input.on('line', (line) => {
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
                     model_override: None,
+                    web_search_enabled: false,
                 },
             ),
         )
@@ -36695,6 +39100,7 @@ input.on('line', (line) => {
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
                     model_override: None,
+                    web_search_enabled: false,
                 },
             ),
         )
@@ -36773,12 +39179,14 @@ input.on('line', (line) => {{
                     rcode_delegate: None,
                 },
                 Some(steer_receiver),
+                None,
                 CodexExecLimits {
                     startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
                     model_override: None,
+                    web_search_enabled: false,
                 },
                 Some((&run_registry, "task-pending-steer", &run_config)),
             )
@@ -36890,12 +39298,14 @@ input.on('line', (line) => {{
                     rcode_delegate: None,
                 },
                 None,
+                None,
                 CodexExecLimits {
                     startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
                     model_override: None,
+                    web_search_enabled: false,
                 },
                 Some((&run_registry, "task-pending-approval", &run_config)),
             )
@@ -36998,6 +39408,7 @@ input.on('line', (line) => {
                         max_tool_calls: None,
                     },
                     model_override: None,
+                    web_search_enabled: false,
                 },
             )
             .await
@@ -37105,6 +39516,7 @@ input.on('line', (line) => {{
                         max_tool_calls: None,
                     },
                     model_override: None,
+                    web_search_enabled: false,
                 },
             )
             .await
@@ -37213,6 +39625,7 @@ input.on('line', (line) => {{
                         max_tool_calls: None,
                     },
                     model_override: None,
+                    web_search_enabled: false,
                 },
             ),
         )
@@ -37605,6 +40018,185 @@ input.on('line', (line) => {{
         );
         assert!(main.contains("[src/lib.rs:42-48](src/lib.rs#L42)"));
         assert!(main.contains("right-side Files workbench"));
+    }
+
+    // M4 子代理可靠性：两条子代理路径共享三档报告合同；主代理带 unresolved
+    // 编排规则；降级映射/解析器/宿主 web_search 开关的合同测试。
+    #[test]
+    fn m4_subagent_reporting_contract_on_both_paths() {
+        let delegated = build_codex_delegation_prompt(
+            "检查配置",
+            CodexDelegationPermissions::read_only(),
+            &r_code_agent_worker::AgentPromptPolicy::default().subagent,
+            None,
+            "",
+        );
+        assert!(delegated.contains(SUBAGENT_REPORTING_CONTRACT));
+        // 原生子代理系统提示由 worker 组装——共享常量本体即注入源。
+        let native = r_code_core::progress_contract::SUBAGENT_REPORTING_CONTRACT;
+        assert!(native.contains("### 无法验证"));
+        assert!(native.contains("file:line"));
+        assert!(native.contains("未完成"));
+    }
+
+    #[test]
+    fn m4_main_prompt_carries_unresolved_orchestration_rule() {
+        let task = Task::new(None, "编排规则", "检查", TaskMode::Ask);
+        let main = codex_main_prompt(
+            &[],
+            &task,
+            "go",
+            None,
+            &r_code_agent_worker::AgentPromptPolicy::default().main_agent,
+            None,
+            "",
+        );
+        assert!(main.contains("unresolved array"));
+        assert!(main.contains("Never silently discard"));
+        assert!(main.contains("degraded report"));
+    }
+
+    #[test]
+    fn m4_extract_unresolved_items_contract() {
+        let report = "已验证：入口在 [a.rs:1](a.rs#L1)。
+
+### 无法验证
+- 时区口径需线上对照
+- slug 格式需真实数据
+
+### 其他
+- 不应出现";
+        let items = extract_unresolved_items(report);
+        assert_eq!(items, vec!["时区口径需线上对照", "slug 格式需真实数据"]);
+        assert!(extract_unresolved_items("只有结论").is_empty());
+        // 有界：9 条只取 8 条；token 形态脱敏。
+        let mut long = String::from("### 无法验证
+");
+        for i in 0..9 {
+            long.push_str(&format!("- 项{i} sk-abcdef123456
+"));
+        }
+        let bounded = extract_unresolved_items(&long);
+        assert_eq!(bounded.len(), 8);
+        assert!(!bounded[0].contains("sk-abcdef123456"), "token redacted");
+    }
+
+    #[test]
+    fn m4_degraded_mapping_and_usage() {
+        assert_eq!(
+            codex_degraded_from(Some(CodexExecFailure::ToolBudget), 0),
+            Some(CodexDegradedReason::ToolBudget)
+        );
+        assert_eq!(
+            codex_degraded_from(None, 3),
+            Some(CodexDegradedReason::StreamRetries)
+        );
+        assert_eq!(codex_degraded_from(Some(CodexExecFailure::Stream), 0), None);
+        let usage = codex_usage_with_degraded(
+            Some(String::from("{\"input_tokens\":5}")),
+            Some(CodexDegradedReason::LoopGuard),
+        )
+        .expect("usage present");
+        let parsed: serde_json::Value = serde_json::from_str(&usage).unwrap();
+        assert_eq!(parsed["input_tokens"], serde_json::json!(5));
+        assert_eq!(parsed["degraded_reason"], serde_json::json!("loop_guard"));
+        assert!(codex_usage_with_degraded(None, None).is_none());
+    }
+
+    #[test]
+    fn m4_codex_thread_config_web_search_toggle() {
+        assert_eq!(
+            codex_thread_config(false)["web_search"],
+            serde_json::json!("disabled")
+        );
+        assert_eq!(
+            codex_thread_config(true)["web_search"],
+            serde_json::json!("enabled")
+        );
+        // 宿主选项文件：缺省/键缺失/显式 true 三态。
+        let dir = std::env::temp_dir().join(format!("r-code-codex-opt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!load_codex_host_web_search(&dir));
+        std::fs::write(dir.join("codex.toml"), "web_search = true
+").unwrap();
+        assert!(load_codex_host_web_search(&dir));
+        std::fs::write(dir.join("codex.toml"), "other = 1
+").unwrap();
+        assert!(!load_codex_host_web_search(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // M1-02.A1：Codex 主提示承载共享低噪声进度合同——首次实质批次、阶段
+    // 变化、新发现、低噪声约束与私有推理禁令全部在场。
+    #[test]
+    fn m1_02_a1_codex_main_prompt_carries_the_progress_contract() {
+        let task = Task::new(None, "进度合同检查", "Inspect the workspace", TaskMode::Ask);
+        let main = codex_main_prompt(
+            &[],
+            &task,
+            "Investigate the failing build",
+            None,
+            &r_code_agent_worker::AgentPromptPolicy::default().main_agent,
+            None,
+            "",
+        );
+        // 共享合同逐字注入（单一事实源，非改写副本）。
+        assert!(main.contains(PUBLIC_PROGRESS_CONTRACT));
+        assert_eq!(
+            main.matches("Keep the user oriented during multi-stage work").count(),
+            1,
+            "contract appears exactly once"
+        );
+        // A1 要件：首次实质批次 / 阶段变化 / 新发现 / 低噪声 / 私有推理禁令。
+        assert!(main.contains("Before the first tool batch"));
+        assert!(main.contains("materially changes"));
+        assert!(main.contains("tool evidence changes the diagnosis"));
+        assert!(main.contains("Do not narrate every tool call"));
+        assert!(main.contains("expose private chain-of-thought"));
+        // 公开通道限定：以公开 assistant 消息承载，不进私有推理。
+        assert!(main.contains("ordinary public assistant messages"));
+        // 最终回答规则未被覆盖。
+        assert!(main.contains("concise result and verification summary"));
+    }
+
+    // M1-02.A2：简单任务不播报 + “继续读取”类空更新被明确禁止（四类
+    // fixture 的负例合同）。
+    #[test]
+    fn m1_02_a2_simple_tasks_stay_silent_and_routine_continuation_is_banned() {
+        let task = Task::new(None, "空播报禁令", "Quick question", TaskMode::Ask);
+        let main = codex_main_prompt(
+            &[],
+            &task,
+            "What does this flag do?",
+            None,
+            &r_code_agent_worker::AgentPromptPolicy::default().main_agent,
+            None,
+            "",
+        );
+        // 简单问答 fixture：不为简单任务制造播报，直接交付最终回答。
+        assert!(main.contains("manufacture updates for a simple task"));
+        assert!(main.contains("For a simple task that needs no staging, stay silent"));
+        // 重复工具 fixture：例行继续播报被禁止（中英两种形态）。
+        assert!(main.contains("Never announce a routine continuation"));
+        assert!(main.contains("继续读取"));
+        assert!(main.contains("Let me continue reading"));
+        assert!(main.contains("repeat visible tool names or arguments"));
+    }
+
+    // M1-02.A3：子代理“简洁交付”边界未被进度合同覆盖。
+    #[test]
+    fn m1_02_a3_codex_subagent_prompt_keeps_concise_delivery_boundary() {
+        let delegated = build_codex_delegation_prompt(
+            "Check the config parser",
+            CodexDelegationPermissions::read_only(),
+            &r_code_agent_worker::AgentPromptPolicy::default().subagent,
+            None,
+            "",
+        );
+        assert!(
+            !delegated.contains(PUBLIC_PROGRESS_CONTRACT),
+            "progress contract is main-agent-only; subagents keep the concise-delivery boundary"
+        );
     }
 
     #[test]

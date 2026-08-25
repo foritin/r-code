@@ -1,0 +1,108 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-24T19:11:30.620Z",
+  "mode": {
+    "kind": "task",
+    "id": "M2-01",
+    "tasks": [
+      "M2-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "d764a9e219a76dc1bacd2d007d2ee6855f2362fd10b7751f4051d16c7eb7b023"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-01.A1",
+      "task": "M2-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "全部支持 kind 的 started/completed 映射 + 失败/退出码状态",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m2_01_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 472,
+      "output_sha256": "02df8c54cf38826dae30179872582eb6452f3640057a7462a35b7a4f56047709",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A2",
+      "task": "M2-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "命令输出按序/可展开/截断可见 + 失败与 exit code 一致（rust e2e + 前端）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m2-01-integration.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3264,
+      "output_sha256": "173af1e8525e12dd60a5b1e4335374029260aed8b5204addda6895552db60e01",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A3",
+      "task": "M2-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "超大/高频输出有界 + 迟到输出丢弃 + 终态不丢",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/codex-interaction/m2-01-reliability.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 257718,
+      "output_sha256": "6b0be2dc2fba7c13352e7969918cf2152cd7a1d9c8dde86868b4b97a6b258a7f",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

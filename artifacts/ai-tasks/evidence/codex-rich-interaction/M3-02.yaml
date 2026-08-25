@@ -1,0 +1,67 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M3-02
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M3-02)
+    - docs/codex-rich-interaction-prd.md#52-用户提问卡
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M3-02.json revision.worktree_digest 记录
+
+deliverables:
+  - types.ts：AgentEvent codex_user_input_requested/resolved + CodexUserQuestion/CodexUserOption
+  - model.ts：TimelineItem kind=question + reducer cases（requested/resolved）+ markQuestionAnswered/StateInPlace
+  - CodexQuestionCard.tsx：选项多选 + isOther 自由文本 + isSecret 密码框；未答满禁用；提交中锁定；终态只读；aria-live 状态；无 autofocus
+  - Timeline.tsx：question 渲染分支 + 提交接线（delivered 后本地即时终态 + 非敏感摘要）
+  - ipc.ts：codexSubmitUserInput（null=取消）
+  - styles/r-code-ui.css：codex-question-* 样式
+  - scripts/codex-question-card.test.mjs（a1/a2/a3）
+
+changed_paths:
+  - src-tauri/frontend/src/lib/types.ts
+  - src-tauri/frontend/src/lib/ipc.ts
+  - src-tauri/frontend/src/components/room/model.ts
+  - src-tauri/frontend/src/components/room/Timeline.tsx
+  - src-tauri/frontend/src/components/room/CodexQuestionCard.tsx
+  - src-tauri/frontend/src/components/room/activity.ts
+  - src-tauri/frontend/src/styles/r-code-ui.css
+  - src-tauri/frontend/scripts/codex-question-card.test.mjs
+  - scripts/codex-interaction/registry.mjs
+
+assertions:
+  - id: M3-02.A1
+    passed: true
+    command: node --test scripts/codex-question-card.test.mjs --test-name-pattern m3_02_a1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-02.json
+  - id: M3-02.A2
+    passed: true
+    command: node --test scripts/codex-question-card.test.mjs --test-name-pattern m3_02_a2
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-02.json
+  - id: M3-02.A3
+    passed: true
+    command: node --test scripts/codex-question-card.test.mjs --test-name-pattern m3_02_a3
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3-02.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M3 --profile implementation
+  exit_code: 1
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M3.json
+  note: M3-01+M3-02 共 6 断言通过；剩余为 M3-03 not_implemented
+
+decisions:
+  - 不写 Plan store：问题卡是 TimelineItem 的独立 kind，与 Plan 状态机零耦合（§2 决策 9）
+  - 答案编码：encodeUserInputAnswers 产出 {qid: [选项label…, 自由文本]}（§4.3 多答案数组）；secret 单输入取文本值
+  - secret 防回显：密码框 + answered 摘要固定“已安全提交”；reducer 序列化断言不含原值
+  - delivered 后本地即时 answered（避免等后端 resolved 的窗口期可重复点击）——后端原子 claim 兜底，resolved 事件幂等确认
+  - 键盘可达性用原生表单控件构造（checkbox/text/password/button + fieldset/legend），aria-live 播报状态，错误 role=alert
+  - 不抢编辑器焦点：requested 是纯数据事件，卡片无 autofocus
+
+external_gates_remaining: []

@@ -1,0 +1,75 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M4-02
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M4-02)
+    - docs/codex-rich-interaction-prd.md#13-definition-of-done
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M4-02.json revision.worktree_digest 记录
+
+deliverables:
+  - commands.rs：m4_02_a2 完整流程 e2e（commentary→工具+输出增量+失败终态→requestUserInput→回答→final 单 turn 闭环 + 全弧事件断言）
+  - frontend scripts/codex-full-flow-visual.test.mjs：真实 Timeline 完整历史（含 answered 问题卡）亮/暗双主题 1280×800 顺序与层次断言
+  - scripts/codex-interaction/m4-02-cross-platform.mjs（A1：共用套件本机全绿 + 归一化层/共用 e2e 无平台 cfg 分叉 + CI 三平台矩阵静态验证）
+  - scripts/codex-interaction/m4-02-regression.mjs（A3：core+worker 回归 + 前端全量 + 文档一致性/链接门禁）
+  - scripts/codex-interaction/m4-02-production-gate.mjs（A4：production profile；真实登录/安装包外部条件缺失时如实 external_pending，绝不伪造 passed）
+  - docs/architecture.md §7.1：Codex 丰富交互层文档（commentary/reasoning/request/steer 区别、恢复、降级、验证入口）
+  - select 竞态修复：resolved 槽移除时通道关闭与 token 取消的归因（全链路门禁发现）
+
+changed_paths:
+  - src-tauri/src/commands.rs
+  - src-tauri/frontend/scripts/codex-full-flow-visual.test.mjs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/m4-02-cross-platform.mjs
+  - scripts/codex-interaction/m4-02-regression.mjs
+  - scripts/codex-interaction/m4-02-production-gate.mjs
+  - scripts/verify-codex-interaction.mjs
+  - docs/architecture.md
+
+assertions:
+  - id: M4-02.A1
+    passed: true
+    command: node scripts/codex-interaction/m4-02-cross-platform.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4-02.json
+  - id: M4-02.A2
+    passed: true
+    command: node --test scripts/codex-full-flow-visual.test.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4-02.json
+  - id: M4-02.A3
+    passed: true
+    command: node scripts/codex-interaction/m4-02-regression.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4-02.json
+  - id: M4-02.A4
+    passed: false
+    command: node scripts/codex-interaction/m4-02-production-gate.mjs
+    exit_code: null
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/production/M4-02-production-gate.json
+    note: production profile 专属外部放行；implementation profile 不参与判定，状态如实 external_pending
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M4 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4.json
+  note: 全部 12 任务 38 断言一次跑通（总报告）；--through 语义为 M0..M4 累计
+
+decisions:
+  - A1 跨平台策略：共用断言（纯逻辑 contract + Node fixture e2e）平台无关且本机全绿；静态验证归一化层与共用 e2e 无 cfg 平台分叉；macOS/Linux 执行由 CI 三平台 cargo test --workspace 承担（推送后生效），本门禁不伪造远端结果
+  - A2 双层证据：Rust e2e 闭环（fixture 校验答案编码后按回答分叉 final）+ 浏览器真实 Timeline 完整历史亮/暗渲染（文档序层次断言：commentary 无作者头、final 唯一作者头、answered 问题卡只读）
+  - A3 前端全量直调内部 runner（npm shim 在 spawnSync(inherit) 下信号异常）
+  - A4 诚实门禁：codex login status 探测 + 安装包缺失 → external_pending（exit 5 + JSON 报告），passed 仅在真实条件满足时给出
+  - 全链路门禁发现并修复真竞态：serverRequest/resolved 撤槽时 select 的通道关闭分支把 resolved 归因为 cancelled——按 resolved_token 归因后确定，5 次复跑稳定
+  - --through 修正为累计语义（M0..M 级联），DoD 要求的单次 --through M4 报告由总运行产生
+
+external_gates_remaining:
+  - "真实 Codex 登录下的候选 smoke（production profile M4-02.A4）"
+  - "Windows/macOS 安装包冒烟与签名/公证环境（production profile M4-02.A4）"
+  - "macOS/Linux CI 腿上的共用断言执行（随下一次 push 的 CI 运行）"

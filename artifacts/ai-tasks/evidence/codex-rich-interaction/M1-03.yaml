@@ -1,0 +1,70 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M1-03
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M1-03)
+    - docs/codex-rich-interaction-prd.md#51-时间线信息层次
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M1-03.json revision.worktree_digest 记录
+
+deliverables:
+  - crates/r-code-core/src/dto.rs：AgentEvent::CodexAgentMessage{item_id, phase, text, delta}（封口帧非空=权威全文替换）
+  - src-tauri/src/commands.rs：emission 改发 CodexAgentMessage；persist_runtime_event 新 arm（替换语义封口）；CODEX_COMMENTARY_EVENT 持久化 + parse_session_messages 重建 kind=codex_commentary
+  - frontend types.ts：AgentEvent 新成员 + SessionMessage kind=codex_commentary
+  - frontend model.ts：TimelineItem.agent 可选 phase；codex_agent_message reducer（item 级 id 归位/封口/权威替换）；buildTimeline codex_commentary 分支；折叠保留 commentary Markdown；createAgentEventCoalescer（≤10Hz）
+  - frontend Timeline.tsx：commentary 走既有 timeline-progress-update 轻量层（无作者头）；监听器 100ms 合并批量应用
+  - frontend activity.ts：新事件的活动条状态
+  - src-tauri/frontend/scripts/codex-message-stream.test.mjs（a1/a2/a3 浏览器测试）
+
+changed_paths:
+  - crates/r-code-core/src/dto.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/frontend/src/lib/types.ts
+  - src-tauri/frontend/src/components/room/model.ts
+  - src-tauri/frontend/src/components/room/Timeline.tsx
+  - src-tauri/frontend/src/components/room/activity.ts
+  - src-tauri/frontend/scripts/codex-message-stream.test.mjs
+  - scripts/codex-interaction/registry.mjs
+
+assertions:
+  - id: M1-03.A1
+    passed: true
+    command: node --test scripts/codex-message-stream.test.mjs --test-name-pattern m1_03_a1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-03.json
+  - id: M1-03.A2
+    passed: true
+    command: node --test scripts/codex-message-stream.test.mjs --test-name-pattern m1_03_a2
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-03.json
+  - id: M1-03.A3
+    passed: true
+    command: node --test scripts/codex-message-stream.test.mjs --test-name-pattern m1_03_a3
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-03.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M1 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1.json
+  note: M1 全部 9 断言通过（M0 7 + M1 9 累计含 M0 复跑）
+
+decisions:
+  - phase 只显式标记 commentary（轻量层偏差项）；final 保持默认作者层——与历史重建的普通 assistant 消息同构（历史无 phase 可还原），A2 一致性以此为准
+  - commentary 历史持久化为 System{codex_commentary, {text}}，重建为 agent+phase 节点（保持 Markdown 与流式语义，§5.1），与原生 r_code_interim 纯文本“过程”层区分
+  - 可见刷新 ≤10Hz 由 createAgentEventCoalescer（100ms 批量，终态立即冲刷，调度器注入可测）+ Timeline 监听器接线实现；内部累计按序不丢字
+  - 工具边界折叠：codex commentary 折叠为静态轻量 agent 条目（保留 Markdown），原生未标记流仍折叠为 r_code_interim 纯文本（行为不变）
+  - live 条目 key=codex-{item_id}；历史条目 key=msg-{storage:line}（与既有消息条目同一稳定性标准，单节点保证跨重建成立）
+  - 真实 Timeline 组件挂载验证（分支模式 + mock cmd_session_messages_for_branch）：commentary 无 .who 作者头、final 有、工具活动可见、1280×800 无横向溢出
+
+external_gates_remaining: []
+
+notes:
+  - 全量前端套件回归：205 tests / 203 pass / 0 fail / 2 skipped（既有跳过），exit 0
+  - M1-01 e2e 断言已随新事件类型更新并复跑通过

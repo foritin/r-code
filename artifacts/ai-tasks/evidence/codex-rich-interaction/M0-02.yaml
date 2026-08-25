@@ -1,0 +1,71 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M0-02
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M0-02)
+    - docs/codex-rich-interaction-prd.md#4-机器合同
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M0-02.json revision.worktree_digest 记录
+
+deliverables:
+  - src-tauri/src/codex_interaction.rs（§4.1 事件 union、scope 门禁、有界常量、诊断、能力快照、方法表）
+  - src-tauri/src/codex_interaction_tests.rs（12 个 a1-a4 前缀合同测试）
+  - src-tauri/src/codex_app_server.rs（recognized_protocol_progress 委托新方法表）
+  - scripts/codex-interaction/registry.mjs（M0-02 四断言接入真实 cargo 命令）
+
+changed_paths:
+  - src-tauri/src/codex_interaction.rs
+  - src-tauri/src/codex_interaction_tests.rs
+  - src-tauri/src/codex_app_server.rs
+  - src-tauri/src/lib.rs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/verify-codex-interaction.test.mjs
+
+assertions:
+  - id: M0-02.A1
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib codex_interaction::tests::a1 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-02.json
+  - id: M0-02.A2
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib codex_interaction::tests::a2 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-02.json
+  - id: M0-02.A3
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib codex_interaction::tests::a3 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-02.json
+  - id: M0-02.A4
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib codex_interaction::tests::a4 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-02.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M0 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0.json
+  note: M0 全部 7 断言通过（M0-01 3 + M0-02 4）
+
+decisions:
+  - 类型落点：src-tauri/src/codex_interaction.rs（host 内、仅依赖 serde_json + r-code-core::secret::redact_text，contract test 直接构造）
+  - phase 合同：0.145.0 AgentMessageThreadItem.phase（commentary|final_answer|null）直接映射显式枚举；缺省→Unknown + PhaseMissing 诊断，投影层（M1-01）按 turn 边界保守归类
+  - error 通知按 R-ACT-02 冻结为 Warning{code:"codex/error"}；warning 的 threadId 可选（schema 语义）
+  - raw reasoning（item/reasoning/textDelta 与 reasoning.content）只产生 ReasoningRawDropped 诊断；bare "requestUserInput" 旧名→LegacyName 诊断不按新合同解释
+  - scope：thread 未建立/缺 threadId/turnId、异线程异 turn 全部 fail-closed（计数不投事件）；陈旧 turn/completed 不清除活动 turn
+  - request id 关联统一 wire_request_id（数字→十进制、字符串→去引号），requestUserInput 与 serverRequest/resolved 同构关联
+  - 方法表对齐：codex_app_server.rs recognized_protocol_progress 委托 codex_interaction::is_recognized_protocol_progress（旧 15 方法超集，既有 28 个 transport 测试保持通过）
+  - 有界：delta 16k/权威文本 200k/工具字段 8k/diff 128k/计划 256 步/问题 32×选项 32；超限截断或拒绝 + 诊断，后续帧继续处理
+
+external_gates_remaining: []
+
+notes:
+  - M0-01.A1 自测曾因 --list 输出断言依赖 M0-02 pending 状态在累计门禁失败；已改为与实现进度无关的结构断言（这属于 harness 自身缺陷修复，未触碰产品断言）

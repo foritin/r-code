@@ -1,0 +1,114 @@
+{
+  "schema_version": "codex-interaction-verification.v1",
+  "generated_at": "2026-08-24T19:26:09.537Z",
+  "mode": {
+    "kind": "task",
+    "id": "M2-02",
+    "tasks": [
+      "M2-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "87dc2711220bc88d4561021d9430d8cb7316d981",
+    "branch": "feat/codex-rich-interaction",
+    "worktree_digest": "d040c0c9f192d9019e2b7678bc61f4391af41fb4345e7b4579e20b4f12579bad"
+  },
+  "fixture_schema_version": "0.145.0",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-02.A1",
+      "task": "M2-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "计划/diff/压缩/warning/usage 各自生成非聊天事件",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "--all-features",
+        "--lib",
+        "m2_02_a1",
+        "--",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 554,
+      "output_sha256": "51889c35d8f6e0c9606478fb77888318d3eb57bae1c23b23c0f777ab89b4afde",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A2",
+      "task": "M2-02",
+      "level": "replay",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "重复 plan 幂等；live/历史重建结构一致",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-context-events.test.mjs",
+        "--test-name-pattern",
+        "m2_02_a2"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2950,
+      "output_sha256": "bfcc0cb6e8a0463bcc64c0d572b12e554d0165f961f06f9f3829a2b28835c6ad",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A3",
+      "task": "M2-02",
+      "level": "visual",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "紧凑上下文行 + 长 diff 截断 + 无横向溢出",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/codex-context-events.test.mjs",
+        "--test-name-pattern",
+        "m2_02_a3"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2863,
+      "output_sha256": "4554b7b6f9cd42893080145eaa120b8dc26b6d40e1b1c974ee8104a5131bd28e",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/codex-rich-interaction",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

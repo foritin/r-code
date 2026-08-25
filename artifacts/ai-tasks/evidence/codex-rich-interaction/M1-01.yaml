@@ -1,0 +1,62 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-codex-rich-interaction
+task_id: M1-01
+status: passed
+
+source:
+  document: docs/codex-rich-interaction-prd.md
+  refs:
+    - docs/codex-rich-interaction-prd.md#10-详细任务卡 (M1-01)
+    - docs/codex-rich-interaction-prd.md#42-commentary-状态机
+
+revision:
+  git_revision: 87dc2711f9db50956e28c9e925683a11e65cb14c
+  worktree_digest: 由报告 M1-01.json revision.worktree_digest 记录
+
+deliverables:
+  - codex_interaction.rs：CodexAgentMessageProjector（§4.2 状态机）+ CodexRunProjection（normalizer+projector 组合）+ begin_thread/begin_turn priming
+  - commands.rs：observe_codex_app_server_event 接入投影（delta→Message{delta:true}；Sealed→直接落盘 + 零长度/全文封口帧）；run 主循环持有投影状态并在收尾冲刷残留 item
+  - commands.rs e2e：m1_01_a1（commentary+final 流式各一次）/ m1_01_a2（重复 completed + 迟到增量不重复）
+  - codex_interaction_tests.rs：6 个 m1_01_a1/a2 前缀投影器单测
+  - scripts/codex-interaction/m1-01-regression.mjs（A3 回归包装）
+
+changed_paths:
+  - src-tauri/src/codex_interaction.rs
+  - src-tauri/src/codex_interaction_tests.rs
+  - src-tauri/src/commands.rs
+  - scripts/codex-interaction/registry.mjs
+  - scripts/codex-interaction/m1-01-regression.mjs
+
+assertions:
+  - id: M1-01.A1
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m1_01_a1 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json
+  - id: M1-01.A2
+    passed: true
+    command: cargo test -p r-code-host --all-features --lib m1_01_a2 -- --test-threads=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json
+  - id: M1-01.A3
+    passed: true
+    command: node scripts/codex-interaction/m1-01-regression.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1-01.json
+
+cumulative_verification:
+  command: node scripts/verify-codex-interaction.mjs --through M1 --profile implementation
+  exit_code: 1
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M1.json
+  note: M1-01 断言全过；剩余失败全部是 M1-02/M1-03 not_implemented（同里程碑后续任务预期状态）
+
+decisions:
+  - 投影器为纯状态机（无 I/O/时钟），e2e 与单测共用；CodexRunProjection 组合 normalizer+projector，主循环一份实例贯穿 run
+  - phase 语义：final_answer→SessionEvent::Message（作者层），commentary/unknown→R_CODE_INTERIM_EVENT（轻量过程层，与原生 interim 折叠共用事件类型）；history 重建因此与 live 折叠一致，无需 vendor 协议改动
+  - 封口帧零长度/全文二分：streamed=true 发空文本封口（正文已按增量交付，重复正文禁令）；streamed=false（无增量一次性 completed/子代理路径）由封口帧携带全文
+  - 权威 mismatch：投影器以全文替换累计并计数（mismatch_count），观察器路径直接写权威全文；live UI 的替换校正显示属 M1-03
+  - 终态墓碑：sealed 后迟到增量丢弃计数（late_delta_count）；重复 completed 由 normalizer（DuplicateCompleted 诊断）+投影器（duplicate_seal_count）双层拦截
+  - turn 结束/取消/失败统一在主循环收尾 finish_turn 冲刷残留 item（累计文本封口，unknown 保守归 commentary）
+  - 不修改 AgentEvent DTO 与 vendor 协议：复用 Message{delta} 通道，A3 回归因此全绿
+
+external_gates_remaining: []

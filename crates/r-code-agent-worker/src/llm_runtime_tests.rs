@@ -7839,6 +7839,32 @@ fn deepseek_reasoning_replay_provider_error_gets_a_dedicated_hint() {
     assert!(!message.contains("接口地址与模型匹配"));
 }
 
+// M1-02.A3：原生 workspace 提示与 Codex 主提示共用 r-code-core 的进度
+// 合同——逐字一致、只出现一次、不与其他合同相互覆盖。
+#[test]
+fn m1_02_a3_workspace_prompt_embeds_shared_progress_contract_once() {
+    let prompt = build_system_prompt(true, false, false);
+    assert!(
+        prompt.contains(r_code_core::progress_contract::PUBLIC_PROGRESS_CONTRACT),
+        "workspace prompt embeds the shared contract verbatim"
+    );
+    assert_eq!(
+        prompt
+            .matches("Keep the user oriented during multi-stage work")
+            .count(),
+        1,
+        "no duplicated drift copies"
+    );
+    // 占位符必须被替换，不能把模板语法漏进提示。
+    assert!(!prompt.contains("{PUBLIC_PROGRESS_CONTRACT}"));
+    // 语言合同与最终回答规则仍在（注入不覆盖既有合同）。
+    assert!(prompt.contains("Always reply in the language the user is using"));
+    assert!(prompt.contains("In the final answer, lead with the outcome"));
+    // 纯聊天（无工作区工具）提示不携带工作区进度合同，行为不变。
+    let chat = build_system_prompt(false, false, false);
+    assert!(!chat.contains("Keep the user oriented during multi-stage work"));
+}
+
 #[test]
 fn system_prompt_excludes_local_clock() {
     let zone = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
