@@ -137,6 +137,9 @@ jobs:
   test:
     name: Test
     runs-on: ${{ matrix.os }}
+    # macOS 腿曾有串行测试挂满 6h 被系统超时（如 e157f114）；60min 对冷缓存
+    # 全量测试富余（windows 冷 ~26min），挂起时快速失败留下可定位日志。
+    timeout-minutes: 60
     strategy:
       # A platform-specific failure must not hide the result from the other
       # supported desktop platform.
