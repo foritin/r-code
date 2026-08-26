@@ -1,6 +1,6 @@
 {
   "schema_version": "windows-reliability-verification.v1",
-  "generated_at": "2026-08-25T14:27:16.633Z",
+  "generated_at": "2026-08-26T11:16:11.136Z",
   "mode": {
     "kind": "task",
     "id": "M0-01",
@@ -10,9 +10,9 @@
     "profile": "implementation"
   },
   "revision": {
-    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "git_revision": "61a7e630537027263a98a4b30c49e95ce3d03907",
     "branch": "feat/windows-command-reliability",
-    "worktree_digest": "8ef512dd135f95bb16ab8d1404ac0cc211fe75e3af7283f57ba45ad8963446a4"
+    "worktree_digest": "30c87e8b4945cb0541ec462302c196b1eee7470856f84bd488598818f6f75bf1"
   },
   "corpus_schema_version": "command-corpus.v1",
   "platform": {
@@ -47,8 +47,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 1999,
-      "output_sha256": "885fdf89ec7e8d52c551e4bb0909650f0a93e5573b113eaa3958923f901c8eac",
+      "duration_ms": 2287,
+      "output_sha256": "010de3c167a0ea4b9ab75e53ffd9694ae64b244d46b3915a128dab53fda718f5",
       "failure_excerpt": null
     },
     {
@@ -68,7 +68,7 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 63,
+      "duration_ms": 67,
       "output_sha256": "48322b663cb635a4ebe6ceb7055331233e6ce0dc11727379f800b3311afa30ae",
       "failure_excerpt": null
     },
@@ -87,6 +87,8 @@
         "scripts/windows-reliability/corpus-run.mjs",
         "--tier",
         "fast",
+        "--tag",
+        "m0-01",
         "--check",
         "dialect-field",
         "--check",
@@ -95,8 +97,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 43020,
-      "output_sha256": "0350174a08f59a9d947e6ea00bc3535ad0e773ca9653f075793030f72434af5d",
+      "duration_ms": 28915,
+      "output_sha256": "df970dd7c003bb796eedfb1cca5bfc2941fb020390ad369b9fe893159dc4d3cc",
       "failure_excerpt": null
     }
   ],
