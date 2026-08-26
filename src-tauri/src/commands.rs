@@ -37977,6 +37977,9 @@ input.on('line', (line) => {
 
     // M1-01.A1：commentary 与 final 的增量按序各出现一次，权威完成帧只
     // 封口不重复正文；phase 正确落到封口发射（interim/message 语义）。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m1_01_a1_codex_app_server_projects_commentary_and_final_each_once() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38085,6 +38088,9 @@ input.on('line', (line) => {
     }
 
     // M1-01.A2：重复 completed 帧与终态后的迟到增量不产生重复正文。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m1_01_a2_codex_app_server_duplicate_completed_keeps_single_text() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38176,6 +38182,9 @@ input.on('line', (line) => {
 
     // M2-01.A2：命令工具生命周期——started→输出增量（按序）→completed
     // （失败状态 + exit code 与输出一致）。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m2_01_a2_codex_app_server_tool_lifecycle_streams_bounded_output() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38289,6 +38298,9 @@ input.on('line', (line) => {
 
     // M2-02.A1：计划/diff/压缩/warning/usage 各自投影为非聊天事件，
     // 绝不伪装成 agent 消息。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m2_02_a1_codex_app_server_context_events_are_not_agent_messages() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38409,6 +38421,9 @@ input.on('line', (line) => {
     }
 
     // M3-01.A1：合法单/多题答案按 question id 返回，Codex 随后继续并完成 turn。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m3_01_a1_codex_app_server_user_input_answers_resume_the_turn() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38547,6 +38562,9 @@ input.on('line', (line) => {
     }
 
     // M3-01.A2：secret 答案只出现在单次 writer 响应；不进事件流/持久化。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m3_01_a2_codex_app_server_secret_answer_never_persists() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38695,6 +38713,9 @@ input.on('line', (line) => {
 
     // M4-02.A2：完整流程 e2e——commentary → 命令工具（含输出增量）→
     // requestUserInput（含 secret）→ 回答 → final，一个 turn 内闭环。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m4_02_a2_codex_app_server_full_rich_interaction_flow() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38906,6 +38927,9 @@ input.on('line', (line) => {
     }
 
     // M3-01.A3：重复提交只有一个确定终态；未知 key 的提交被拒绝。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m3_01_a3_codex_app_server_duplicate_submissions_have_one_terminal_state() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -39054,6 +39078,9 @@ input.on('line', (line) => {
 
     // M3-03.A1：answer vs timeout/resolved 竞态只有一个 writer 结果与一个
     // UI 终态；迟到答案被拒绝。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m3_03_a1_timeout_and_resolved_races_have_single_terminals() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -39194,6 +39221,9 @@ input.on('line', (line) => {
 
     // M3-03.A2：pending 期间普通 composer 消息走 steer，问题提交只回答
     // request；两者顺序可追踪且互不串线。
+    // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
+    // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
+    #[cfg(windows)]
     #[tokio::test]
     async fn m3_03_a2_pending_question_and_steer_stay_separate_channels() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
