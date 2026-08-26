@@ -414,9 +414,12 @@ impl StreamDrain {
 }
 
 /// Windows Git Bash 档工具描述（诚实声明方言与 Unix 工具可用性）。
+/// 仅 Windows 的 description() 引用；非 Windows 构建下不编译（防 dead_code）。
+#[cfg(windows)]
 const GIT_BASH_TIER_DESCRIPTION: &str = "Run a shell command inside the workspace. On this machine the shell is Git Bash (bash -c, no login profile): use bash/POSIX syntax — grep, sed, awk and other Unix tools are available. Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, create_file and edit instead — they behave identically on every platform and need no approval for reads. Reserve this tool for builds, tests, linters, git, and package managers. Keep commands short and single-purpose: break a multi-step build/test/package pipeline into separate calls, one step at a time, and check each step's output before the next. A command finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. cwd defaults to the workspace root and cannot escape it.";
 
 /// Windows PowerShell/cmd 回落档工具描述（保持既有方言警告）。
+#[cfg(windows)]
 const POWERSHELL_FALLBACK_DESCRIPTION: &str = "Run a shell command inside the workspace. On this machine the shell is PowerShell (pwsh -NoProfile), so use PowerShell syntax — Unix tools like grep, sed, head and awk are not available. Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, create_file and edit instead — they behave identically on every platform and need no approval for reads. Reserve this tool for builds, tests, linters, git, and package managers. Keep commands short and single-purpose: break a multi-step build/test/package pipeline into separate calls, one step at a time, and check each step's output before the next. A command finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. cwd defaults to the workspace root and cannot escape it.";
 
 /// `bash` 工具 -- 在工作区内执行 shell 命令。
@@ -983,7 +986,7 @@ mod tests {
         #[cfg(windows)]
         let command = tier_command("exit 3", "cmd /c exit 3");
         #[cfg(not(windows))]
-        let command = "exit 3";
+        let command = "exit 3".to_string();
         let out = BashTool
             .execute(json_input(&command, dir.path()))
             .await
@@ -1008,7 +1011,7 @@ mod tests {
         #[cfg(windows)]
         let command = tier_command("ls", "Get-ChildItem -Name");
         #[cfg(not(windows))]
-        let command = "ls";
+        let command = "ls".to_string();
         let out = BashTool
             .execute(json_input(&command, dir.path()))
             .await
@@ -1022,7 +1025,7 @@ mod tests {
         #[cfg(windows)]
         let command = tier_command("sleep 30", "Start-Sleep -Seconds 30");
         #[cfg(not(windows))]
-        let command = "sleep 30";
+        let command = "sleep 30".to_string();
         let out = BashTool
             .execute(serde_json::json!({
                 "command": command,
