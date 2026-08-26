@@ -64,6 +64,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pushToast } from "../../store/toast";
 import { useCompanionStore, type CompanionMotion } from "../../store/companion";
 import { providerIconFor, providerInitial } from "../../lib/provider-icons";
+import { ExecutionEnvCard } from "./ExecutionEnvCard";
 import { McpPanel } from "./McpPanel";
 import { KnowledgeSettingsPane } from "./KnowledgeSettingsPane";
 import { SubagentProvidersPanel } from "./SubagentProvidersPanel";
@@ -117,6 +118,7 @@ const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   { pane: "agents", blockId: "orchestration-skills", title: "内置编排能力", keywords: ["任务拆解", "路由", "codex 子代理", "质量复核循环"] },
   { pane: "agents", blockId: "codex-setup-block", title: "Codex 运行时", keywords: ["codex", "登录", "认证", "协作", "cli", "更新", "升级", "mcp", "安装", "权限", "模型"] },
   { pane: "tools", blockId: "mcp-panel-block", title: "工具与连接（MCP）", keywords: ["mcp", "工具", "连接", "市场", "扩展", "rtk"] },
+  { pane: "tools", blockId: "execution-env-block", title: "执行环境（Windows Shell）", keywords: ["shell", "bash", "git bash", "powershell", "执行环境", "命令", "路径", "回落", "方言"] },
   { pane: "knowledge", blockId: "knowledge-block", title: "知识与指令", keywords: ["记忆", "prompt", "提示词", "skills", "技能", "知识库", "指令"] },
   { pane: "preferences", blockId: "appearance-block", title: "界面主题", keywords: ["主题", "外观", "亮色", "暗色", "跟随系统"] },
   { pane: "preferences", blockId: "companion-block", title: "桌面小助手", keywords: ["小助手", "悬浮", "提示音", "动效", "形态"] },
@@ -750,6 +752,7 @@ export function SettingsScene() {
 
             {activePane === "tools" && (
               <div className="settings-sheet settings-tools-sheet">
+                <ExecutionEnvCard />
                 <McpPanel />
               </div>
             )}
