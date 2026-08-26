@@ -110,7 +110,11 @@ fn a1_agent_message_lifecycle_with_phase() {
         }
     }));
     match events(&started)[0] {
-        CodexTimelineEventV1::AssistantStarted { item_id, phase, scope } => {
+        CodexTimelineEventV1::AssistantStarted {
+            item_id,
+            phase,
+            scope,
+        } => {
             assert_eq!(item_id, "msg_1");
             assert_eq!(*phase, CodexAssistantPhase::Commentary);
             assert_eq!(scope.run_id, "run_test");
@@ -125,7 +129,12 @@ fn a1_agent_message_lifecycle_with_phase() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "msg_1", "delta": "正在定位…" }
     }));
     match events(&delta)[0] {
-        CodexTimelineEventV1::AssistantDelta { item_id, phase, delta, .. } => {
+        CodexTimelineEventV1::AssistantDelta {
+            item_id,
+            phase,
+            delta,
+            ..
+        } => {
             assert_eq!(item_id, "msg_1");
             assert_eq!(*phase, CodexAssistantPhase::Commentary);
             assert_eq!(delta, "正在定位…");
@@ -141,7 +150,12 @@ fn a1_agent_message_lifecycle_with_phase() {
         }
     }));
     match events(&completed)[0] {
-        CodexTimelineEventV1::AssistantCompleted { item_id, phase, authoritative_text, .. } => {
+        CodexTimelineEventV1::AssistantCompleted {
+            item_id,
+            phase,
+            authoritative_text,
+            ..
+        } => {
             assert_eq!(item_id, "msg_1");
             assert_eq!(*phase, CodexAssistantPhase::FinalAnswer);
             assert_eq!(authoritative_text, "最终答案");
@@ -160,7 +174,12 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "rs_1", "summaryIndex": 2, "delta": "摘要片段" }
     }));
     match events(&reasoning_delta)[0] {
-        CodexTimelineEventV1::ReasoningSummaryDelta { item_id, summary_index, delta, .. } => {
+        CodexTimelineEventV1::ReasoningSummaryDelta {
+            item_id,
+            summary_index,
+            delta,
+            ..
+        } => {
             assert_eq!(item_id, "rs_1");
             assert_eq!(*summary_index, 2);
             assert_eq!(delta, "摘要片段");
@@ -176,7 +195,11 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         }
     }));
     match events(&reasoning_done)[0] {
-        CodexTimelineEventV1::ReasoningSummaryCompleted { item_id, public_summary, .. } => {
+        CodexTimelineEventV1::ReasoningSummaryCompleted {
+            item_id,
+            public_summary,
+            ..
+        } => {
             assert_eq!(item_id, "rs_1");
             assert_eq!(public_summary, "公开摘要");
         }
@@ -191,11 +214,19 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         }
     }));
     match events(&tool_started)[0] {
-        CodexTimelineEventV1::ToolStarted { item_id, kind, safe_input, .. } => {
+        CodexTimelineEventV1::ToolStarted {
+            item_id,
+            kind,
+            safe_input,
+            ..
+        } => {
             assert_eq!(item_id, "cmd_1");
             assert_eq!(*kind, CodexToolKind::CommandExecution);
             assert_eq!(safe_input.summary, "rg");
-            assert_eq!(safe_input.raw_kind_name.as_deref(), Some("commandExecution"));
+            assert_eq!(
+                safe_input.raw_kind_name.as_deref(),
+                Some("commandExecution")
+            );
         }
         other => panic!("expected ToolStarted, got {other:?}"),
     }
@@ -205,7 +236,11 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "cmd_1", "delta": "line1\n" }
     }));
     match events(&output_delta)[0] {
-        CodexTimelineEventV1::ToolOutputDelta { item_id, safe_delta, .. } => {
+        CodexTimelineEventV1::ToolOutputDelta {
+            item_id,
+            safe_delta,
+            ..
+        } => {
             assert_eq!(item_id, "cmd_1");
             assert_eq!(safe_delta, "line1\n");
         }
@@ -220,7 +255,13 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         }
     }));
     match events(&tool_done)[0] {
-        CodexTimelineEventV1::ToolCompleted { item_id, kind, status, safe_output, .. } => {
+        CodexTimelineEventV1::ToolCompleted {
+            item_id,
+            kind,
+            status,
+            safe_output,
+            ..
+        } => {
             assert_eq!(item_id, "cmd_1");
             assert_eq!(*kind, CodexToolKind::CommandExecution);
             assert_eq!(*status, CodexToolStatus::Failed);
@@ -238,7 +279,9 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         }
     }));
     match events(&plan)[0] {
-        CodexTimelineEventV1::PlanUpdated { explanation, steps, .. } => {
+        CodexTimelineEventV1::PlanUpdated {
+            explanation, steps, ..
+        } => {
             assert_eq!(explanation.as_deref(), Some("两步走"));
             assert_eq!(steps.len(), 2);
             assert_eq!(steps[0].status, CodexPlanStepStatus::Completed);
@@ -252,7 +295,10 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "diff": "--- a\n+++ b\n" }
     }));
     match events(&diff)[0] {
-        CodexTimelineEventV1::DiffUpdated { unified_diff_or_reference, .. } => {
+        CodexTimelineEventV1::DiffUpdated {
+            unified_diff_or_reference,
+            ..
+        } => {
             assert!(unified_diff_or_reference.starts_with("--- a"));
         }
         other => panic!("expected DiffUpdated, got {other:?}"),
@@ -290,7 +336,11 @@ fn a1_reasoning_tool_plan_diff_usage_compaction_warning_conversion() {
         "params": { "message": "磁盘空间偏低" }
     }));
     match events(&warning)[0] {
-        CodexTimelineEventV1::Warning { scope, code, safe_message } => {
+        CodexTimelineEventV1::Warning {
+            scope,
+            code,
+            safe_message,
+        } => {
             assert!(scope.is_none(), "global warning carries no scope");
             assert!(code.is_none());
             assert_eq!(safe_message, "磁盘空间偏低");
@@ -352,7 +402,9 @@ fn a1_request_user_input_and_resolution() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "requestId": "41" }
     }));
     match events(&resolved)[0] {
-        CodexTimelineEventV1::UserInputResolved { item_id, outcome, .. } => {
+        CodexTimelineEventV1::UserInputResolved {
+            item_id, outcome, ..
+        } => {
             assert_eq!(item_id, "item_demo");
             assert_eq!(*outcome, CodexUserInputOutcome::Resolved);
         }
@@ -369,11 +421,20 @@ fn a1_unknown_method_and_kind_only_produce_safe_diagnostics() {
         "method": "codex/someBrandNewEvent",
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "payload": { "secret": "x" } }
     }));
-    assert!(events(&unknown_method).is_empty(), "unknown method must not become an event");
+    assert!(
+        events(&unknown_method).is_empty(),
+        "unknown method must not become an event"
+    );
     let diagnostic = diagnostics(&unknown_method)[0];
     assert_eq!(diagnostic.code, CodexDiagnosticCode::UnknownMethod);
-    assert_eq!(diagnostic.method.as_deref(), Some("codex/someBrandNewEvent"));
-    assert!(!diagnostic.detail.contains("secret"), "diagnostic must not carry payload");
+    assert_eq!(
+        diagnostic.method.as_deref(),
+        Some("codex/someBrandNewEvent")
+    );
+    assert!(
+        !diagnostic.detail.contains("secret"),
+        "diagnostic must not carry payload"
+    );
 
     let unknown_kind = state.feed(&json!({
         "method": "item/started",
@@ -393,7 +454,10 @@ fn a1_unknown_method_and_kind_only_produce_safe_diagnostics() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "rs_9", "delta": "内部推理正文" }
     }));
     assert!(events(&raw_delta).is_empty());
-    assert_eq!(diagnostics(&raw_delta)[0].code, CodexDiagnosticCode::ReasoningRawDropped);
+    assert_eq!(
+        diagnostics(&raw_delta)[0].code,
+        CodexDiagnosticCode::ReasoningRawDropped
+    );
 
     let legacy = state.feed(&json!({
         "method": "requestUserInput",
@@ -401,7 +465,10 @@ fn a1_unknown_method_and_kind_only_produce_safe_diagnostics() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo" }
     }));
     assert!(events(&legacy).is_empty());
-    assert_eq!(diagnostics(&legacy)[0].code, CodexDiagnosticCode::LegacyName);
+    assert_eq!(
+        diagnostics(&legacy)[0].code,
+        CodexDiagnosticCode::LegacyName
+    );
 }
 
 #[test]
@@ -415,7 +482,11 @@ fn a1_frozen_fixture_sample_frames_convert() {
     let delta_frame = &fixture["sample_frames"]["agent_message_delta"]["frame"];
     let outcomes = state.feed(delta_frame);
     let delta_events = events(&outcomes);
-    assert_eq!(delta_events.len(), 1, "fixture delta frame converts to one event");
+    assert_eq!(
+        delta_events.len(),
+        1,
+        "fixture delta frame converts to one event"
+    );
     match delta_events[0] {
         CodexTimelineEventV1::AssistantDelta { delta, .. } => {
             assert_eq!(delta, "正在检索配置入口…");
@@ -435,7 +506,11 @@ fn a1_frozen_fixture_sample_frames_convert() {
     let request_frame = &fixture["sample_frames"]["request_user_input_request"]["frame"];
     let outcomes = state.feed(request_frame);
     match events(&outcomes)[0] {
-        CodexTimelineEventV1::UserInputRequested { request_id, questions, .. } => {
+        CodexTimelineEventV1::UserInputRequested {
+            request_id,
+            questions,
+            ..
+        } => {
             assert_eq!(request_id, "41");
             assert_eq!(questions[0].header, "范围");
         }
@@ -458,7 +533,9 @@ fn a2_optional_and_unknown_fields_tolerated() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "plan": [] }
     }));
     match events(&plan)[0] {
-        CodexTimelineEventV1::PlanUpdated { explanation, steps, .. } => {
+        CodexTimelineEventV1::PlanUpdated {
+            explanation, steps, ..
+        } => {
             assert!(explanation.is_none());
             assert!(steps.is_empty());
         }
@@ -476,13 +553,19 @@ fn a2_optional_and_unknown_fields_tolerated() {
         }
     }));
     match events(&done)[0] {
-        CodexTimelineEventV1::AssistantCompleted { authoritative_text, phase, .. } => {
+        CodexTimelineEventV1::AssistantCompleted {
+            authoritative_text,
+            phase,
+            ..
+        } => {
             assert_eq!(authoritative_text, "答案");
             assert_eq!(*phase, CodexAssistantPhase::Unknown);
         }
         other => panic!("expected AssistantCompleted, got {other:?}"),
     }
-    assert!(diagnostics(&done).iter().any(|d| d.code == CodexDiagnosticCode::PhaseMissing));
+    assert!(diagnostics(&done)
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::PhaseMissing));
 
     let request = state.feed(&json!({
         "id": 77,
@@ -493,7 +576,11 @@ fn a2_optional_and_unknown_fields_tolerated() {
         }
     }));
     match events(&request)[0] {
-        CodexTimelineEventV1::UserInputRequested { auto_resolution_ms, questions, .. } => {
+        CodexTimelineEventV1::UserInputRequested {
+            auto_resolution_ms,
+            questions,
+            ..
+        } => {
             assert_eq!(*auto_resolution_ms, None);
             assert_eq!(questions.len(), 1);
             assert!(questions[0].options.is_empty());
@@ -513,7 +600,12 @@ fn a2_missing_or_stale_scope_never_enters_current_run() {
         "params": { "threadId": "thr_other", "turnId": "turn_demo", "itemId": "m", "delta": "别处的流" }
     }));
     assert!(stale.is_empty(), "stale thread frame produces no outcomes");
-    assert_eq!(state.diagnostic_counts.get(&CodexDiagnosticCode::ScopeStale), Some(&1));
+    assert_eq!(
+        state
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::ScopeStale),
+        Some(&1)
+    );
 
     // 缺 threadId：丢弃 + ScopeMissing。
     let missing_thread = state.feed(&json!({
@@ -521,7 +613,12 @@ fn a2_missing_or_stale_scope_never_enters_current_run() {
         "params": { "turnId": "turn_demo", "itemId": "m", "delta": "无主帧" }
     }));
     assert!(missing_thread.is_empty());
-    assert_eq!(state.diagnostic_counts.get(&CodexDiagnosticCode::ScopeMissing), Some(&1));
+    assert_eq!(
+        state
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::ScopeMissing),
+        Some(&1)
+    );
 
     // 异 turn 帧：同样 fail-closed。
     let stale_turn = state.feed(&json!({
@@ -529,7 +626,12 @@ fn a2_missing_or_stale_scope_never_enters_current_run() {
         "params": { "threadId": "thr_demo", "turnId": "turn_old", "itemId": "m", "delta": "旧 turn" }
     }));
     assert!(stale_turn.is_empty());
-    assert_eq!(state.diagnostic_counts.get(&CodexDiagnosticCode::ScopeStale), Some(&2));
+    assert_eq!(
+        state
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::ScopeStale),
+        Some(&2)
+    );
 
     // thread 未建立前的事件帧不允许进入。
     let mut fresh = normalizer();
@@ -538,7 +640,12 @@ fn a2_missing_or_stale_scope_never_enters_current_run() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "m", "delta": "早到" }
     }));
     assert!(early.is_empty());
-    assert_eq!(fresh.diagnostic_counts.get(&CodexDiagnosticCode::ScopeMissing), Some(&1));
+    assert_eq!(
+        fresh
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::ScopeMissing),
+        Some(&1)
+    );
 
     // 陈旧 turn/completed 不得清掉当前活动 turn。
     let mut keep = normalizer();
@@ -547,7 +654,9 @@ fn a2_missing_or_stale_scope_never_enters_current_run() {
         "method": "turn/completed",
         "params": { "threadId": "thr_demo", "turn": { "id": "turn_ghost" } }
     }));
-    assert!(diagnostics(&stale_finish).iter().any(|d| d.code == CodexDiagnosticCode::ScopeStale));
+    assert!(diagnostics(&stale_finish)
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::ScopeStale));
     let still_scoped = keep.feed(&json!({
         "method": "item/agentMessage/delta",
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "m", "delta": "仍然有效" }
@@ -571,11 +680,16 @@ fn a3_oversized_payloads_are_bounded_and_processing_continues() {
     }));
     match events(&outcomes)[0] {
         CodexTimelineEventV1::AssistantDelta { delta, .. } => {
-            assert!(delta.chars().count() <= MAX_DELTA_CHARS + 1, "delta bounded");
+            assert!(
+                delta.chars().count() <= MAX_DELTA_CHARS + 1,
+                "delta bounded"
+            );
         }
         other => panic!("expected AssistantDelta, got {other:?}"),
     }
-    assert!(diagnostics(&outcomes).iter().any(|d| d.code == CodexDiagnosticCode::PayloadTruncated));
+    assert!(diagnostics(&outcomes)
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::PayloadTruncated));
 
     // 问题数超限：截到上限并拒绝多余，请求事件仍然产生。
     let questions: Vec<Value> = (0..MAX_QUESTIONS + 5)
@@ -595,7 +709,9 @@ fn a3_oversized_payloads_are_bounded_and_processing_continues() {
         }
         other => panic!("expected UserInputRequested, got {other:?}"),
     }
-    assert!(diagnostics(&outcomes).iter().any(|d| d.code == CodexDiagnosticCode::PayloadRejected));
+    assert!(diagnostics(&outcomes)
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::PayloadRejected));
 
     // 空问题 id：拒绝该问题，不影响其余。
     let outcomes = state.feed(&json!({
@@ -623,7 +739,12 @@ fn a3_oversized_payloads_are_bounded_and_processing_continues() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "big", "delta": "恢复" }
     }));
     assert_eq!(events(&healthy).len(), 1);
-    assert_eq!(state.diagnostic_counts.get(&CodexDiagnosticCode::PayloadTruncated), Some(&1));
+    assert_eq!(
+        state
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::PayloadTruncated),
+        Some(&1)
+    );
 }
 
 #[test]
@@ -639,8 +760,13 @@ fn a3_duplicate_completed_frames_are_idempotent() {
     });
     assert_eq!(events(&state.feed(&completed)).len(), 1);
     let replayed = state.feed(&completed);
-    assert!(events(&replayed).is_empty(), "duplicate completed must not re-emit");
-    assert!(diagnostics(&replayed).iter().any(|d| d.code == CodexDiagnosticCode::DuplicateCompleted));
+    assert!(
+        events(&replayed).is_empty(),
+        "duplicate completed must not re-emit"
+    );
+    assert!(diagnostics(&replayed)
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::DuplicateCompleted));
 }
 
 // ---------------------------------------------------------------------------
@@ -665,8 +791,14 @@ fn a4_diagnostics_and_events_stay_redacted() {
         }
     }));
     let outcome_text = format!("{outcomes:?}");
-    assert!(!outcome_text.contains("sk-abc123def456ghi"), "token must be redacted in events");
-    assert!(!outcome_text.contains("hunter2deadbeef"), "credential must be redacted");
+    assert!(
+        !outcome_text.contains("sk-abc123def456ghi"),
+        "token must be redacted in events"
+    );
+    assert!(
+        !outcome_text.contains("hunter2deadbeef"),
+        "credential must be redacted"
+    );
 
     // raw reasoning 正文不进入任何事件/诊断 detail。
     let raw = state.feed(&json!({
@@ -674,7 +806,10 @@ fn a4_diagnostics_and_events_stay_redacted() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "rs_raw", "delta": "绝密推理：秘密是 1234" }
     }));
     let raw_text = format!("{raw:?}");
-    assert!(!raw_text.contains("绝密推理"), "raw reasoning body must never surface");
+    assert!(
+        !raw_text.contains("绝密推理"),
+        "raw reasoning body must never surface"
+    );
     assert!(!raw_text.contains("1234"));
 
     // reasoning item 的 raw content 只留下丢弃诊断。
@@ -687,7 +822,9 @@ fn a4_diagnostics_and_events_stay_redacted() {
     }));
     let started_text = format!("{started:?}");
     assert!(!started_text.contains("内部推理正文"));
-    assert!(diagnostics(&started).iter().any(|d| d.code == CodexDiagnosticCode::ReasoningRawDropped));
+    assert!(diagnostics(&started)
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::ReasoningRawDropped));
 
     // 诊断 detail 只含长度/类型等不可逆元数据。
     let unknown = state.feed(&json!({
@@ -706,11 +843,19 @@ fn a4_diagnostics_and_events_stay_redacted() {
 
 #[test]
 fn a4_capability_snapshot_defaults_conservative() {
-    assert!(CodexInteractionCapabilities::for_cli_version(Some("0.145.0")).supports_request_user_input);
-    assert!(CodexInteractionCapabilities::for_cli_version(Some("0.150.2")).supports_request_user_input);
-    assert!(!CodexInteractionCapabilities::for_cli_version(Some("0.144.9")).supports_request_user_input);
+    assert!(
+        CodexInteractionCapabilities::for_cli_version(Some("0.145.0")).supports_request_user_input
+    );
+    assert!(
+        CodexInteractionCapabilities::for_cli_version(Some("0.150.2")).supports_request_user_input
+    );
+    assert!(
+        !CodexInteractionCapabilities::for_cli_version(Some("0.144.9")).supports_request_user_input
+    );
     assert!(!CodexInteractionCapabilities::for_cli_version(None).supports_request_user_input);
-    assert!(!CodexInteractionCapabilities::for_cli_version(Some("garbage")).supports_request_user_input);
+    assert!(
+        !CodexInteractionCapabilities::for_cli_version(Some("garbage")).supports_request_user_input
+    );
 
     // 能力缺失时 requestUserInput 显式降级为 LegacyName 诊断而非崩溃。
     let mut legacy = CodexInteractionNormalizer::new(
@@ -725,7 +870,9 @@ fn a4_capability_snapshot_defaults_conservative() {
         "params": { "threadId": "thr_demo", "turnId": "turn_demo", "itemId": "i", "questions": [] }
     }));
     assert!(events(&outcomes).is_empty());
-    assert!(diagnostics(&outcomes).iter().any(|d| d.code == CodexDiagnosticCode::LegacyName));
+    assert!(diagnostics(&outcomes)
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::LegacyName));
 }
 
 // ===========================================================================
@@ -782,7 +929,13 @@ fn m1_01_a1_projector_streams_and_seals_commentary_and_final_in_order() {
         .collect();
     assert_eq!(seals.len(), 2, "one seal per item");
     match seals[0] {
-        CodexMessageEmission::Sealed { item_id, phase, authoritative_text, corrected, streamed } => {
+        CodexMessageEmission::Sealed {
+            item_id,
+            phase,
+            authoritative_text,
+            corrected,
+            streamed,
+        } => {
             assert_eq!(item_id, "c1");
             assert_eq!(*phase, CodexAssistantPhase::Commentary);
             assert_eq!(authoritative_text, "先看构建。入口在配置模块。");
@@ -792,7 +945,13 @@ fn m1_01_a1_projector_streams_and_seals_commentary_and_final_in_order() {
         other => panic!("expected c1 seal, got {other:?}"),
     }
     match seals[1] {
-        CodexMessageEmission::Sealed { item_id, phase, authoritative_text, corrected, streamed } => {
+        CodexMessageEmission::Sealed {
+            item_id,
+            phase,
+            authoritative_text,
+            corrected,
+            streamed,
+        } => {
             assert_eq!(item_id, "f1");
             assert_eq!(*phase, CodexAssistantPhase::FinalAnswer);
             assert_eq!(authoritative_text, "已修复，测试全绿。");
@@ -818,9 +977,17 @@ fn m1_01_a1_projector_seal_without_deltas_carries_full_text_once() {
     }));
     assert_eq!(emissions.len(), 1);
     match &emissions[0] {
-        CodexMessageEmission::Sealed { authoritative_text, streamed, corrected, .. } => {
+        CodexMessageEmission::Sealed {
+            authoritative_text,
+            streamed,
+            corrected,
+            ..
+        } => {
             assert_eq!(authoritative_text, "一次性交付");
-            assert!(!*streamed, "no deltas were streamed: seal carries the full text");
+            assert!(
+                !*streamed,
+                "no deltas were streamed: seal carries the full text"
+            );
             assert!(!*corrected);
         }
         other => panic!("expected seal, got {other:?}"),
@@ -846,16 +1013,18 @@ fn m1_01_a2_projector_duplicate_and_late_frames_stay_idempotent() {
         .any(|d| d.code == CodexDiagnosticCode::DuplicateCompleted));
 
     // 投影器第二道防线：直接喂重复 AssistantCompleted 也不重发。
-    let direct = projection.messages.observe(&CodexTimelineEventV1::AssistantCompleted {
-        scope: CodexInteractionScopeV1 {
-            run_id: "run_m1".into(),
-            thread_id: "thr_demo".into(),
-            turn_id: Some("turn_demo".into()),
-        },
-        item_id: "dup".into(),
-        phase: CodexAssistantPhase::FinalAnswer,
-        authoritative_text: "只此一次".into(),
-    });
+    let direct = projection
+        .messages
+        .observe(&CodexTimelineEventV1::AssistantCompleted {
+            scope: CodexInteractionScopeV1 {
+                run_id: "run_m1".into(),
+                thread_id: "thr_demo".into(),
+                turn_id: Some("turn_demo".into()),
+            },
+            item_id: "dup".into(),
+            phase: CodexAssistantPhase::FinalAnswer,
+            authoritative_text: "只此一次".into(),
+        });
     assert!(direct.is_empty());
     assert_eq!(projection.messages.duplicate_seal_count, 1);
 
@@ -894,13 +1063,19 @@ fn m1_01_a2_projector_interleaved_items_do_not_cross_streams() {
     let seals: Vec<(&str, &str)> = emissions
         .iter()
         .filter_map(|e| match e {
-            CodexMessageEmission::Sealed { item_id, authoritative_text, .. } => {
-                Some((item_id.as_str(), authoritative_text.as_str()))
-            }
+            CodexMessageEmission::Sealed {
+                item_id,
+                authoritative_text,
+                ..
+            } => Some((item_id.as_str(), authoritative_text.as_str())),
             _ => None,
         })
         .collect();
-    assert_eq!(seals, vec![("a", "A1A2"), ("b", "B1B2")], "each item seals its own text");
+    assert_eq!(
+        seals,
+        vec![("a", "A1A2"), ("b", "B1B2")],
+        "each item seals its own text"
+    );
     assert_eq!(projection.messages.mismatch_count, 0);
 }
 
@@ -919,9 +1094,18 @@ fn m1_01_a2_projector_finish_turn_seals_residuals_conservatively() {
     }
     let residuals = projection.finish_turn();
     assert_eq!(residuals.len(), 2);
-    for (index, expected) in [("r1", "流了一半"), ("r2", "无相位残留")].iter().enumerate() {
+    for (index, expected) in [("r1", "流了一半"), ("r2", "无相位残留")]
+        .iter()
+        .enumerate()
+    {
         match &residuals[index] {
-            CodexMessageEmission::Sealed { item_id, phase, authoritative_text, streamed, .. } => {
+            CodexMessageEmission::Sealed {
+                item_id,
+                phase,
+                authoritative_text,
+                streamed,
+                ..
+            } => {
                 assert_eq!(item_id, expected.0);
                 // 未知 phase 的残留保守归为 commentary（§4.2）。
                 assert_eq!(*phase, CodexAssistantPhase::Commentary);
@@ -931,7 +1115,10 @@ fn m1_01_a2_projector_finish_turn_seals_residuals_conservatively() {
             other => panic!("expected residual seal, got {other:?}"),
         }
     }
-    assert!(projection.finish_turn().is_empty(), "second finish is a no-op");
+    assert!(
+        projection.finish_turn().is_empty(),
+        "second finish is a no-op"
+    );
 }
 
 #[test]
@@ -941,7 +1128,10 @@ fn m1_01_a2_projection_rejects_foreign_run_frames() {
         "method": "item/agentMessage/delta",
         "params": { "threadId": "thr_foreign", "turnId": "turn_demo", "itemId": "x", "delta": "别处的增量" }
     }));
-    assert!(emissions.is_empty(), "foreign thread frames must not project");
+    assert!(
+        emissions.is_empty(),
+        "foreign thread frames must not project"
+    );
 }
 
 // ===========================================================================
@@ -983,9 +1173,18 @@ fn m4_01_a1_security_negative_raw_reasoning_and_secret_never_surface() {
         everything.push_str(&format!("{events:?}"));
         everything.push_str(&format!("{diagnostics:?}"));
     }
-    assert!(!everything.contains(SECRET), "secret value must never appear in any projection output");
-    assert!(!everything.contains("sk-live"), "token-shaped strings must be redacted");
-    assert!(!everything.contains(RAW_REASONING), "raw reasoning body must never surface");
+    assert!(
+        !everything.contains(SECRET),
+        "secret value must never appear in any projection output"
+    );
+    assert!(
+        !everything.contains("sk-live"),
+        "token-shaped strings must be redacted"
+    );
+    assert!(
+        !everything.contains(RAW_REASONING),
+        "raw reasoning body must never surface"
+    );
     assert!(!everything.contains("内部推理"));
     // secret answer：UserInputRequested 只有问题与标志（M3 路径的值不进事件），
     // 公开 reasoning summary 正常通过。
@@ -1025,18 +1224,27 @@ fn m4_01_a2_diagnostics_carry_only_allowed_metadata_but_locate_categories() {
 
     // 类别可定位（R-OBS-01）。
     assert_eq!(
-        state.diagnostic_counts.get(&CodexDiagnosticCode::UnknownMethod),
+        state
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::UnknownMethod),
         Some(&1)
     );
     assert_eq!(
-        state.diagnostic_counts.get(&CodexDiagnosticCode::PayloadTruncated),
+        state
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::PayloadTruncated),
         Some(&1)
     );
     assert!(diagnostics(&duplicate)
         .iter()
         .any(|d| d.code == CodexDiagnosticCode::DuplicateCompleted));
     assert!(stale.is_empty());
-    assert_eq!(state.diagnostic_counts.get(&CodexDiagnosticCode::ScopeStale), Some(&1));
+    assert_eq!(
+        state
+            .diagnostic_counts
+            .get(&CodexDiagnosticCode::ScopeStale),
+        Some(&1)
+    );
     assert!(diagnostics(&raw)
         .iter()
         .any(|d| d.code == CodexDiagnosticCode::ReasoningRawDropped));
@@ -1113,10 +1321,12 @@ fn m4_01_a3_out_of_order_duplicate_and_severed_streams_end_deterministic() {
     // run_a：两次增量 → 封口一次；重复与迟到零输出。
     let a_streamed: String = [a1.clone(), a2.clone()]
         .iter()
-        .flat_map(|batch| batch.iter().filter_map(|e| match e {
-            CodexMessageEmission::Delta { delta, .. } => Some(delta.clone()),
-            _ => None,
-        }))
+        .flat_map(|batch| {
+            batch.iter().filter_map(|e| match e {
+                CodexMessageEmission::Delta { delta, .. } => Some(delta.clone()),
+                _ => None,
+            })
+        })
         .collect();
     assert_eq!(a_streamed, "A-文本-第二段");
     assert_eq!(seal_a.len(), 1);
@@ -1124,7 +1334,11 @@ fn m4_01_a3_out_of_order_duplicate_and_severed_streams_end_deterministic() {
     assert!(late_a.is_empty());
     assert!(foreign.is_empty(), "cross-run frames never project");
     match &seal_a[0] {
-        CodexMessageEmission::Sealed { authoritative_text, corrected, .. } => {
+        CodexMessageEmission::Sealed {
+            authoritative_text,
+            corrected,
+            ..
+        } => {
             assert_eq!(authoritative_text, "A-文本-第二段");
             assert!(!corrected);
         }
@@ -1141,14 +1355,22 @@ fn m4_01_a3_out_of_order_duplicate_and_severed_streams_end_deterministic() {
     assert_eq!(b_streamed, "B-文本-");
     assert_eq!(severed_b.len(), 1);
     match &severed_b[0] {
-        CodexMessageEmission::Sealed { authoritative_text, phase, streamed, .. } => {
+        CodexMessageEmission::Sealed {
+            authoritative_text,
+            phase,
+            streamed,
+            ..
+        } => {
             assert_eq!(authoritative_text, "B-文本-");
             assert_eq!(*phase, CodexAssistantPhase::Commentary);
             assert!(*streamed);
         }
         other => panic!("expected severed seal, got {other:?}"),
     }
-    assert!(severed_a.is_empty(), "already sealed item produces no residual");
+    assert!(
+        severed_a.is_empty(),
+        "already sealed item produces no residual"
+    );
 }
 
 // ===========================================================================
@@ -1238,7 +1460,12 @@ fn m2_01_a1_every_supported_kind_maps_started_and_completed() {
         let started_events = tool_events_of(&started);
         assert_eq!(started_events.len(), 1, "{label}: exactly one ToolStarted");
         match started_events[0] {
-            CodexTimelineEventV1::ToolStarted { item_id, kind, safe_input, .. } => {
+            CodexTimelineEventV1::ToolStarted {
+                item_id,
+                kind,
+                safe_input,
+                ..
+            } => {
                 assert_eq!(*kind, expected_kind, "{label}: kind maps");
                 assert_eq!(item_id, label);
                 // 展示标题映射表（M2-01 步骤 1）。
@@ -1257,7 +1484,12 @@ fn m2_01_a1_every_supported_kind_maps_started_and_completed() {
             "params": { "threadId": "thr_demo", "turnId": "turn_demo", "item": item }
         }));
         match tool_events_of(&completed)[0] {
-            CodexTimelineEventV1::ToolCompleted { item_id, kind, status, .. } => {
+            CodexTimelineEventV1::ToolCompleted {
+                item_id,
+                kind,
+                status,
+                ..
+            } => {
                 assert_eq!(*kind, expected_kind, "{label}: completed kind maps");
                 assert_eq!(*status, CodexToolStatus::Completed);
                 assert_eq!(item_id, label);
@@ -1282,7 +1514,12 @@ fn m2_01_a1_failure_and_exit_code_states_map() {
             "item": { "id": "cf", "type": "commandExecution", "command": ["cargo"], "cwd": "/w", "status": "failed", "exitCode": 2, "aggregatedOutput": "error: bench failed", "commandActions": [] } }
     }));
     match tool_events_of(&completed)[0] {
-        CodexTimelineEventV1::ToolCompleted { status, exit_code, safe_output, .. } => {
+        CodexTimelineEventV1::ToolCompleted {
+            status,
+            exit_code,
+            safe_output,
+            ..
+        } => {
             assert_eq!(*status, CodexToolStatus::Failed);
             assert_eq!(*exit_code, Some(2));
             assert_eq!(safe_output.as_deref(), Some("error: bench failed"));
@@ -1316,8 +1553,15 @@ fn m2_01_a3_output_buffer_is_bounded_and_terminal_survives() {
     let rendered = projection
         .take_tool_output("big", None)
         .expect("buffered output survives");
-    assert!(rendered.chars().count() < 40 * 10_000, "output stays bounded");
-    assert!(rendered.contains("已截断"), "truncation marker is visible: {}", &rendered[65_000..65_120]);
+    assert!(
+        rendered.chars().count() < 40 * 10_000,
+        "output stays bounded"
+    );
+    assert!(
+        rendered.contains("已截断"),
+        "truncation marker is visible: {}",
+        &rendered[65_000..65_120]
+    );
     assert!(rendered.starts_with(&chunk[..100]), "head preserved");
     assert!(rendered.ends_with("xxxx"), "tail preserved");
 
@@ -1347,11 +1591,17 @@ fn m2_01_a3_output_delta_events_are_bounded_per_frame() {
     }));
     assert!(emissions.is_empty());
     match &events[0] {
-        CodexTimelineEventV1::ToolOutputDelta { safe_delta, item_id, .. } => {
+        CodexTimelineEventV1::ToolOutputDelta {
+            safe_delta,
+            item_id,
+            ..
+        } => {
             assert_eq!(item_id, "cmd");
             assert!(safe_delta.chars().count() <= crate::codex_interaction::MAX_DELTA_CHARS + 1);
         }
         other => panic!("expected ToolOutputDelta, got {other:?}"),
     }
-    assert!(diagnostics.iter().any(|d| d.code == CodexDiagnosticCode::PayloadTruncated));
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == CodexDiagnosticCode::PayloadTruncated));
 }
