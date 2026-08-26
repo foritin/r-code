@@ -38,6 +38,8 @@ tempfile = { version = "3", optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows Credential Manager。缺失时 keyring 会回落到无法跨 Entry 持久化的 mock。
 keyring = { workspace = true, features = ["windows-native"] }
+# 注册表实时 PATH 合成（win_env.rs，windows-reliability PRD §4.2）。
+windows-registry = "0.6.1"
 
 [target.'cfg(not(any(target_os = "windows", target_os = "macos")))'.dependencies]
 # Linux 等平台保持现有系统凭据后端选择；macOS 明确不链接 keyring/Keychain。

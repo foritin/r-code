@@ -918,6 +918,7 @@ mod tests {
             caller: Some("agent".to_string()),
             access_mode: ProjectAccessMode::RiskBased,
             origin_request_key: None,
+            shell_override: None,
         }
     }
 

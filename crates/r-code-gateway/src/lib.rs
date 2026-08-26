@@ -11,15 +11,22 @@
 #![allow(clippy::doc_nested_refdefs)]
 
 pub mod classifier;
+pub mod diagnosis;
 pub mod gateway;
 pub mod permission;
 pub mod tools;
 pub mod tools_command;
 pub mod tools_search;
+#[cfg(windows)]
+pub mod win_shell;
 
 pub use classifier::{
     classify_command, classify_shell_command, has_control_chars, is_agent_process,
     CommandClassification,
+};
+pub use diagnosis::{
+    append_diagnosis, classify_failure, codex_shell_dialect, diagnosis_counters,
+    reset_diagnosis_counters, DiagnosisKind,
 };
 pub use gateway::{
     subagent_read_only_tool_allowed, tool_outcome_directive, PathArity, PathBinding, Tool,
@@ -31,5 +38,9 @@ pub use tools::{
     ApplyPatchTool, CreateFileTool, DeleteFileTool, EditTool, GitDiffStatTool, GitStatusTool,
     ListFilesTool, LoadSkillTool, ReadFileTool,
 };
-pub use tools_command::BashTool;
+pub use tools_command::{
+    current_shell_dialect, current_shell_dialect_label, BashTool, ShellDialect,
+};
 pub use tools_search::{GlobTool, SearchHit, SearchTool};
+#[cfg(windows)]
+pub use win_shell::{resolve_windows_shell, ResolvedShell};

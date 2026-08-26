@@ -22,6 +22,8 @@ pub mod progress_contract;
 pub mod secret;
 pub mod security;
 pub mod state;
+#[cfg(windows)]
+pub mod win_env;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

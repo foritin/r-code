@@ -95,6 +95,11 @@ pub struct ToolExecutionContext {
     /// model-controlled JSON input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_request_key: Option<String>,
+    /// Host-installed Windows shell override (`execution.bash_shell_path`,
+    /// docs/windows-command-reliability-prd.md §4.5). `Some("")` forces the
+    /// PowerShell fallback chain; the bash tool is the only consumer today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_override: Option<String>,
 }
 
 /// Optional host policy evaluated before permission prompts and before any built-in or dynamic
@@ -639,6 +644,11 @@ pub struct ToolGateway {
     /// Populated only by the trusted desktop host; absent resolver keeps the field
     /// `None` and changes no behavior.
     run_origin_resolver: Option<RunOriginResolver>,
+    /// Host-installed Windows shell override threaded into every
+    /// [`ToolExecutionContext`]（execution.bash_shell_path，PRD §4.5）。
+    /// Interior mutability：宿主设置保存后经 [`ToolGateway::update_shell_override`]
+    /// 即时生效，无需重启（值经锁快照，绝不阻塞工具执行）。
+    shell_override: Arc<std::sync::RwLock<Option<String>>>,
 }
 
 impl ToolGateway {
@@ -651,6 +661,7 @@ impl ToolGateway {
             ledger: Arc::new(RwLock::new(Vec::new())),
             policy_guard: None,
             run_origin_resolver: None,
+            shell_override: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -662,6 +673,33 @@ impl ToolGateway {
     /// [`ToolExecutionContext::origin_request_key`].
     pub fn set_run_origin_resolver(&mut self, resolver: RunOriginResolver) {
         self.run_origin_resolver = Some(resolver);
+    }
+
+    /// Install the host-owned Windows shell override
+    /// (`execution.bash_shell_path`). `None` keeps auto detection; `Some("")`
+    /// forces the PowerShell fallback chain; a path is used verbatim (validated
+    /// at resolution time, errors instead of silently falling back).
+    pub fn set_shell_override(&mut self, override_path: Option<String>) {
+        *self
+            .shell_override
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = override_path;
+    }
+
+    /// Runtime update through a shared handle (`Arc<ToolGateway>`)：设置保存后
+    /// 即时生效；毒锁取值继续（锁内只有 Option<String>，无不变量可破坏）。
+    pub fn update_shell_override(&self, override_path: Option<String>) {
+        *self
+            .shell_override
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = override_path;
+    }
+
+    fn current_shell_override(&self) -> Option<String> {
+        self.shell_override
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     fn resolve_origin_request_key(&self, run_id: &str) -> Option<String> {
@@ -909,6 +947,7 @@ impl ToolGateway {
             caller: caller.map(ToOwned::to_owned),
             access_mode,
             origin_request_key: self.resolve_origin_request_key(run_id),
+            shell_override: self.current_shell_override(),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -959,6 +998,17 @@ impl ToolGateway {
                 }
             }
             PermissionCheckResult::Denied(reason) => {
+                // bash 工具的 policy 拒绝追加只读档位诊断提示（R-DX-01：
+                // "blocked by policy" 类失败必须可归因到权限档位）。
+                let reason = if tool_name == "bash" {
+                    crate::diagnosis::append_diagnosis(
+                        &reason,
+                        None,
+                        crate::tools_command::current_shell_dialect(),
+                    )
+                } else {
+                    reason
+                };
                 audit.deny(&reason);
                 self.ledger.write().await.push(audit);
                 Err(ProductError::PermissionError(reason))
@@ -1089,6 +1139,7 @@ impl ToolGateway {
             caller: caller.map(ToOwned::to_owned),
             access_mode,
             origin_request_key: self.resolve_origin_request_key(run_id),
+            shell_override: self.current_shell_override(),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -1270,6 +1321,7 @@ impl ToolGateway {
             caller: caller.map(ToOwned::to_owned),
             access_mode,
             origin_request_key: self.resolve_origin_request_key(run_id),
+            shell_override: self.current_shell_override(),
         };
         if let Some(guard) = &self.policy_guard {
             if let Err(error) = guard.check(&context, tool_name, risk_level) {
@@ -1838,6 +1890,7 @@ mod tests {
             caller: Some("agent".to_string()),
             access_mode: ProjectAccessMode::FullAccess,
             origin_request_key: None,
+            shell_override: None,
         };
 
         let error = tokio::time::timeout(
