@@ -7534,8 +7534,10 @@ async fn request_approval_subagent_executes_bash_only_after_user_approval() {
         suspension_gate: Arc::new(AtomicBool::new(false)),
         continuation_gate: Arc::new(AtomicBool::new(false)),
     };
+    // echo 重定向在 Git Bash 与 PowerShell 回落档都可执行（方言中立）；
+    // 测试真值是"批准后才落盘"，不绑定某一档语法。
     #[cfg(windows)]
-    let command = "Set-Content -LiteralPath approved.txt -Value approved";
+    let command = "echo approved > approved.txt";
     #[cfg(not(windows))]
     let command = "printf approved > approved.txt";
 
@@ -9884,4 +9886,32 @@ async fn plan_native_hidden_edit_call_is_rejected_at_execution_boundary() {
     // 目录不含 edit（呈现层），但执行边界才是权威。
     let timelines = journal_tool_names(journal_dir.path(), &session.meta.id).await;
     assert!(!timelines[0].iter().any(|name| name == "edit"));
+}
+
+#[test]
+fn delegate_task_description_states_full_access_semantics() {
+    // R-CDX-03/A1：delegate_task 描述必须显式说明 full_access 参数语义
+    //（只读默认 + blocked by policy 拒绝行为 + full_access 授权边界）。
+    // 描述在 provider list_tools 内拼装（需完整 runtime 才能实例化），
+    // 以源级标记断言语义段落真实拼入 delegate_description 终段。
+    let source = include_str!("llm_runtime.rs");
+    let start = source
+        .find("Access: 'read_only' (default) limits the child")
+        .expect("delegate_task 描述必须含 full_access 语义段");
+    let mut segment = source[start..start + 700].to_string();
+    // Rust 字符串行续符（反斜杠+换行）在源码里切断标记——归一化后匹配运行时语义。
+    // \u{5c} 为反斜杠的 unicode 转义（避开源码续行符歧义）。
+    segment = segment.replace("\u{5c}\r\n", "").replace("\u{5c}\n", "");
+    let segment = segment.as_str();
+    for marker in [
+        "full_access",
+        "blocked by policy",
+        "approval matrix",
+        "read-only tools",
+    ] {
+        assert!(
+            segment.contains(marker),
+            "语义段缺少要素 {marker}: {segment}"
+        );
+    }
 }

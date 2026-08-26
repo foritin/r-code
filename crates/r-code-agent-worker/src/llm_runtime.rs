@@ -7148,9 +7148,12 @@ your final answer."
     };
     let delegate_description = format!(
         "{delegate_description} Work directly by default; permission to use subagents is not an \
-instruction to call this tool. A run may create at most three direct subagents. Starting the second \
-or third requires a confirmed plan_subagents batch with one genuinely distinct entry per direction; \
-no fourth direct subagent is allowed."
+instruction to call this tool. Access: 'read_only' (default) limits the child to read-only tools \
+and its write/network commands fail with a 'blocked by policy' error; 'full_access' grants edits \
+and commands under the approval matrix, only when the user or parent plan assigns them. A run may \
+create at most three direct subagents. Starting the second or third requires a confirmed \
+plan_subagents batch with one genuinely distinct entry per direction; no fourth direct subagent is \
+allowed."
     );
     tools.extend([
         ToolSpec {

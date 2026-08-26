@@ -1677,6 +1677,20 @@ pub async fn cmd_request_audit_counters(
     r_code_host::commands::request_audit_counters(&state, &task_id).await
 }
 
+/// 执行环境探测（R-OPS-01 设置卡：当前 shell 解析档/路径/是否检出 Git Bash）。
+#[tauri::command]
+pub fn cmd_execution_env_probe(
+    state: tauri::State<'_, r_code_host::CommandState>,
+) -> r_code_host::commands::ExecutionEnvProbe {
+    r_code_host::commands::execution_env_probe(&state.config_dir)
+}
+
+/// 诊断提示命中计数（R-MET-02 旁路观察：[(类别, 次数)]，无正文）。
+#[tauri::command]
+pub fn cmd_diagnosis_hint_counters() -> Vec<(String, u64)> {
+    r_code_host::commands::diagnosis_hint_counters()
+}
+
 /// Install RTK from its verified official release when needed, then atomically toggle policy.
 #[tauri::command]
 pub async fn cmd_rtk_set_enabled(

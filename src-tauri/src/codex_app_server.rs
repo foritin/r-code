@@ -859,6 +859,39 @@ fn windows_cmd_safe_path(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn synthesized_path_child_applied_to_app_server_command() {
+        // R-ENV-01/M2-01.A2：app-server 拉起的子进程 PATH 必须与
+        // configure_codex_child 基准一致（RTK 前缀 + 注册表合成基底单次拼装）。
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("codex-appserver-probe.exe");
+        std::fs::write(&cli, b"stub").unwrap();
+        let command =
+            codex_app_server_command(Some(cli), directory.path()).expect("command must build");
+        let mut probe = tokio::process::Command::new("probe");
+        crate::rtk::configure_codex_child(&mut probe);
+        let expected = probe
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                key.eq_ignore_ascii_case("PATH")
+                    .then(|| value.map(std::ffi::OsString::from))
+                    .flatten()
+            })
+            .expect("configure_codex_child must set PATH");
+        let path_env = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                key.eq_ignore_ascii_case("PATH")
+                    .then(|| value.map(std::ffi::OsString::from))
+                    .flatten()
+            })
+            .expect("app-server child must carry an explicit PATH env");
+        assert_eq!(path_env, expected);
+    }
+
     use super::*;
 
     use tempfile::TempDir;
