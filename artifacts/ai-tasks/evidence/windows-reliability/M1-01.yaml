@@ -1,0 +1,57 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M1-01
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M1-01）
+    - docs/windows-command-reliability-prd.md#41-windows-shell-解析链合同
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m1-01-verified-2026-08-25
+deliverables:
+  - crates/r-code-gateway/src/win_shell.rs：五级解析链（纯函数核心 + 生产包装 + TTL 5min 缓存 + invalidate）
+  - crates/r-code-gateway/src/tools_command.rs：ShellDialect 枚举、ShellPlan 带方言标记、Git Bash 档 Inline -c 直传、PS 档保留 .ps1 暂存全部加固、unix_only_rejection 方言门控（bash 档放行）
+  - ToolExecutionContext.shell_override 字段 + ToolGateway::set_shell_override + 3 处 context 构造点透传
+  - src-tauri/src/settings.rs：ExecutionHostSettings（execution.toml：execution.bash_shell_path + codex.subagent_reasoning_effort，枚举校验 minimal|low|medium|high，绝对路径校验）
+  - src-tauri/src/commands.rs：CommandState::new 中 gateway.set_shell_override 接线
+changed_paths:
+  - crates/r-code-gateway/src/win_shell.rs（新增）
+  - crates/r-code-gateway/src/tools_command.rs
+  - crates/r-code-gateway/src/lib.rs
+  - crates/r-code-gateway/src/gateway.rs
+  - src-tauri/src/settings.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/plan_tools.rs
+  - src-tauri/tests/plan_review_tools.rs
+  - artifacts/metrics/corpus-m1-01.log
+assertions:
+  - id: M1-01.A1
+    passed: true
+    command: cargo test -p r-code-gateway resolve_windows_shell
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-01.json
+  - id: M1-01.A2
+    passed: true
+    command: cargo test -p r-code-gateway wsl_bash
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-01.json
+  - id: M1-01.A3
+    passed: true
+    command: node scripts/windows-reliability/corpus-run.mjs --tier fast --check dialect=git-bash --check categories=dialect-chain,env-prefix,quoting
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-01.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --task M1-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-01.json
+  note: 3/3 passed；金集对照——基线 pwsh 34.1%（dialect_failures=24）→ Git Bash 档 92.7%（38/41，dialect_failures=0；剩余 3 条为 policy fail-with-hint，属 M2-02 提示引擎范畴）
+decisions:
+  - unix_only_rejection 的方言门控提前到 M1-01 落地（bash 档放行）——否则 bash 档会把 Git Bash 自带的 head/wc/tr 误拦截，金集无法全绿；M1-02.A2 再以专项测试锁定该行为
+  - 设置覆盖不进 TTL 缓存（覆盖值随时可变，校验只是单次 stat）；无覆盖解析结果缓存 5 分钟
+  - 空串覆盖=强制回落跳过 1-4 级；指向缺失=ConfigError 报错不静默回落
+  - execution.toml 同时承载 codex.subagent_reasoning_effort（M3-01 消费），避免两套宿主设置文件
+  - MSYS 路径转换会拆坏 `cmd /c`（实测 `/c`→`C:\`）——M1-02 的 MSYS_NO_PATHCONV=1 注入将根治，M1-01 测试按档位选命令规避
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）

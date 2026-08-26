@@ -1,0 +1,340 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T14:59:39.014Z",
+  "mode": {
+    "kind": "through",
+    "id": "M1",
+    "tasks": [
+      "M0-01",
+      "M0-02",
+      "M1-01",
+      "M1-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "c9992297f28408abd0919ea15f0248821366c76e653b96f21c83131733def8bb"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Harness 自测：未知 task / 失败子命令 / registry 缺失 required 断言均非 0 退出且报告列出准确失败 ID",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/verify-windows-reliability.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1710,
+      "output_sha256": "b73991e60e862bf6003b43c3a13e2431e0420dcd7ed62f1a4adc388f42d40fe9",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A2",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "corpus.jsonl 通过 schema 校验（枚举合法、八类数量达下限、无重复 id）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-schema.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 50,
+      "output_sha256": "48322b663cb635a4ebe6ceb7055331233e6ce0dc11727379f800b3311afa30ae",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A3",
+      "task": "M0-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "runner 真实执行至少一条 both/fast 命令并产出含 dialect 字段的报告",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--tag",
+        "m0-01",
+        "--check",
+        "dialect-field",
+        "--check",
+        "both-executed=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 6841,
+      "output_sha256": "5334fc9207d7544cd851fc2da56a8812aa7951481539c1f821a079269fd23d82",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A1",
+      "task": "M0-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Windows 基线报告存在、schema 完整且 total ≥ 40",
+      "evidence_path": "artifacts/metrics/command-corpus",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-report-check.mjs",
+        "--platform",
+        "windows",
+        "--suffix",
+        "baseline",
+        "--min-total",
+        "40"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 52,
+      "output_sha256": "3b232924fc08c8d06a88a8b2cc901ec2de9e0bcecafbec0c92b113d8fbe4d8e4",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A3",
+      "task": "M0-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "PRD §4.4 基线小节含报告路径与四个数字字段（windows 基线回填 + darwin 外部待执行标注）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/prd-baseline-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 50,
+      "output_sha256": "1347266466e78ec8308ccdcea379a0ea6e8c3095297e16e36f6d4f2ad35e0d95",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A1",
+      "task": "M1-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "五级解析链单测：设置覆盖（含失败报错不静默回落）、已知位置、git.exe 反推、PATH 探测、PowerShell 回落",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "resolve_windows_shell"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 295,
+      "output_sha256": "9ddd90269c8a709966000a552915692ca9a393fdb6a152b846e2fb17b3e5503a",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A2",
+      "task": "M1-01",
+      "level": "security-negative",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "PATH 首位为 C:\\Windows\\System32\\bash.exe 时跳过并继续下一级",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "wsl_bash"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 290,
+      "output_sha256": "e28b80c25f13ba724b6c643c3b7271ba254833ebfb43c26f81197a32da6fe250",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A3",
+      "task": "M1-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Git Bash 档金集 dialect-chain/env-prefix/quoting 全绿（回落档由 M1-01.A1 的 fallback 单测覆盖）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--tag",
+        "m1-01",
+        "--check",
+        "dialect=git-bash",
+        "--check",
+        "categories=dialect-chain,env-prefix,quoting"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3246,
+      "output_sha256": "ebe1a20fd6e218dc07a068d9a61698587473e29a63c71e252a0885ac1e97884e",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A1",
+      "task": "M1-02",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "bash 档子进程 env 含 MSYS_NO_PATHCONV=1 与 LANG=C.UTF-8",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "bash_tier_env"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 348,
+      "output_sha256": "1aecf67f3122d4abed6f2eb8ded17fef3004eda942634dd65867bec84df013e0",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A2",
+      "task": "M1-02",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "grep 在 PowerShell 档被 hint 拦截、在 bash 档放行",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "unix_only_rejection"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 298,
+      "output_sha256": "32fd35f739da804a3f20d15788199ac380b280decf11f5376cd5c19d687456bc",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A3",
+      "task": "M1-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Windows bash 档描述含 Git Bash、回落档描述含 PowerShell 语义字符串",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "windows_tool_description"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 284,
+      "output_sha256": "60e1dceefd2950c2d4aa40a42f3412caa7461174a8494da062b19e27dac0febb",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A4",
+      "task": "M1-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "金集 encoding/path/pipe 类通过，中文无 U+FFFD 替换符",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--tag",
+        "m1-02",
+        "--check",
+        "categories=encoding,path,pipe",
+        "--check",
+        "no-mojibake"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3344,
+      "output_sha256": "ae15ce2d40576e37e5331b5920006aecf1dfd9999844b3baf29e11479c6427a7",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

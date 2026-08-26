@@ -325,6 +325,20 @@ Gateway 的执行顺序是：工具查找 → 输入路径绑定 → 动态风�
 
 对既有工作区文件，安全边界不止停在路径检查：`PathGuard` 持有创建时打开的工作区目录 capability，读取、枚举、原子写入、变更回滚、审核读取和工作区图片预览都相对该句柄执行，不会在逻辑校验后再按环境绝对路径打开文件。类型化句柄（`ResolvedWorkspacePath`、`WorkspaceFile`、`WorkspaceDirectory`）把 capability 相对路径封装在内部，调用方只能拿到展示路径或已打开的文件句柄，不能拿回可被 `std::fs` 按环境路径重新打开的裸 `PathBuf`。Windows junction/reparse point 与 Unix 符号链接逃逸同等对待，均 fail-closed 拒绝。`atomic_write_path` 在 `rename` 成功后同步父目录（不支持的平台依赖操作系统元数据日志，不伪同步），保证崩溃后目录项可见。Plan 审核的跟踪写入包装器也会把同一 capability 传给内层写工具，避免包装层意外退回普通路径 I/O。Git、搜索、glob 和 Bash 等子进程仍需要把工作区路径作为 `cwd` 传给操作系统；它们先经过路径边界校验，但当前跨平台 API 没有等价的 capability-aware `cwd`，这是持续收紧的跨进程边界。
 
+#### Windows 命令执行：五级 shell 解析链与方言策略
+
+`bash` 工具在 Windows 上不再把 PowerShell 当默认解释器。shell 解析按**五级固定顺序**（`r-code-gateway::win_shell`，TTL 缓存 5 分钟）：
+
+1. 宿主设置 `execution.bash_shell_path`（`<config_dir>/execution.toml`）——存在即用，路径缺失时**报错不静默回落**；空串=强制回落；
+2. 已知安装位置（Program Files / Program Files(x86) / LOCALAPPDATA / scoop 的 `Git\in\ash.exe`）；
+3. PATH 上 `git.exe` 反推 `<git根>\in\ash.exe`（优先）与 `usr\in\ash.exe`；
+4. PATH 上 `bash.exe`（**显式跳过 `C:\Windows\System32\bash.exe`（WSL 启动器）及同级系统目录命中**）；
+5. 回落链 `pwsh.exe → powershell.exe → cmd.exe`（保留全部既有加固：`.ps1` 暂存 + `-File`、UTF-8 前缀、`$LASTEXITCODE` 透传）。
+
+Git Bash 档以 `bash -c <command>` 单 argv 直传（不经临时脚本、不加载 login profile），并注入 `MSYS_NO_PATHCONV=1`（防 MSYS 把 `/c`、`cmd /c` 改写为 Windows 路径）与 `LANG=C.UTF-8`。`UNIX_ONLY_HINTS` 前置拦截仅在 PowerShell/cmd 回落档生效；工具描述按解析档声明当前方言与语法约束。子进程 PATH 由 `r-code-core::win_env` 从注册表（HKLM 系统 + HKCU 用户，`REG_EXPAND_SZ` 展开）实时合成（HKLM → HKCU → 进程差集，TTL 5 分钟）——GUI 启动的陈旧 PATH 不再丢新装工具；bash 工具与全部 Codex 子进程拉起路径（exec / app-server / MCP）同源受益，RTK managed bin 前缀与合成基底单次拼装。
+
+命令失败输出经 `r-code-gateway::diagnosis` 做**签名分类**后追加有界诊断提示（ParserError+`&&`、相对路径 `.exe` 调用、`blocked by policy` 档位说明、`is not recognized` 安装/PATH 建议、cmd 链语法），bash 工具与 Codex `commandExecution` 错误投影共用同源实现，命中计数经 `cmd_diagnosis_hint_counters` 旁路暴露。分类器对解释器包壳（`powershell -Command …`/`bash -c …`/`cmd /c …`）按内层命令定级（只收紧）。金集回归（`crates/r-code-gateway/tests/command_corpus/`，44 条八类）经 `node scripts/verify-windows-reliability.mjs` 验收，CI Windows 腿挂 fast 档门禁。
+
 ### 8.2 风险等级
 
 | 风险 | 含义 | 示例行为 |

@@ -1,0 +1,85 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T14:29:19.824Z",
+  "mode": {
+    "kind": "task",
+    "id": "M0-02",
+    "tasks": [
+      "M0-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "0a3841b1866e692ee261b3d952a8e0f9ba8004067ef390a1ba3d080bbc2bfab5"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-02.A1",
+      "task": "M0-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Windows 基线报告存在、schema 完整且 total ≥ 40",
+      "evidence_path": "artifacts/metrics/command-corpus",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-report-check.mjs",
+        "--platform",
+        "windows",
+        "--min-total",
+        "40"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 54,
+      "output_sha256": "8d04496a8c8f6b8089050c36b6a3ee2e7f2a9ac11ace281b61e11da0677535e5",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A3",
+      "task": "M0-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "PRD §4.4 基线小节含报告路径与四个数字字段（windows 基线回填 + darwin 外部待执行标注）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/prd-baseline-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 53,
+      "output_sha256": "1347266466e78ec8308ccdcea379a0ea6e8c3095297e16e36f6d4f2ad35e0d95",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

@@ -1,0 +1,61 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M0-01
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M0-01）
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: harness-m0-01-verified-2026-08-25
+deliverables:
+  - scripts/verify-windows-reliability.mjs（薄入口：--task/--through/--profile/--list，退出码 0/1/2 语义与 codex-interaction 一致）
+  - scripts/windows-reliability/registry.mjs（11 任务 36 断言全量注册 + 依赖环校验 + required 缺失硬失败）
+  - scripts/windows-reliability/runner.mjs（报告 windows-reliability-verification.v1：revision/worktree digest/平台/脱敏/输出仅 sha256；断言级 env 合并）
+  - scripts/windows-reliability/corpus-schema.mjs（六字段/枚举/八类下限/重复 id/总数≥40）
+  - scripts/windows-reliability/corpus-run.mjs（净化 PATH 编排 cargo 金集 runner + dialect/categories/no-mojibake/thresholds 检查）
+  - scripts/windows-reliability/corpus-report-check.mjs（基线报告存在性与 schema 检查）
+  - crates/r-code-gateway/tests/command_corpus/corpus.jsonl（44 条：dialect-chain 7 / env-prefix 4 / quoting 6 / encoding 4 / path 8 / pipe 6 / exit-code 5 / policy 4；both 13 条；slow 3 条）
+  - crates/r-code-gateway/tests/command_corpus_runner.rs（CORPUS_RUN 门控；policy 类经真实 ToolGateway R4 前置拒绝；报告 command-corpus-report.v1）
+  - crates/r-code-gateway/src/tools_command.rs 新增 pub fn current_shell_dialect_label（只读自省，行为零变化）
+  - scripts/verify-windows-reliability.test.mjs（Harness 自测 11 用例）
+changed_paths:
+  - crates/r-code-gateway/src/tools_command.rs
+  - crates/r-code-gateway/src/lib.rs
+  - crates/r-code-gateway/tests/command_corpus/corpus.jsonl
+  - crates/r-code-gateway/tests/command_corpus_runner.rs
+  - scripts/verify-windows-reliability.mjs
+  - scripts/verify-windows-reliability.test.mjs
+  - scripts/windows-reliability/registry.mjs
+  - scripts/windows-reliability/runner.mjs
+  - scripts/windows-reliability/corpus-schema.mjs
+  - scripts/windows-reliability/corpus-run.mjs
+  - scripts/windows-reliability/corpus-report-check.mjs
+  - artifacts/ai-tasks/current.yaml
+assertions:
+  - id: M0-01.A1
+    passed: true
+    command: node --test scripts/verify-windows-reliability.test.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-01.json
+  - id: M0-01.A2
+    passed: true
+    command: node scripts/windows-reliability/corpus-schema.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-01.json
+  - id: M0-01.A3
+    passed: true
+    command: node scripts/windows-reliability/corpus-run.mjs --tier fast --check dialect-field --check both-executed=1
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-01.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --task M0-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-01.json
+  note: 3/3 passed；金集首跑（净化 PATH、PowerShell 档）dialect=pwsh total=41 ok=12 fail=29 dialect_failures=24 hint_hits=0
+decisions:
+  - policy 类语料经真实 gateway R4 前置拒绝链路（captured "risk level R4: pre-rejected by policy" 文本），fail-with-hint 断言将据此判定 M2-02 挂载
+  - 报告 ok 语义 = 结果符合 expect（含预期失败与预期失败+提示）
+  - corpus-run.mjs 净化 cargo 子进程 PATH（剥离 Git Bash bin/usr/bin/mingw64 目录）以模拟 GUI 干净启动环境，避免开发 shell 的 MSYS 目录污染 PowerShell 基线
+external_gates_remaining: []

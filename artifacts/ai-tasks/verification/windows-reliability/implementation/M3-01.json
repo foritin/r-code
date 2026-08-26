@@ -1,0 +1,111 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T15:49:02.873Z",
+  "mode": {
+    "kind": "task",
+    "id": "M3-01",
+    "tasks": [
+      "M3-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "fa9ea56f9dad1f243090e9858e47cd956aee392ce2484f4b5dc8bce6e09f7138"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-01.A1",
+      "task": "M3-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "无设置时 codex exec 参数不含 reasoning 覆盖；有设置时按值传递",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "codex_exec_reasoning_effort"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 57538,
+      "output_sha256": "d628cb658134abaf41ed60715bf4f6eb57a901ad117a7808ac83ecf8eeaff936",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A2",
+      "task": "M3-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Windows 委派提示含规约常量（五要素语义），Unix 不含；常量 ≤300 字符",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "delegation_prompt_convention"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 842,
+      "output_sha256": "c86d436f0e5243ec088c8e41d3bc94b59e3597fbed89e304129d4ef66c872e72",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A3",
+      "task": "M3-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "web_search=disabled 与既有 codex 拉起参数不回归",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "codex_exec_web_search"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 821,
+      "output_sha256": "ea3b9cbd1dbe2e62441a3f2761414056e24c8187411d504f03bff53dd113127f",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

@@ -1,0 +1,61 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M2-02
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M2-02）
+    - docs/windows-command-reliability-prd.md#43-诊断提示模式表
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m2-02-verified-2026-08-25
+deliverables:
+  - crates/r-code-gateway/src/diagnosis.rs：classify_failure/append_diagnosis（§4.3 五行模式表、只追加、≤400 字符、[诊断] 标记）、diagnosis_counters/reset（类别+次数）、codex_shell_dialect（codex 内部 shell 估计）
+  - 挂载四点：bash 工具 render_output 后（exit≠0）；gateway bash 工具 policy 拒绝（Denied 分支）；codex exec JSONL 投影 codex_tool_result_payload(is_error)；codex app-server 投影 codex_tool_safe_output（status Failed 或 exitCode≠0）
+  - IPC：cmd_diagnosis_hint_counters（main.rs 注册）
+changed_paths:
+  - crates/r-code-gateway/src/diagnosis.rs（新增）
+  - crates/r-code-gateway/src/lib.rs
+  - crates/r-code-gateway/src/tools_command.rs
+  - crates/r-code-gateway/src/gateway.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/codex_interaction.rs
+  - src-tauri/src/tauri_commands.rs
+  - src-tauri/src/main.rs
+  - artifacts/metrics/corpus-m2-02.log
+assertions:
+  - id: M2-02.A1
+    passed: true
+    command: cargo test -p r-code-gateway append_diagnosis_samples
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-02.json
+  - id: M2-02.A2
+    passed: true
+    command: cargo test -p r-code-gateway diagnosis_boundary
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-02.json
+  - id: M2-02.A3
+    passed: true
+    command: cargo test -p r-code-host codex_diagnosis_projection
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-02.json
+  - id: M2-02.A4
+    passed: true
+    command: cargo test -p r-code-gateway diagnosis_counters
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-02.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --through M2 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2.json
+  note: 20/20 passed（M0+M1+M2 全部断言）；金集 m2-02 档 41/41=100%，hint_hits=5（3 policy + 2 相对路径 exe）
+decisions:
+  - §4.3 行 3 签名扩展为双措辞："blocked by policy"（codex）与 "pre-rejected by policy"（gateway R4 文本）——同义失败两来源都需可归因到档位
+  - 行 1/行 2 的"命令含 &&/命令头为相对 exe"条件在 output 文本上判定（bash/PS 报错都会回显出错 token），使冻结签名 append_diagnosis(output, exit_code, dialect) 成立
+  - codex 投影方言经 codex_shell_dialect()（镜像 codex-rs shell_detect 的 pwsh→powershell→cmd）而非宿主档位
+  - 诊断测试组以 std Mutex 串行（进程级计数器 + cargo 默认并行测试会互染）
+  - 复审补丁：app-server 运行环（observe_codex_app_server_event 的 ToolCompleted 分支）手工构建 payload、
+    未走 exec 路径的 codex_tool_result_payload——已补挂同源 append_diagnosis（此前该路径诊断缺失）
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）

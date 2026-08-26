@@ -1,0 +1,109 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T16:25:54.873Z",
+  "mode": {
+    "kind": "task",
+    "id": "M4-02",
+    "tasks": [
+      "M4-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "9907fc4466ddd89ad9dc7a4339f888b40b636b6a62b0a9005951d162ea7422c0"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-02.A1",
+      "task": "M4-02",
+      "level": "performance",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "改造后全量金集：符合率 ≥96% 且方言类失败占比 <2%",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "all",
+        "--tag",
+        "final",
+        "--check",
+        "thresholds"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 9771,
+      "output_sha256": "72b4a22ab4c47ca45da793923b43a2bbae60a68ddf25b6172967a888b0de31b8",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A2",
+      "task": "M4-02",
+      "level": "ci-contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "CI Windows job 含金集 fast 档步骤且失败会阻断",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/ci-corpus-gate-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 61,
+      "output_sha256": "579dad01c63a8675715bf560cd9c911801ea0ffe379c4d78a3e101c39f3ea30c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A3",
+      "task": "M4-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Codex 链路重放评估脚本可离线运行并输出结构化结果",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/replay-eval.mjs",
+        "--offline"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 418,
+      "output_sha256": "631aabfd61e1e1184244b3b59fd80a26f6749580d19ee005919f0a9200583f5c",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

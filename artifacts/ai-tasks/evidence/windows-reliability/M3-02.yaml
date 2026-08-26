@@ -1,0 +1,48 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M3-02
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M3-02）
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m3-02-verified-2026-08-25
+deliverables:
+  - llm_runtime.rs：delegate_task 描述三形态统一追加 access 语义段（read_only 默认 + blocked by policy 拒绝行为 + full_access 授权边界/审批矩阵）
+  - commands.rs：PolicyRejectionTracker（按 run 计数、阈值 2、一次性触发）挂载 exec JSONL 事件环 ToolCompleted 分支；提示经 AgentEvent::CodexContextEvent（持久化为 SessionEvent::System）
+changed_paths:
+  - crates/r-code-agent-worker/src/llm_runtime.rs
+  - crates/r-code-agent-worker/src/llm_runtime_tests.rs
+  - src-tauri/src/commands.rs
+assertions:
+  - id: M3-02.A1
+    passed: true
+    command: cargo test -p r-code-agent-worker delegate_task_description
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3-02.json
+  - id: M3-02.A2
+    passed: true
+    command: cargo test -p r-code-host policy_rejection_system_hint
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3-02.json
+  - id: M3-02.A3
+    passed: true
+    command: cargo test -p r-code-host policy_rejection_hint_threshold
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3-02.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --through M3 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3.json
+  note: 26/26 passed（M0+M1+M2+M3 全部断言）
+decisions:
+  - 拒绝识别复用 §4.3 双措辞签名（blocked by policy / pre-rejected by policy），计数器与提示生成收敛在 PolicyRejectionTracker（run 作用域、阈值 2、单次触发）
+  - System 提示走 CodexContextEvent 通道（与 codex_warning/r_code_context_compacted 同一先例，持久化为 SessionEvent::System，历史重建共用规则）
+  - delegate_task 描述断言采用源级标记（描述在 provider list_tools 闭包内拼装，实例化需完整 runtime）；测试内归一化行续符与 CRLF
+  - app-server 主 Agent 线路不在本卡范围（PRD 明确"子代理"；主 Agent 自身命令的 policy 拒绝已有 M2-02 诊断提示覆盖）
+  - 复审补丁：app-server 子代理运行环同样挂 PolicyRejectionTracker（仅 is_subagent 策略；
+    observe_codex_app_server_event 增 &mut Option<Tracker> 参数，Main 策略传 None 不跟踪）
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）

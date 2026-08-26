@@ -1,0 +1,50 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M0-02
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M0-02）
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: baseline-before-m1-2026-08-25
+deliverables:
+  - artifacts/metrics/command-corpus/report-69ab1637c1ea346e0241a52ba4d939626dce9958-windows.json（全量 fast+slow，dialect=pwsh）
+  - PRD §4.4 基线小节回填（Windows 数字 + darwin 外部待执行标注）
+  - scripts/windows-reliability/prd-baseline-check.mjs（回填一致性检查）
+  - freeze.yaml normative digest 重算（e9713b45…， sanctioned 回填；worklist digest 不变）
+changed_paths:
+  - docs/windows-command-reliability-prd.md
+  - docs/windows-command-reliability-freeze.yaml
+  - scripts/windows-reliability/prd-baseline-check.mjs
+  - artifacts/metrics/command-corpus/report-69ab1637c1ea346e0241a52ba4d939626dce9958-windows.json
+  - artifacts/metrics/corpus-m0-01-fast.log
+  - artifacts/metrics/corpus-m0-02-baseline.log
+assertions:
+  - id: M0-02.A1
+    passed: true
+    command: node scripts/windows-reliability/corpus-report-check.mjs --platform windows --min-total 40
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-02.json
+  - id: M0-02.A2
+    passed: false
+    command: "外部放行：darwin 基线需 macOS 主机（生产 profile external_pending，implementation 不参与判定）"
+    exit_code: null
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-02.json
+  - id: M0-02.A3
+    passed: true
+    command: node scripts/windows-reliability/prd-baseline-check.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-02.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --task M0-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-02.json
+  note: 2/2 passed（A2 为 production 外部放行断言，implementation 档正确跳过）
+decisions:
+  - M0-02.A2（darwin 基线）按外部放行处理：本会话主机为 Windows，无 macOS 执行能力；已在 registry 标 external+production 并在 PRD §4.4 记录生成命令。合并 M1 前必须在 macOS 上补跑（§0.3 决策阶梯"缺外部能力先记录"）
+  - Windows 基线在净化 PATH（剥离 Git Bash 目录）下采集，模拟 GUI 启动环境；dialect=pwsh（本机装 pwsh 7）
+  - PRD §4.4 回填属 PRD 明示动作（"M0-02 产出入库后回填本节"），同步重算 freeze normative digest
+external_gates_remaining:
+  - darwin 基线报告（macOS 主机执行 corpus-run --tier all，M1 合入前的 M0 提交上）

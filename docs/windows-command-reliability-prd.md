@@ -21,9 +21,9 @@
 
 <!-- AI_WORKLIST_VOLATILE_START -->
 
-- 当前进度：`0 / 12` 项完成。
-- 下一执行项：`M0-01`（建立统一验证 Harness 与金集语料）。
-- 当前任务包：`artifacts/ai-tasks/current.yaml`（该文件当前属于已完成的 codex-rich-interaction 清单；本项目首次启动时按 §10 模板重建，不保留其内容）。
+- 当前进度：`11 / 11` 项完成（implementation_verified 就绪）。
+- 下一执行项：无——全部 MUST 任务完成；外部放行项见 §11.3（darwin 基线、真实 Codex 账号复测、无 Git Bash 实机回落）。
+- 当前任务包：`artifacts/ai-tasks/current.yaml`（M0-01 已验收；进入 M1-01 时更新）。
 - 注意：工作区存在未跟踪文件 `NUL`（Windows 设备名残留），视为用户资产，任何任务不得尝试 add/提交/删除它。
 
 <!-- AI_WORKLIST_VOLATILE_END -->
@@ -200,7 +200,13 @@ bash 档执行：`<bash> -c <command>` 单 argv 直传，`cwd` 为绑定工作�
  "ok":42,"fail":2,"dialect_failures":0,"hint_hits":3,"commands":[…]}
 ```
 
-基线（M0-02 产出入库后回填本节）：会话取证锚点——原生 bash 96.5%（143 样本）、Codex 链路 87.1%（673 样本，拼接率 23.3%）；金集首跑数字待生成。
+基线（M0-02 产出，2026-08-25，改造前 PowerShell 链、净化 PATH）：
+
+- **Windows**：`artifacts/metrics/command-corpus/report-69ab1637c1ea346e0241a52ba4d939626dce9958-windows-baseline.json` — dialect=`pwsh`，total=44，ok=15（34.1%），fail=29，dialect_failures=24，hint_hits=0。金集数字与取证锚点互证：会话取证原生 bash 96.5%（143 样本）、Codex 链路 87.1%（673 样本，bash 式引号拼接率 23.3%）。
+- **darwin**：`artifacts/metrics/command-corpus/report-<sha>-darwin.json` —— 外部待执行（本会话无 macOS 主机；在 M1 合入前的 M0 提交上于 macOS 运行 `node scripts/windows-reliability/corpus-run.mjs --tier all --check dialect-field` 生成，sha 取当时 HEAD）。darwin 预期：/bin/sh 档 both 条目近乎全绿。
+- **改造后对照（M4-02 产出，2026-08-25，同 sha 全量 fast+slow、净化 PATH）**：`artifacts/metrics/command-corpus/report-69ab1637c1ea346e0241a52ba4d939626dce9958-windows-final.json` — dialect=`git-bash`，total=44，ok=44（100%），fail=0，dialect_failures=0，hint_hits=5。
+- **对照结论**：符合率 34.1% → 100%（门槛 ≥96% ✓）；方言类失败 24 条（54.5%）→ 0 条（门槛 <2% ✓）；诊断提示命中 0 → 5（fail-with-hint 全部达成）。CI Windows 腿已接 fast 档金集门禁（thresholds 阻断）。
+- **Codex 链路重放评估（离线）**：`artifacts/metrics/command-corpus/replay-eval-69ab1637c1.json` — 8 样本零失配、hint_hits=6；真实账号 ≥92% 复测属外部放行（§11.3）。
 
 ### 4.5 设置键与配置边界
 
@@ -272,17 +278,17 @@ M0-01 自身在 Harness 尚未存在时，先用任务卡列出的直接测试�
 
 ## 8. 主 Checklist（唯一状态源）
 
-- [ ] **M0-01** 建立统一验证 Harness、金集语料与证据入口。证据：待生成
-- [ ] **M0-02** 产出 Windows/macOS 金集基线报告并回填 PRD。证据：待生成
-- [ ] **M1-01** 实现 Windows 五级 shell 解析链（Git Bash 优先，排除 WSL）。证据：待生成
-- [ ] **M1-02** Git Bash 执行环境治理与工具描述统一。证据：待生成
-- [ ] **M2-01** 注册表实时 PATH 合成并应用于 bash 与 Codex 子进程。证据：待生成
-- [ ] **M2-02** 命令失败诊断提示引擎与命中计数。证据：待生成
-- [ ] **M3-01** Codex 子代理降智移除与 Windows 命令书写规约。证据：待生成
-- [ ] **M3-02** 委派档位显性化与 policy 拒绝系统性提示。证据：待生成
-- [ ] **M4-01** 分类器 bash 方言风险分级专项。证据：待生成
-- [ ] **M4-02** 对照报告与 CI 金集门禁合入。证据：待生成
-- [ ] **M4-03** 执行环境设置卡与维护文档更新。证据：待生成
+- [x] **M0-01** 建立统一验证 Harness、金集语料与证据入口。证据：`artifacts/ai-tasks/evidence/windows-reliability/M0-01.yaml`
+- [x] **M0-02** 产出 Windows/macOS 金集基线报告并回填 PRD。证据：`artifacts/ai-tasks/evidence/windows-reliability/M0-02.yaml`（darwin 基线为外部放行项，见证据 external_gates_remaining）
+- [x] **M1-01** 实现 Windows 五级 shell 解析链（Git Bash 优先，排除 WSL）。证据：`artifacts/ai-tasks/evidence/windows-reliability/M1-01.yaml`
+- [x] **M1-02** Git Bash 执行环境治理与工具描述统一。证据：`artifacts/ai-tasks/evidence/windows-reliability/M1-02.yaml`
+- [x] **M2-01** 注册表实时 PATH 合成并应用于 bash 与 Codex 子进程。证据：`artifacts/ai-tasks/evidence/windows-reliability/M2-01.yaml`
+- [x] **M2-02** 命令失败诊断提示引擎与命中计数。证据：`artifacts/ai-tasks/evidence/windows-reliability/M2-02.yaml`
+- [x] **M3-01** Codex 子代理降智移除与 Windows 命令书写规约。证据：`artifacts/ai-tasks/evidence/windows-reliability/M3-01.yaml`
+- [x] **M3-02** 委派档位显性化与 policy 拒绝系统性提示。证据：`artifacts/ai-tasks/evidence/windows-reliability/M3-02.yaml`
+- [x] **M4-01** 分类器 bash 方言风险分级专项。证据：`artifacts/ai-tasks/evidence/windows-reliability/M4-01.yaml`
+- [x] **M4-02** 对照报告与 CI 金集门禁合入。证据：`artifacts/ai-tasks/evidence/windows-reliability/M4-02.yaml`
+- [x] **M4-03** 执行环境设置卡与维护文档更新。证据：`artifacts/ai-tasks/evidence/windows-reliability/M4-03.yaml`
 
 ## 9. 详细任务卡
 

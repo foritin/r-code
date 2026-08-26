@@ -17,7 +17,7 @@ normative_input:
     - docs/windows-command-reliability-prd.md#6-需求追踪表
   digest_algorithm: sha256
   normalization: ai-worklist-markers-v1
-  digest: 42f9f7bea05c018b54dca610da6eb7d523340f7eb5e8441bba63e9d9c9b44f9c
+  digest: de1415303fcf247229137978951ee08e2ac1c8639b503e111ef44b1f2d073b03
 
 worklist:
   refs:

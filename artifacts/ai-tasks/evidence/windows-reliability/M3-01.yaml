@@ -1,0 +1,51 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M3-01
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M3-01）
+    - docs/windows-command-reliability-prd.md#45-设置键与配置边界
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m3-01-verified-2026-08-25
+deliverables:
+  - commands.rs：固定 model_reasoning_effort="medium" 覆盖移除（子代理继承 codex 默认/用户 config）；新增 CodexExecLimits.subagent_reasoning_effort + load_subagent_reasoning_effort（execution.toml codex.subagent_reasoning_effort，枚举子集防御过滤）
+  - CODEX_WINDOWS_COMMAND_CONVENTION 常量（≤300 字符，五要素）注入 build_codex_delegation_prompt 与 codex_main_prompt 两处模板（cfg(windows)，置空即回退）
+  - codex_main_prompt 同时补挂 CODEX_CROSS_PLATFORM_SHELL_HINT（原仅子代理模板有）
+  - web_search="disabled" 保持并有回归测试锁定
+changed_paths:
+  - src-tauri/src/commands.rs
+assertions:
+  - id: M3-01.A1
+    passed: true
+    command: cargo test -p r-code-host codex_exec_reasoning_effort
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3-01.json
+  - id: M3-01.A2
+    passed: true
+    command: cargo test -p r-code-host delegation_prompt_convention
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3-01.json
+  - id: M3-01.A3
+    passed: true
+    command: cargo test -p r-code-host codex_exec_web_search
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3-01.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --task M3-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M3-01.json
+  note: 3/3 passed
+decisions:
+  - 推理档位经 CodexExecLimits 新字段下传（生产注入点 CodexSubagentRunner::run，持有 config_dir）；
+    测试注入继续走 wrapper 第 5 参——不改 CodexRunPolicy 枚举形状（8 处构造点零扰动）
+  - 主 Agent 模板（app-server thread）的 codex_thread_config medium 不在本次范围：该配置属主 Agent
+    线程（PRD 前置事实明确指向 exec 子代理路径 20095-20100）
+  - 规约注入顺带把 CODEX_CROSS_PLATFORM_SHELL_HINT 补进主模板（主 Agent 同样在 Windows 写命令）
+  - 复审补丁：app-server 子代理线程（thread/start config 注入点 commands.rs 23919 一带）同样存在固定 medium——
+    codex_thread_config 已改为 (web_search, subagent_reasoning) 双参，默认不注入 model_reasoning_effort；
+    app-server fixture 的协议预期同步更新（默认缺失该键即正确）；m4_codex_thread_config_web_search_toggle 扩展断言两种形态
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）

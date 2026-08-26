@@ -91,6 +91,14 @@ r-code/
 
 支持包只在本地生成，不会自动上传。它包含应用版本、平台、本地统计、受限 MCP 摘要及最近的脱敏 warning/error。脱敏只能降低风险，不能保证完全清除敏感信息，所以发送前必须打开生成的 JSON 再检查一遍。不要在公开 issue 中附上原始 profile、Provider key、MCP 凭据、私有源码或真实对话；安全问题必须按 [SECURITY.md](../SECURITY.md) 私密报告。
 
+## Windows 命令执行排障
+
+- **命令成功率低 / `ParserError` / `is not recognized`**：R-Code 的 `bash` 工具在 Windows 优先经 **Git Bash** 执行（五级解析链：设置覆盖 → 已知位置 → git.exe 反推 → PATH bash.exe（排除 WSL `System32\bash.exe`）→ PowerShell 回落）。安装 Git for Windows 后无需重启即可生效（探测有 5 分钟缓存）。可在 设置 → 工具与连接 → 执行环境 查看当前方言档；未检出 Git Bash 时该卡片会显示回落警示。
+- **强制使用 PowerShell**：设置 → 执行环境 把 bash 路径覆盖**清空保存为空串**（`execution.bash_shell_path=""`），或填写指定 `bash.exe` 绝对路径（路径缺失会显式报错，不会静默回落）。
+- **新装工具找不到**：子进程 PATH 由注册表实时合成（HKLM+HKCU），无需重启 R-Code；确认工具已写入系统/用户 PATH 后重试。诊断提示会自动给出安装/PATH 建议。
+- **Codex 子代理命令被拒（`blocked by policy`）**：只读委派档位的预期行为；需要写/联网/执行类操作时以 `full_access` 重新委派（受审批矩阵约束）。连续两次拒绝会触发系统性只读档位提示。
+- **金集自检**：`node scripts/verify-windows-reliability.mjs --through M4 --profile implementation`（本地全量断言）；单跑金集 `node scripts/windows-reliability/corpus-run.mjs --tier fast --tag local --check thresholds`。
+
 ## 运维验收清单
 
 每次安装或升级后，至少确认：应用可以启动；已知任务和对话仍存在；可以配置 Provider 而不暴露密钥；支持包预览能成功生成。正式推广前，应在每个实际分发平台的干净机器或虚拟机上完成安装、升级、保留数据卸载和恢复测试。

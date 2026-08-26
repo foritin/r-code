@@ -1,0 +1,134 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T15:23:11.805Z",
+  "mode": {
+    "kind": "task",
+    "id": "M2-01",
+    "tasks": [
+      "M2-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "a19d63e49146aeef30eeccad4c6ce56ec00a123904eb06c274c227bc4fa58ebb"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-01.A1",
+      "task": "M2-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "合成顺序 HKLM→HKCU→进程差集、REG_EXPAND_SZ 展开、大小写不敏感去重",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-core",
+        "win_env"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 9817,
+      "output_sha256": "8f5ff58ed76438b84f836fa3fe900da6733593ba611646f760a311434b2cd623",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A2",
+      "task": "M2-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "bash 与两条 Codex 拉起路径的子进程 PATH 为合成值，RTK 前缀在最前且无覆盖丢失",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "-p",
+        "r-code-host",
+        "synthesized_path_child"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 84489,
+      "output_sha256": "b3c037049a8c9e2a6352a73a45366460eeb5d553c3e7201a28489a7b271ce761",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A3",
+      "task": "M2-01",
+      "level": "failure-path",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "注册表读取失败时 fallthrough 进程 PATH 且有日志",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-core",
+        "win_env_fallthrough"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 404,
+      "output_sha256": "bddc084e96dde15fa17a9611714c8dc924727412d2fb939783575cfe30932f07",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A4",
+      "task": "M2-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "win_env 全部经 #[cfg(windows)] 隔离、无非 cfg 引用（macOS 实机构建由 CI darwin job 把关）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/cfg-isolation-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 154,
+      "output_sha256": "0d845c68aa12b5d63b0847ef02054e99ebd913c6e7428cf1e0613c0ba52d2c0d",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

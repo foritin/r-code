@@ -1,0 +1,891 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T18:39:58.690Z",
+  "mode": {
+    "kind": "through",
+    "id": "M4",
+    "tasks": [
+      "M0-01",
+      "M0-02",
+      "M1-01",
+      "M1-02",
+      "M2-01",
+      "M2-02",
+      "M3-01",
+      "M3-02",
+      "M4-01",
+      "M4-02",
+      "M4-03"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "14da11957bc47db4c62b0be51a8524928f2260e8b8ffd1df474c2b1ce5ce3b5c"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 35,
+    "passed": 35,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Harness 自测：未知 task / 失败子命令 / registry 缺失 required 断言均非 0 退出且报告列出准确失败 ID",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/verify-windows-reliability.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1854,
+      "output_sha256": "f34a3c6750e0f5e0363a9e71778cd5cdd9fa3afbfc52a3e57ed1adb7b08a6818",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A2",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "corpus.jsonl 通过 schema 校验（枚举合法、八类数量达下限、无重复 id）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-schema.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 51,
+      "output_sha256": "48322b663cb635a4ebe6ceb7055331233e6ce0dc11727379f800b3311afa30ae",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A3",
+      "task": "M0-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "runner 真实执行至少一条 both/fast 命令并产出含 dialect 字段的报告",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--tag",
+        "m0-01",
+        "--check",
+        "dialect-field",
+        "--check",
+        "both-executed=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 5455,
+      "output_sha256": "9e286dfc5932fe29c52269f6b5e8657eeb915d3395b0f328d0540c175d90132c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A1",
+      "task": "M0-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Windows 基线报告存在、schema 完整且 total ≥ 40",
+      "evidence_path": "artifacts/metrics/command-corpus",
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-report-check.mjs",
+        "--platform",
+        "windows",
+        "--suffix",
+        "baseline",
+        "--min-total",
+        "40"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 59,
+      "output_sha256": "3b232924fc08c8d06a88a8b2cc901ec2de9e0bcecafbec0c92b113d8fbe4d8e4",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-02.A3",
+      "task": "M0-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "PRD §4.4 基线小节含报告路径与四个数字字段（windows 基线回填 + darwin 外部待执行标注）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/prd-baseline-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 61,
+      "output_sha256": "1347266466e78ec8308ccdcea379a0ea6e8c3095297e16e36f6d4f2ad35e0d95",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A1",
+      "task": "M1-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "五级解析链单测：设置覆盖（含失败报错不静默回落）、已知位置、git.exe 反推、PATH 探测、PowerShell 回落",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "resolve_windows_shell"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1353,
+      "output_sha256": "11e3a85dd5b3eae91ccb7c3f16f815d62da1cab8a34abe81680e35fb818729e2",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A2",
+      "task": "M1-01",
+      "level": "security-negative",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "PATH 首位为 C:\\Windows\\System32\\bash.exe 时跳过并继续下一级",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "wsl_bash"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 346,
+      "output_sha256": "78156fbebb0b4c19e473a0ade7898cb26cd7d5240a29afa379bf425844f3c391",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A3",
+      "task": "M1-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Git Bash 档金集 dialect-chain/env-prefix/quoting 全绿（回落档由 M1-01.A1 的 fallback 单测覆盖）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--tag",
+        "m1-01",
+        "--check",
+        "dialect=git-bash",
+        "--check",
+        "categories=dialect-chain,env-prefix,quoting"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3471,
+      "output_sha256": "87e92383a7009c323e83aa08d8909cadacd80cefe6734600b57a92fa845da7a3",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A1",
+      "task": "M1-02",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "bash 档子进程 env 含 MSYS_NO_PATHCONV=1 与 LANG=C.UTF-8",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "bash_tier_env"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 393,
+      "output_sha256": "71077bef369b4175f751ecb7ca95451c66954323a5a9a3cad4eff91444ce4ca7",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A2",
+      "task": "M1-02",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "grep 在 PowerShell 档被 hint 拦截、在 bash 档放行",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "unix_only_rejection"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 352,
+      "output_sha256": "9ce3baf38a99891676c3ba287a4563589874336ed77af48b0c311bd333ba7007",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A3",
+      "task": "M1-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Windows bash 档描述含 Git Bash、回落档描述含 PowerShell 语义字符串",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "windows_tool_description"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 318,
+      "output_sha256": "f2866c9d059939d63060da8e7eeba2bcfd20f6ce1610060f71ed9f2409433cae",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-02.A4",
+      "task": "M1-02",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "金集 encoding/path/pipe 类通过，中文无 U+FFFD 替换符",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--tag",
+        "m1-02",
+        "--check",
+        "categories=encoding,path,pipe",
+        "--check",
+        "no-mojibake"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3452,
+      "output_sha256": "cad035c50996cc491f2c0d85a7f931d236f2a97921136a8e7777260aaf54ea9e",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A1",
+      "task": "M2-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "合成顺序 HKLM→HKCU→进程差集、REG_EXPAND_SZ 展开、大小写不敏感去重",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-core",
+        "win_env"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 433,
+      "output_sha256": "2989b8527ca7ba6133410755507f02ad20ca9a2d73259ebd019df50ba063f5cf",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A2",
+      "task": "M2-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "bash 与两条 Codex 拉起路径的子进程 PATH 为合成值，RTK 前缀在最前且无覆盖丢失",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "-p",
+        "r-code-host",
+        "synthesized_path_child"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 30071,
+      "output_sha256": "cd2cb5d37e0031d19f8d3e0db3fa27f1fd556052250e192784584958e0c37fb5",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A3",
+      "task": "M2-01",
+      "level": "failure-path",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "注册表读取失败时 fallthrough 进程 PATH 且有日志",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-core",
+        "win_env_fallthrough"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2482,
+      "output_sha256": "a90df34839980e333ad87ea7e13566b6a3dfd982d640249210762f90fb974ea1",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-01.A4",
+      "task": "M2-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "win_env 全部经 #[cfg(windows)] 隔离、无非 cfg 引用（macOS 实机构建由 CI darwin job 把关）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/cfg-isolation-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 255,
+      "output_sha256": "0d845c68aa12b5d63b0847ef02054e99ebd913c6e7428cf1e0613c0ba52d2c0d",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A1",
+      "task": "M2-02",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "四类取证样本（ParserError/相对路径 exe/not recognized/blocked by policy）各产出正确提示要点",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "append_diagnosis_samples"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 468,
+      "output_sha256": "2b08640a2bb64bc550b634f10506613b4e804e992d646c028b2e666ecc49df2c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A2",
+      "task": "M2-02",
+      "level": "boundary",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "正常输出零污染、提示长度 ≤400 字符",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "diagnosis_boundary"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 398,
+      "output_sha256": "595507b7baa25768e49a24a5aee26edd5fe504c1b4b03cf9ef047208e85f11ae",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A3",
+      "task": "M2-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "codex commandExecution 错误投影含同源提示",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "codex_diagnosis_projection"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 996,
+      "output_sha256": "3ecf41f60d4dbc14239ce86cc3eac410a419954cf564d8691d149e124e8be9d8",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A4",
+      "task": "M2-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "诊断命中计数可读取且只含类别与次数",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "diagnosis_counters"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 425,
+      "output_sha256": "2396466287af4c61875f6d569077db83d1e7561d9a9e0bb43b682e0d24e9f485",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A1",
+      "task": "M3-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "无设置时 codex exec 参数不含 reasoning 覆盖；有设置时按值传递",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "codex_exec_reasoning_effort"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 938,
+      "output_sha256": "1538614a0e0642a4417da7848a44afa36417c6d9f1a91496ea7f207c838015bd",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A2",
+      "task": "M3-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Windows 委派提示含规约常量（五要素语义），Unix 不含；常量 ≤300 字符",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "delegation_prompt_convention"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1098,
+      "output_sha256": "638b97b3fb3371c55c3365ad7e946276d9e7668a580a2ae29f8945a15d717d6b",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-01.A3",
+      "task": "M3-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "web_search=disabled 与既有 codex 拉起参数不回归",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "codex_exec_web_search"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1039,
+      "output_sha256": "8404d24a5f68dbfe5b3434c1fd2084ec4f9e0248eff81a609bf5b61dbea19239",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A1",
+      "task": "M3-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "delegate_task 描述含 full_access 参数语义字符串",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-agent-worker",
+        "delegate_task_description"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 7481,
+      "output_sha256": "1a457aa5d0580f9f57141500db969f32967bcbdfe5d8f166dcc2fc2d76b2c01b",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A2",
+      "task": "M3-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "mock 连续 2 次 blocked by policy 后事件流出现只读档位提示",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "policy_rejection_system_hint"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 922,
+      "output_sha256": "0c470073f2b8242b440d3dbfb84cdc7858274dd1a58fa45817a20670264c7466",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A3",
+      "task": "M3-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "该提示来自 System 通道且 1 次拒绝不触发",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "policy_rejection_hint_threshold"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 788,
+      "output_sha256": "297f36c531510f2f1c132371792e0a44a17d94113bc029b3e312703c6f537ff6",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A1",
+      "task": "M4-01",
+      "level": "security-negative",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "专项清单（sudo/rm -rf/curl|sh/管道位置）全部按预期定级，无漏判为 R0/R1",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "classifier_bash_dialect"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 355,
+      "output_sha256": "35e4fd6e7460af47eb6b35594d206253949fae3cb3e25a6575d0baba47790af4",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A2",
+      "task": "M4-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "同一命令集分级不低于 Unix 现状基线",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "classifier_not_looser"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 353,
+      "output_sha256": "6d3a34d3705d6e93912edaae5d6b1fed25c8eb8a20e60bf517f306bda50f0b96",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A3",
+      "task": "M4-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "powershell -Command 包壳命令按内层命令定级",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "classifier_shell_wrap"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 355,
+      "output_sha256": "bf16fb045ce7071e41305c2b4e34407d943f549ffba29c92fda5756122067aaf",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A1",
+      "task": "M4-02",
+      "level": "performance",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "改造后全量金集：符合率 ≥96% 且方言类失败占比 <2%",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "all",
+        "--tag",
+        "final",
+        "--check",
+        "thresholds"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 9812,
+      "output_sha256": "72b4a22ab4c47ca45da793923b43a2bbae60a68ddf25b6172967a888b0de31b8",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A2",
+      "task": "M4-02",
+      "level": "ci-contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "CI Windows job 含金集 fast 档步骤且失败会阻断",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/ci-corpus-gate-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 67,
+      "output_sha256": "579dad01c63a8675715bf560cd9c911801ea0ffe379c4d78a3e101c39f3ea30c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-02.A3",
+      "task": "M4-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Codex 链路重放评估脚本可离线运行并输出结构化结果",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/replay-eval.mjs",
+        "--offline"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 366,
+      "output_sha256": "631aabfd61e1e1184244b3b59fd80a26f6749580d19ee005919f0a9200583f5c",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-03.A1",
+      "task": "M4-03",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "execution.bash_shell_path / codex.subagent_reasoning_effort 读写经 SettingsService，空串=强制回落",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "execution_settings"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 735,
+      "output_sha256": "509e31905430c27fe7afb5f7f782556ae13917a2dfcc933bad5a0b10eae3a502",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-03.A2",
+      "task": "M4-03",
+      "level": "component",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "设置卡：未检出 Git Bash 警示可见；检出时展示路径",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/run-tests.mjs",
+        "execution-env-card.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3690,
+      "output_sha256": "4d21b667b7311ddd0a5097d74827cbfff9be50b103fc26a0e208a45518fd34c4",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-03.A3",
+      "task": "M4-03",
+      "level": "docs-contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "architecture.md/operations.md 含方言策略与设置键说明",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/docs-consistency-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 64,
+      "output_sha256": "cf627d61eac3591884f9be19e4f02a71117cc11c9b99736308e66b88f61692d7",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

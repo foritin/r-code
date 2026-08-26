@@ -1,0 +1,45 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M4-01
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M4-01）
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m4-01-verified-2026-08-25
+deliverables:
+  - classifier.rs：解释器包壳定级规则（powershell -Command / pwsh -c / cmd /c / bash -c 逐层解包 ≤3 层，max(外壳地板, 内层结果)——只收紧）
+  - classifier.rs：Windows 盘内顶级系统目录收紧（c:/users、c:/windows、c:/program files 等；此前 rm -rf C:\Users 仅 R3）
+  - 专项测试三组：special_list（提权/毁灭/管道位置，无漏判 R0/R1）、not_looser（Unix 基线地板表）、shell_wrap（按内层定级 + 只收紧对比）
+changed_paths:
+  - crates/r-code-gateway/src/classifier.rs
+assertions:
+  - id: M4-01.A1
+    passed: true
+    command: cargo test -p r-code-gateway classifier_bash_dialect
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-01.json
+  - id: M4-01.A2
+    passed: true
+    command: cargo test -p r-code-gateway classifier_not_looser
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-01.json
+  - id: M4-01.A3
+    passed: true
+    command: cargo test -p r-code-gateway classifier_shell_wrap
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-01.json
+cumulative_verification:
+  command: cargo test -p r-code-gateway --lib（全量回归）
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-01.json
+  note: 226/226 passed——既有 21 个分类器测试零回归（收紧不放宽验证）
+decisions:
+  - `rm -rf /usr/local/bin` 维持 Unix 现状 R3（非系统根目录清单成员；地板承诺是"不低于现状+绝不 R0/R1"）
+  - unwrap 剥两端引号用 trim_matches（容忍不成对引号）；解包上限 3 层 + 文本收缩保证递归终止
+  - EncodedCommand 载体也入包壳表：内容不可静态分析时由内层分类地板兜底（绝不放宽）
+  - rule_key 仍按外壳首位生成（standing rule 授权范围不因包壳扩大）
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）
