@@ -2061,6 +2061,13 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
   if (typeof forcedFailure === "string") throw new Error(forcedFailure);
   if (forcedFailure) throw forcedFailure;
   switch (command) {
+    case "cmd_execution_env_probe": {
+      // 浏览器 mock：默认模拟"已检出 Git Bash"；测试可用
+      // window.__R_CODE_TEST_EXECUTION_ENV_PROBE 覆盖（含未检出回落场景）。
+      const fallback = { dialect: "git-bash", program: "C:\Program Files\Git\bin\bash.exe", git_bash_detected: true, configured_override: null };
+      const override = (globalThis as Record<string, unknown>).__R_CODE_TEST_EXECUTION_ENV_PROBE;
+      return typeof override === "object" && override !== null ? override : fallback;
+    }
     case "ping": return true;
     case "cmd_app_quit": return null;
     case "cmd_platform_capabilities": {

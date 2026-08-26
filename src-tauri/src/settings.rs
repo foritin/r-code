@@ -11,7 +11,8 @@
 //!
 //! [doc-14 阶段1] [agent-contracts/08]
 
-#[cfg(all(not(test), not(target_os = "macos")))]
+use std::path::Path;
+#[cfg(not(test))]
 use std::sync::LazyLock;
 use std::{
     collections::HashMap,
@@ -33,6 +34,36 @@ const INTERNAL_SECRET_ACCOUNT_PREFIX: &str = "__r_code_internal_secret_v1__:";
 const PROJECT_KNOWLEDGE_DIR: &str = "project-knowledge";
 const PROJECT_AGENT_PROMPTS_FILE: &str = "agent-prompts.toml";
 const MAX_AGENT_PROMPT_CHARS: usize = 20_000;
+const EXECUTION_SETTINGS_FILE: &str = "execution.toml";
+
+/// 宿主执行环境设置（`config_dir/execution.toml`，windows-reliability PRD §4.5）。
+///
+/// 不进 agent-contracts：`execution.bash_shell_path` 经 `ToolGateway::set_shell_override`
+/// 下传给 gateway 的 Windows 五级 shell 解析第 1 级；`codex.subagent_reasoning_effort`
+/// 经 codex exec 拉起参数 `-c model_reasoning_effort=…` 下传。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ExecutionHostSettings {
+    #[serde(default)]
+    pub execution: ExecutionSettings,
+    #[serde(default)]
+    pub codex: CodexExecutionSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ExecutionSettings {
+    /// Git Bash 覆盖路径：`None`=自动探测；`Some("")`=强制回落 PowerShell 链；
+    /// `Some(path)`=存在即用（缺失时执行报错，不静默回落）。
+    #[serde(default)]
+    pub bash_shell_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CodexExecutionSettings {
+    /// Codex 子代理推理档位覆盖：`None`=继承 codex 自身默认；枚举子集
+    /// minimal|low|medium|high。
+    #[serde(default)]
+    pub subagent_reasoning_effort: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -267,6 +298,63 @@ impl SettingsService {
     /// Product-owned MCP metadata is stored beside the other user-level settings.
     pub fn mcp_settings(&self) -> crate::mcp_settings::McpSettingsService {
         crate::mcp_settings::McpSettingsService::new(self.config_dir.clone())
+    }
+
+    /// 宿主执行环境设置文件路径：`config_dir/execution.toml`。
+    ///
+    /// 两个键（`execution.bash_shell_path`、`codex.subagent_reasoning_effort`）
+    /// 属于宿主设置，不进 agent-contracts（PRD windows-command-reliability §4.5
+    /// 决策 5）。文件缺失 = 全默认。
+    pub fn execution_settings_path(&self) -> PathBuf {
+        self.config_dir.join(EXECUTION_SETTINGS_FILE)
+    }
+
+    pub fn load_execution_settings(&self) -> Result<ExecutionHostSettings, ProductError> {
+        let path = self.execution_settings_path();
+        if !path.exists() {
+            return Ok(ExecutionHostSettings::default());
+        }
+        let content = std::fs::read_to_string(&path).map_err(|error| {
+            ProductError::ConfigError(format!("read {}: {error}", path.display()))
+        })?;
+        let settings: ExecutionHostSettings = toml::from_str(&content).map_err(|error| {
+            ProductError::ConfigError(format!("parse {}: {error}", path.display()))
+        })?;
+        Self::validate_execution_settings(&settings)?;
+        Ok(settings)
+    }
+
+    pub fn save_execution_settings(
+        &self,
+        settings: &ExecutionHostSettings,
+    ) -> Result<(), ProductError> {
+        Self::validate_execution_settings(settings)?;
+        std::fs::create_dir_all(&self.config_dir)?;
+        let content = toml::to_string_pretty(settings).map_err(|error| {
+            ProductError::ConfigError(format!("serialize execution settings: {error}"))
+        })?;
+        std::fs::write(self.execution_settings_path(), content)?;
+        Ok(())
+    }
+
+    fn validate_execution_settings(settings: &ExecutionHostSettings) -> Result<(), ProductError> {
+        if let Some(effort) = settings.codex.subagent_reasoning_effort.as_deref() {
+            const ALLOWED: [&str; 4] = ["minimal", "low", "medium", "high"];
+            if !ALLOWED.contains(&effort) {
+                return Err(ProductError::ConfigError(format!(
+                    "codex.subagent_reasoning_effort 必须是 {} 之一，实际 {effort:?}",
+                    ALLOWED.join("|")
+                )));
+            }
+        }
+        if let Some(path) = settings.execution.bash_shell_path.as_deref() {
+            if !path.is_empty() && !Path::new(path).is_absolute() {
+                return Err(ProductError::ConfigError(format!(
+                    "execution.bash_shell_path 必须是绝对路径（或空串=强制回落），实际 {path:?}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// 全局配置文件路径：`config_dir/config.toml`。
@@ -821,6 +909,108 @@ fn merge_toml(base: &mut toml::Value, over: &toml::Value) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn execution_settings_roundtrip_preserves_empty_string_semantics() {
+        // M4-03.A1：两键读写经 SettingsService；空串语义必须原样保留
+        //（bash_shell_path=""=强制回落，None=自动探测，两者不同）。
+        let directory = tempfile::tempdir().unwrap();
+        let settings = SettingsService::new(directory.path().to_path_buf());
+
+        // 文件缺失 = 全默认（None）。
+        let loaded = settings.load_execution_settings().unwrap();
+        assert_eq!(loaded.execution.bash_shell_path, None);
+        assert_eq!(loaded.codex.subagent_reasoning_effort, None);
+
+        // 空串保存/加载原样保留。
+        settings
+            .save_execution_settings(&ExecutionHostSettings {
+                execution: ExecutionSettings {
+                    bash_shell_path: Some(String::new()),
+                },
+                codex: CodexExecutionSettings {
+                    subagent_reasoning_effort: Some("high".to_string()),
+                },
+            })
+            .unwrap();
+        let loaded = settings.load_execution_settings().unwrap();
+        assert_eq!(loaded.execution.bash_shell_path, Some(String::new()));
+        assert_eq!(
+            loaded.codex.subagent_reasoning_effort,
+            Some("high".to_string())
+        );
+
+        // 回到 None（删除键）后恢复默认。
+        settings
+            .save_execution_settings(&ExecutionHostSettings::default())
+            .unwrap();
+        let loaded = settings.load_execution_settings().unwrap();
+        assert_eq!(loaded.execution.bash_shell_path, None);
+    }
+
+    #[test]
+    fn execution_settings_validation_rejects_invalid_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let settings = SettingsService::new(directory.path().to_path_buf());
+
+        // 相对路径拒绝。
+        let error = settings
+            .save_execution_settings(&ExecutionHostSettings {
+                execution: ExecutionSettings {
+                    bash_shell_path: Some("relative/bash.exe".to_string()),
+                },
+                codex: CodexExecutionSettings::default(),
+            })
+            .expect_err("relative path must be rejected");
+        assert!(error.to_string().contains("绝对路径"), "error: {error}");
+
+        // 推理档位枚举子集。
+        let error = settings
+            .save_execution_settings(&ExecutionHostSettings {
+                execution: ExecutionSettings::default(),
+                codex: CodexExecutionSettings {
+                    subagent_reasoning_effort: Some("ultra".to_string()),
+                },
+            })
+            .expect_err("invalid effort must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("codex.subagent_reasoning_effort"),
+            "error: {error}"
+        );
+
+        // 合法枚举通过。
+        settings
+            .save_execution_settings(&ExecutionHostSettings {
+                execution: ExecutionSettings::default(),
+                codex: CodexExecutionSettings {
+                    subagent_reasoning_effort: Some("minimal".to_string()),
+                },
+            })
+            .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn execution_settings_probe_reports_resolved_dialect() {
+        // R-OPS-01 设置卡数据源：探测必须给出稳定方言标签；本机装有 Git Bash
+        // 时应报 git-bash + 绝对路径（CI windows runner 同样装 Git for Windows）。
+        let directory = tempfile::tempdir().unwrap();
+        let probe = crate::commands::execution_env_probe(directory.path());
+        assert!(!probe.dialect.is_empty());
+        if probe.git_bash_detected {
+            assert_eq!(probe.dialect, "git-bash");
+            assert!(
+                probe.program.to_ascii_lowercase().ends_with("bash.exe"),
+                "program: {}",
+                probe.program
+            );
+        }
+        // 空配置目录：configured_override 为 None（自动探测），探测不落任何文件。
+        assert_eq!(probe.configured_override, None);
+    }
+
     use super::*;
     use agent_config::ProviderConfig;
     use std::path::Path;

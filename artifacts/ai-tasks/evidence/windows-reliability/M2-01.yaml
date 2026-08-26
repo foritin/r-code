@@ -1,0 +1,64 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M2-01
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M2-01）
+    - docs/windows-command-reliability-prd.md#42-win_env-合成算法合同
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m2-01-verified-2026-08-25
+deliverables:
+  - crates/r-code-core/src/win_env.rs：synthesized_path()/invalidate()，HKLM→HKCU→进程差集、REG_EXPAND_SZ 展开（ExpandEnvironmentStringsW 语义）、TTL 5min 缓存、读失败 fallthrough+日志；windows-registry 0.6.1（cfg(windows) 门内）
+  - tools_command.rs：bash/回落两档 spawn 应用 cmd.env("PATH", synthesized_path())
+  - rtk.rs：prepend_managed_bin → apply_child_path（RTK 前缀 + 合成基底单次拼装；未启用 RTK 的 Windows 也携带合成 PATH）；exec/app-server/mcp 三处 codex 拉起点经 configure_codex_child 自动生效
+  - scripts/windows-reliability/cfg-isolation-check.mjs（花括号栈结构分析）
+changed_paths:
+  - crates/r-code-core/Cargo.toml（+windows-registry）
+  - crates/r-code-core/src/lib.rs
+  - crates/r-code-core/src/win_env.rs（新增）
+  - crates/r-code-gateway/src/tools_command.rs
+  - src-tauri/src/rtk.rs
+  - src-tauri/src/commands.rs（exec 拉起点接线测试）
+  - src-tauri/src/codex_app_server.rs（app-server 拉起点接线测试）
+  - scripts/windows-reliability/cfg-isolation-check.mjs（新增）
+  - artifacts/metrics/core-m2-01-regression.log
+assertions:
+  - id: M2-01.A1
+    passed: true
+    command: cargo test -p r-code-core win_env
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-01.json
+  - id: M2-01.A2
+    passed: true
+    command: cargo test -p r-code-gateway -p r-code-host synthesized_path_child
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-01.json
+  - id: M2-01.A3
+    passed: true
+    command: cargo test -p r-code-core win_env_fallthrough
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-01.json
+  - id: M2-01.A4
+    passed: true
+    command: node scripts/windows-reliability/cfg-isolation-check.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-01.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --task M2-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M2-01.json
+  note: 4/4 passed；另以 cargo check --target x86_64-unknown-linux-gnu 对 r-code-core/r-code-gateway 交叉验证 unix cfg 路径零错误；r-code-core 全量 93/93
+decisions:
+  - 子进程 PATH 精确断言经 PowerShell 回落档完成（pwsh 原样回显注入的 env PATH；
+    bash 档由 MSYS 根映射重写视角无法精确往返；pwsh 自身安装目录前置已在断言中剥离）
+  - REG_EXPAND_SZ 展开为自实现（%VAR% 查进程环境、未知保留、%% 转义），windows-registry 无展开 API；
+    用 Type::ExpandString 判定是否展开
+  - cargo add --target windows 生成的 [target.windows.dependencies] 非有效 cfg 表，手工并入 [target.'cfg(target_os = "windows")'.dependencies]
+  - cfg-isolation-check 抓到一个真 bug：rtk.rs 测试用 cfg!(windows) 运行时分支引用 win_env
+    （unix 测试构建无法解析路径，会炸 CI ubuntu 腿）——已改为编译期 #[cfg(windows)] 块
+  - 交叉编译 linux 目标可用（本机已装 x86_64-unknown-linux-gnu），对 core+gateway 验证 unix 路径
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）

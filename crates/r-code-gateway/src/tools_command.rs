@@ -4,13 +4,14 @@
 //!
 //! | 平台 | 解释器 | 传递方式 |
 //! |------|--------|----------|
-//! | Windows | `pwsh.exe` → `powershell.exe` → `cmd.exe`（按 PATH 探测顺序） | 临时 `.ps1` 脚本文件 |
-//! | macOS / Linux | `/bin/sh -lc` | 直接作为 argv 传入 |
+//! | Windows | 五级解析链（Git Bash 优先，见 [`win_shell`]）：设置覆盖 → 已知位置 → git.exe 反推 → PATH bash.exe（排除 WSL）→ pwsh/powershell/cmd 回落 | bash 档 `bash -c` argv 直传；PowerShell 回落档临时 `.ps1` 脚本文件 |
+//! | macOS / Linux | `/bin/sh -c` | 直接作为 argv 传入 |
 //!
-//! Windows 上**不用** `-Command "<字符串>"`：PowerShell 会重新解析 `-Command`
-//! 之后的原始命令行，而 Rust 的 `std::process` 按 CRT 规则转义参数（内嵌 `"`
-//! 变成 `\"`），两者规则不一致——`git commit -m "fix: x"` 这类命令会被拆坏。
-//! 落成临时脚本再 `-File` 执行可以完全绕开引号转义问题。
+//! Windows 上 PowerShell 回落档**不用** `-Command "<字符串>"`：PowerShell 会重新
+//! 解析 `-Command` 之后的原始命令行，而 Rust 的 `std::process` 按 CRT 规则转义
+//! 参数（内嵌 `"` 变成 `\"`），两者规则不一致——`git commit -m "fix: x"` 这类
+//! 命令会被拆坏。落成临时脚本再 `-File` 执行可以完全绕开引号转义问题。
+//! Git Bash 档 `bash -c` 单 argv 直传，与 Unix 档同一执行模型。
 //!
 //! ## 风险分级
 //!
@@ -162,8 +163,14 @@ fn command_head(command: &str) -> String {
 }
 
 /// Windows 上若命令头是不存在的 Unix 工具，返回带指引的错误文本。
-fn unix_only_rejection(command: &str) -> Option<String> {
+///
+/// 仅在 PowerShell/cmd 回落档生效：Git Bash 档自带 Unix 工具，`grep`/`sed`
+/// 是一等公民，直接放行（PRD R-SHELL-03）。
+fn unix_only_rejection(command: &str, dialect: ShellDialect) -> Option<String> {
     if !cfg!(windows) {
+        return None;
+    }
+    if matches!(dialect, ShellDialect::GitBash) {
         return None;
     }
     let head = command_head(command);
@@ -177,16 +184,53 @@ fn unix_only_rejection(command: &str) -> Option<String> {
     ))
 }
 
+/// shell 方言档（跨平台类型；Windows 值由 `win_shell` 五级解析产生）。
+///
+/// 金集报告的 `dialect` 字段、诊断提示的方言参数与工具描述的平台分支共用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellDialect {
+    /// macOS / Linux 的 `/bin/sh -c`。
+    PosixSh,
+    /// Windows 五级解析链命中的 Git Bash（第一方言，PRD 决策 1）。
+    GitBash,
+    /// 回落档：PowerShell 7。
+    Pwsh,
+    /// 回落档：Windows PowerShell 5.1。
+    Powershell,
+    /// 回落档：cmd.exe。
+    Cmd,
+}
+
+impl ShellDialect {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PosixSh => "posix-sh",
+            Self::GitBash => "git-bash",
+            Self::Pwsh => "pwsh",
+            Self::Powershell => "powershell",
+            Self::Cmd => "cmd",
+        }
+    }
+}
+
 /// 已解析的 shell 调用方式。
+#[derive(Debug)]
 enum ShellPlan {
-    /// 直接把命令作为单个 argv 传给解释器（Unix：execve，无二次解析）。
-    Inline { program: String, args: Vec<String> },
-    /// 命令落成临时脚本文件后执行（Windows：绕开 PowerShell 的引号重解析）。
+    /// 直接把命令作为单个 argv 传给解释器（Unix execve / Windows Git Bash `-c`，
+    /// 均无二次解析）。
+    Inline {
+        dialect: ShellDialect,
+        program: String,
+        args: Vec<String>,
+    },
+    /// 命令落成临时脚本文件后执行（Windows PowerShell 回落档：绕开 `-Command`
+    /// 的引号重解析）。
     ///
     /// 非 Windows 平台不会构造这个变体，但类型仍需存在以保持 `plan_shell`
     /// 的返回类型跨平台一致。
     #[cfg_attr(not(windows), allow(dead_code))]
     Script {
+        dialect: ShellDialect,
         program: String,
         /// `-File` 之前的固定参数。
         leading: Vec<String>,
@@ -200,6 +244,11 @@ impl ShellPlan {
             Self::Inline { program, .. } | Self::Script { program, .. } => program.as_str(),
         }
     }
+    fn dialect(&self) -> ShellDialect {
+        match self {
+            Self::Inline { dialect, .. } | Self::Script { dialect, .. } => *dialect,
+        }
+    }
     fn cleanup(&self) {
         if let Self::Script { script_path, .. } = self {
             let _ = std::fs::remove_file(script_path);
@@ -207,15 +256,41 @@ impl ShellPlan {
     }
 }
 
-/// 选择解释器并准备调用方式。
-#[cfg(windows)]
-fn plan_shell(command: &str) -> Result<ShellPlan, ProductError> {
-    let program = ["pwsh.exe", "powershell.exe"]
-        .into_iter()
-        .find(|candidate| executable_on_path(candidate));
+/// 当前解析档的稳定标签（金集报告的 `dialect` 字段与诊断元数据使用）。
+///
+/// 只读自省：与 `plan_shell` 同源（Windows 经 `win_shell` 五级解析，TTL 缓存），
+/// 但绝不产生副作用，也不改变执行行为。
+pub fn current_shell_dialect_label() -> &'static str {
+    current_shell_dialect().label()
+}
 
-    match program {
-        Some(program) => {
+/// 当前解析档（与 `current_shell_dialect_label` 同源；诊断提示的方言参数）。
+pub fn current_shell_dialect() -> ShellDialect {
+    #[cfg(windows)]
+    {
+        crate::win_shell::resolve_windows_shell(None)
+            .map(|resolved| resolved.dialect)
+            .unwrap_or(ShellDialect::Cmd)
+    }
+    #[cfg(not(windows))]
+    {
+        ShellDialect::PosixSh
+    }
+}
+
+/// 选择解释器并准备调用方式（Windows：方言 + 暂存方案由五级解析结果决定）。
+#[cfg(windows)]
+fn plan_shell(command: &str, override_path: Option<&str>) -> Result<ShellPlan, ProductError> {
+    let resolved = crate::win_shell::resolve_windows_shell(override_path)?;
+    match resolved.dialect {
+        // Git Bash 档：`bash -c <command>` 单 argv 直传——不经临时脚本、不加载
+        // login profile，从根上绕开引号重解析（与 Unix 档同一执行模型）。
+        ShellDialect::GitBash => Ok(ShellPlan::Inline {
+            dialect: ShellDialect::GitBash,
+            program: resolved.program.to_string_lossy().into_owned(),
+            args: vec!["-c".to_string(), command.to_string()],
+        }),
+        dialect @ (ShellDialect::Pwsh | ShellDialect::Powershell) => {
             // 三段固定前言：
             // 1. 强制 UTF-8 输出。中文 Windows 的控制台默认是 GBK(936)，
             //    直接 from_utf8_lossy 会把中文输出全变成 `�`。用 try/catch 包住是因为
@@ -238,7 +313,8 @@ if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}\n"
                 ))
             })?;
             Ok(ShellPlan::Script {
-                program: program.to_string(),
+                dialect,
+                program: resolved.program.to_string_lossy().into_owned(),
                 leading: vec![
                     "-NoProfile".to_string(),
                     "-NonInteractive".to_string(),
@@ -250,7 +326,14 @@ if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}\n"
             })
         }
         // 没有 PowerShell 的极端情况（精简版 Windows）：退到 cmd.exe。
-        None => Ok(ShellPlan::Inline {
+        ShellDialect::Cmd => Ok(ShellPlan::Inline {
+            dialect: ShellDialect::Cmd,
+            program: "cmd.exe".to_string(),
+            args: vec!["/D".to_string(), "/C".to_string(), command.to_string()],
+        }),
+        // win_shell 在 Windows 上不会产出 PosixSh。
+        ShellDialect::PosixSh => Ok(ShellPlan::Inline {
+            dialect: ShellDialect::Cmd,
             program: "cmd.exe".to_string(),
             args: vec!["/D".to_string(), "/C".to_string(), command.to_string()],
         }),
@@ -259,10 +342,13 @@ if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}\n"
 
 /// 选择解释器并准备调用方式。
 #[cfg(not(windows))]
-fn plan_shell(command: &str) -> Result<ShellPlan, ProductError> {
+fn plan_shell(command: &str, override_path: Option<&str>) -> Result<ShellPlan, ProductError> {
+    // override 是 Windows 专属语义（execution.bash_shell_path），Unix 忽略。
+    let _ = override_path;
     // `-c` 而非 `-lc`：不加载登录配置，避免用户 profile 改写 PATH / 别名
     // 导致同一条命令在 Agent 里和终端里行为不同。
     Ok(ShellPlan::Inline {
+        dialect: ShellDialect::PosixSh,
         program: "/bin/sh".to_string(),
         args: vec!["-c".to_string(), command.to_string()],
     })
@@ -327,6 +413,12 @@ impl StreamDrain {
     }
 }
 
+/// Windows Git Bash 档工具描述（诚实声明方言与 Unix 工具可用性）。
+const GIT_BASH_TIER_DESCRIPTION: &str = "Run a shell command inside the workspace. On this machine the shell is Git Bash (bash -c, no login profile): use bash/POSIX syntax — grep, sed, awk and other Unix tools are available. Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, create_file and edit instead — they behave identically on every platform and need no approval for reads. Reserve this tool for builds, tests, linters, git, and package managers. Keep commands short and single-purpose: break a multi-step build/test/package pipeline into separate calls, one step at a time, and check each step's output before the next. A command finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. cwd defaults to the workspace root and cannot escape it.";
+
+/// Windows PowerShell/cmd 回落档工具描述（保持既有方言警告）。
+const POWERSHELL_FALLBACK_DESCRIPTION: &str = "Run a shell command inside the workspace. On this machine the shell is PowerShell (pwsh -NoProfile), so use PowerShell syntax — Unix tools like grep, sed, head and awk are not available. Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, create_file and edit instead — they behave identically on every platform and need no approval for reads. Reserve this tool for builds, tests, linters, git, and package managers. Keep commands short and single-purpose: break a multi-step build/test/package pipeline into separate calls, one step at a time, and check each step's output before the next. A command finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. cwd defaults to the workspace root and cannot escape it.";
+
 /// `bash` 工具 -- 在工作区内执行 shell 命令。
 ///
 /// R3（静态）：实际等级由 `classify_shell_command` 按命令内容决定。
@@ -339,29 +431,21 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
+        // 描述按当前解析档声明方言与语法约束（PRD R-SHELL-03）：bash 档明确
+        // Git Bash 与可用 Unix 工具；PowerShell/cmd 回落档保持既有警告。
         #[cfg(windows)]
         {
-            "Run a shell command inside the workspace. On this machine the shell is \
-PowerShell (pwsh -NoProfile), so use PowerShell syntax — Unix tools like grep, sed, \
-head and awk are not available. \
-Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, \
-create_file and edit instead — they behave identically on every platform and need no approval \
-for reads. Reserve this tool for builds, tests, linters, git, and package managers. \
-Keep commands short and single-purpose: break a multi-step build/test/package pipeline into \
-separate calls, one step at a time, and check each step's output before the next. A command \
-finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. \
-cwd defaults to the workspace root and cannot escape it."
+            match crate::win_shell::resolve_windows_shell(None)
+                .map(|resolved| resolved.dialect)
+                .unwrap_or(ShellDialect::Cmd)
+            {
+                ShellDialect::GitBash => GIT_BASH_TIER_DESCRIPTION,
+                _ => POWERSHELL_FALLBACK_DESCRIPTION,
+            }
         }
         #[cfg(not(windows))]
         {
-            "Run a shell command inside the workspace (/bin/sh, no login profile). \
-Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, \
-create_file and edit instead — they are faster, respect .gitignore, and need no approval \
-for reads. Reserve this tool for builds, tests, linters, git, and package managers. \
-Keep commands short and single-purpose: break a multi-step build/test/package pipeline into \
-separate calls, one step at a time, and check each step's output before the next. A command \
-finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. \
-cwd defaults to the workspace root and cannot escape it."
+            "Run a shell command inside the workspace (/bin/sh, no login profile). Do NOT use shell commands to read, search, or edit files: use read_file, search, glob, create_file and edit instead — they are faster, respect .gitignore, and need no approval for reads. Reserve this tool for builds, tests, linters, git, and package managers. Keep commands short and single-purpose: break a multi-step build/test/package pipeline into separate calls, one step at a time, and check each step's output before the next. A command finishes and returns as soon as its process exits; timeout_ms only caps a still-running command. cwd defaults to the workspace root and cannot escape it."
         }
     }
 
@@ -405,16 +489,16 @@ cwd defaults to the workspace root and cannot escape it."
     }
 
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_bash(input, None).await
+        execute_bash(input, None, None).await
     }
 
     async fn execute_with_context_and_abort(
         &self,
         input: serde_json::Value,
-        _context: &ToolExecutionContext,
+        context: &ToolExecutionContext,
         abort_flag: Option<&AtomicBool>,
     ) -> Result<ToolExecutionResult, ProductError> {
-        execute_bash(input, abort_flag)
+        execute_bash(input, abort_flag, context.shell_override.as_deref())
             .await
             .map(ToolExecutionResult::from)
     }
@@ -423,6 +507,7 @@ cwd defaults to the workspace root and cannot escape it."
 async fn execute_bash(
     input: serde_json::Value,
     abort_flag: Option<&AtomicBool>,
+    shell_override: Option<&str>,
 ) -> Result<String, ProductError> {
     let command = input
         .get("command")
@@ -433,10 +518,6 @@ async fn execute_bash(
             "'command' must not be empty".to_string(),
         ));
     }
-    if let Some(rejection) = unix_only_rejection(command) {
-        return Err(ProductError::Other(rejection));
-    }
-
     // cwd 由运行时的 `PathBinding::default_root("cwd")` 注入（经 PathGuard 解析）。
     // 缺失说明调用没走工作区绑定路径 —— fail-closed，绝不回落到进程 CWD。
     let cwd = input.get("cwd").and_then(|v| v.as_str()).ok_or_else(|| {
@@ -457,7 +538,16 @@ async fn execute_bash(
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .clamp(1, MAX_TIMEOUT_MS);
 
-    let plan = plan_shell(command)?;
+    // 落计划（Windows 经五级解析，解析结果 TTL 缓存；PowerShell 档会暂存 .ps1，
+    // 拦截命中时由 cleanup 收走）。方言档是拦截门控的唯一依据：Git Bash 档放行
+    // Unix 工具，PowerShell/cmd 回落档保持前置拦截。设置覆盖指向不存在的 bash
+    // 时在这里报错，绝不静默回落（PRD §4.1 第 1 级）。
+    let plan = plan_shell(command, shell_override)?;
+    if let Some(rejection) = unix_only_rejection(command, plan.dialect()) {
+        plan.cleanup();
+        return Err(ProductError::Other(rejection));
+    }
+
     let mut cmd = Command::new(plan.program());
     match &plan {
         ShellPlan::Inline { args, .. } => {
@@ -476,6 +566,13 @@ async fn execute_bash(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if matches!(plan.dialect(), ShellDialect::GitBash) {
+        apply_bash_tier_env(&mut cmd);
+    }
+    // 注册表实时 PATH（R-ENV-01）：子进程摆脱 GUI 启动时的陈旧 PATH；
+    // gateway 侧无 RTK 前缀（那是 codex 拉起路径的拼装），基底即合成值。
+    #[cfg(windows)]
+    cmd.env("PATH", r_code_core::win_env::synthesized_path());
     // Give every Unix command its own process group. `kill()` only targets the shell process;
     // a group lets cancellation and timeout terminate cargo/node descendants as well.
     #[cfg(unix)]
@@ -555,9 +652,24 @@ async fn execute_bash(
         ));
     }
 
-    Ok(render_output(
-        command, exit_code, timed_out, timeout_ms, &stdout, &stderr,
+    let rendered = render_output(command, exit_code, timed_out, timeout_ms, &stdout, &stderr);
+    // 诊断提示（R-DX-01）：失败输出经签名分类后追加有界提示；正常输出零污染。
+    Ok(crate::diagnosis::append_diagnosis(
+        &rendered,
+        exit_code,
+        plan.dialect(),
     ))
+}
+
+/// Git Bash 档的 MSYS 环境治理（PRD R-SHELL-03）。
+///
+/// - `MSYS_NO_PATHCONV=1`：禁止 MSYS 把 `/c`、`/d/…` 这类 Unix 风格参数改写为
+///   Windows 路径——实测 `cmd /c exit 3` 会被拆成 `cmd C:\ exit 3` 导致 cmd
+///   进入交互模式；
+/// - `LANG=C.UTF-8`：强制 UTF-8 locale，中文输出不依赖系统代码页（936/GBK）。
+fn apply_bash_tier_env(cmd: &mut Command) {
+    cmd.env("MSYS_NO_PATHCONV", "1");
+    cmd.env("LANG", "C.UTF-8");
 }
 
 /// 结束子进程及其后代。
@@ -698,6 +810,20 @@ mod tests {
 
     fn json_input(command: &str, cwd: &Path) -> serde_json::Value {
         serde_json::json!({ "command": command, "cwd": cwd.to_str().unwrap() })
+    }
+
+    /// 按当前解析档选择测试命令（bash 档用 bash 语法，PowerShell 回落档用 PS 语法）。
+    /// 保证测试在装/不装 Git Bash 的机器上都成立。
+    #[cfg(windows)]
+    fn tier_command(bash_cmd: &str, ps_cmd: &str) -> String {
+        let dialect = crate::win_shell::resolve_windows_shell(None)
+            .map(|resolved| resolved.dialect)
+            .unwrap_or(ShellDialect::Cmd);
+        if matches!(dialect, ShellDialect::GitBash) {
+            bash_cmd.to_string()
+        } else {
+            ps_cmd.to_string()
+        }
     }
 
     #[test]
@@ -852,12 +978,14 @@ mod tests {
     async fn nonzero_exit_is_reported_not_errored() {
         let dir = TempDir::new().unwrap();
         // 命令失败是"结果"，不是工具故障——必须返回 Ok 让模型读到 stderr。
+        // bash 档直接用内建 exit；PowerShell 回落档经 cmd（bash 档下 `/c` 会被
+        // MSYS 路径转换拆坏，MSYS_NO_PATHCONV 由 M1-02 统一注入）。
         #[cfg(windows)]
-        let command = "cmd /c exit 3";
+        let command = tier_command("exit 3", "cmd /c exit 3");
         #[cfg(not(windows))]
         let command = "exit 3";
         let out = BashTool
-            .execute(json_input(command, dir.path()))
+            .execute(json_input(&command, dir.path()))
             .await
             .unwrap();
         assert!(out.contains("exit: 3"), "output was: {out}");
@@ -878,11 +1006,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("marker.txt"), "x").unwrap();
         #[cfg(windows)]
-        let command = "Get-ChildItem -Name";
+        let command = tier_command("ls", "Get-ChildItem -Name");
         #[cfg(not(windows))]
         let command = "ls";
         let out = BashTool
-            .execute(json_input(command, dir.path()))
+            .execute(json_input(&command, dir.path()))
             .await
             .unwrap();
         assert!(out.contains("marker.txt"), "output was: {out}");
@@ -892,7 +1020,7 @@ mod tests {
     async fn timeout_kills_the_command() {
         let dir = TempDir::new().unwrap();
         #[cfg(windows)]
-        let command = "Start-Sleep -Seconds 30";
+        let command = tier_command("sleep 30", "Start-Sleep -Seconds 30");
         #[cfg(not(windows))]
         let command = "sleep 30";
         let out = BashTool
@@ -912,11 +1040,27 @@ mod tests {
         let started = dir.path().join("bash-cancel-started");
         let finished = dir.path().join("bash-cancel-finished");
         #[cfg(windows)]
-        let command = format!(
-            "Set-Content -LiteralPath '{}' -Value started; Start-Sleep -Seconds 30; Set-Content -LiteralPath '{}' -Value finished",
-            started.display().to_string().replace('\'', "''"),
-            finished.display().to_string().replace('\'', "''"),
-        );
+        let command = {
+            let bash_tier = matches!(
+                crate::win_shell::resolve_windows_shell(None)
+                    .map(|resolved| resolved.dialect)
+                    .unwrap_or(ShellDialect::Cmd),
+                ShellDialect::GitBash
+            );
+            if bash_tier {
+                format!(
+                    "printf started > '{}'; sleep 30; printf finished > '{}'",
+                    started.display(),
+                    finished.display()
+                )
+            } else {
+                format!(
+                    "Set-Content -LiteralPath '{}' -Value started; Start-Sleep -Seconds 30; Set-Content -LiteralPath '{}' -Value finished",
+                    started.display().to_string().replace('\'', "''"),
+                    finished.display().to_string().replace('\'', "''"),
+                )
+            }
+        };
         #[cfg(not(windows))]
         let command = format!(
             "printf started > '{}'; sleep 30; printf finished > '{}'",
@@ -937,6 +1081,7 @@ mod tests {
             tool_call_id: "call-cancel-bash".to_string(),
             caller: Some("subagent:run-cancel-bash".to_string()),
             access_mode: r_code_core::dto::ProjectAccessMode::FullAccess,
+            shell_override: None,
         };
         let run = tokio::spawn(async move {
             BashTool
@@ -970,7 +1115,16 @@ mod tests {
     #[tokio::test]
     async fn unix_only_commands_get_redirected() {
         let dir = TempDir::new().unwrap();
-        // 只在 PATH 上真的没有 grep 时才断言（装了 Git Bash 的机器应放行）。
+        // bash 档自带 Unix 工具，直接放行（拦截只属于 PowerShell/cmd 回落档）。
+        if matches!(
+            crate::win_shell::resolve_windows_shell(None)
+                .map(|resolved| resolved.dialect)
+                .unwrap_or(ShellDialect::Cmd),
+            ShellDialect::GitBash
+        ) {
+            return;
+        }
+        // 只在 PATH 上真的没有 grep 时才断言（MSYS 装了同名二进制不拦）。
         if executable_on_path("grep") {
             return;
         }
@@ -986,7 +1140,9 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn unix_only_rejection_is_windows_only() {
-        assert!(unix_only_rejection("grep -rn foo .").is_none());
+        assert!(unix_only_rejection("grep -rn foo .", ShellDialect::PosixSh).is_none());
+        // 即使模拟 Windows 档也不受影响（cfg!(windows) 为 false）。
+        assert!(unix_only_rejection("grep -rn foo .", ShellDialect::Pwsh).is_none());
     }
 
     #[test]
@@ -1010,17 +1166,195 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn windows_plans_powershell_not_cmd() {
-        // 有 PowerShell 时必须走 Script 方案（临时 .ps1），否则引号会被拆坏。
-        let plan = plan_shell("echo hi").unwrap();
-        // 用 `&plan` 匹配：`matches!` 会 move 掉表达式，之后还要用 plan。
+    #[tokio::test]
+    async fn bash_tier_env_markers_visible_in_subprocess() {
+        // MSYS_NO_PATHCONV=1 与 LANG=C.UTF-8 必须真实进入 bash 档子进程 env
+        //（PRD R-SHELL-03 / M1-02.A1）。非 bash 档机器跳过（回落档无此治理）。
+        let resolved = crate::win_shell::resolve_windows_shell(None).unwrap();
+        if !matches!(resolved.dialect, ShellDialect::GitBash) {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let out = BashTool
+            .execute(json_input("echo \"$MSYS_NO_PATHCONV:$LANG\"", dir.path()))
+            .await
+            .unwrap();
         assert!(
-            matches!(&plan, ShellPlan::Script { .. }),
-            "planned {} instead of a PowerShell script",
-            plan.program()
+            out.contains("1:C.UTF-8"),
+            "env markers missing, output was: {out}"
         );
-        assert!(plan.program().starts_with("pwsh") || plan.program().starts_with("powershell"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unix_only_rejection_is_dialect_gated() {
+        // bash 档：Git Bash 自带 Unix 工具，一律放行（即使进程 PATH 上没有）。
+        assert!(unix_only_rejection("grep -rn foo .", ShellDialect::GitBash).is_none());
+        assert!(unix_only_rejection("sed -i s/a/b/ f.txt", ShellDialect::GitBash).is_none());
+        // PowerShell/cmd 回落档：保持前置拦截（ack 在 Windows PATH 上不存在）。
+        for dialect in [
+            ShellDialect::Pwsh,
+            ShellDialect::Powershell,
+            ShellDialect::Cmd,
+        ] {
+            let rejection = unix_only_rejection("ack pattern", dialect)
+                .expect("PS/cmd tier must intercept ack");
+            assert!(
+                rejection.contains("PowerShell"),
+                "rejection was: {rejection}"
+            );
+            assert!(rejection.contains("search"), "rejection was: {rejection}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn synthesized_path_child_inherits_registry_path() {
+        // R-ENV-01 端到端：子进程环境块里的 PATH 必须是 win_env 合成值。
+        // 经 PowerShell 回落档做精确比对——pwsh 不重写继承的 PATH，`$env:PATH`
+        // 原样回显 spawn 时注入的值（bash 档由 MSYS 根映射重写视角，无法精确
+        // 往返，但注入走的是同一条 `cmd.env("PATH", …)` 代码路径）。
+        let dir = TempDir::new().unwrap();
+        let context = ToolExecutionContext {
+            origin_request_key: None,
+            task_id: "task-winenv".to_string(),
+            run_id: "run-winenv".to_string(),
+            tool_call_id: "call-winenv".to_string(),
+            caller: None,
+            access_mode: r_code_core::dto::ProjectAccessMode::FullAccess,
+            // 空串 = 强制回落 PowerShell 链（本机 pwsh 7 或 powershell 5.1）。
+            shell_override: Some(String::new()),
+        };
+        let input = serde_json::json!({
+            "command": "$env:PATH",
+            "cwd": dir.path().to_str().unwrap(),
+        });
+        let outcome = BashTool
+            .execute_with_context_and_abort(input, &context, None)
+            .await
+            .expect("fallback tier must execute");
+        let output = outcome.content;
+        if !output.contains("--- stdout ---") {
+            // 无任何 PowerShell 的极端机器（cmd 档）——cmd 不回显 PATH 同样格式，跳过。
+            return;
+        }
+        let stdout = output
+            .split("--- stdout ---")
+            .nth(1)
+            .and_then(|section| section.split("--- stderr ---").next())
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .replace("\r\n", "\n");
+        let expected_binding = r_code_core::win_env::synthesized_path();
+        let expected = expected_binding.to_string_lossy().to_ascii_lowercase();
+        // pwsh 启动时会把自身安装目录前置到 PATH（一次性、非合成来源）——
+        // 剥掉这一项后必须与合成值逐项一致。
+        let split = |value: &str| {
+            value
+                .split(';')
+                .filter(|entry| !entry.trim().is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let mut child_entries = split(&stdout);
+        let expected_entries = split(&expected);
+        if child_entries.first() != expected_entries.first() {
+            child_entries.remove(0);
+        }
+        assert_eq!(
+            child_entries, expected_entries,
+            "child PATH env must equal the synthesized registry PATH entry-by-entry"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_tool_description_matches_dialect() {
+        // bash 档描述必须声明 Git Bash 与 bash 语法；回落档描述必须声明 PowerShell
+        //（PRD M1-02.A3）。
+        let dialect = crate::win_shell::resolve_windows_shell(None)
+            .map(|resolved| resolved.dialect)
+            .unwrap_or(ShellDialect::Cmd);
+        let description = BashTool.description();
+        match dialect {
+            ShellDialect::GitBash => {
+                assert!(
+                    description.contains("Git Bash"),
+                    "description was: {description}"
+                );
+                assert!(description.contains("bash/POSIX syntax"));
+            }
+            _ => {
+                assert!(
+                    description.contains("PowerShell"),
+                    "description was: {description}"
+                );
+            }
+        }
+        // 两份常量文案同时存在（回落机器上 bash 档文案由常量断言覆盖）。
+        assert!(GIT_BASH_TIER_DESCRIPTION.contains("Git Bash"));
+        assert!(POWERSHELL_FALLBACK_DESCRIPTION.contains("PowerShell"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_plan_matches_resolved_dialect() {
+        // 计划方案必须与解析档一致：Git Bash 档 Inline `-c` 直传；PowerShell 档
+        // 走 .ps1 暂存（否则引号会被 -Command 重解析拆坏）；cmd 档 Inline `/D /C`。
+        let resolved = crate::win_shell::resolve_windows_shell(None).unwrap();
+        let plan = plan_shell("echo hi", None).unwrap();
+        assert_eq!(
+            plan.dialect(),
+            resolved.dialect,
+            "plan dialect must match resolution"
+        );
+        match (&plan, resolved.dialect) {
+            (ShellPlan::Inline { args, program, .. }, ShellDialect::GitBash) => {
+                assert_eq!(args.first().map(String::as_str), Some("-c"));
+                assert!(
+                    program.to_ascii_lowercase().ends_with("bash.exe"),
+                    "program was {program}"
+                );
+            }
+            (ShellPlan::Script { .. }, ShellDialect::Pwsh | ShellDialect::Powershell) => {}
+            (ShellPlan::Inline { args, program, .. }, ShellDialect::Cmd) => {
+                assert_eq!(args.first().map(String::as_str), Some("/D"));
+                assert_eq!(program, "cmd.exe");
+            }
+            (plan, dialect) => panic!("plan/dialect mismatch: {plan:?} vs {dialect:?}"),
+        }
         plan.cleanup();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn plan_shell_override_empty_forces_fallback() {
+        // execution.bash_shell_path="" 表示强制回落：跳过 bash 各级，直接进
+        // pwsh → powershell → cmd 链（PRD §4.5 空串语义）。
+        let plan = plan_shell("echo hi", Some("")).unwrap();
+        assert_ne!(
+            plan.dialect(),
+            ShellDialect::GitBash,
+            "empty override must force fallback"
+        );
+        plan.cleanup();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn plan_shell_override_missing_path_errors_without_fallback() {
+        // 设置指向不存在的 bash：报错，绝不静默回落（否则用户以为在用指定 bash）。
+        let error = plan_shell("echo hi", Some(r"X:\definitely\not\bash.exe"))
+            .expect_err("missing override path must error");
+        let message = error.to_string();
+        assert!(
+            message.contains("execution.bash_shell_path"),
+            "message was: {message}"
+        );
+        assert!(
+            message.contains("X:\\definitely\\not\\bash.exe"),
+            "message was: {message}"
+        );
     }
 }

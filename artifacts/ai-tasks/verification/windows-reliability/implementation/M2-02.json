@@ -1,0 +1,135 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T15:34:27.571Z",
+  "mode": {
+    "kind": "task",
+    "id": "M2-02",
+    "tasks": [
+      "M2-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "ce75c33326313cfb512480259331d67b8814a41a6a026c774af2788586c9bf86"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-02.A1",
+      "task": "M2-02",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "四类取证样本（ParserError/相对路径 exe/not recognized/blocked by policy）各产出正确提示要点",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "append_diagnosis_samples"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 318,
+      "output_sha256": "c576b3cd97be160ceea68fd4a1768242bf4790ca67deeb75dd532534cf1546df",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A2",
+      "task": "M2-02",
+      "level": "boundary",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "正常输出零污染、提示长度 ≤400 字符",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "diagnosis_boundary"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 295,
+      "output_sha256": "daa8b3333246529a086f8cd4534e6fc3beed3ab6dc5e2503cfa9552ee4d86e4d",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A3",
+      "task": "M2-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "codex commandExecution 错误投影含同源提示",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "codex_diagnosis_projection"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 63354,
+      "output_sha256": "cf7de5e749b64b15484b483c85ab41cc5cdcd8ee21397a07288707a67b0b29f2",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M2-02.A4",
+      "task": "M2-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "诊断命中计数可读取且只含类别与次数",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "diagnosis_counters"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 311,
+      "output_sha256": "65b75474e38d485ec331e315df88fbfaf17a3a773e4e6982ffa6125a779858ec",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

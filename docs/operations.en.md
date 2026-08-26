@@ -91,6 +91,14 @@ Open **Settings → Diagnostics** to view the local log tail. The app retains th
 
 The export is created locally and is not uploaded automatically. It includes the app version, platform, local counters, a restricted MCP summary, and recent redacted warning/error entries. Redaction reduces risk but is not a guarantee: inspect the resulting JSON before sending it. Never include a raw profile, provider key, MCP credential, private source file, or real conversation in a public issue. Security-sensitive reports must follow [SECURITY.md](../SECURITY.md).
 
+## Windows command execution troubleshooting
+
+- **Low command success rate / `ParserError` / `is not recognized`**: the `bash` tool on Windows prefers **Git Bash** (five-level resolution: settings override -> known locations -> derive from `git.exe` on PATH -> `bash.exe` on PATH (skipping the WSL `System32\bash.exe` launcher) -> PowerShell fallback). Installing Git for Windows takes effect without restarting R-Code (detection is cached for 5 minutes). Check the current dialect tier under Settings -> Tools & Connections -> Execution environment; the card shows a fallback warning when Git Bash is missing.
+- **Force PowerShell**: in Settings -> Execution environment, clear the bash path override and save it as an **empty string** (`execution.bash_shell_path=""`), or fill in an absolute `bash.exe` path (a missing path errors loudly; it never silently falls back).
+- **Newly installed tools not found**: child-process PATH is synthesized live from the registry (HKLM + HKCU), so no R-Code restart is needed; retry after confirming the tool wrote itself into the system or user PATH. Diagnosis hints suggest installation/PATH fixes automatically.
+- **Codex subagent commands rejected (`blocked by policy`)**: expected behavior of the read-only delegation tier; re-delegate with `full_access` for write/network/exec operations (still gated by the approval matrix). Two consecutive rejections trigger a system-level read-only tier notice.
+- **Golden-corpus self check**: `node scripts/verify-windows-reliability.mjs --through M4 --profile implementation` (full local assertions); corpus only: `node scripts/windows-reliability/corpus-run.mjs --tier fast --tag local --check thresholds`.
+
 ## Operator acceptance checklist
 
 After an installation or upgrade, verify that the application opens, a known task and conversation are present, a provider can be configured without revealing its secret, and a support-bundle preview succeeds. Before a production rollout, perform the same install, upgrade, uninstall-with-data-preserved, and restore tests on a clean machine or VM for every distributed platform.

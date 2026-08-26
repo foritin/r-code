@@ -1,0 +1,109 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T14:27:16.633Z",
+  "mode": {
+    "kind": "task",
+    "id": "M0-01",
+    "tasks": [
+      "M0-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "8ef512dd135f95bb16ab8d1404ac0cc211fe75e3af7283f57ba45ad8963446a4"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Harness 自测：未知 task / 失败子命令 / registry 缺失 required 断言均非 0 退出且报告列出准确失败 ID",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "scripts/verify-windows-reliability.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1999,
+      "output_sha256": "885fdf89ec7e8d52c551e4bb0909650f0a93e5573b113eaa3958923f901c8eac",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A2",
+      "task": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "corpus.jsonl 通过 schema 校验（枚举合法、八类数量达下限、无重复 id）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-schema.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 63,
+      "output_sha256": "48322b663cb635a4ebe6ceb7055331233e6ce0dc11727379f800b3311afa30ae",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M0-01.A3",
+      "task": "M0-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "runner 真实执行至少一条 both/fast 命令并产出含 dialect 字段的报告",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--check",
+        "dialect-field",
+        "--check",
+        "both-executed=1"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 43020,
+      "output_sha256": "0350174a08f59a9d947e6ea00bc3535ad0e773ca9653f075793030f72434af5d",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

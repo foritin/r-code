@@ -579,10 +579,16 @@ test("independent session assistant animates, reports unread progress and expose
       sprite: sprite && { width: sprite.width, height: sprite.height },
     };
   });
+  // idle 帧时长被刻意放慢 6 倍（660-1920ms/帧）：固定 360ms 等待依赖采样相位，
+  // 负载下定时器漂移即偶发失败。改为有界轮询直到帧序号变化（任何序列下
+  // 帧长 ≥110ms，3s 上限绰绰有余）。
   const before = await frame.getAttribute("data-frame-index");
-  await page.waitForTimeout(360);
-  const after = await frame.getAttribute("data-frame-index");
-  assert.notEqual(before, after, "the authored sprite sequence must advance frames over time");
+  assert.notEqual(before, null, "sprite frame must expose its index");
+  await page.waitForFunction(
+    (initial) => document.querySelector(".companion-sprite-frame")?.getAttribute("data-frame-index") !== initial,
+    before,
+    { timeout: 3_000 },
+  );
 
   await avatar.hover();
   await page.waitForFunction(() => document.querySelector(".companion-window-root")?.classList.contains("is-hovered"));

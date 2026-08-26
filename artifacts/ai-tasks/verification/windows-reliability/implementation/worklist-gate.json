@@ -1,0 +1,18 @@
+{
+  "schema_version": "ai-worklist-gate.v1",
+  "mode": "check",
+  "document": "docs/windows-command-reliability-prd.md",
+  "freeze": "docs/windows-command-reliability-freeze.yaml",
+  "passed": true,
+  "counts": {
+    "requirements": 12,
+    "checklist_tasks": 11,
+    "task_cards": 11,
+    "assertions": 36
+  },
+  "digests": {
+    "normative": "de1415303fcf247229137978951ee08e2ac1c8639b503e111ef44b1f2d073b03",
+    "worklist": "1bb54eb6001bdec4dbe56697da092e297c4acff94bd24d7b6c877128c071b61e"
+  },
+  "issues": []
+}

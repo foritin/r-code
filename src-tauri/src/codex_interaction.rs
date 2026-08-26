@@ -67,9 +67,7 @@ fn semver_gte_0_145(raw: &str) -> bool {
         parts.next().and_then(|p| p.parse::<u64>().ok()),
     );
     match (major, minor, patch) {
-        (Some(major), Some(minor), Some(patch)) => {
-            (major, minor, patch) >= (0, 145, 0)
-        }
+        (Some(major), Some(minor), Some(patch)) => (major, minor, patch) >= (0, 145, 0),
         _ => false,
     }
 }
@@ -387,11 +385,17 @@ pub enum UserInputParseIssue {
     /// 0.145.0 必需字段 questions 缺失或不是数组。
     MissingQuestions,
     TooManyQuestions,
-    QuestionMissingId { index: usize },
-    DuplicateQuestionId { id: String },
+    QuestionMissingId {
+        index: usize,
+    },
+    DuplicateQuestionId {
+        id: String,
+    },
 }
 
-pub fn parse_user_input_request(frame: &Value) -> (Option<ParsedUserInputRequest>, Vec<UserInputParseIssue>) {
+pub fn parse_user_input_request(
+    frame: &Value,
+) -> (Option<ParsedUserInputRequest>, Vec<UserInputParseIssue>) {
     let mut issues = Vec::new();
     let params = frame.get("params").cloned().unwrap_or_default();
     let item_id = bounded_scope_id(params.get("itemId").and_then(Value::as_str));
@@ -406,55 +410,61 @@ pub fn parse_user_input_request(frame: &Value) -> (Option<ParsedUserInputRequest
     match params.get("questions").and_then(Value::as_array) {
         Some(raw_questions) => {
             for (index, question) in raw_questions.iter().enumerate() {
-            if index >= MAX_QUESTIONS {
-                issues.push(UserInputParseIssue::TooManyQuestions);
-                break;
-            }
-            let id = bounded_scope_id(question.get("id").and_then(Value::as_str));
-            if id.is_empty() {
-                issues.push(UserInputParseIssue::QuestionMissingId { index });
-                continue;
-            }
-            if !seen_ids.insert(id.clone()) {
-                issues.push(UserInputParseIssue::DuplicateQuestionId { id });
-                continue;
-            }
-            let mut options = Vec::new();
-            if let Some(raw_options) = question.get("options").and_then(Value::as_array) {
-                for option in raw_options.iter().take(MAX_OPTIONS_PER_QUESTION) {
-                    options.push(CodexUserOptionV1 {
-                        label: safe_text(
-                            option.get("label").and_then(Value::as_str).unwrap_or(""),
-                            MAX_QUESTION_FIELD_CHARS,
-                        ),
-                        description: safe_text(
-                            option.get("description").and_then(Value::as_str).unwrap_or(""),
-                            MAX_QUESTION_FIELD_CHARS,
-                        ),
-                    });
+                if index >= MAX_QUESTIONS {
+                    issues.push(UserInputParseIssue::TooManyQuestions);
+                    break;
                 }
+                let id = bounded_scope_id(question.get("id").and_then(Value::as_str));
+                if id.is_empty() {
+                    issues.push(UserInputParseIssue::QuestionMissingId { index });
+                    continue;
+                }
+                if !seen_ids.insert(id.clone()) {
+                    issues.push(UserInputParseIssue::DuplicateQuestionId { id });
+                    continue;
+                }
+                let mut options = Vec::new();
+                if let Some(raw_options) = question.get("options").and_then(Value::as_array) {
+                    for option in raw_options.iter().take(MAX_OPTIONS_PER_QUESTION) {
+                        options.push(CodexUserOptionV1 {
+                            label: safe_text(
+                                option.get("label").and_then(Value::as_str).unwrap_or(""),
+                                MAX_QUESTION_FIELD_CHARS,
+                            ),
+                            description: safe_text(
+                                option
+                                    .get("description")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(""),
+                                MAX_QUESTION_FIELD_CHARS,
+                            ),
+                        });
+                    }
+                }
+                questions.push(CodexUserQuestionV1 {
+                    id,
+                    header: safe_text(
+                        question.get("header").and_then(Value::as_str).unwrap_or(""),
+                        MAX_QUESTION_FIELD_CHARS,
+                    ),
+                    question: safe_text(
+                        question
+                            .get("question")
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
+                        MAX_QUESTION_FIELD_CHARS,
+                    ),
+                    is_other: question
+                        .get("isOther")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    is_secret: question
+                        .get("isSecret")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    options,
+                });
             }
-            questions.push(CodexUserQuestionV1 {
-                id,
-                header: safe_text(
-                    question.get("header").and_then(Value::as_str).unwrap_or(""),
-                    MAX_QUESTION_FIELD_CHARS,
-                ),
-                question: safe_text(
-                    question.get("question").and_then(Value::as_str).unwrap_or(""),
-                    MAX_QUESTION_FIELD_CHARS,
-                ),
-                is_other: question
-                    .get("isOther")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                is_secret: question
-                    .get("isSecret")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                options,
-            });
-        }
         }
         None => issues.push(UserInputParseIssue::MissingQuestions),
     }
@@ -534,17 +544,16 @@ impl CodexAgentMessageProjector {
     /// （M2 的工具/上下文投影复用同一 normalizer 输出）。
     pub fn observe(&mut self, event: &CodexTimelineEventV1) -> Vec<CodexMessageEmission> {
         match event {
-            CodexTimelineEventV1::AssistantStarted {
-                item_id, phase, ..
-            } => {
+            CodexTimelineEventV1::AssistantStarted { item_id, phase, .. } => {
                 self.start_item(item_id.clone(), *phase);
                 Vec::new()
             }
             CodexTimelineEventV1::AssistantDelta {
-                item_id, phase, delta, ..
-            } => {
-                self.push_delta(item_id, *phase, delta)
-            }
+                item_id,
+                phase,
+                delta,
+                ..
+            } => self.push_delta(item_id, *phase, delta),
             CodexTimelineEventV1::AssistantCompleted {
                 item_id,
                 phase,
@@ -599,9 +608,12 @@ impl CodexAgentMessageProjector {
     }
 
     fn start_item(&mut self, item_id: String, phase: CodexAssistantPhase) {
-        if self.items.len() >= Self::MAX_TRACKED_ITEMS && !self.items.iter().any(|i| i.item_id == item_id) {
+        if self.items.len() >= Self::MAX_TRACKED_ITEMS
+            && !self.items.iter().any(|i| i.item_id == item_id)
+        {
             self.items.retain(|item| item.sealed);
-            self.items.truncate(Self::MAX_TRACKED_ITEMS.saturating_sub(1));
+            self.items
+                .truncate(Self::MAX_TRACKED_ITEMS.saturating_sub(1));
         }
         if let Some(item) = self.items.iter_mut().find(|i| i.item_id == item_id) {
             item.phase = phase;
@@ -794,8 +806,15 @@ impl CodexRunProjection {
 
     /// 工具终态时取回累计输出：优先使用 item 自带的权威聚合输出，
     /// 缺失时回退累计缓冲。终态不受中途截断影响。
-    pub fn take_tool_output(&mut self, item_id: &str, authoritative: Option<String>) -> Option<String> {
-        let buffered = self.tool_outputs.remove(item_id).map(|buffer| buffer.render());
+    pub fn take_tool_output(
+        &mut self,
+        item_id: &str,
+        authoritative: Option<String>,
+    ) -> Option<String> {
+        let buffered = self
+            .tool_outputs
+            .remove(item_id)
+            .map(|buffer| buffer.render());
         match authoritative {
             Some(output) => Some(output),
             None => buffered.filter(|text| !text.is_empty()),
@@ -1062,14 +1081,19 @@ impl CodexInteractionNormalizer {
         frame: &Value,
     ) -> Vec<CodexInteractionOutcome> {
         let safe_message = safe_text(
-            frame.pointer("/params/message").and_then(Value::as_str).unwrap_or(""),
+            frame
+                .pointer("/params/message")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
             MAX_TOOL_FIELD_CHARS,
         );
-        vec![CodexInteractionOutcome::Event(CodexTimelineEventV1::Warning {
-            scope,
-            code: None,
-            safe_message,
-        })]
+        vec![CodexInteractionOutcome::Event(
+            CodexTimelineEventV1::Warning {
+                scope,
+                code: None,
+                safe_message,
+            },
+        )]
     }
 
     fn dispatch_scoped(
@@ -1125,12 +1149,16 @@ impl CodexInteractionNormalizer {
             }
             "item/reasoning/summaryTextDelta" => {
                 let mut outcomes = Vec::new();
-                let item_id = bounded_scope_id(frame.pointer("/params/itemId").and_then(Value::as_str));
+                let item_id =
+                    bounded_scope_id(frame.pointer("/params/itemId").and_then(Value::as_str));
                 let summary_index = frame
                     .pointer("/params/summaryIndex")
                     .and_then(Value::as_i64)
                     .unwrap_or(0);
-                let delta_raw = frame.pointer("/params/delta").and_then(Value::as_str).unwrap_or("");
+                let delta_raw = frame
+                    .pointer("/params/delta")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let (delta, truncated) = safe_text_checked(delta_raw, MAX_DELTA_CHARS);
                 if truncated {
                     outcomes.push(self.diagnostic(
@@ -1169,8 +1197,12 @@ impl CodexInteractionNormalizer {
             }
             "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => {
                 let mut outcomes = Vec::new();
-                let item_id = bounded_scope_id(frame.pointer("/params/itemId").and_then(Value::as_str));
-                let delta_raw = frame.pointer("/params/delta").and_then(Value::as_str).unwrap_or("");
+                let item_id =
+                    bounded_scope_id(frame.pointer("/params/itemId").and_then(Value::as_str));
+                let delta_raw = frame
+                    .pointer("/params/delta")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let (safe_delta, truncated) = safe_text_checked(delta_raw, MAX_DELTA_CHARS);
                 if truncated {
                     outcomes.push(self.diagnostic(
@@ -1191,12 +1223,10 @@ impl CodexInteractionNormalizer {
             }
             "item/fileChange/patchUpdated" => {
                 let mut outcomes = Vec::new();
-                let item_id = bounded_scope_id(frame.pointer("/params/itemId").and_then(Value::as_str));
+                let item_id =
+                    bounded_scope_id(frame.pointer("/params/itemId").and_then(Value::as_str));
                 let mut diff = String::new();
-                if let Some(changes) = frame
-                    .pointer("/params/changes")
-                    .and_then(Value::as_array)
-                {
+                if let Some(changes) = frame.pointer("/params/changes").and_then(Value::as_array) {
                     for change in changes {
                         if let Some(text) = change.get("diff").and_then(Value::as_str) {
                             diff.push_str(text);
@@ -1263,7 +1293,10 @@ impl CodexInteractionNormalizer {
             }
             "turn/diff/updated" => {
                 let mut outcomes = Vec::new();
-                let diff_raw = frame.pointer("/params/diff").and_then(Value::as_str).unwrap_or("");
+                let diff_raw = frame
+                    .pointer("/params/diff")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let (bounded_diff, truncated) = safe_text_checked(diff_raw, MAX_DIFF_CHARS);
                 if truncated {
                     outcomes.push(self.diagnostic(
@@ -1311,11 +1344,13 @@ impl CodexInteractionNormalizer {
                         .unwrap_or("Codex 报告了错误"),
                     MAX_TOOL_FIELD_CHARS,
                 );
-                vec![CodexInteractionOutcome::Event(CodexTimelineEventV1::Warning {
-                    scope: Some(scope),
-                    code: Some("codex/error".to_string()),
-                    safe_message,
-                })]
+                vec![CodexInteractionOutcome::Event(
+                    CodexTimelineEventV1::Warning {
+                        scope: Some(scope),
+                        code: Some("codex/error".to_string()),
+                        safe_message,
+                    },
+                )]
             }
             "serverRequest/resolved" => {
                 let request_id = wire_request_id(frame.pointer("/params/requestId"));
@@ -1405,14 +1440,19 @@ impl CodexInteractionNormalizer {
         }
     }
 
-    fn handle_item_started(&mut self, scope: &CodexInteractionScopeV1, frame: &Value) -> Vec<CodexInteractionOutcome> {
+    fn handle_item_started(
+        &mut self,
+        scope: &CodexInteractionScopeV1,
+        frame: &Value,
+    ) -> Vec<CodexInteractionOutcome> {
         let params = frame.get("params").cloned().unwrap_or_default();
         let item = params.get("item").unwrap_or(&params);
         let item_id = bounded_scope_id(item.get("id").and_then(Value::as_str));
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
         match item_type {
             "agentMessage" | "agent_message" => {
-                let phase = CodexAssistantPhase::from_wire(item.get("phase").and_then(Value::as_str));
+                let phase =
+                    CodexAssistantPhase::from_wire(item.get("phase").and_then(Value::as_str));
                 let mut outcomes = Vec::new();
                 if phase == CodexAssistantPhase::Unknown {
                     outcomes.push(self.diagnostic(
@@ -1422,7 +1462,13 @@ impl CodexInteractionNormalizer {
                         "agentMessage without phase",
                     ));
                 }
-                self.track_item(&item_id, CodexItemState::AgentMessage { phase, completed: false });
+                self.track_item(
+                    &item_id,
+                    CodexItemState::AgentMessage {
+                        phase,
+                        completed: false,
+                    },
+                );
                 outcomes.push(CodexInteractionOutcome::Event(
                     CodexTimelineEventV1::AssistantStarted {
                         scope: scope.clone(),
@@ -1444,10 +1490,12 @@ impl CodexInteractionNormalizer {
             }
             "contextCompaction" | "context_compaction" => {
                 self.track_item(&item_id, CodexItemState::Other { completed: false });
-                vec![CodexInteractionOutcome::Event(CodexTimelineEventV1::ContextCompacted {
-                    scope: scope.clone(),
-                    item_id: Some(item_id),
-                })]
+                vec![CodexInteractionOutcome::Event(
+                    CodexTimelineEventV1::ContextCompacted {
+                        scope: scope.clone(),
+                        item_id: Some(item_id),
+                    },
+                )]
             }
             "userMessage" | "user_message" | "hookPrompt" | "hook_prompt" | "plan" => {
                 self.track_item(&item_id, CodexItemState::Other { completed: false });
@@ -1461,16 +1509,28 @@ impl CodexInteractionNormalizer {
                         CodexDiagnosticCode::UnknownItemKind,
                         Some("item/started"),
                         Some(&item_id),
-                        format!("item.type={} len={}", sanitize_kind_name(other), other.len()),
+                        format!(
+                            "item.type={} len={}",
+                            sanitize_kind_name(other),
+                            other.len()
+                        ),
                     )];
                 }
-                self.track_item(&item_id, CodexItemState::Tool { kind, completed: false });
-                vec![CodexInteractionOutcome::Event(CodexTimelineEventV1::ToolStarted {
-                    scope: scope.clone(),
-                    item_id,
-                    kind,
-                    safe_input: codex_tool_safe_input(item, kind),
-                })]
+                self.track_item(
+                    &item_id,
+                    CodexItemState::Tool {
+                        kind,
+                        completed: false,
+                    },
+                );
+                vec![CodexInteractionOutcome::Event(
+                    CodexTimelineEventV1::ToolStarted {
+                        scope: scope.clone(),
+                        item_id,
+                        kind,
+                        safe_input: codex_tool_safe_input(item, kind),
+                    },
+                )]
             }
         }
     }
@@ -1494,7 +1554,8 @@ impl CodexInteractionNormalizer {
                         "duplicate agentMessage completed frame",
                     )];
                 }
-                let phase = CodexAssistantPhase::from_wire(item.get("phase").and_then(Value::as_str));
+                let phase =
+                    CodexAssistantPhase::from_wire(item.get("phase").and_then(Value::as_str));
                 let mut outcomes = Vec::new();
                 if phase == CodexAssistantPhase::Unknown {
                     outcomes.push(self.diagnostic(
@@ -1510,7 +1571,13 @@ impl CodexInteractionNormalizer {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 let authoritative_text = safe_text(raw_text, MAX_AUTHORITATIVE_TEXT_CHARS);
-                self.mark_completed(&item_id, CodexItemState::AgentMessage { phase, completed: true });
+                self.mark_completed(
+                    &item_id,
+                    CodexItemState::AgentMessage {
+                        phase,
+                        completed: true,
+                    },
+                );
                 outcomes.push(CodexInteractionOutcome::Event(
                     CodexTimelineEventV1::AssistantCompleted {
                         scope: scope.clone(),
@@ -1551,10 +1618,12 @@ impl CodexInteractionNormalizer {
             }
             "contextCompaction" | "context_compaction" => {
                 self.mark_completed(&item_id, CodexItemState::Other { completed: true });
-                vec![CodexInteractionOutcome::Event(CodexTimelineEventV1::ContextCompacted {
-                    scope: scope.clone(),
-                    item_id: Some(item_id),
-                })]
+                vec![CodexInteractionOutcome::Event(
+                    CodexTimelineEventV1::ContextCompacted {
+                        scope: scope.clone(),
+                        item_id: Some(item_id),
+                    },
+                )]
             }
             "userMessage" | "user_message" | "hookPrompt" | "hook_prompt" | "plan" => {
                 self.mark_completed(&item_id, CodexItemState::Other { completed: true });
@@ -1568,7 +1637,11 @@ impl CodexInteractionNormalizer {
                         CodexDiagnosticCode::UnknownItemKind,
                         Some("item/completed"),
                         Some(&item_id),
-                        format!("item.type={} len={}", sanitize_kind_name(other), other.len()),
+                        format!(
+                            "item.type={} len={}",
+                            sanitize_kind_name(other),
+                            other.len()
+                        ),
                     )];
                 }
                 if self.item_already_completed(&item_id) {
@@ -1581,8 +1654,26 @@ impl CodexInteractionNormalizer {
                 }
                 let status = CodexToolStatus::from_wire(item.get("status").and_then(Value::as_str));
                 let exit_code = item.get("exitCode").and_then(Value::as_i64);
-                let safe_output = codex_tool_safe_output(item);
-                self.mark_completed(&item_id, CodexItemState::Tool { kind, completed: true });
+                let safe_output = codex_tool_safe_output(item).map(|output| {
+                    // 失败的 commandExecution 输出追加同源诊断提示（R-DX-01）。
+                    if status == CodexToolStatus::Failed || exit_code.is_some_and(|code| code != 0)
+                    {
+                        r_code_gateway::append_diagnosis(
+                            &output,
+                            None,
+                            r_code_gateway::codex_shell_dialect(),
+                        )
+                    } else {
+                        output
+                    }
+                });
+                self.mark_completed(
+                    &item_id,
+                    CodexItemState::Tool {
+                        kind,
+                        completed: true,
+                    },
+                );
                 vec![CodexInteractionOutcome::Event(
                     CodexTimelineEventV1::ToolCompleted {
                         scope: scope.clone(),
@@ -1637,12 +1728,7 @@ impl CodexInteractionNormalizer {
                 }
                 _ => CodexDiagnosticCode::PayloadRejected,
             };
-            outcomes.push(self.diagnostic(
-                code,
-                Some("item/tool/requestUserInput"),
-                None,
-                detail,
-            ));
+            outcomes.push(self.diagnostic(code, Some("item/tool/requestUserInput"), None, detail));
         }
         let Some(parsed) = parsed else {
             return outcomes;
@@ -1765,10 +1851,19 @@ impl CodexInteractionNormalizer {
     fn item_already_completed(&self, item_id: &str) -> bool {
         matches!(
             self.items.get(item_id),
-            Some(CodexItemState::AgentMessage { completed: true, .. })
-                | Some(CodexItemState::Tool { completed: true, .. })
-                | Some(CodexItemState::Reasoning { completed: true, .. })
-                | Some(CodexItemState::Other { completed: true, .. })
+            Some(CodexItemState::AgentMessage {
+                completed: true,
+                ..
+            }) | Some(CodexItemState::Tool {
+                completed: true,
+                ..
+            }) | Some(CodexItemState::Reasoning {
+                completed: true,
+                ..
+            }) | Some(CodexItemState::Other {
+                completed: true,
+                ..
+            })
         )
     }
 
@@ -1859,7 +1954,12 @@ fn safe_text_checked(value: &str, max_chars: usize) -> (String, bool) {
 
 fn bounded_scope_id(value: Option<&str>) -> String {
     value
-        .map(|raw| raw.trim().chars().take(MAX_SCOPE_ID_CHARS).collect::<String>())
+        .map(|raw| {
+            raw.trim()
+                .chars()
+                .take(MAX_SCOPE_ID_CHARS)
+                .collect::<String>()
+        })
         .unwrap_or_default()
 }
 
@@ -1976,10 +2076,7 @@ fn codex_tool_safe_input(item: &Value, kind: CodexToolKind) -> CodexSafeInputV1 
             )
         }
         CodexToolKind::DynamicToolCall => {
-            let tool = item
-                .get("tool")
-                .and_then(Value::as_str)
-                .unwrap_or("工具");
+            let tool = item.get("tool").and_then(Value::as_str).unwrap_or("工具");
             let namespace = item
                 .get("namespace")
                 .and_then(Value::as_str)
@@ -2020,7 +2117,10 @@ fn codex_tool_safe_input(item: &Value, kind: CodexToolKind) -> CodexSafeInputV1 
             (bounded(tool), Some(bounded(tool)), None)
         }
         CodexToolKind::WebSearch => {
-            let query = item.get("query").and_then(Value::as_str).unwrap_or("搜索资料");
+            let query = item
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or("搜索资料");
             (bounded(query), None, None)
         }
         CodexToolKind::ImageView => {

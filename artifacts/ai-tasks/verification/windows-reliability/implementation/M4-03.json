@@ -1,0 +1,106 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T16:43:46.559Z",
+  "mode": {
+    "kind": "task",
+    "id": "M4-03",
+    "tasks": [
+      "M4-03"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "a3b6777a6539fe21e8df480908cc728f890e50f66f44f067eb9dd9e445df081f"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-03.A1",
+      "task": "M4-03",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "execution.bash_shell_path / codex.subagent_reasoning_effort 读写经 SettingsService，空串=强制回落",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "execution_settings"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 67235,
+      "output_sha256": "ac2dbf6c022e79fb2889915c0c228d9779d83e59c97c0ab661a388679979a345",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-03.A2",
+      "task": "M4-03",
+      "level": "component",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "设置卡：未检出 Git Bash 警示可见；检出时展示路径",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/run-tests.mjs",
+        "execution-env-card.test.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4283,
+      "output_sha256": "3b88adc856e2b59746c3e44037007960598cc9b546bf572f5f74211572905082",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-03.A3",
+      "task": "M4-03",
+      "level": "docs-contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "architecture.md/operations.md 含方言策略与设置键说明",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/docs-consistency-check.mjs"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 57,
+      "output_sha256": "cf627d61eac3591884f9be19e4f02a71117cc11c9b99736308e66b88f61692d7",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

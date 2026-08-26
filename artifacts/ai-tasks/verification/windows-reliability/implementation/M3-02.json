@@ -1,0 +1,111 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T15:59:08.539Z",
+  "mode": {
+    "kind": "task",
+    "id": "M3-02",
+    "tasks": [
+      "M3-02"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "9ade52ead7076bfe69ed375a06988c8a22763177049758d0da8a765b282f3994"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 1,
+  "summary": {
+    "total": 3,
+    "passed": 2,
+    "failed": 1,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-02.A1",
+      "task": "M3-02",
+      "level": "contract",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "delegate_task 描述含 full_access 参数语义字符串",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-agent-worker",
+        "delegate_task_description"
+      ],
+      "status": "failed",
+      "passed": false,
+      "exit_code": 101,
+      "duration_ms": 405,
+      "output_sha256": "30367225b0c8ed5c56f0f7b8317ca1152998c14322a2c0e858842c02ff093f52",
+      "failure_excerpt": "s semantics: access='read_only' (default) restricts the child \\\nto read-only tools, and its write or network commands will be rejected by policy with a 'blocked \\\nby policy' error; access='full_access' grants workspace edits and command execution, still gated by \\\nthe approval matrix, and must be justified by the user conversation or parent plan. A run may \\\ncreate at most three direct subagents. Starting the second or third requires a confirmed \\\nplan_subagents batch with one genuinely distinct entry per direction; no fourth direct subagent is \\\nallowed.\"\n    );\n    tools.extend([\n        ToolSpec {\n            name: \"plan_subagents\".to_string(),\n            description: \"Plan a parall\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    llm_runtime::tests::delegate_task_description_states_full_access_semantics\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 296 filtered out; finished in 0.00s\n\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running unittests src\\lib.rs (target\\debug\\deps\\r_code_agent_worker-c672bee73d94a182.exe)\nerror: test failed, to rerun pass `-p r-code-agent-worker --lib`"
+    },
+    {
+      "id": "M3-02.A2",
+      "task": "M3-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "mock 连续 2 次 blocked by policy 后事件流出现只读档位提示",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "policy_rejection_system_hint"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 819,
+      "output_sha256": "c72ca41a1d8bf4b189927e45c2a75bfdd01a8b93ff0cfb0e41d45d824d8d6efb",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M3-02.A3",
+      "task": "M3-02",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "该提示来自 System 通道且 1 次拒绝不触发",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-host",
+        "policy_rejection_hint_threshold"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 876,
+      "output_sha256": "e6cb24b1c67b0b9b958aef1c9282ecb0029c6d1e8956121203df5896f4ada23e",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

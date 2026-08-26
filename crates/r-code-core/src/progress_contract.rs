@@ -17,7 +17,6 @@ pub const PUBLIC_PROGRESS_CONTRACT: &str = "Keep the user oriented during multi-
 - Never announce a routine continuation such as \"继续读取…\" or \"Let me continue reading…\". A progress update must carry a new finding, decision, or material change; if the only content is restating the next tool call, stay silent.\n\
 - Preserve chronological order: progress update, related tools, next update, then the final answer.";
 
-
 /// 子代理交付报告合同（单一事实源，注入原生 R-Code 子代理与 Codex CLI
 /// 委派两条路径）：三档输出 + 证据强制 + 禁止占位摘要。占位/降级必须
 /// 自报，宿主据此把 unresolved 透传给父代理（转派或显式丢弃）。
@@ -37,10 +36,8 @@ mod tests {
         assert!(PUBLIC_PROGRESS_CONTRACT.contains("Before the first tool batch"));
         assert!(PUBLIC_PROGRESS_CONTRACT.contains("when the approach materially changes"));
         // 新证据：改变诊断或完成阶段。
-        assert!(
-            PUBLIC_PROGRESS_CONTRACT
-                .contains("tool evidence changes the diagnosis or completes a meaningful stage")
-        );
+        assert!(PUBLIC_PROGRESS_CONTRACT
+            .contains("tool evidence changes the diagnosis or completes a meaningful stage"));
         // 简单问答：不制造播报。
         assert!(PUBLIC_PROGRESS_CONTRACT.contains("manufacture updates for a simple task"));
         // 重复工具：不复述工具调用；禁止例行继续播报（中英两种形态）。
@@ -54,4 +51,3 @@ mod tests {
         assert!(PUBLIC_PROGRESS_CONTRACT.contains("then the final answer"));
     }
 }
-

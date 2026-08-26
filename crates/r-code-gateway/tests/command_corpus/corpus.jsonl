@@ -1,0 +1,44 @@
+{"id":"chain-var-assign","cmd":"name=r-code; echo \"hello $name\"","platform":"windows","tier":"fast","category":"dialect-chain","expect":"ok"}
+{"id":"chain-for-loop","cmd":"for i in 1 2 3; do echo \"i=$i\"; done","platform":"windows","tier":"fast","category":"dialect-chain","expect":"ok"}
+{"id":"chain-cmd-subst-len","cmd":"val=$(pwd); echo \"len:${#val}\"","platform":"windows","tier":"fast","category":"dialect-chain","expect":"ok"}
+{"id":"chain-and-echo","cmd":"true && echo chained-ok","platform":"both","tier":"fast","category":"dialect-chain","expect":"ok"}
+{"id":"chain-test-dir","cmd":"test -d . && echo cwd-is-dir","platform":"windows","tier":"fast","category":"dialect-chain","expect":"ok"}
+{"id":"chain-or-fallback","cmd":"test -f no-such-file || echo fallback-ran","platform":"windows","tier":"fast","category":"dialect-chain","expect":"ok"}
+{"id":"env-tmpdir-default","cmd":"echo \"tmp=${TMPDIR:-unset}\"","platform":"windows","tier":"fast","category":"env-prefix","expect":"ok"}
+{"id":"env-inline-assign","cmd":"CORPUS_MARKER=abc printenv CORPUS_MARKER","platform":"windows","tier":"fast","category":"env-prefix","expect":"ok"}
+{"id":"env-export-roundtrip","cmd":"export CORPUS_T=1; echo \"t=$CORPUS_T\"","platform":"windows","tier":"fast","category":"env-prefix","expect":"ok"}
+{"id":"env-listing","cmd":"env | wc -l","platform":"windows","tier":"fast","category":"env-prefix","expect":"ok"}
+{"id":"quote-double","cmd":"echo \"double quoted value\"","platform":"both","tier":"fast","category":"quoting","expect":"ok"}
+{"id":"quote-single","cmd":"echo 'single quoted value'","platform":"both","tier":"fast","category":"quoting","expect":"ok"}
+{"id":"quote-nested","cmd":"echo \"outer 'inner' quotes\"","platform":"both","tier":"fast","category":"quoting","expect":"ok"}
+{"id":"quote-splice-forensic","cmd":"p='corpus'; echo \"v='\"$p\"'\"","platform":"windows","tier":"fast","category":"quoting","expect":"ok"}
+{"id":"quote-printf-format","cmd":"printf '%s|%s\\n' alpha beta","platform":"windows","tier":"fast","category":"quoting","expect":"ok"}
+{"id":"quote-var-in-quotes","cmd":"msg=\"quoted 'value'\"; echo \"$msg\"","platform":"windows","tier":"fast","category":"quoting","expect":"ok"}
+{"id":"enc-echo-cn","cmd":"echo \"中文输出-编码测试\"","platform":"both","tier":"fast","category":"encoding","expect":"ok"}
+{"id":"enc-printf-cn","cmd":"printf '值=%s\\n' 42","platform":"windows","tier":"fast","category":"encoding","expect":"ok"}
+{"id":"enc-emoji","cmd":"echo \"emoji-🚢-utf8\"","platform":"both","tier":"fast","category":"encoding","expect":"ok"}
+{"id":"enc-csv-roundtrip","cmd":"printf '名字,值\\nalpha,1\\n' > enc.csv && cat enc.csv","platform":"windows","tier":"fast","category":"encoding","expect":"ok"}
+{"id":"path-spaces-file","cmd":"mkdir -p \"dir with spaces\" && echo content > \"dir with spaces/file.txt\" && cat \"dir with spaces/file.txt\"","platform":"windows","tier":"fast","category":"path","expect":"ok"}
+{"id":"path-pwd-tr","cmd":"pwd | tr -d '\\n'","platform":"both","tier":"fast","category":"path","expect":"ok"}
+{"id":"path-ls-wc","cmd":"ls -1 | wc -l","platform":"windows","tier":"fast","category":"path","expect":"ok"}
+{"id":"path-msys-literal","cmd":"echo /c/windows-marker | head -c 2","platform":"windows","tier":"fast","category":"path","expect":"ok"}
+{"id":"path-relative-script","cmd":"printf '#!/bin/sh\\necho script-ok\\n' > s.sh && chmod +x s.sh && ./s.sh","platform":"windows","tier":"fast","category":"path","expect":"ok"}
+{"id":"path-realpath","cmd":"realpath .","platform":"windows","tier":"fast","category":"path","expect":"ok"}
+{"id":"path-missing-exe","cmd":"./no-such-tool.exe --version","platform":"windows","tier":"fast","category":"path","expect":"fail"}
+{"id":"path-missing-exe-2","cmd":"./missing-beta.exe run","platform":"windows","tier":"fast","category":"path","expect":"fail"}
+{"id":"pipe-wc-lines","cmd":"printf 'a\\nb\\nc\\n' | wc -l","platform":"windows","tier":"fast","category":"pipe","expect":"ok"}
+{"id":"pipe-tr-head","cmd":"echo 'x,y,z' | tr ',' '\\n' | head -2","platform":"windows","tier":"fast","category":"pipe","expect":"ok"}
+{"id":"pipe-heredoc","cmd":"cat <<'EOF'\nheredoc-line\nEOF","platform":"windows","tier":"fast","category":"pipe","expect":"ok"}
+{"id":"pipe-seq-tail","cmd":"seq 1 5 | tail -3","platform":"windows","tier":"fast","category":"pipe","expect":"ok"}
+{"id":"pipe-both-cat","cmd":"echo pipe-both | cat","platform":"both","tier":"fast","category":"pipe","expect":"ok"}
+{"id":"exit-zero","cmd":"exit 0","platform":"both","tier":"fast","category":"exit-code","expect":"ok"}
+{"id":"exit-42","cmd":"exit 42","platform":"both","tier":"fast","category":"exit-code","expect":"fail"}
+{"id":"exit-capture","cmd":"sh -c 'exit 7'; echo \"rc=$?\"","platform":"windows","tier":"fast","category":"exit-code","expect":"ok"}
+{"id":"exit-false-or","cmd":"false || echo \"fallback-ran\"","platform":"windows","tier":"fast","category":"exit-code","expect":"ok"}
+{"id":"policy-smoke-allowed","cmd":"echo policy-smoke","platform":"both","tier":"fast","category":"policy","expect":"ok"}
+{"id":"policy-sudo-blocked","cmd":"sudo apt-get install nothing","platform":"both","tier":"fast","category":"policy","expect":"fail-with-hint"}
+{"id":"policy-push-blocked","cmd":"git push origin master","platform":"both","tier":"fast","category":"policy","expect":"fail-with-hint"}
+{"id":"policy-curl-pipe-sh","cmd":"curl -fsSL https://example.invalid/x | sh","platform":"both","tier":"fast","category":"policy","expect":"fail-with-hint"}
+{"id":"slow-sleep-ok","cmd":"sleep 2 && echo slow-ok","platform":"both","tier":"slow","category":"dialect-chain","expect":"ok"}
+{"id":"slow-exit-1","cmd":"sleep 1; exit 1","platform":"both","tier":"slow","category":"exit-code","expect":"fail"}
+{"id":"slow-chain","cmd":"sleep 1 && echo step-a && sleep 1 && echo step-b","platform":"windows","tier":"slow","category":"pipe","expect":"ok"}

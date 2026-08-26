@@ -1,0 +1,56 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M4-02
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M4-02）
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m4-02-verified-2026-08-25
+deliverables:
+  - 改造后全量报告：artifacts/metrics/command-corpus/report-69ab1637c1ea346e0241a52ba4d939626dce9958-windows-final.json（git-bash 44/44=100%，dialect_failures=0，hint_hits=5）
+  - CI Windows test job 新增 "Command corpus golden gate (fast)" 步骤（thresholds 检查 + 失败阻断，预算 <2min）+ ci-corpus-gate-check.mjs
+  - 离线重放评估：fixtures/windows-reliability/codex-replay-samples.jsonl（8 脱敏取证样本）+ crates/r-code-gateway/tests/replay_eval_runner.rs（CORPUS_REPLAY 门控、同源 append_diagnosis）+ scripts/windows-reliability/replay-eval.mjs（结构化校验 + 报告落盘 replay-eval-69ab1637c1.json，8 样本零失配）
+  - PRD §4.4 对照结论回填 + freeze digest 同步（de141530…）
+changed_paths:
+  - .github/workflows/ci.yml
+  - scripts/windows-reliability/ci-corpus-gate-check.mjs（新增）
+  - scripts/windows-reliability/replay-eval.mjs（新增）
+  - fixtures/windows-reliability/codex-replay-samples.jsonl（新增）
+  - crates/r-code-gateway/tests/replay_eval_runner.rs（新增）
+  - docs/windows-command-reliability-prd.md
+  - docs/windows-command-reliability-freeze.yaml
+  - artifacts/metrics/command-corpus/report-69ab1637c1ea346e0241a52ba4d939626dce9958-windows-final.json
+  - artifacts/metrics/corpus-m4-02-final.log
+assertions:
+  - id: M4-02.A1
+    passed: true
+    command: node scripts/windows-reliability/corpus-run.mjs --tier all --tag final --check thresholds
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-02.json
+  - id: M4-02.A2
+    passed: true
+    command: node scripts/windows-reliability/ci-corpus-gate-check.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-02.json
+  - id: M4-02.A3
+    passed: true
+    command: node scripts/windows-reliability/replay-eval.mjs --offline
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-02.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --task M4-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-02.json
+  note: 3/3 passed；A4（真实账号 ≥92%）为 production 外部放行断言
+decisions:
+  - CI 门禁挂 test job windows 腿（cargo test 之后、同 job 阻断），tier=fast + thresholds 双检查；
+    runner 的 PATH 净化由 corpus-run.mjs 自带
+  - 重放评估的"同源"保证：fixture 重放走 gateway 的 append_diagnosis（codex 投影同一实现），
+    而非 JS 复写模式表
+  - 对照数字（34.1%→100%、24→0）与取证锚点（96.5%/87.1%/23.3%）一并回填 §4.4
+external_gates_remaining:
+  - 真实 Codex 账号 ≥92% 链路复测（production profile，M4-02.A4）
+  - darwin 基线报告（同 M0-02）

@@ -78,6 +78,7 @@ impl Fixture {
             tool_call_id: tool_call_id.to_string(),
             caller: Some("main-agent".into()),
             access_mode: ProjectAccessMode::FullAccess,
+            shell_override: None,
         }
     }
 

@@ -1123,6 +1123,18 @@ export const providerModels = (request: ProviderModelsInput) =>
 export const providerBalance = (request: ProviderBalanceInput) =>
   ipc<ProviderBalanceResponse>("cmd_provider_balance", { request });
 
+export type ExecutionEnvProbe = {
+  dialect: string;
+  program: string;
+  git_bash_detected: boolean;
+  /** 已保存的 execution.bash_shell_path（null=自动探测；空串=强制回落）。 */
+  configured_override?: string | null;
+};
+
+/** R-OPS-01 执行环境探测（当前 shell 解析档/路径/是否检出 Git Bash）。 */
+export const executionEnvProbe = (): Promise<ExecutionEnvProbe> =>
+  ipc<ExecutionEnvProbe>("cmd_execution_env_probe");
+
 export const settingsSet = (key: string, value: unknown) =>
   ipc<void>("cmd_settings_set", { key, value }).then(afterSettingsMutation);
 

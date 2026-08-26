@@ -1,0 +1,64 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M4-03
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M4-03）
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m4-03-verified-2026-08-25
+deliverables:
+  - settings.rs：execution_settings 三组单测（空串语义/校验/探测）
+  - settings_set 路由 execution.bash_shell_path 与 codex.subagent_reasoning_effort → execution.toml（空串语义区分：bash=强制回落；effort 空串=恢复继承）
+  - cmd_execution_env_probe IPC + ExecutionEnvProbe（dialect/program/git_bash_detected）
+  - 前端 ExecutionEnvCard（探测展示 + 未检出警示 role=alert + 路径覆盖保存），注册 tools 面板与 SETTINGS_SEARCH_INDEX；ipc.ts executionEnvProbe + browser mock（window 覆盖钩子）
+  - execution-env-card.test.mjs 组件测试（检出/未检出双场景，浏览器编排）
+  - docs/architecture.md §8.1 新增「Windows 命令执行：五级 shell 解析链与方言策略」；docs/operations.md + operations.en.md 新增「Windows 命令执行排障」
+  - docs-consistency-check.mjs（grep 断言）
+changed_paths:
+  - src-tauri/src/settings.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/tauri_commands.rs
+  - src-tauri/src/main.rs
+  - src-tauri/frontend/src/components/scenes/ExecutionEnvCard.tsx（新增）
+  - src-tauri/frontend/src/components/scenes/SettingsScene.tsx
+  - src-tauri/frontend/src/lib/ipc.ts
+  - src-tauri/frontend/src/lib/browser-mock-runtime.ts
+  - src-tauri/frontend/scripts/execution-env-card.test.mjs（新增）
+  - docs/architecture.md
+  - docs/operations.md
+  - docs/operations.en.md
+  - scripts/windows-reliability/docs-consistency-check.mjs（新增）
+assertions:
+  - id: M4-03.A1
+    passed: true
+    command: cargo test -p r-code-host execution_settings
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-03.json
+  - id: M4-03.A2
+    passed: true
+    command: node scripts/run-tests.mjs execution-env-card.test.mjs（cwd src-tauri/frontend）
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-03.json
+  - id: M4-03.A3
+    passed: true
+    command: node scripts/windows-reliability/docs-consistency-check.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-03.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --task M4-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M4-03.json
+  note: 3/3 passed
+decisions:
+  - 设置读写全部经 SettingsService（settings_set 特例路由 → execution.toml；不进 agent-contracts）
+  - 探测 mock 支持测试覆盖钩子（window.__R_CODE_TEST_EXECUTION_ENV_PROBE），未检出场景无需卸载真实 Git Bash
+  - 英文版 operations.en.md 同步维护
+  - 复审补丁：shell_override 改 ToolGateway 内部 Arc<RwLock>（settings_set 保存后 update_shell_override 即时生效 +
+    win_shell 解析缓存失效，无需重启）；execution_env_probe 改为按 config_dir 解析（含 override，缺失路径如实报错态）
+    并返回 configured_override 供卡片回显；cmd_execution_env_probe 接 State
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）
+  - 真实 Codex 账号 ≥92% 链路复测（production profile）

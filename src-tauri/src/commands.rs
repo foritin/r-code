@@ -70,7 +70,6 @@ use r_code_core::dto::{
     VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
 use r_code_core::error::ProductError;
-use r_code_core::progress_contract::{PUBLIC_PROGRESS_CONTRACT, SUBAGENT_REPORTING_CONTRACT};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput,
     PlanExecutionContext, PlanExecutionStatus, PlanImplementationDispatchState, PlanItemState,
@@ -79,6 +78,7 @@ use r_code_core::plan::{
 };
 use r_code_core::plan_entry::OriginRequestKind;
 use r_code_core::process::hide_background_console;
+use r_code_core::progress_contract::{PUBLIC_PROGRESS_CONTRACT, SUBAGENT_REPORTING_CONTRACT};
 use r_code_core::secret::redact_text;
 use r_code_core::security::{PathGuard, WorkspaceFileAccess};
 use r_code_core::{
@@ -1221,6 +1221,18 @@ impl CommandState {
         gateway.set_policy_guard(Arc::new(
             crate::plan_review_tools::PlanExecutionToolGuard::new(db.clone()),
         ));
+        // Windows 执行环境设置下传（execution.bash_shell_path，PRD
+        // windows-command-reliability §4.5 决策 5：宿主设置，不进 agent-contracts）。
+        match SettingsService::new(config_dir.clone()).load_execution_settings() {
+            Ok(execution) => {
+                gateway.set_shell_override(execution.execution.bash_shell_path.clone());
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "failed to load execution settings, keeping shell auto-detection: {error}"
+                );
+            }
+        }
         // 只读（R0/R1）
         gateway.register(Box::new(r_code_gateway::ReadFileTool));
         gateway.register(Box::new(r_code_gateway::ListFilesTool));
@@ -5694,7 +5706,11 @@ async fn persist_runtime_event(
                 } else {
                     pending.storage_id
                 };
-                let full = if text.is_empty() { pending.text } else { text.clone() };
+                let full = if text.is_empty() {
+                    pending.text
+                } else {
+                    text.clone()
+                };
                 if !full.trim().is_empty() {
                     let event = if phase == "final_answer" {
                         SessionEvent::Message(Message::assistant_text(&full))
@@ -12228,11 +12244,13 @@ async fn session_messages_for_task(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("")
             .to_string();
-        let live = !run_id.is_empty()
-            && state.external_agents.run_is_live(task_id, &run_id).await;
+        let live = !run_id.is_empty() && state.external_agents.run_is_live(task_id, &run_id).await;
         if !live {
             if let Some(target) = payload.as_object_mut() {
-                target.insert("state".to_string(), serde_json::Value::String("expired".into()));
+                target.insert(
+                    "state".to_string(),
+                    serde_json::Value::String("expired".into()),
+                );
             }
             message.output_json = Some(payload.to_string());
         }
@@ -12253,13 +12271,7 @@ pub async fn session_messages(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(err_str(e)),
     };
-    Ok(session_messages_for_task(
-        state,
-        task_id,
-        &content,
-        &branch.id,
-        &branch.storage_id,
-    ).await)
+    Ok(session_messages_for_task(state, task_id, &content, &branch.id, &branch.storage_id).await)
 }
 
 /// Read one branch without activating it. The task/branch ownership check prevents a caller from
@@ -12281,13 +12293,7 @@ pub async fn session_messages_for_branch(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(err_str(error)),
     };
-    Ok(session_messages_for_task(
-        state,
-        task_id,
-        &content,
-        &branch.id,
-        &branch.storage_id,
-    ).await)
+    Ok(session_messages_for_task(state, task_id, &content, &branch.id, &branch.storage_id).await)
 }
 
 /// 时间线图片附件的按需预览载荷。`data` 是不含 data URL 前缀的标准 Base64。
@@ -12801,17 +12807,17 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                         .unwrap_or("")
                         .to_string();
                     if !request_key.is_empty() {
-                        let merged = if let Some(existing) = out
-                            .iter_mut()
-                            .rev()
-                            .find(|message| {
-                                message.kind == "codex_question" && message.text == Some(request_key.clone())
-                            })
-                        {
-                            let mut merged: serde_json::Value =
-                                serde_json::from_str(existing.output_json.as_deref().unwrap_or("{}"))
-                                    .unwrap_or_default();
-                            if let (Some(target), Some(source)) = (merged.as_object_mut(), data.as_object()) {
+                        let merged = if let Some(existing) = out.iter_mut().rev().find(|message| {
+                            message.kind == "codex_question"
+                                && message.text == Some(request_key.clone())
+                        }) {
+                            let mut merged: serde_json::Value = serde_json::from_str(
+                                existing.output_json.as_deref().unwrap_or("{}"),
+                            )
+                            .unwrap_or_default();
+                            if let (Some(target), Some(source)) =
+                                (merged.as_object_mut(), data.as_object())
+                            {
                                 for (key, value) in source {
                                     target.insert(key.clone(), value.clone());
                                 }
@@ -13581,13 +13587,7 @@ pub async fn subagent_session_messages(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(err_str(error)),
     };
-    Ok(session_messages_for_task(
-        state,
-        task_id,
-        &content,
-        &branch.id,
-        &storage_id,
-    ).await)
+    Ok(session_messages_for_task(state, task_id, &content, &branch.id, &storage_id).await)
 }
 
 // ============================================================================
@@ -16255,6 +16255,61 @@ pub async fn rtk_status(state: &CommandState) -> Result<crate::rtk::RtkStatus, S
 /// 返回 `Some((headers_appended, mismatches))`；bridge 不存在或不是 Real
 /// runtime（Mock / 尚未 ensure）时返回 `None`。只读、无敏感内容，不进设置
 /// UI——soak 期间用 devtools/日志消费，UI 化另议。
+/// 执行环境探测（R-OPS-01 设置卡）：当前解析档 + 程序路径 + 是否检出 Git Bash。
+#[derive(Debug, serde::Serialize)]
+pub struct ExecutionEnvProbe {
+    pub dialect: String,
+    pub program: String,
+    pub git_bash_detected: bool,
+    /// 已保存的 execution.bash_shell_path（None=自动探测；Some("")=强制回落）。
+    pub configured_override: Option<String>,
+}
+
+pub fn execution_env_probe(config_dir: &Path) -> ExecutionEnvProbe {
+    let configured_override = SettingsService::new(config_dir.to_path_buf())
+        .load_execution_settings()
+        .ok()
+        .and_then(|settings| settings.execution.bash_shell_path);
+    #[cfg(windows)]
+    {
+        match r_code_gateway::resolve_windows_shell(configured_override.as_deref()) {
+            Ok(resolved) => ExecutionEnvProbe {
+                dialect: resolved.dialect.label().to_string(),
+                program: resolved.program.to_string_lossy().into_owned(),
+                git_bash_detected: matches!(
+                    resolved.dialect,
+                    r_code_gateway::ShellDialect::GitBash
+                ),
+                configured_override,
+            },
+            Err(error) => ExecutionEnvProbe {
+                // 覆盖路径缺失等解析错误：如实呈现（卡片显示探测失败与原因）。
+                dialect: "unknown".to_string(),
+                program: error.to_string(),
+                git_bash_detected: false,
+                configured_override,
+            },
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        ExecutionEnvProbe {
+            dialect: r_code_gateway::ShellDialect::PosixSh.label().to_string(),
+            program: "/bin/sh".to_string(),
+            git_bash_detected: false,
+            configured_override,
+        }
+    }
+}
+
+/// 诊断提示命中计数（R-MET-02 旁路：只含类别与次数，不记正文；进程级）。
+pub fn diagnosis_hint_counters() -> Vec<(String, u64)> {
+    r_code_gateway::diagnosis_counters()
+        .into_iter()
+        .map(|(label, count)| (label.to_string(), count))
+        .collect()
+}
+
 pub async fn request_audit_counters(
     state: &CommandState,
     task_id: &str,
@@ -18265,6 +18320,10 @@ struct CodexExecLimits {
     /// 子代理是否放开 Codex 内置 web_search（宿主 codex.toml 的 web_search
     /// 键；默认关闭）。只影响 thread config，不改任何全局 Codex 配置。
     web_search_enabled: bool,
+    /// R-CDX-02：Codex 子代理推理档位显式覆盖（宿主 execution.toml 的
+    /// codex.subagent_reasoning_effort）。None=继承 codex 自身默认/用户 config
+    ///（固定 medium 降智已移除）；Some 仅追加到本次子进程。
+    subagent_reasoning_effort: Option<String>,
 }
 
 impl Default for CodexExecLimits {
@@ -18276,8 +18335,19 @@ impl Default for CodexExecLimits {
             policy: CodexRunPolicy::Main,
             model_override: None,
             web_search_enabled: false,
+            subagent_reasoning_effort: None,
         }
     }
+}
+
+/// R-CDX-02：宿主 execution.toml 的 codex.subagent_reasoning_effort
+///（枚举子集 minimal|low|medium|high；保存时已校验，此处防御性再过滤）。
+fn load_subagent_reasoning_effort(config_dir: &Path) -> Option<String> {
+    crate::settings::SettingsService::new(config_dir.to_path_buf())
+        .load_execution_settings()
+        .ok()
+        .and_then(|settings| settings.codex.subagent_reasoning_effort)
+        .filter(|effort| ["minimal", "low", "medium", "high"].contains(&effort.as_str()))
 }
 
 /// 宿主侧 Codex 选项文件（`<config_dir>/codex.toml`）。与 Codex 自身的
@@ -18297,11 +18367,33 @@ fn load_codex_host_web_search(config_dir: &Path) -> bool {
 }
 
 /// thread/start 的 config 注入（单一构造点，测试直接断言两种形态）。
-fn codex_thread_config(web_search_enabled: bool) -> serde_json::Value {
-    serde_json::json!({
-        "model_reasoning_effort": "medium",
-        "web_search": if web_search_enabled { "enabled" } else { "disabled" },
-    })
+///
+/// R-CDX-02：固定 `model_reasoning_effort: "medium"` 降智已移除——app-server
+/// 子代理线程继承 codex 自身默认/用户 config；仅当宿主设置显式给出
+/// `codex.subagent_reasoning_effort` 时才注入该键。
+fn codex_thread_config(
+    web_search_enabled: bool,
+    subagent_reasoning: Option<&str>,
+) -> serde_json::Value {
+    let mut config = serde_json::Map::new();
+    if let Some(effort) = subagent_reasoning {
+        config.insert(
+            "model_reasoning_effort".to_string(),
+            serde_json::Value::String(effort.to_string()),
+        );
+    }
+    config.insert(
+        "web_search".to_string(),
+        serde_json::Value::String(
+            if web_search_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+            .to_string(),
+        ),
+    );
+    serde_json::Value::Object(config)
 }
 
 impl CodexExecLimits {
@@ -18315,6 +18407,7 @@ impl CodexExecLimits {
             },
             model_override: None,
             web_search_enabled: false,
+            subagent_reasoning_effort: None,
         }
     }
 }
@@ -18437,15 +18530,15 @@ fn codex_usage_with_degraded(
 fn extract_unresolved_items(report: &str) -> Vec<String> {
     const MAX_ITEMS: usize = 8;
     const MAX_ITEM_CHARS: usize = 200;
-    let Some(index) = ["### 无法验证", "## 无法验证"].iter().find_map(|marker| report.find(marker)) else {
+    let Some(index) = ["### 无法验证", "## 无法验证"]
+        .iter()
+        .find_map(|marker| report.find(marker))
+    else {
         return Vec::new();
     };
     let mut items = Vec::new();
     for line in report[index..].lines().skip(1) {
-        let trimmed = line
-            .trim()
-            .trim_start_matches(['-', '*', '•'])
-            .trim();
+        let trimmed = line.trim().trim_start_matches(['-', '*', '•']).trim();
         if trimmed.starts_with('#') {
             break;
         }
@@ -18679,6 +18772,7 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
         let mut limits = CodexExecLimits::subagent();
         limits.model_override = self.model_override.clone();
         limits.web_search_enabled = load_codex_host_web_search(&self.config_dir);
+        limits.subagent_reasoning_effort = load_subagent_reasoning_effort(&self.config_dir);
         let completion = run_codex_delegation_process(
             &workspace,
             &build_codex_delegation_prompt(
@@ -18743,7 +18837,9 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
         {
             return Err(ProductError::Other(format!(
                 "Codex 子代理降级结束（{}），且未产出实质总结；请按未完成处理",
-                degraded_reason.map(|reason| reason.user_label()).unwrap_or("未知原因")
+                degraded_reason
+                    .map(|reason| reason.user_label())
+                    .unwrap_or("未知原因")
             )));
         }
         Ok(CodexSubagentOutcome::Completed(
@@ -18848,10 +18944,118 @@ fn codex_tool_result_payload(is_error: bool, output: Option<String>) -> serde_js
         "status".to_string(),
         serde_json::Value::String(if is_error { "failed" } else { "completed" }.to_string()),
     );
+    // 失败的 commandExecution 输出追加同源诊断提示（R-DX-01：codex 投影与
+    // bash 工具共用 gateway 的 append_diagnosis）。
+    let output = output.map(|text| {
+        if is_error {
+            r_code_gateway::append_diagnosis(&text, None, r_code_gateway::codex_shell_dialect())
+        } else {
+            text
+        }
+    });
     if let Some(output) = output {
         payload.insert("output".to_string(), serde_json::Value::String(output));
     }
     serde_json::Value::Object(payload)
+}
+
+#[cfg(test)]
+mod policy_rejection_system_hint_tests {
+    use super::*;
+
+    #[test]
+    fn policy_rejection_hint_threshold_fires_once_on_second_rejection() {
+        // R-CDX-03：连续 2 次 blocked by policy 才触发，且只触发一次；
+        // 1 次拒绝不触发（M3-02.A3）。
+        let mut tracker = PolicyRejectionTracker::default();
+        assert!(
+            tracker
+                .observe(true, Some("command rejected: blocked by policy"))
+                .is_none(),
+            "第 1 次拒绝不得触发提示"
+        );
+        let hint = tracker
+            .observe(true, Some("rejected: blocked by policy (read-only)"))
+            .expect("第 2 次拒绝必须触发系统性提示");
+        assert!(hint.contains("read-only"));
+        assert!(hint.contains("full_access"));
+        // 第 3 次不再重复触发。
+        assert!(tracker
+            .observe(true, Some("blocked by policy again"))
+            .is_none());
+    }
+
+    #[test]
+    fn policy_rejection_hint_ignores_non_policy_errors_and_successes() {
+        let mut tracker = PolicyRejectionTracker::default();
+        assert!(tracker
+            .observe(true, Some("cargo build failed with exit 101"))
+            .is_none());
+        assert!(tracker
+            .observe(false, Some("rejected: blocked by policy"))
+            .is_none());
+        assert!(tracker.observe(true, None).is_none());
+        // 非失败事件不计数：再来一次真实拒绝仍是第 1 次。
+        assert!(tracker.observe(true, Some("blocked by policy")).is_none());
+    }
+
+    #[test]
+    fn policy_rejection_hint_is_system_channel_event() {
+        // 提示必须是系统性 System 通道（AgentEvent::CodexContextEvent，持久化为
+        // SessionEvent::System），而非模型生成的消息。
+        let event = PolicyRejectionTracker::hint_event("提示文本".to_string());
+        match event {
+            AgentEvent::CodexContextEvent { event, data } => {
+                assert_eq!(event, "codex_policy_rejection_hint");
+                assert_eq!(data["message"].as_str(), Some("提示文本"));
+            }
+            other => panic!("hint must ride the System channel, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod codex_diagnosis_projection_tests {
+    use super::*;
+
+    #[test]
+    fn codex_diagnosis_projection_appends_policy_hint_on_error() {
+        // exec JSONL 投影：失败的 commandExecution 输出必须带同源诊断提示
+        //（blocked by policy → 只读档位说明）。
+        let payload = codex_tool_result_payload(
+            true,
+            Some("rejected: blocked by policy (read-only sandbox)".to_string()),
+        );
+        let output = payload["output"].as_str().unwrap();
+        assert!(
+            output.starts_with("rejected: blocked by policy"),
+            "原文必须保留"
+        );
+        assert!(
+            output.contains("[诊断]"),
+            "必须追加诊断提示，output: {output}"
+        );
+        assert!(output.contains("full_access"), "必须说明权限途径");
+        // 成功输出零污染。
+        let ok_payload = codex_tool_result_payload(false, Some("done".to_string()));
+        assert_eq!(ok_payload["output"].as_str().unwrap(), "done");
+    }
+
+    #[test]
+    fn codex_diagnosis_projection_appends_relative_exe_hint() {
+        let payload = codex_tool_result_payload(
+            true,
+            Some(
+                "The term './missing-beta.exe' is not recognized as a name of a cmdlet".to_string(),
+            ),
+        );
+        let output = payload["output"].as_str().unwrap();
+        assert!(output.contains("[诊断]"));
+        assert!(
+            output.contains("& .\\tool.exe"),
+            "PowerShell 档需说明 & 调用符, output: {output}"
+        );
+    }
 }
 
 fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)> {
@@ -19057,6 +19261,54 @@ fn codex_exec_protocol_progress(line: &str) -> bool {
     )
 }
 
+/// R-CDX-03：Codex 子代理的 policy 拒绝跟踪器（按 run 作用域）。
+///
+/// 连续第 2 次 "blocked by policy" 类失败时返回一条**系统性**提示文本（宿主
+/// 生成，经 `AgentEvent::CodexContextEvent` 持久化为 `SessionEvent::System`，
+/// 非模型输出），把"被拒"显性归因到只读档位；阈值前与已通知后都返回 None。
+#[derive(Debug, Default)]
+struct PolicyRejectionTracker {
+    rejections: usize,
+    notified: bool,
+}
+
+const POLICY_REJECTION_HINT_EVENT: &str = "codex_policy_rejection_hint";
+const POLICY_REJECTION_HINT_THRESHOLD: usize = 2;
+
+impl PolicyRejectionTracker {
+    /// 观察一次工具结果；跨过阈值且未通知过时返回提示文本（仅一次）。
+    fn observe(&mut self, is_error: bool, output: Option<&str>) -> Option<String> {
+        let rejected = is_error
+            && output.is_some_and(|text| {
+                let lower = text.to_ascii_lowercase();
+                lower.contains("blocked by policy") || lower.contains("pre-rejected by policy")
+            });
+        if !rejected {
+            return None;
+        }
+        self.rejections += 1;
+        if self.rejections >= POLICY_REJECTION_HINT_THRESHOLD && !self.notified {
+            self.notified = true;
+            Some(format!(
+                "当前 Codex 子代理运行在只读（read-only）委派档位：已有 {} 条命令被策略拒绝 \
+（blocked by policy）。写文件、联网或执行类命令需要以 access=\"full_access\" 重新委派（受审批矩阵约束）；如果这些命令并非必需，请改用只读等价方式完成任务。",
+                self.rejections
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// 提示事件（System 通道：AgentEvent::CodexContextEvent 持久化为
+    /// SessionEvent::System，前端与历史重建共用同一规则）。
+    fn hint_event(message: String) -> AgentEvent {
+        AgentEvent::CodexContextEvent {
+            event: POLICY_REJECTION_HINT_EVENT.to_string(),
+            data: serde_json::json!({ "message": message }),
+        }
+    }
+}
+
 fn codex_exec_failure_message(failure: Option<CodexExecFailure>, stream_retries: usize) -> String {
     match failure {
         Some(CodexExecFailure::IdleTimeout) => {
@@ -19132,6 +19384,18 @@ not use Bash-only operators or utilities, and route PowerShell cmdlets through `
 pwsh.exe -NoProfile -NonInteractive -Command` when RTK has no dedicated wrapper. On macOS and \
 Linux, use the configured POSIX shell and never emit PowerShell-only syntax.";
 
+/// R-CDX-01：Windows 下 Codex 命令书写规约（五要素：单命令优先/双引号/禁 bash 式
+/// 引号拼接与插值/相对可执行 `&` 调用/路径分隔统一；≤300 字符，置空即回退）。
+/// 只注入 Windows——取证表明 23.3% 的 Codex 命令带 bash 式引号拼接，正是
+/// PowerShell 解释器上的头号失败因子。
+#[cfg(windows)]
+const CODEX_WINDOWS_COMMAND_CONVENTION: &str =
+    "On Windows keep every shell command a single simple command. Quote values with double \
+quotes; never splice quotes bash-style or interpolate like 'x'\"$v\"'x'. Call relative-path \
+executables with the & operator (`& .\\tool.exe`). Use one path separator style per path.";
+#[cfg(not(windows))]
+const CODEX_WINDOWS_COMMAND_CONVENTION: &str = "";
+
 const CODEX_FILE_LINK_HINT: &str = "Make workspace file references clickable in replies. Link every referenced existing file with \
 a workspace-relative Markdown destination. Add a one-based location when useful: \
 `[src/lib.rs:42](src/lib.rs#L42)` or `[src/lib.rs:42:7](src/lib.rs#L42C7)`. For a range, show \
@@ -19205,7 +19469,8 @@ each batch, synthesize the evidence and decide whether it already supports the r
 Stop immediately once the assignment is supported. Do not invoke \
 unrelated skills, MCP servers, or web research. {CODEX_PARALLEL_EXECUTION_HINT} \
 {rtk} {CODEX_FILE_LINK_HINT} {report_guidance} \
-Do not expose private chain-of-thought. {CODEX_CROSS_PLATFORM_SHELL_HINT} 
+Do not expose private chain-of-thought. {CODEX_CROSS_PLATFORM_SHELL_HINT} \
+{CODEX_WINDOWS_COMMAND_CONVENTION} 
 {SUBAGENT_REPORTING_CONTRACT}{editable}{memory}\n\nAssignment:\n{goal}"
     )
 }
@@ -19647,7 +19912,8 @@ that needs no staging, stay silent and deliver the final answer directly. Do not
 chain-of-thought, and finish with a concise result and verification summary.
 
 Subagent report handling (host-enforced): when a rcode_delegate_subagent result carries a non-empty unresolved array or a degraded field, treat it as a machine-readable signal — for each unresolved item either re-delegate a new bounded task with the concrete data source it says is missing, or list it explicitly as dropped in your final answer. Never silently discard an unresolved item, and never treat a degraded report as fully trustworthy evidence.\n\n\
-{efficiency}\n\n{CODEX_PARALLEL_EXECUTION_HINT}\n\n{rtk}\n\n{CODEX_FILE_LINK_HINT}{editable}{memory}\n\n\
+{efficiency}\n\n{CODEX_PARALLEL_EXECUTION_HINT}\n\n{rtk}\n\n{CODEX_CROSS_PLATFORM_SHELL_HINT} \
+{CODEX_WINDOWS_COMMAND_CONVENTION}\n\n{CODEX_FILE_LINK_HINT}{editable}{memory}\n\n\
 Session title: {}\n\nVisible conversation context:\n{}\n\nCurrent user request:\n{}{}",
         task.title, transcript, request, attachment_context
     )
@@ -20050,6 +20316,7 @@ fn codex_exec_command_with_permissions(
     workspace: &Path,
     permissions: CodexDelegationPermissions,
     prompt: &str,
+    subagent_reasoning: Option<&str>,
 ) -> Result<TokioCommand, String> {
     codex_exec_command_with_permissions_and_images(
         cli_path,
@@ -20061,9 +20328,11 @@ fn codex_exec_command_with_permissions(
         CodexRunPolicy::Subagent {
             max_tool_calls: None,
         },
+        subagent_reasoning,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn codex_exec_command_with_permissions_and_images(
     cli_path: Option<PathBuf>,
     workspace: &Path,
@@ -20072,6 +20341,7 @@ fn codex_exec_command_with_permissions_and_images(
     image_paths: &[PathBuf],
     model_override: Option<&str>,
     policy: CodexRunPolicy,
+    subagent_reasoning: Option<&str>,
 ) -> Result<TokioCommand, String> {
     if prompt.contains('\0') {
         return Err("Codex 委派任务不能包含 NUL 字符。".to_string());
@@ -20093,9 +20363,15 @@ fn codex_exec_command_with_permissions_and_images(
         command.arg("--model").arg(model);
     }
     if policy.is_subagent() {
-        // 子代理是一次性辅助任务：固定中等推理并关闭联网搜索，避免继承用户为主
-        // Agent 选择的高推理档位或每轮搜索。覆盖只附加到本次子进程，不写 config.toml。
-        command.args(["-c", "model_reasoning_effort=\"medium\""]);
+        // R-CDX-02：固定 medium 推理降智已移除——命令书写质量对推理档位敏感，
+        // 子代理继承 codex 自身默认/用户 config；仅当宿主设置显式给出
+        // codex.subagent_reasoning_effort 时才覆盖，且只附加到本次子进程。
+        if let Some(effort) = subagent_reasoning {
+            command
+                .arg("-c")
+                .arg(format!("model_reasoning_effort=\"{effort}\""));
+        }
+        // 联网搜索默认关闭（保持既有行为）：一次性辅助任务不该引入搜索噪声。
         command.args(["-c", "web_search=\"disabled\""]);
     }
     // A Codex child launched by R-Code must not reconnect to R-Code's legacy MCP server. Doing
@@ -20412,6 +20688,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
         image_paths,
         limits.model_override.as_deref(),
         limits.policy,
+        limits.subagent_reasoning_effort.as_deref(),
     )
     .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
     {
@@ -20486,6 +20763,8 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
     let mut summary = None;
     let mut usage_json = None;
     let mut tool_calls = 0usize;
+    // R-CDX-03：按 run 计数的 policy 拒绝跟踪（阈值后插入一次 System 提示）。
+    let mut policy_rejections = PolicyRejectionTracker::default();
     let idle_timer = tokio::time::sleep(limits.idle_timeout);
     let deadline_timer = wait_for_optional_codex_deadline(limits.hard_timeout);
     tokio::pin!(idle_timer);
@@ -20598,6 +20877,17 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                                 ).await;
                             }
                             CodexExecJsonEvent::ToolCompleted { call_id, is_error, output } => {
+                                // R-CDX-03：policy 拒绝按 run 计数，跨阈值插入一次
+                                // System 通道提示（宿主生成，非模型输出）。
+                                if let Some(hint) =
+                                    policy_rejections.observe(is_error, output.as_deref())
+                                {
+                                    emit_codex_observable_event(
+                                        observer.as_ref(),
+                                        event_sink,
+                                        PolicyRejectionTracker::hint_event(hint),
+                                    ).await;
+                                }
                                 emit_codex_observable_event(
                                     observer.as_ref(),
                                     event_sink,
@@ -20804,7 +21094,11 @@ async fn handle_codex_app_server_user_input(
     // 错误结束——fail-closed，不进入等待。
     let (parsed, issues) = crate::codex_interaction::parse_user_input_request(value);
     if !issues.is_empty() {
-        tracing::warn!(run_id, count = issues.len(), "rejecting invalid requestUserInput payload");
+        tracing::warn!(
+            run_id,
+            count = issues.len(),
+            "rejecting invalid requestUserInput payload"
+        );
         let _ = writer.try_send(serde_json::json!({
             "id": request_id,
             "error": { "code": -32602, "message": "invalid requestUserInput payload" },
@@ -20817,14 +21111,18 @@ async fn handle_codex_app_server_user_input(
     let request_key = format!("{run_id}:{}", parsed.item_id);
     let (answer_tx, mut answer_rx) = tokio::sync::mpsc::channel(1);
     let resolved_token = CancellationToken::new();
-    pending.slots.lock().expect("pending user input lock").insert(
-        request_key.clone(),
-        CodexPendingUserInputSlot {
-            respond: answer_tx,
-            resolved: resolved_token.clone(),
-            request_id: parsed.request_id.clone(),
-        },
-    );
+    pending
+        .slots
+        .lock()
+        .expect("pending user input lock")
+        .insert(
+            request_key.clone(),
+            CodexPendingUserInputSlot {
+                respond: answer_tx,
+                resolved: resolved_token.clone(),
+                request_id: parsed.request_id.clone(),
+            },
+        );
     // 前端事件：问题本身非敏感（§4.4）；答案只经内存通道与单次 writer 响应。
     let questions = parsed
         .questions
@@ -20914,60 +21212,57 @@ async fn handle_codex_app_server_user_input(
         .expect("pending user input lock")
         .remove(&request_key);
 
-    let (frame, outcome_label, request_key_for_marker): (serde_json::Value, &'static str, String) = match outcome {
-        WaitOutcome::Answered(answer) => {
-            // 权威编码：{answers:{<questionId>:{answers:[string]}}}（§4.3）。
-            let _ = answer
-                .response
-                .send(ExternalUserInputOutcome::Delivered);
-            (
-                serde_json::json!({
-                    "id": request_id,
-                    "result": { "answers": answer.answers },
-                }),
-                "answered",
-                request_key.clone(),
-            )
-        }
-        WaitOutcome::CancelledByUser(answer) => {
-            // 用户显式取消：提交者仍得到 Delivered（取消被编码为空答案集）。
-            let _ = answer
-                .response
-                .send(ExternalUserInputOutcome::Delivered);
-            (
+    let (frame, outcome_label, request_key_for_marker): (serde_json::Value, &'static str, String) =
+        match outcome {
+            WaitOutcome::Answered(answer) => {
+                // 权威编码：{answers:{<questionId>:{answers:[string]}}}（§4.3）。
+                let _ = answer.response.send(ExternalUserInputOutcome::Delivered);
+                (
+                    serde_json::json!({
+                        "id": request_id,
+                        "result": { "answers": answer.answers },
+                    }),
+                    "answered",
+                    request_key.clone(),
+                )
+            }
+            WaitOutcome::CancelledByUser(answer) => {
+                // 用户显式取消：提交者仍得到 Delivered（取消被编码为空答案集）。
+                let _ = answer.response.send(ExternalUserInputOutcome::Delivered);
+                (
+                    serde_json::json!({
+                        "id": request_id,
+                        "result": { "answers": {} },
+                    }),
+                    "cancelled",
+                    request_key.clone(),
+                )
+            }
+            WaitOutcome::TimedOut => (
                 serde_json::json!({
                     "id": request_id,
                     "result": { "answers": {} },
                 }),
+                "expired",
+                request_key.clone(),
+            ),
+            WaitOutcome::ResolvedExternally => (
+                serde_json::json!({
+                    "id": request_id,
+                    "error": { "code": -32600, "message": "request already resolved" },
+                }),
+                "resolved",
+                request_key.clone(),
+            ),
+            WaitOutcome::RunCancelled => (
+                serde_json::json!({
+                    "id": request_id,
+                    "error": { "code": -32600, "message": "run cancelled" },
+                }),
                 "cancelled",
                 request_key.clone(),
-            )
-        }
-        WaitOutcome::TimedOut => (
-            serde_json::json!({
-                "id": request_id,
-                "result": { "answers": {} },
-            }),
-            "expired",
-            request_key.clone(),
-        ),
-        WaitOutcome::ResolvedExternally => (
-            serde_json::json!({
-                "id": request_id,
-                "error": { "code": -32600, "message": "request already resolved" },
-            }),
-            "resolved",
-            request_key.clone(),
-        ),
-        WaitOutcome::RunCancelled => (
-            serde_json::json!({
-                "id": request_id,
-                "error": { "code": -32600, "message": "run cancelled" },
-            }),
-            "cancelled",
-            request_key.clone(),
-        ),
-    };
+            ),
+        };
     emit_codex_observable_event(
         observer,
         event_sink,
@@ -22660,15 +22955,9 @@ async fn handle_codex_rcode_single_dynamic_tool(
         // 子代理降级信号（GuardTrip=循环护栏、StreamReplay=流重试）在此捕获，
         // 随 inner JSON 透传给父代理（区别于 outright failure 的完成但降级）。
         if child_degraded.is_none() {
-            if matches!(
-                event,
-                AgentEvent::GuardTrip { .. }
-            ) {
+            if matches!(event, AgentEvent::GuardTrip { .. }) {
                 child_degraded = Some(CodexDegradedReason::LoopGuard);
-            } else if matches!(
-                event,
-                AgentEvent::StreamReplay { .. }
-            ) {
+            } else if matches!(event, AgentEvent::StreamReplay { .. }) {
                 child_degraded = Some(CodexDegradedReason::StreamRetries);
             }
         }
@@ -23002,6 +23291,7 @@ async fn observe_codex_app_server_event(
     event_sink: Option<&CodexSubagentEventSink>,
     summary: &mut Option<String>,
     projection: &mut CodexRunProjection,
+    policy_rejections: &mut Option<PolicyRejectionTracker>,
 ) -> Option<CodexExecFailure> {
     let method = value.get("method").and_then(serde_json::Value::as_str)?;
     let params = value.get("params").cloned().unwrap_or_default();
@@ -23019,7 +23309,10 @@ async fn observe_codex_app_server_event(
     for event in events {
         match event {
             CodexTimelineEventV1::ToolStarted {
-                item_id, kind, safe_input, ..
+                item_id,
+                kind,
+                safe_input,
+                ..
             } => {
                 let input = safe_input
                     .input_json
@@ -23036,7 +23329,11 @@ async fn observe_codex_app_server_event(
                 )
                 .await;
             }
-            CodexTimelineEventV1::ToolOutputDelta { item_id, safe_delta, .. } => {
+            CodexTimelineEventV1::ToolOutputDelta {
+                item_id,
+                safe_delta,
+                ..
+            } => {
                 // 宿主侧有界累计（头尾保留 + 截断标记）；增量同时下发前端
                 // 原位追加，终态由 ToolResult 权威覆盖。
                 let _ = projection.accumulate_tool_output(&item_id, &safe_delta);
@@ -23061,8 +23358,34 @@ async fn observe_codex_app_server_event(
                 let output_text = projection.take_tool_output(&item_id, safe_output);
                 // 失败语义与旧 codex_item_failed 对齐：failed/declined 终态或
                 // 非零退出码视为错误；cancelled 映射为失败状态展示。
-                let is_error = matches!(status, CodexToolStatus::Failed | CodexToolStatus::Declined)
-                    || exit_code.is_some_and(|code| code != 0);
+                let is_error =
+                    matches!(status, CodexToolStatus::Failed | CodexToolStatus::Declined)
+                        || exit_code.is_some_and(|code| code != 0);
+                // R-DX-01：失败的命令输出追加同源诊断提示（与 exec JSONL 路径的
+                // codex_tool_result_payload 共用 gateway append_diagnosis）。
+                let output_text = output_text.map(|text| {
+                    if is_error {
+                        r_code_gateway::append_diagnosis(
+                            &text,
+                            exit_code.map(|code| code as i32),
+                            r_code_gateway::codex_shell_dialect(),
+                        )
+                    } else {
+                        text
+                    }
+                });
+                // R-CDX-03：子代理 run 的 policy 拒绝计数（跨阈值插入一次
+                // System 提示；Main 策略运行不跟踪——主代理并非只读档位）。
+                if let Some(tracker) = policy_rejections.as_mut() {
+                    if let Some(hint) = tracker.observe(is_error, output_text.as_deref()) {
+                        emit_codex_observable_event(
+                            observer,
+                            event_sink,
+                            PolicyRejectionTracker::hint_event(hint),
+                        )
+                        .await;
+                    }
+                }
                 let mut payload = serde_json::Map::new();
                 payload.insert(
                     "status".to_string(),
@@ -23072,15 +23395,16 @@ async fn observe_codex_app_server_event(
                         CodexToolStatus::Failed => "failed".to_string(),
                         CodexToolStatus::Declined => "declined".to_string(),
                         CodexToolStatus::Unknown => {
-                            if is_error { "failed".to_string() } else { "completed".to_string() }
+                            if is_error {
+                                "failed".to_string()
+                            } else {
+                                "completed".to_string()
+                            }
                         }
                     }),
                 );
                 if let Some(exit_code) = exit_code {
-                    payload.insert(
-                        "exit_code".to_string(),
-                        serde_json::Value::from(exit_code),
-                    );
+                    payload.insert("exit_code".to_string(), serde_json::Value::from(exit_code));
                 }
                 if let Some(output) = output_text {
                     payload.insert("output".to_string(), serde_json::Value::String(output));
@@ -23103,15 +23427,11 @@ async fn observe_codex_app_server_event(
                     .iter()
                     .map(|step| PlanStep {
                         description: step.text.clone(),
-                        completed: step.status == crate::codex_interaction::CodexPlanStepStatus::Completed,
+                        completed: step.status
+                            == crate::codex_interaction::CodexPlanStepStatus::Completed,
                     })
                     .collect::<Vec<_>>();
-                emit_codex_observable_event(
-                    observer,
-                    event_sink,
-                    AgentEvent::Plan { steps },
-                )
-                .await;
+                emit_codex_observable_event(observer, event_sink, AgentEvent::Plan { steps }).await;
             }
             CodexTimelineEventV1::DiffUpdated {
                 unified_diff_or_reference,
@@ -23147,7 +23467,9 @@ async fn observe_codex_app_server_event(
                 )
                 .await;
             }
-            CodexTimelineEventV1::Warning { code, safe_message, .. } => {
+            CodexTimelineEventV1::Warning {
+                code, safe_message, ..
+            } => {
                 emit_codex_observable_event(
                     observer,
                     event_sink,
@@ -23281,9 +23603,12 @@ async fn handle_codex_message_emissions(
                 }
                 if let Some(observer) = observer {
                     let storage_id = observer.parent_storage_id;
-                    if let Err(error) =
-                        ensure_session_log(observer.session_store, observer.sessions_dir, storage_id)
-                            .await
+                    if let Err(error) = ensure_session_log(
+                        observer.session_store,
+                        observer.sessions_dir,
+                        storage_id,
+                    )
+                    .await
                     {
                         tracing::warn!(storage_id, %error, "failed to init codex session log");
                     }
@@ -23291,9 +23616,9 @@ async fn handle_codex_message_emissions(
                     // 轻量层（历史重建为无作者头的 Markdown 进度条目）。
                     if !authoritative_text.trim().is_empty() {
                         let event = match phase {
-                            CodexAssistantPhase::FinalAnswer => SessionEvent::Message(
-                                Message::assistant_text(&authoritative_text),
-                            ),
+                            CodexAssistantPhase::FinalAnswer => {
+                                SessionEvent::Message(Message::assistant_text(&authoritative_text))
+                            }
                             _ => SessionEvent::System {
                                 event: CODEX_COMMENTARY_EVENT.into(),
                                 data: serde_json::json!({ "text": authoritative_text }),
@@ -23649,7 +23974,10 @@ async fn run_codex_app_server_process_with_images_and_registry(
             .expect("thread/start params are an object")
             .insert(
                 "config".to_string(),
-                codex_thread_config(limits.web_search_enabled),
+                codex_thread_config(
+                    limits.web_search_enabled,
+                    limits.subagent_reasoning_effort.as_deref(),
+                ),
             );
     }
     let dynamic_tools = codex_app_server_dynamic_tools(approval.rcode_delegate.is_some());
@@ -23706,6 +24034,12 @@ async fn run_codex_app_server_process_with_images_and_registry(
     );
     // M3-01：requestUserInput pending 注册表（run 生命周期内有效）。
     let pending_user_inputs = CodexPendingUserInputs::default();
+    // R-CDX-03：本 run 的 policy 拒绝跟踪（仅子代理策略——主代理并非只读档位）。
+    let mut policy_rejections = if limits.policy.is_subagent() {
+        Some(PolicyRejectionTracker::default())
+    } else {
+        None
+    };
     let user_input_run_id = approval.run_id.clone();
     emit_codex_observable_event(
         observer.as_ref(),
@@ -24074,6 +24408,7 @@ async fn run_codex_app_server_process_with_images_and_registry(
                             event_sink,
                             &mut summary,
                             &mut codex_projection,
+                            &mut policy_rejections,
                         ).await {
                             failure = Some(event_failure);
                             break;
@@ -25355,6 +25690,38 @@ pub async fn settings_set(
 
     if key == "orchestration.subagent_pool" || key.starts_with("orchestration.subagent_pool.") {
         return Err("子代理候选池只能通过带 revision 的原子保存接口修改".to_string());
+    }
+
+    // 宿主执行环境设置（windows-reliability PRD §4.5 决策 5）：独立 execution.toml，
+    // 不进 agent-contracts 的 config.toml。空串语义：bash_shell_path=""=强制回落
+    // PowerShell 链；codex.subagent_reasoning_effort 枚举子集 minimal|low|medium|high。
+    if key == "execution.bash_shell_path" || key == "codex.subagent_reasoning_effort" {
+        let raw = value
+            .as_str()
+            .ok_or_else(|| format!("{key} 必须是字符串（空串有语义，不接受 null）"))?
+            .to_string();
+        let mut execution = settings.load_execution_settings().map_err(err_str)?;
+        match key {
+            "execution.bash_shell_path" => {
+                execution.execution.bash_shell_path = Some(raw);
+            }
+            "codex.subagent_reasoning_effort" => {
+                execution.codex.subagent_reasoning_effort =
+                    if raw.is_empty() { None } else { Some(raw) };
+            }
+            _ => unreachable!(),
+        }
+        settings
+            .save_execution_settings(&execution)
+            .map_err(err_str)?;
+        // 即时生效：gateway 的 override 快照更新 + Windows shell 解析缓存失效
+        //（否则最长 5 分钟内仍按旧档执行）。
+        state
+            .tool_gateway
+            .update_shell_override(execution.execution.bash_shell_path.clone());
+        #[cfg(windows)]
+        r_code_gateway::win_shell::invalidate_shell_cache();
+        return Ok(());
     }
     // 旧 first_round_* 实验档位：客户设置已移除（docs §15.2）。legacy 输入只返回
     // 明确诊断警告，不得静默映射为新 Plan 语义。
@@ -34796,7 +35163,9 @@ command = "r-code-host"
         // M2-01：rcode_delegate 的白名单输入负载由归一化层构建
         // （codex_interaction::rcode_delegate_safe_input）。
         let mut codex_projection = crate::codex_interaction::CodexRunProjection::new(
-            crate::codex_interaction::CodexInteractionCapabilities::for_cli_version(Some("0.145.0")),
+            crate::codex_interaction::CodexInteractionCapabilities::for_cli_version(Some(
+                "0.145.0",
+            )),
             0,
             "run_m2",
             "thr_demo",
@@ -34806,11 +35175,16 @@ command = "r-code-host"
             "method": "item/started",
             "params": { "threadId": "thr_demo", "turnId": "turn_demo", "item": dynamic_delegate }
         }));
-        match events.iter().find(|event| matches!(
-            event,
-            crate::codex_interaction::CodexTimelineEventV1::ToolStarted { .. }
-        )) {
-            Some(crate::codex_interaction::CodexTimelineEventV1::ToolStarted { safe_input, .. }) => {
+        match events.iter().find(|event| {
+            matches!(
+                event,
+                crate::codex_interaction::CodexTimelineEventV1::ToolStarted { .. }
+            )
+        }) {
+            Some(crate::codex_interaction::CodexTimelineEventV1::ToolStarted {
+                safe_input,
+                ..
+            }) => {
                 assert_eq!(
                     safe_input.input_json,
                     Some(serde_json::json!({
@@ -37101,7 +37475,11 @@ process.stdin.on('end', () => {
         .await;
 
         assert_eq!(completion.failure, Some(CodexExecFailure::ToolBudget));
-        assert_eq!(completion.degraded, Some(CodexDegradedReason::ToolBudget), "budget runs must carry a degraded reason");
+        assert_eq!(
+            completion.degraded,
+            Some(CodexDegradedReason::ToolBudget),
+            "budget runs must carry a degraded reason"
+        );
         assert!(!completion.succeeded);
         assert_eq!(
             observed
@@ -37233,6 +37611,7 @@ process.stdin.on('end', () => {
             &workspace,
             CodexDelegationPermissions::read_only(),
             "inspect only",
+            None,
         )
         .unwrap();
         let exec_args = exec
@@ -37301,6 +37680,7 @@ input.on('line', (line) => {
                     },
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             )
             .await
@@ -37344,7 +37724,7 @@ input.on('line', (line) => {
     }
   } else if (message.method === 'thread/start') {
     if (message.params?.config?.web_search !== 'disabled' ||
-        message.params?.config?.model_reasoning_effort !== 'medium') {
+        message.params?.config?.model_reasoning_effort !== undefined) {
       send({ id: message.id, error: { code: -32602, message: 'expected bounded subagent config' } });
     } else {
       send({ id: message.id, result: { thread: { id: 'thread-app-server' } } });
@@ -37390,6 +37770,7 @@ input.on('line', (line) => {
                 },
                 model_override: None,
                 web_search_enabled: false,
+                subagent_reasoning_effort: None,
             },
         )
         .await;
@@ -37474,12 +37855,17 @@ input.on('line', (line) => {
                 },
                 model_override: None,
                 web_search_enabled: false,
+                subagent_reasoning_effort: None,
             },
         )
         .await;
 
         assert_eq!(completion.failure, Some(CodexExecFailure::ToolBudget));
-        assert_eq!(completion.degraded, Some(CodexDegradedReason::ToolBudget), "budget runs must carry a degraded reason");
+        assert_eq!(
+            completion.degraded,
+            Some(CodexDegradedReason::ToolBudget),
+            "budget runs must carry a degraded reason"
+        );
         assert!(!completion.succeeded);
         assert_eq!(
             observed
@@ -37562,6 +37948,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             )
             .await
@@ -37654,6 +38041,7 @@ input.on('line', (line) => {
                 policy: CodexRunPolicy::Main,
                 model_override: None,
                 web_search_enabled: false,
+                subagent_reasoning_effort: None,
             },
         )
         .await;
@@ -37662,7 +38050,10 @@ input.on('line', (line) => {
         let mut messages = Vec::new();
         while let Ok(event) = capture_rx.try_recv() {
             if let AgentEvent::CodexAgentMessage {
-                text, delta, item_id, ..
+                text,
+                delta,
+                item_id,
+                ..
             } = event
             {
                 messages.push((text, delta, item_id));
@@ -37679,7 +38070,11 @@ input.on('line', (line) => {
         );
         let seals: Vec<&(String, bool, String)> =
             messages.iter().filter(|(_, delta, _)| !*delta).collect();
-        assert_eq!(seals.len(), 2, "one seal per item, empty body (streamed already)");
+        assert_eq!(
+            seals.len(),
+            2,
+            "one seal per item, empty body (streamed already)"
+        );
         assert!(
             seals.iter().all(|(text, _, _)| text.is_empty()),
             "authoritative text must not be re-appended"
@@ -37751,6 +38146,7 @@ input.on('line', (line) => {
                 policy: CodexRunPolicy::Main,
                 model_override: None,
                 web_search_enabled: false,
+                subagent_reasoning_effort: None,
             },
         )
         .await;
@@ -37766,7 +38162,10 @@ input.on('line', (line) => {
             .filter(|(_, delta)| *delta)
             .map(|(text, _)| text.as_str())
             .collect();
-        assert_eq!(streamed, "唯一正文", "duplicate completed and late delta add nothing");
+        assert_eq!(
+            streamed, "唯一正文",
+            "duplicate completed and late delta add nothing"
+        );
         assert_eq!(
             messages.iter().filter(|(_, delta)| !*delta).count(),
             1,
@@ -37838,6 +38237,7 @@ input.on('line', (line) => {
                 policy: CodexRunPolicy::Main,
                 model_override: None,
                 web_search_enabled: false,
+                subagent_reasoning_effort: None,
             },
         )
         .await;
@@ -37849,10 +38249,15 @@ input.on('line', (line) => {
                 AgentEvent::ToolCall { name, call_id, .. } => {
                     tool_events.push((name, call_id, String::new(), false))
                 }
-                AgentEvent::ToolOutputDelta { call_id, safe_delta } => {
-                    tool_events.push((String::new(), call_id, safe_delta, false))
-                }
-                AgentEvent::ToolResult { call_id, output, is_error } => tool_events.push((
+                AgentEvent::ToolOutputDelta {
+                    call_id,
+                    safe_delta,
+                } => tool_events.push((String::new(), call_id, safe_delta, false)),
+                AgentEvent::ToolResult {
+                    call_id,
+                    output,
+                    is_error,
+                } => tool_events.push((
                     String::new(),
                     call_id,
                     serde_json::to_string(&output).unwrap_or_default(),
@@ -37868,7 +38273,10 @@ input.on('line', (line) => {
         assert_eq!(tool_events[0].0, "Codex 命令");
         assert_eq!(tool_events[0].1, "cmd-1");
         assert_eq!(tool_events[1].2, "running 2 tests\n");
-        assert_eq!(tool_events[2].2, "test result: FAILED. 1 passed; 1 failed\n");
+        assert_eq!(
+            tool_events[2].2,
+            "test result: FAILED. 1 passed; 1 failed\n"
+        );
         let (final_output, is_error) = (tool_events[3].2.clone(), tool_events[3].3);
         assert!(is_error, "failed status + exit code 101 must mark error");
         assert!(final_output.contains("\"status\":\"failed\""));
@@ -37943,6 +38351,7 @@ input.on('line', (line) => {
                 policy: CodexRunPolicy::Main,
                 model_override: None,
                 web_search_enabled: false,
+                subagent_reasoning_effort: None,
             },
         )
         .await;
@@ -37976,15 +38385,27 @@ input.on('line', (line) => {
         }
         assert_eq!(plans, 1, "plan projects once as a plan event");
         assert_eq!(usages, 1, "usage projects once");
-        let names: Vec<&str> = context_rows.iter().map(|(event, _)| event.as_str()).collect();
-        assert_eq!(names, vec!["codex_diff", "r_code_context_compacted", "codex_warning"]);
+        let names: Vec<&str> = context_rows
+            .iter()
+            .map(|(event, _)| event.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["codex_diff", "r_code_context_compacted", "codex_warning"]
+        );
         let diff_data = &context_rows[0].1;
         assert_eq!(diff_data["truncated"], serde_json::json!(false));
-        assert!(diff_data["preview"].as_str().unwrap_or("").starts_with("--- a/src/lib.rs"));
+        assert!(diff_data["preview"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("--- a/src/lib.rs"));
         let warning_data = &context_rows[2].1;
         assert_eq!(warning_data["message"], serde_json::json!("磁盘空间偏低"));
         // 上下文事件绝不进入 agent 消息通道（唯一消息是 final）。
-        assert_eq!(messages, 1, "only the final agentMessage becomes message events");
+        assert_eq!(
+            messages, 1,
+            "only the final agentMessage becomes message events"
+        );
     }
 
     // M3-01.A1：合法单/多题答案按 question id 返回，Codex 随后继续并完成 turn。
@@ -38064,6 +38485,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 None,
             )
@@ -38203,6 +38625,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 None,
             )
@@ -38214,10 +38637,15 @@ input.on('line', (line) => {
         while request_key.is_none() && std::time::Instant::now() < deadline {
             while let Ok(event) = capture_rx.try_recv() {
                 if let AgentEvent::CodexUserInputRequested {
-                    request_key: key, questions, ..
+                    request_key: key,
+                    questions,
+                    ..
                 } = event
                 {
-                    assert!(questions[0].is_secret, "secret flag must survive to the UI event");
+                    assert!(
+                        questions[0].is_secret,
+                        "secret flag must survive to the UI event"
+                    );
                     request_key = Some(key);
                 }
             }
@@ -38252,7 +38680,10 @@ input.on('line', (line) => {
                 leaked_in_events = true;
             }
         }
-        assert!(!leaked_in_events, "secret must never enter the event stream");
+        assert!(
+            !leaked_in_events,
+            "secret must never enter the event stream"
+        );
         // 会话 JSONL 不含 secret。
         let jsonl = sessions_dir_for_assert.join(format!("{run_storage}.jsonl"));
         let persisted = std::fs::read_to_string(&jsonl).unwrap_or_default();
@@ -38347,6 +38778,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 None,
             )
@@ -38358,7 +38790,12 @@ input.on('line', (line) => {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while request_key.is_none() && std::time::Instant::now() < deadline {
             while let Ok(event) = capture_rx.try_recv() {
-                if let AgentEvent::CodexUserInputRequested { request_key: ref key, ref questions, .. } = event {
+                if let AgentEvent::CodexUserInputRequested {
+                    request_key: ref key,
+                    ref questions,
+                    ..
+                } = event
+                {
                     assert_eq!(questions[0].options.len(), 2);
                     request_key = Some(key.clone());
                 }
@@ -38384,7 +38821,10 @@ input.on('line', (line) => {
             .expect("full-flow run timed out")
             .unwrap();
         assert!(completion.succeeded, "completion: {completion:?}");
-        assert_eq!(completion.summary.as_deref(), Some("已按最小范围修复，测试全绿。"));
+        assert_eq!(
+            completion.summary.as_deref(),
+            Some("已按最小范围修复，测试全绿。")
+        );
 
         // 全弧事件序列断言：commentary 流/封口、工具卡+增量+失败终态、
         // 提问与 answered 终态、final 封口。
@@ -38401,7 +38841,12 @@ input.on('line', (line) => {
         }
         for event in captured {
             match event {
-                AgentEvent::CodexAgentMessage { phase, delta, item_id, text } => {
+                AgentEvent::CodexAgentMessage {
+                    phase,
+                    delta,
+                    item_id,
+                    text,
+                } => {
                     if item_id == "c1" && delta {
                         saw_commentary_delta = true;
                         assert_eq!(phase, "commentary");
@@ -38421,12 +38866,19 @@ input.on('line', (line) => {
                     assert_eq!(call_id, "cmd1");
                     assert_eq!(name, "Codex 命令");
                 }
-                AgentEvent::ToolOutputDelta { call_id, safe_delta } => {
+                AgentEvent::ToolOutputDelta {
+                    call_id,
+                    safe_delta,
+                } => {
                     saw_tool_output_delta = true;
                     assert_eq!(call_id, "cmd1");
                     assert_eq!(safe_delta, "2 failing\n");
                 }
-                AgentEvent::ToolResult { call_id, is_error, output } => {
+                AgentEvent::ToolResult {
+                    call_id,
+                    is_error,
+                    output,
+                } => {
                     saw_tool_failed = true;
                     assert_eq!(call_id, "cmd1");
                     assert!(is_error);
@@ -38441,8 +38893,14 @@ input.on('line', (line) => {
                 _ => {}
             }
         }
-        assert!(saw_commentary_delta && saw_commentary_seal, "commentary arc");
-        assert!(saw_tool_call && saw_tool_output_delta && saw_tool_failed, "tool arc");
+        assert!(
+            saw_commentary_delta && saw_commentary_seal,
+            "commentary arc"
+        );
+        assert!(
+            saw_tool_call && saw_tool_output_delta && saw_tool_failed,
+            "tool arc"
+        );
         assert!(saw_question && saw_answered, "question arc");
         assert!(saw_final_seal, "final arc");
     }
@@ -38516,6 +38974,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 None,
             )
@@ -38525,7 +38984,10 @@ input.on('line', (line) => {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while request_key.is_none() && std::time::Instant::now() < deadline {
             while let Ok(event) = capture_rx.try_recv() {
-                if let AgentEvent::CodexUserInputRequested { request_key: key, .. } = event {
+                if let AgentEvent::CodexUserInputRequested {
+                    request_key: key, ..
+                } = event
+                {
                     request_key = Some(key);
                 }
             }
@@ -38669,6 +39131,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 None,
             )
@@ -38678,7 +39141,12 @@ input.on('line', (line) => {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while keys.len() < 2 && std::time::Instant::now() < deadline {
             while let Ok(event) = capture_rx.try_recv() {
-                if let AgentEvent::CodexUserInputRequested { request_key, item_id, .. } = event {
+                if let AgentEvent::CodexUserInputRequested {
+                    request_key,
+                    item_id,
+                    ..
+                } = event
+                {
                     keys.insert(item_id, request_key);
                 }
             }
@@ -38707,7 +39175,10 @@ input.on('line', (line) => {
         assert_eq!(completion.summary.as_deref(), Some("race terminals ok"));
         let mut outcomes = Vec::new();
         while let Ok(event) = capture_rx.try_recv() {
-            if let AgentEvent::CodexUserInputResolved { item_id, outcome, .. } = event {
+            if let AgentEvent::CodexUserInputResolved {
+                item_id, outcome, ..
+            } = event
+            {
                 outcomes.push((item_id, outcome));
             }
         }
@@ -38798,6 +39269,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 None,
             )
@@ -38807,7 +39279,10 @@ input.on('line', (line) => {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while request_key.is_none() && std::time::Instant::now() < deadline {
             while let Ok(event) = capture_rx.try_recv() {
-                if let AgentEvent::CodexUserInputRequested { request_key: key, .. } = event {
+                if let AgentEvent::CodexUserInputRequested {
+                    request_key: key, ..
+                } = event
+                {
                     request_key = Some(key);
                 }
             }
@@ -38847,7 +39322,10 @@ input.on('line', (line) => {
             .expect("steer+answer run timed out")
             .unwrap();
         assert!(completion.succeeded, "completion: {completion:?}");
-        assert_eq!(completion.summary.as_deref(), Some("order: steer then answer"));
+        assert_eq!(
+            completion.summary.as_deref(),
+            Some("order: steer then answer")
+        );
     }
 
     // M3-03.A3：恢复标记持久化 + 解析合并（run 存活裁决在 session 重建层，
@@ -38866,7 +39344,11 @@ input.on('line', (line) => {
             .iter()
             .filter(|message| message.kind == "codex_question")
             .collect();
-        assert_eq!(questions.len(), 2, "one entry per request_key, terminal state merged");
+        assert_eq!(
+            questions.len(),
+            2,
+            "one entry per request_key, terminal state merged"
+        );
         let answered = questions
             .iter()
             .find(|message| message.text.as_deref() == Some("run-x:item_a"))
@@ -38882,7 +39364,10 @@ input.on('line', (line) => {
         let pending_payload: serde_json::Value =
             serde_json::from_str(still_pending.output_json.as_deref().unwrap()).unwrap();
         assert_eq!(pending_payload["state"], serde_json::json!("pending"));
-        assert_eq!(pending_payload["questions"][0]["is_secret"], serde_json::json!(true));
+        assert_eq!(
+            pending_payload["questions"][0]["is_secret"],
+            serde_json::json!(true)
+        );
     }
 
     #[cfg(windows)]
@@ -38948,6 +39433,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             )
             .await
@@ -39024,6 +39510,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             ),
         )
@@ -39101,6 +39588,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             ),
         )
@@ -39187,6 +39675,7 @@ input.on('line', (line) => {{
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 Some((&run_registry, "task-pending-steer", &run_config)),
             )
@@ -39306,6 +39795,7 @@ input.on('line', (line) => {{
                     policy: CodexRunPolicy::Main,
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
                 Some((&run_registry, "task-pending-approval", &run_config)),
             )
@@ -39409,6 +39899,7 @@ input.on('line', (line) => {
                     },
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             )
             .await
@@ -39517,6 +40008,7 @@ input.on('line', (line) => {{
                     },
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             )
             .await
@@ -39626,6 +40118,7 @@ input.on('line', (line) => {{
                     },
                     model_override: None,
                     web_search_enabled: false,
+                    subagent_reasoning_effort: None,
                 },
             ),
         )
@@ -39792,6 +40285,7 @@ input.on('line', (line) => {{
             directory.path(),
             CodexDelegationPermissions::read_only(),
             &prompt,
+            None,
         )
         .unwrap();
         let command = command.as_std();
@@ -39806,8 +40300,6 @@ input.on('line', (line) => {{
             [
                 "exec",
                 "--json",
-                "-c",
-                "model_reasoning_effort=\"medium\"",
                 "-c",
                 "web_search=\"disabled\"",
                 "-c",
@@ -39826,6 +40318,205 @@ input.on('line', (line) => {{
 
     #[cfg(windows)]
     #[test]
+    fn synthesized_path_child_applied_to_codex_exec_command() {
+        // R-ENV-01/M2-01.A2：codex exec 拉起的子进程 PATH 必须是
+        // 「RTK 前缀 + 注册表合成基底」的单次拼装（与 configure_codex_child 基准一致）。
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("codex-probe.exe");
+        std::fs::write(&cli, b"stub").unwrap();
+        let command = codex_exec_command_with_permissions(
+            Some(cli),
+            directory.path(),
+            CodexDelegationPermissions::read_only(),
+            "probe prompt",
+            None,
+        )
+        .unwrap();
+        let expected = expected_codex_child_path_probe();
+        let path_env = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                key.eq_ignore_ascii_case("PATH")
+                    .then(|| value.map(std::ffi::OsString::from))
+                    .flatten()
+            })
+            .expect("codex exec child must carry an explicit PATH env");
+        assert_eq!(path_env, expected);
+    }
+
+    #[test]
+    fn codex_exec_reasoning_effort_not_overridden_by_default() {
+        // R-CDX-02：无设置时 codex exec 参数不含任何 reasoning 覆盖（继承
+        // codex 自身默认/用户 config）；固定 medium 降智已移除。
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("codex-effort.exe");
+        std::fs::write(&cli, b"stub").unwrap();
+        let command = codex_exec_command_with_permissions(
+            Some(cli),
+            directory.path(),
+            CodexDelegationPermissions::read_only(),
+            "probe prompt",
+            None,
+        )
+        .unwrap();
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("model_reasoning_effort")),
+            "reasoning override must be absent by default, args: {args:?}"
+        );
+        // web_search=disabled 保持（A3 回归锚点）。
+        assert!(
+            args.iter().any(|arg| arg.contains("web_search")),
+            "web_search=disabled must stay, args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn codex_exec_reasoning_effort_passed_when_configured() {
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("codex-effort-high.exe");
+        std::fs::write(&cli, b"stub").unwrap();
+        let command = codex_exec_command_with_permissions(
+            Some(cli),
+            directory.path(),
+            CodexDelegationPermissions::read_only(),
+            "probe prompt",
+            Some("high"),
+        )
+        .unwrap();
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let position = args
+            .iter()
+            .position(|arg| arg.contains("model_reasoning_effort"))
+            .expect("configured effort must be passed");
+        assert_eq!(args[position], "model_reasoning_effort=\"high\"");
+        assert_eq!(args[position - 1], "-c");
+    }
+
+    #[test]
+    fn delegation_prompt_convention_injected_only_on_windows() {
+        // R-CDX-01：规约常量 ≤300 字符、五要素齐备；Windows 注入两处模板，Unix 不注入。
+        assert!(
+            CODEX_WINDOWS_COMMAND_CONVENTION.chars().count() <= 300,
+            "convention must stay within 300 chars, got {}",
+            CODEX_WINDOWS_COMMAND_CONVENTION.chars().count()
+        );
+        let prompt = build_codex_delegation_prompt(
+            "goal text",
+            CodexDelegationPermissions::read_only(),
+            "",
+            None,
+            "",
+        );
+        if cfg!(windows) {
+            assert!(
+                prompt.contains(CODEX_WINDOWS_COMMAND_CONVENTION.trim()),
+                "delegation prompt must embed the command convention on Windows"
+            );
+        } else {
+            assert_eq!(CODEX_WINDOWS_COMMAND_CONVENTION, "");
+            assert!(!prompt.contains("never splice quotes bash-style"));
+        }
+    }
+
+    #[test]
+    fn delegation_prompt_convention_covers_five_elements() {
+        let convention = CODEX_WINDOWS_COMMAND_CONVENTION;
+        if !cfg!(windows) {
+            return;
+        }
+        // 五要素：单命令优先 / 双引号 / 禁 bash 式引号拼接与插值 / 相对可执行 & 调用 / 路径分隔统一。
+        assert!(convention.contains("single simple command"));
+        assert!(convention.contains("double"));
+        assert!(convention.contains("bash-style"));
+        assert!(convention.contains("& operator"));
+        assert!(convention.contains("path separator"));
+        // 主 Agent 模板同样注入。
+        let task = r_code_core::dto::Task::new(
+            Some("C:\\workspace".to_string()),
+            "title",
+            "goal",
+            r_code_core::dto::TaskMode::default(),
+        );
+        let main_prompt = codex_main_prompt(&[], &task, "request", None, "", None, "");
+        assert!(
+            main_prompt.contains(convention.trim()),
+            "main prompt must embed the command convention on Windows"
+        );
+    }
+
+    #[test]
+    fn codex_exec_web_search_disabled_is_preserved_for_subagents() {
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("codex-websearch.exe");
+        std::fs::write(&cli, b"stub").unwrap();
+        let command = codex_exec_command_with_permissions_and_images(
+            Some(cli.clone()),
+            directory.path(),
+            CodexDelegationPermissions::read_only(),
+            "probe",
+            &[],
+            None,
+            CodexRunPolicy::Subagent {
+                max_tool_calls: None,
+            },
+            None,
+        )
+        .unwrap();
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.iter().any(|arg| arg == "web_search=\"disabled\""));
+        // 主 Agent 策略不注入 web_search 覆盖。
+        let main = codex_exec_command_with_permissions_and_images(
+            Some(cli),
+            directory.path(),
+            CodexDelegationPermissions::read_only(),
+            "probe",
+            &[],
+            None,
+            CodexRunPolicy::Main,
+            None,
+        )
+        .unwrap();
+        let main_args = main
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!main_args.iter().any(|arg| arg.contains("web_search")));
+    }
+
+    #[cfg(windows)]
+    fn expected_codex_child_path_probe() -> std::ffi::OsString {
+        let mut probe = tokio::process::Command::new("probe");
+        crate::rtk::configure_codex_child(&mut probe);
+        probe
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                key.eq_ignore_ascii_case("PATH")
+                    .then(|| value.map(std::ffi::OsString::from))
+                    .flatten()
+            })
+            .expect("configure_codex_child must set PATH")
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn codex_exec_uses_only_validated_permission_preset_arguments() {
         let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::AutoReview)
             .expect("auto review must be a built-in preset");
@@ -39834,6 +40525,7 @@ input.on('line', (line) => {{
             Path::new(r"C:\repo"),
             permissions,
             "validated prompt",
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -39850,8 +40542,6 @@ input.on('line', (line) => {{
             [
                 "exec",
                 "--json",
-                "-c",
-                "model_reasoning_effort=\"medium\"",
                 "-c",
                 "web_search=\"disabled\"",
                 "-c",
@@ -39880,6 +40570,7 @@ input.on('line', (line) => {{
             directory.path(),
             CodexDelegationPermissions::read_only(),
             "inspect only",
+            None,
         )
         .expect_err("an unknown cmd shim must not receive a delegated prompt");
         assert!(error.contains("npm"));
@@ -40070,11 +40761,15 @@ input.on('line', (line) => {{
         assert_eq!(items, vec!["时区口径需线上对照", "slug 格式需真实数据"]);
         assert!(extract_unresolved_items("只有结论").is_empty());
         // 有界：9 条只取 8 条；token 形态脱敏。
-        let mut long = String::from("### 无法验证
-");
+        let mut long = String::from(
+            "### 无法验证
+",
+        );
         for i in 0..9 {
-            long.push_str(&format!("- 项{i} sk-abcdef123456
-"));
+            long.push_str(&format!(
+                "- 项{i} sk-abcdef123456
+"
+            ));
         }
         let bounded = extract_unresolved_items(&long);
         assert_eq!(bounded.len(), 8);
@@ -40106,22 +40801,41 @@ input.on('line', (line) => {{
     #[test]
     fn m4_codex_thread_config_web_search_toggle() {
         assert_eq!(
-            codex_thread_config(false)["web_search"],
+            codex_thread_config(false, None)["web_search"],
             serde_json::json!("disabled")
         );
         assert_eq!(
-            codex_thread_config(true)["web_search"],
+            codex_thread_config(true, None)["web_search"],
             serde_json::json!("enabled")
+        );
+        // R-CDX-02：默认不注入 reasoning 覆盖（继承 codex 默认）；显式设置才透传。
+        assert!(
+            codex_thread_config(false, None)
+                .get("model_reasoning_effort")
+                .is_none(),
+            "thread config must not carry a reasoning override by default"
+        );
+        assert_eq!(
+            codex_thread_config(false, Some("high"))["model_reasoning_effort"],
+            serde_json::json!("high")
         );
         // 宿主选项文件：缺省/键缺失/显式 true 三态。
         let dir = std::env::temp_dir().join(format!("r-code-codex-opt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!load_codex_host_web_search(&dir));
-        std::fs::write(dir.join("codex.toml"), "web_search = true
-").unwrap();
+        std::fs::write(
+            dir.join("codex.toml"),
+            "web_search = true
+",
+        )
+        .unwrap();
         assert!(load_codex_host_web_search(&dir));
-        std::fs::write(dir.join("codex.toml"), "other = 1
-").unwrap();
+        std::fs::write(
+            dir.join("codex.toml"),
+            "other = 1
+",
+        )
+        .unwrap();
         assert!(!load_codex_host_web_search(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -40143,7 +40857,8 @@ input.on('line', (line) => {{
         // 共享合同逐字注入（单一事实源，非改写副本）。
         assert!(main.contains(PUBLIC_PROGRESS_CONTRACT));
         assert_eq!(
-            main.matches("Keep the user oriented during multi-stage work").count(),
+            main.matches("Keep the user oriented during multi-stage work")
+                .count(),
             1,
             "contract appears exactly once"
         );

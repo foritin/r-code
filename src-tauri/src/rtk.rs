@@ -534,13 +534,29 @@ impl RtkManager {
         Ok(())
     }
 
-    fn prepend_managed_bin(&self, command: &mut Command) {
+    /// 子进程 PATH 单次拼装（windows-reliability PRD 决策 6 / R-ENV-01）：
+    /// Windows 基底为注册表实时合成 PATH（HKLM→HKCU→进程差集，TTL 缓存），
+    /// RTK managed bin（策略启用且二进制存在时）作为前缀，一次性
+    /// `command.env("PATH", …)`——消除旧实现"进程 PATH 整体覆盖"与 win_env
+    /// 互相踩踏的问题。非 Windows 基底保持进程 PATH（登录 PATH 由平台启动链
+    /// 处理：macOS 有 fix_path_env），且仅在 RTK 启用时才改写 env。
+    fn apply_child_path(&self, command: &mut Command) {
+        #[cfg(windows)]
+        let base: std::ffi::OsString = r_code_core::win_env::synthesized_path();
+        #[cfg(not(windows))]
+        let base: std::ffi::OsString = std::env::var_os("PATH").unwrap_or_default();
+
         if !self.policy_enabled() || !self.managed_executable().is_file() {
+            #[cfg(windows)]
+            {
+                // 未启用 RTK 也必须用合成 PATH：R-ENV-01 的目标是所有 Codex
+                // 子进程摆脱 GUI 陈旧环境。
+                command.env("PATH", base);
+            }
             return;
         }
         let bin_dir = self.managed_bin_dir();
-        let current = std::env::var_os("PATH").unwrap_or_default();
-        let paths = std::iter::once(bin_dir).chain(std::env::split_paths(&current));
+        let paths = std::iter::once(bin_dir).chain(std::env::split_paths(&base));
         if let Ok(path) = std::env::join_paths(paths) {
             command.env("PATH", path);
         }
@@ -548,9 +564,10 @@ impl RtkManager {
 }
 
 /// Apply the managed RTK directory only to Codex children spawned by R-Code.
+/// Windows 下同时应用注册表实时合成 PATH（见 `RtkManager::apply_child_path`）。
 pub fn configure_codex_child(command: &mut Command) {
     if let Some(data_dir) = crate::app_paths::default_data_dir() {
-        RtkManager::from_data_dir(data_dir).prepend_managed_bin(command);
+        RtkManager::from_data_dir(data_dir).apply_child_path(command);
     }
 }
 
@@ -1047,7 +1064,7 @@ mod tests {
         manager.enable_policy().unwrap();
 
         let mut command = Command::new("codex");
-        manager.prepend_managed_bin(&mut command);
+        manager.apply_child_path(&mut command);
         let configured_path = command
             .as_std()
             .get_envs()
@@ -1064,8 +1081,74 @@ mod tests {
 
         manager.disable_policy().unwrap();
         let mut disabled_command = Command::new("codex");
-        manager.prepend_managed_bin(&mut disabled_command);
+        manager.apply_child_path(&mut disabled_command);
+        // 未启用 RTK 时 Windows 也必须携带合成 PATH（R-ENV-01）；
+        // 非 Windows 无合成需求，保持不改 env。
+        #[cfg(windows)]
+        {
+            let path = disabled_command
+                .as_std()
+                .get_envs()
+                .find_map(|(key, value)| {
+                    key.eq_ignore_ascii_case("PATH")
+                        .then(|| value.map(OsString::from))
+                        .flatten()
+                })
+                .expect("synthesized PATH must be applied even without rtk");
+            assert_eq!(path, r_code_core::win_env::synthesized_path());
+        }
+        #[cfg(not(windows))]
         assert!(disabled_command.as_std().get_envs().next().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn synthesized_path_child_env_uses_registry_base_without_rtk() {
+        // R-ENV-01：即使 RTK 未启用，Codex 子进程的 PATH 也必须是注册表合成值
+        // 而非 GUI 进程继承的陈旧 PATH。
+        let directory = tempfile::tempdir().unwrap();
+        let manager = RtkManager::from_data_dir(directory.path());
+
+        let mut command = Command::new("codex");
+        manager.apply_child_path(&mut command);
+        let path = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                key.eq_ignore_ascii_case("PATH")
+                    .then(|| value.map(OsString::from))
+                    .flatten()
+            })
+            .expect("PATH env must be set");
+        assert_eq!(path, r_code_core::win_env::synthesized_path());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn synthesized_path_child_env_prefixes_managed_bin_in_single_pass() {
+        // 决策 6：RTK 前缀 + 合成基底一次拼装，前缀在最前且基底无丢失/覆盖。
+        let directory = tempfile::tempdir().unwrap();
+        let manager = RtkManager::from_data_dir(directory.path());
+        std::fs::create_dir_all(manager.managed_bin_dir()).unwrap();
+        std::fs::write(manager.managed_executable(), b"installed-binary").unwrap();
+        manager.enable_policy().unwrap();
+
+        let mut command = Command::new("codex");
+        manager.apply_child_path(&mut command);
+        let path = command
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                key.eq_ignore_ascii_case("PATH")
+                    .then(|| value.map(OsString::from))
+                    .flatten()
+            })
+            .expect("PATH env must be set");
+        let expected = std::env::join_paths(std::iter::once(manager.managed_bin_dir()).chain(
+            std::env::split_paths(&r_code_core::win_env::synthesized_path()),
+        ))
+        .unwrap();
+        assert_eq!(path, expected);
     }
 
     #[cfg(windows)]

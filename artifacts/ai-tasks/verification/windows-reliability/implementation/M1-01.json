@@ -1,0 +1,114 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T14:49:29.392Z",
+  "mode": {
+    "kind": "task",
+    "id": "M1-01",
+    "tasks": [
+      "M1-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "b3e5ccb99a2a8161247fadae0109f73c92744b28faa9ae97797ca5994127018b"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-01.A1",
+      "task": "M1-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "五级解析链单测：设置覆盖（含失败报错不静默回落）、已知位置、git.exe 反推、PATH 探测、PowerShell 回落",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "resolve_windows_shell"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 292,
+      "output_sha256": "4b0ed43fde0779a8814352700e14b2e9357b87400351d69e4b24074ce28a0c69",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A2",
+      "task": "M1-01",
+      "level": "security-negative",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "PATH 首位为 C:\\Windows\\System32\\bash.exe 时跳过并继续下一级",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "wsl_bash"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 273,
+      "output_sha256": "e6814ad4c5f0b5e3dd2353070841904a4e78ba401764811168d2f02aa5a9d645",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M1-01.A3",
+      "task": "M1-01",
+      "level": "integration",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "Git Bash 档金集 dialect-chain/env-prefix/quoting 全绿（回落档由 M1-01.A1 的 fallback 单测覆盖）",
+      "evidence_path": null,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "scripts/windows-reliability/corpus-run.mjs",
+        "--tier",
+        "fast",
+        "--check",
+        "dialect=git-bash",
+        "--check",
+        "categories=dialect-chain,env-prefix,quoting"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3250,
+      "output_sha256": "aab7dde5d6e6cdbb8a51a8cd91c1b735dec3e687a4ef8a3695e4b3b891f728f1",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

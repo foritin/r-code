@@ -1,0 +1,111 @@
+{
+  "schema_version": "windows-reliability-verification.v1",
+  "generated_at": "2026-08-25T16:22:26.590Z",
+  "mode": {
+    "kind": "task",
+    "id": "M4-01",
+    "tasks": [
+      "M4-01"
+    ],
+    "profile": "implementation"
+  },
+  "revision": {
+    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
+    "branch": "feat/windows-command-reliability",
+    "worktree_digest": "60920a97af795d2f38fe076ce0f7faa5eb364045517744d68f168335ee3a4db2"
+  },
+  "corpus_schema_version": "command-corpus.v1",
+  "platform": {
+    "node": "v24.9.0",
+    "os": "win32",
+    "arch": "x64"
+  },
+  "exit_code": 0,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0,
+    "external_pending": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-01.A1",
+      "task": "M4-01",
+      "level": "security-negative",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "专项清单（sudo/rm -rf/curl|sh/管道位置）全部按预期定级，无漏判为 R0/R1",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "classifier_bash_dialect"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 6760,
+      "output_sha256": "0ec4925aecf192f3df95b97bddd1d03edab6fb07c859e1a011ba2a69dbcbea52",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A2",
+      "task": "M4-01",
+      "level": "regression",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "同一命令集分级不低于 Unix 现状基线",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "classifier_not_looser"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 376,
+      "output_sha256": "a5179a88f55f8c06f811d2bddb0e3d3d502bcf6e5470db0c8be7dec477030d66",
+      "failure_excerpt": null
+    },
+    {
+      "id": "M4-01.A3",
+      "task": "M4-01",
+      "level": "unit",
+      "profiles": [
+        "implementation",
+        "production"
+      ],
+      "note": "powershell -Command 包壳命令按内层命令定级",
+      "evidence_path": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "r-code-gateway",
+        "classifier_shell_wrap"
+      ],
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 389,
+      "output_sha256": "44e29fae85b80ce29664c5122ed7b8777bc9d9e52e77408bcf6ab50e21341fa5",
+      "failure_excerpt": null
+    }
+  ],
+  "evidence_index": {
+    "task_packet": "artifacts/ai-tasks/current.yaml",
+    "evidence_dir": "artifacts/ai-tasks/evidence/windows-reliability",
+    "corpus_reports": "artifacts/metrics/command-corpus",
+    "redaction": "stdout/stderr 全文不落盘；失败节选先脱敏再截断（1200 字符）"
+  }
+}

@@ -1,0 +1,60 @@
+schema_version: ai-task-evidence.v1
+project_id: r-code-windows-reliability
+task_id: M1-02
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M1-02）
+revision:
+  git_revision: 69ab1637c1ea346e0241a52ba4d939626dce9958
+  worktree_digest: m1-02-verified-2026-08-25
+deliverables:
+  - apply_bash_tier_env：bash 档子进程注入 MSYS_NO_PATHCONV=1 与 LANG=C.UTF-8
+  - unix_only_rejection 方言门控（bash 档放行，PS/cmd 档保持拦截）+ 专项测试锁定
+  - 工具描述按解析档动态切换：GIT_BASH_TIER_DESCRIPTION / POWERSHELL_FALLBACK_DESCRIPTION
+  - 模块文档（平台策略表）更新为五级解析链
+changed_paths:
+  - crates/r-code-gateway/src/tools_command.rs
+  - artifacts/metrics/corpus-m1-02.log
+  - artifacts/metrics/corpus-m0-02-baseline-rebuild.log
+  - crates/r-code-gateway/tests/command_corpus_runner.rs（报告 tag 支持）
+  - scripts/windows-reliability/{corpus-run,corpus-report-check,prd-baseline-check}.mjs（tag 支持）
+  - scripts/windows-reliability/registry.mjs（金集断言加 tag，防同 sha 覆写）
+assertions:
+  - id: M1-02.A1
+    passed: true
+    command: cargo test -p r-code-gateway bash_tier_env
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-02.json
+  - id: M1-02.A2
+    passed: true
+    command: cargo test -p r-code-gateway unix_only_rejection
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-02.json
+  - id: M1-02.A3
+    passed: true
+    command: cargo test -p r-code-gateway windows_tool_description
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-02.json
+  - id: M1-02.A4
+    passed: true
+    command: node scripts/windows-reliability/corpus-run.mjs --tier fast --tag m1-02 --check categories=encoding,path,pipe --check no-mojibake
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1-02.json
+cumulative_verification:
+  command: node scripts/verify-windows-reliability.mjs --through M1 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M1.json
+  note: 12/12 passed（M0-01/M0-02/M1-01/M1-02 全部断言）
+decisions:
+  - 数据保真缺陷修复：同一 git sha 的金集重复运行会覆写报告文件——M1 期间发现基线被覆写后，
+    以 git stash 回到 pre-M1 代码 + M0-01 版本自省函数，诚实重建基线
+    （report-<sha>-windows-baseline.json，数字与原始基线逐字一致：pwsh/44/15/24/0），
+    并给全部金集运行加 report tag 后缀防再犯
+  - MSYS_NO_PATHCONV 的实证：`cmd /c exit 3` 在 Git Bash 下被 MSYS 转换拆成 `cmd C:\ …`
+    导致 cmd 进入交互模式（单测捕获）；注入后恢复
+  - 拦截测试用 ack 作确定性样本（rg 在本机 ~/.kimi-code/bin 存在，ack 不存在）
+  - 工具描述经 resolve(None) 动态选择（description 无 context 入参，override 场景由 M4-03 设置卡展示真实档位）
+external_gates_remaining:
+  - darwin 基线报告（同 M0-02）

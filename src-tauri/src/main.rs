@@ -836,6 +836,8 @@ fn main() {
             tauri_commands::cmd_rtk_status,
             tauri_commands::cmd_rtk_set_enabled,
             tauri_commands::cmd_request_audit_counters,
+            tauri_commands::cmd_diagnosis_hint_counters,
+            tauri_commands::cmd_execution_env_probe,
             tauri_commands::cmd_rtk_open_security_exclusions,
             tauri_commands::cmd_codex_integration_status,
             tauri_commands::cmd_codex_install_cli,
