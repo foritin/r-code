@@ -195,6 +195,12 @@ jobs:
         # Several workspace integration suites share process-global fixtures.
         # Serial execution avoids platform-dependent false hangs under CI load.
         run: cargo test --workspace --all-features -- --test-threads=1
+      # Windows 命令执行可靠性金集回归门禁（windows-reliability PRD R-MET-01/M4-02）：
+      # fast 档真实执行（净化 PATH → 五级解析 → Git Bash），失败即阻断本 job。
+      # 预算：fast 41 条串行 < 2min（单条 60s 上限、命令平均 < 1s）。
+      - name: Command corpus golden gate (fast, Windows)
+        if: matrix.os == 'windows-latest'
+        run: node scripts/windows-reliability/corpus-run.mjs --tier fast --tag ci --check dialect=git-bash --check thresholds
 
   audit:
     name: Security Audit

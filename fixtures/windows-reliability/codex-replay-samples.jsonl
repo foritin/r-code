@@ -1,0 +1,8 @@
+{"id":"fx-parser-and","output":"ParserError: The token '&&' is not a valid statement separator in a script block","exit_code":1,"expect_hint":"parser-error-chain"}
+{"id":"fx-relative-exe","output":"The term './tool.exe' is not recognized as a name of a cmdlet, function, script file, or operable program.","exit_code":1,"expect_hint":"relative-exe-invocation"}
+{"id":"fx-not-recognized","output":"'rg-cli' is not recognized as an internal or external command, operable program or batch file.","exit_code":1,"expect_hint":"not-recognized"}
+{"id":"fx-policy-blocked","output":"rejected: blocked by policy (read-only sandbox)","exit_code":null,"expect_hint":"policy-blocked"}
+{"id":"fx-clean-build-error","output":"error: could not compile `demo` due to 2 previous errors","exit_code":101,"expect_hint":null}
+{"id":"fx-cmd-unexpected","output":"123 was unexpected at this time.","exit_code":1,"expect_hint":"cmd-unexpected"}
+{"id":"fx-gateway-prejected","output":"PermissionError: risk level R4: pre-rejected by policy","exit_code":null,"expect_hint":"policy-blocked"}
+{"id":"fx-clean-ok","output":"running 12 tests\ntest result: ok. 12 passed","exit_code":0,"expect_hint":null}

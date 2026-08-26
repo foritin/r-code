@@ -1,0 +1,67 @@
+{
+  "dialect": "pwsh",
+  "hint_hits": 6,
+  "mismatch_count": 0,
+  "mismatches": [],
+  "mode": "offline-fixture",
+  "samples": [
+    {
+      "expected": "parser-error-chain",
+      "hit": "parser-error-chain",
+      "id": "fx-parser-and",
+      "matched": true,
+      "original_preserved": true
+    },
+    {
+      "expected": "relative-exe-invocation",
+      "hit": "relative-exe-invocation",
+      "id": "fx-relative-exe",
+      "matched": true,
+      "original_preserved": true
+    },
+    {
+      "expected": "not-recognized",
+      "hit": "not-recognized",
+      "id": "fx-not-recognized",
+      "matched": true,
+      "original_preserved": true
+    },
+    {
+      "expected": "policy-blocked",
+      "hit": "policy-blocked",
+      "id": "fx-policy-blocked",
+      "matched": true,
+      "original_preserved": true
+    },
+    {
+      "expected": null,
+      "hit": null,
+      "id": "fx-clean-build-error",
+      "matched": true,
+      "original_preserved": true
+    },
+    {
+      "expected": "cmd-unexpected",
+      "hit": "cmd-unexpected",
+      "id": "fx-cmd-unexpected",
+      "matched": true,
+      "original_preserved": true
+    },
+    {
+      "expected": "policy-blocked",
+      "hit": "policy-blocked",
+      "id": "fx-gateway-prejected",
+      "matched": true,
+      "original_preserved": true
+    },
+    {
+      "expected": null,
+      "hit": null,
+      "id": "fx-clean-ok",
+      "matched": true,
+      "original_preserved": true
+    }
+  ],
+  "schema_version": "codex-replay-eval.v1",
+  "total": 8
+}
