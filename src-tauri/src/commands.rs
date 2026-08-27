@@ -40,6 +40,7 @@ use std::os::windows::process::CommandExt;
 
 use crate::plan_entry_commands::PlanningRuntimeState;
 use crate::plan_tools::ProposePlanModeTool;
+use crate::task_workspace_binding::resolve_task_workspace_binding;
 use agent_config::{SubagentPoolConfig, SubagentProviderSource};
 use agent_contract::{
     CompletionRequest, ContentBlock, FileSource, HostedToolFormat, HostedToolSpec,
@@ -82,8 +83,8 @@ use r_code_core::progress_contract::{PUBLIC_PROGRESS_CONTRACT, SUBAGENT_REPORTIN
 use r_code_core::secret::redact_text;
 use r_code_core::security::{PathGuard, WorkspaceFileAccess};
 use r_code_core::{
-    MemoryEntry, MemoryReviewSettingsUpdate, MemoryReviewSettingsView, MemorySnapshot,
-    MemorySnapshotLoadOutcome,
+    project_task_status, MemoryEntry, MemoryReviewSettingsUpdate, MemoryReviewSettingsView,
+    MemorySnapshot, MemorySnapshotLoadOutcome, TaskStatusProjectionInput, TaskStatusView,
 };
 use r_code_gateway::permission::{PermissionCancellation, PermissionCheckResult, PermissionEngine};
 use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
@@ -354,10 +355,10 @@ fn queued_dispatch_resources(state: &CommandState) -> QueuedDispatchResources {
 }
 
 fn capture_workspace_snapshot(db: &Database, task: &Task) -> Option<PendingWorkspaceSnapshot> {
-    let workspace = task_workspace_binding_from_db(db, task)
-        .ok()
-        .and_then(|(path, _)| path)
-        .map(PathBuf::from)?;
+    let workspace = resolve_task_workspace_binding(db, task)
+        .ok()?
+        .root()
+        .to_path_buf();
     let git = GitService::new(workspace.clone());
     let repo_root = git.repo_root().ok()?.canonicalize().ok()?;
     let workspace_root = workspace.canonicalize().ok()?;
@@ -1018,7 +1019,7 @@ pub struct CommandState {
     pub agent_event_sink: Mutex<Option<AgentEventSink>>,
     /// 工具门（内置工具 + 权限门 + 审计账本），真实 runtime 的 ToolHost 来源
     pub tool_gateway: Arc<r_code_gateway::ToolGateway>,
-    /// Plan 入口建议与双轨的宿主运行时状态（docs/archive/implementation/plan-mode-dual-track-gate.md）。
+    /// Plan 入口建议与双轨的宿主运行时状态（docs/support/archive/implementation/plan-mode-dual-track-gate.md）。
     pub planning: Arc<PlanningRuntimeState>,
     /// 本机 MCP / 联网工具管理器。配置热更新由同一个长生命周期实例承载。
     pub mcp_manager: Arc<McpManager>,
@@ -1449,6 +1450,8 @@ fn capture_startup_recovery(db: &Database) -> Result<StartupRecoverySnapshot, Pr
 pub struct TaskDetail {
     /// 任务本体
     pub task: Task,
+    /// 由持久化状态与当前运行观测共同派生的统一展示状态。
+    pub status: TaskStatusView,
     /// 当前视图对应的活跃会话分支
     pub active_branch: SessionBranch,
     /// 全部分支元数据；当前界面默认只显示 active_branch，其余供审计/回放使用。
@@ -1493,6 +1496,7 @@ pub struct DashboardChangeSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardTaskSummary {
     pub task: Task,
+    pub status: TaskStatusView,
     pub activity: String,
     pub agent_label: String,
     pub pending_permission_count: u32,
@@ -1806,6 +1810,16 @@ fn err_str<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// Preserve structured user errors across legacy `Result<T, String>` command paths while older
+/// internal errors keep their existing textual behavior. The frontend recognizes this JSON shape
+/// and localizes `code + args`; `debug_detail` remains outside the visible message.
+fn product_err_str(error: ProductError) -> String {
+    match error {
+        ProductError::UserFacing(error) => serde_json::to_string(&error).unwrap_or(error.code),
+        error => error.to_string(),
+    }
+}
+
 /// 从已打开的 workspace 记录得到一个规范且存在的根目录。
 ///
 /// 前端不能把任意路径当作工作区作用域传入：路径必须已经由 `workspace_open`
@@ -1844,50 +1858,24 @@ fn attached_workspace_root(state: &CommandState, workspace_path: &str) -> Result
     workspace_root(state, workspace_path)
 }
 
-/// 不依赖完整 CommandState 的工作区绑定版本，供后台队列调度器复用。
-fn task_workspace_binding_from_db(
-    db: &Database,
-    task: &Task,
-) -> Result<(Option<String>, ProjectAccessMode), String> {
-    let Some(workspace_path) = task.workspace_path.as_deref() else {
-        // 纯聊天默认把用户主目录作为工作区：MCP 等全局能力不绑定项目，
-        // 本地文件/终端工具以主目录为根，写操作与命令仍需要用户批准。
-        let home = dirs::home_dir()
-            .filter(|path| path.is_dir())
-            .ok_or_else(|| "无法确定当前用户主目录".to_string())?
-            .canonicalize()
-            .map_err(|error| format!("用户主目录不可访问：{error}"))?;
-        return Ok((
-            Some(home.display().to_string()),
-            ProjectAccessMode::RequestApproval,
-        ));
-    };
-    let workspace = WorkspaceService::new(db)
-        .get(workspace_path)
-        .map_err(err_str)?
-        .ok_or_else(|| "task workspace is no longer registered".to_string())?;
-    let root = PathBuf::from(&workspace.canonical_path)
-        .canonicalize()
-        .map_err(|e| format!("workspace is no longer accessible: {e}"))?;
-    if !root.is_dir() {
-        return Err("workspace path is not a directory".to_string());
-    }
-    Ok((Some(root.display().to_string()), workspace.access_mode))
-}
-
 fn attached_task_workspace_root(state: &CommandState, task_id: &str) -> Result<PathBuf, String> {
     let task = TaskRepository::new(&state.db)
         .get(task_id)
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found: {task_id}"))?;
-    match task.workspace_path {
-        Some(ref path) => attached_workspace_root(state, path),
-        None => dirs::home_dir()
-            .filter(|path| path.is_dir())
-            .ok_or_else(|| "无法确定当前用户主目录".to_string())?
-            .canonicalize()
-            .map_err(|error| format!("用户主目录不可访问：{error}")),
-    }
+    resolve_task_workspace_binding(&state.db, &task)
+        .map(|binding| binding.root().to_path_buf())
+        .map_err(product_err_str)
+}
+
+#[cfg(test)]
+fn task_workspace_binding_from_db(
+    db: &Database,
+    task: &Task,
+) -> Result<(Option<String>, ProjectAccessMode), String> {
+    resolve_task_workspace_binding(db, task)
+        .map(|binding| binding.into_runtime_parts())
+        .map_err(product_err_str)
 }
 
 fn resolve_workspace_path(root: &Path, path: &str) -> Result<PathBuf, String> {
@@ -2149,10 +2137,9 @@ fn task_matches_codex_prepare_identity(
     if task.state == TaskState::Archived || task.agent_engine != AgentEngine::Codex {
         return Ok(false);
     }
-    let (current_workspace, _) = task_workspace_binding_from_db(&state.db, &task)?;
-    let workspace_matches = current_workspace
-        .as_deref()
-        .is_some_and(|current| Path::new(current) == workspace);
+    let current_workspace =
+        resolve_task_workspace_binding(&state.db, &task).map_err(product_err_str)?;
+    let workspace_matches = current_workspace.root() == workspace;
     let branch_matches = SessionBranchRepository::new(&state.db)
         .active(task_id)
         .map_err(err_str)?
@@ -2233,10 +2220,10 @@ pub async fn task_prepare(state: &CommandState, task_id: &str) -> Result<(), Str
     .await?;
 
     if task.agent_engine == AgentEngine::Codex {
-        let (workspace_path, _) = task_workspace_binding_from_db(&state.db, &task)?;
-        let workspace = workspace_path
-            .map(PathBuf::from)
-            .ok_or_else(|| "Codex 主 Agent 需要先附加本地工作区".to_string())?;
+        let workspace = resolve_task_workspace_binding(&state.db, &task)
+            .map_err(product_err_str)?
+            .root()
+            .to_path_buf();
         drop(bridge);
         let cli = probe_authenticated_codex_cached().await.map_err(err_str)?;
         let cli_path = cli
@@ -4134,6 +4121,81 @@ pub async fn task_set_inference(
         .ok_or_else(|| format!("task not found after inference update: {task_id}"))
 }
 
+fn bounded_status_count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+async fn pending_task_question_count(state: &CommandState, task_id: &str) -> Result<u32, String> {
+    let plan_questions = state
+        .plan_store
+        .current_for_task(task_id)
+        .map_err(err_str)?
+        .and_then(|view| view.pending_question_set)
+        .map(|set| bounded_status_count(set.questions.len()))
+        .unwrap_or_default();
+
+    // Codex requestUserInput cards are restored from their non-secret JSONL markers. Reuse the
+    // same reconstruction path as the Room so expired requests cannot keep a phantom attention
+    // state. A damaged/unreadable transcript must not make the otherwise available task detail
+    // endpoint disappear; the Room's dedicated history request will still surface that error.
+    let codex_questions = match session_messages(state, task_id).await {
+        Ok(messages) => bounded_status_count(
+            messages
+                .iter()
+                .filter(|message| {
+                    message.kind == "codex_question"
+                        && message.output_json.as_deref().is_some_and(|payload| {
+                            serde_json::from_str::<serde_json::Value>(payload)
+                                .ok()
+                                .is_some_and(|value| {
+                                    value.get("state").and_then(serde_json::Value::as_str)
+                                        == Some("pending")
+                                })
+                        })
+                })
+                .count(),
+        ),
+        Err(error) => {
+            tracing::warn!(task_id, %error, "task status could not inspect Codex question markers");
+            0
+        }
+    };
+    Ok(plan_questions.saturating_add(codex_questions))
+}
+
+async fn project_host_task_status(
+    state: &CommandState,
+    task: &Task,
+    runs: &[AgentRun],
+    queued_messages: &[QueuedMessage],
+    approvals: &[PermissionRequest],
+    latest_verification: Option<&VerificationRecord>,
+) -> Result<TaskStatusView, String> {
+    let pending_question_count = if task.state == TaskState::Archived {
+        0
+    } else {
+        pending_task_question_count(state, &task.id).await?
+    };
+    let workspace_binding_invalid = match resolve_task_workspace_binding(&state.db, task) {
+        Ok(_) => false,
+        Err(error @ ProductError::DatabaseError(_)) => return Err(err_str(error)),
+        Err(_) => true,
+    };
+    let unread_count = NotificationRepository::new(&state.db)
+        .unread_count_for_task(&task.id)
+        .map_err(err_str)?;
+    Ok(project_task_status(TaskStatusProjectionInput {
+        task,
+        runs,
+        queued_messages,
+        approvals,
+        pending_question_count,
+        latest_verification,
+        workspace_binding_invalid,
+        unread_count,
+    }))
+}
+
 pub async fn task_detail(state: &CommandState, task_id: &str) -> Result<TaskDetail, String> {
     let task = TaskRepository::new(&state.db)
         .get(task_id)
@@ -4169,8 +4231,19 @@ pub async fn task_detail(state: &CommandState, task_id: &str) -> Result<TaskDeta
     let pending_plan_entry_offer =
         crate::plan_entry_commands::plan_entry_offer_view_for_task(&state.planning, task_id)
             .map_err(err_str)?;
+    let latest_verification = verifications.iter().max_by_key(|record| record.started_at);
+    let status = project_host_task_status(
+        state,
+        &task,
+        &runs,
+        &queued_messages,
+        &permissions,
+        latest_verification,
+    )
+    .await?;
     Ok(TaskDetail {
         task,
+        status,
         active_branch,
         branches,
         runs,
@@ -4364,8 +4437,23 @@ pub async fn workspace_dashboard(
             .map_err(err_str)?;
         let latest_verification = verifications
             .iter()
-            .max_by_key(|record| record.ended_at.as_ref().unwrap_or(&record.started_at))
+            .max_by_key(|record| record.started_at)
             .cloned();
+        let active_branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .map_err(err_str)?;
+        let queued_messages = QueuedMessageRepository::new(&state.db)
+            .list_pending(&task.id, &active_branch.id)
+            .map_err(err_str)?;
+        let status = project_host_task_status(
+            state,
+            &task,
+            &task_runs,
+            &queued_messages,
+            &pending_permissions,
+            latest_verification.as_ref(),
+        )
+        .await?;
         let live = is_live_dashboard_task(&task, &task_runs);
 
         metrics.pending_permission_count += pending_permissions.len() as u32;
@@ -4404,6 +4492,7 @@ pub async fn workspace_dashboard(
             change_summary: summarize_changes(&changes),
             latest_verification,
             active_run,
+            status,
             task,
         };
         summaries.push(summary);
@@ -4566,48 +4655,63 @@ pub async fn activity_list(
 }
 
 fn review_notification_source_key(task_id: &str, run: Option<&AgentRun>) -> String {
-    format!(
-        "review:{task_id}:{}",
-        run.map(|record| record.id.as_str()).unwrap_or("task")
-    )
+    crate::native_notification::review_source_key(task_id, run.map(|record| record.id.as_str()))
 }
 
-async fn sync_notifications(state: &CommandState) -> Result<(), String> {
+async fn sync_notifications(state: &CommandState, locale: &str) -> Result<(), String> {
     let tasks = TaskRepository::new(&state.db)
         .list(None, None, false)
         .map_err(err_str)?;
     let notifications = NotificationRepository::new(&state.db);
     let runs = AgentRunRepository::new(&state.db);
+    let localizer = crate::native_notification::NativeLocalizer::for_locale(locale);
 
     for task in tasks {
+        let task_title = task.title.trim();
+        let task_title = if !task_title.is_empty() {
+            task_title.to_string()
+        } else if !task.goal.trim().is_empty() {
+            task.goal.trim().to_string()
+        } else {
+            localizer.text("notifications.unnamedTask", &[])
+        };
         for permission in state.permission_engine.pending_for_task(&task.id).await {
             let body = if permission.input_summary.trim().is_empty() {
-                format!("{} 需要你的批准才能继续。", permission.tool_name)
+                localizer.text(
+                    "notifications.native.permissionBody",
+                    &[("tool", &permission.tool_name)],
+                )
             } else {
                 permission.input_summary.clone()
             };
             let notification = Notification::new(
                 NotificationKind::PermissionRequested,
-                format!("需要授权：{}", display_task_title(&task)),
+                localizer.text(
+                    "notifications.native.permissionTitle",
+                    &[("task", &task_title)],
+                ),
                 body,
                 Some(task.id.clone()),
                 task.workspace_path.clone(),
             );
             notifications
-                .upsert(&format!("permission:{}", permission.id), &notification)
+                .upsert(
+                    &crate::native_notification::permission_source_key(&permission.id),
+                    &notification,
+                )
                 .map_err(err_str)?;
         }
 
+        let latest_run = runs.get_latest_main_run(&task.id).map_err(err_str)?;
         if task.state == TaskState::ReviewReady {
-            let latest_run = runs.get_latest_main_run(&task.id).map_err(err_str)?;
             let source_key = review_notification_source_key(&task.id, latest_run.as_ref());
             notifications
                 .mark_task_source_prefix_read(&task.id, "review:", Some(&source_key))
                 .map_err(err_str)?;
             let notification = Notification::new(
                 NotificationKind::ReviewReady,
-                format!("等待审核：{}", display_task_title(&task)),
-                "本轮变更已准备好验收。".to_string(),
+                localizer.text("notifications.native.reviewTitle", &[("task", &task_title)]),
+                localizer.text("notifications.native.reviewBody", &[]),
                 Some(task.id.clone()),
                 task.workspace_path.clone(),
             );
@@ -4617,6 +4721,28 @@ async fn sync_notifications(state: &CommandState) -> Result<(), String> {
         } else {
             notifications
                 .mark_task_source_prefix_read(&task.id, "review:", None)
+                .map_err(err_str)?;
+        }
+
+        if let Some(run) = latest_run
+            .as_ref()
+            .filter(|run| run.ended_at.is_some() && run.review_state == ReviewState::Failed)
+        {
+            let notification = Notification::new(
+                NotificationKind::RunFailed,
+                localizer.text(
+                    "notifications.native.failureTitle",
+                    &[("task", &task_title)],
+                ),
+                localizer.text("notifications.native.failureBody", &[]),
+                Some(task.id.clone()),
+                task.workspace_path.clone(),
+            );
+            notifications
+                .upsert(
+                    &crate::native_notification::run_failure_source_key(&task.id, &run.id),
+                    &notification,
+                )
                 .map_err(err_str)?;
         }
     }
@@ -4642,7 +4768,18 @@ pub async fn notification_list(
     limit: u32,
     unread_only: bool,
 ) -> Result<NotificationPage, String> {
-    sync_notifications(state).await?;
+    notification_list_for_locale(state, cursor, limit, unread_only, "zh-CN").await
+}
+
+/// Tauri/WebView entry: synchronize Notification Center copy in the active interface locale.
+pub async fn notification_list_for_locale(
+    state: &CommandState,
+    cursor: Option<&str>,
+    limit: u32,
+    unread_only: bool,
+    locale: &str,
+) -> Result<NotificationPage, String> {
+    sync_notifications(state, locale).await?;
     let cursor = parse_page_cursor(cursor, "notification")?;
     let notifications = NotificationRepository::new(&state.db);
     let rows = notifications
@@ -4675,6 +4812,31 @@ pub async fn notification_mark_all_read(state: &CommandState) -> Result<u64, Str
     NotificationRepository::new(&state.db)
         .mark_all_read()
         .map_err(err_str)
+}
+
+/// 读取系统通知权限状态。平台差异与插件错误由独立通知模块归一化。
+pub fn native_notification_permission_state(
+    app: &tauri::AppHandle,
+) -> crate::native_notification::NativeNotificationPermissionState {
+    crate::native_notification::permission_state(app)
+}
+
+/// 由设置页显式请求系统通知权限；任务执行路径绝不主动弹权限框。
+pub fn native_notification_request_permission(
+    app: &tauri::AppHandle,
+) -> Result<
+    crate::native_notification::NativeNotificationPermissionState,
+    r_code_core::UserFacingError,
+> {
+    crate::native_notification::request_permission(app)
+}
+
+/// 同步当前界面语言，供后台系统通知选择对应文案。
+pub fn native_notification_set_locale(
+    app: &tauri::AppHandle,
+    locale: &str,
+) -> Result<(), r_code_core::UserFacingError> {
+    crate::native_notification::set_locale(app, locale)
 }
 
 // ============================================================================
@@ -5087,7 +5249,7 @@ async fn ensure_real_runtime(
                 .map_err(|error| error.to_string())
         }));
     }
-    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.3：注入附件解析器。发送时的所有权与元数据
+    // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.3：注入附件解析器。发送时的所有权与元数据
     // 校验已在 build_ref_send_plan 完成（task-local lock 内 get_owned）；此处
     // 解析器只服务 Provider 请求构造期的物化（attachment_id → Blob 字节），
     // 物化副本随请求结束丢弃，Base64 不进任何持久层。blobs 目录与 sessions
@@ -6131,7 +6293,9 @@ async fn ensure_runtime_session(
     }
 
     ensure_session_log(session_store, sessions_dir, &branch.storage_id).await?;
-    let (workspace_path, workspace_access_mode) = task_workspace_binding_from_db(db, task)?;
+    let (workspace_path, workspace_access_mode) = resolve_task_workspace_binding(db, task)
+        .map_err(product_err_str)?
+        .into_runtime_parts();
     let session = bridge
         .kind
         .create_session(CreateSessionInput {
@@ -6159,7 +6323,7 @@ async fn ensure_runtime_session(
         .set_request_journal_target(&session.meta.id, branch.storage_id.clone())
         .await
         .map_err(err_str)?;
-    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.1/§6.2：会话建立时注入冻结能力派生物——
+    // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.1/§6.2：会话建立时注入冻结能力派生物——
     // 视觉预算 profile（目录确认多模态时）与路由审计描述。能力解析只经
     // model_capabilities 单一入口；同 run 内不再随设置热变化。
     {
@@ -6763,7 +6927,7 @@ fn main_model_handles_images_natively(
     resolved.vision == crate::model_capabilities::CapabilityTruth::Confirmed
 }
 
-/// 图片理解引擎（docs/archive/implementation/settings-ux-and-image-understanding.md D4）：把"图片怎么被
+/// 图片理解引擎（docs/support/archive/implementation/settings-ux-and-image-understanding.md D4）：把"图片怎么被
 /// 理解"从隐式降级变成显式配置分派。
 ///
 /// **前置短路**：主模型原生处理图片（Codex 主 Agent，或目录确认多模态的主模型）
@@ -6970,7 +7134,7 @@ async fn apply_vision_model_understanding(
         .collect::<Vec<_>>();
     let described_results = futures::future::join_all(requests).await;
 
-    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.2：辅助视觉模型失败必须原样返回可操作
+    // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §5.2：辅助视觉模型失败必须原样返回可操作
     // 错误——**没有**「失败后自动 OCR 降级」分支。用户选择视觉模型引擎后，
     // 静默换引擎等于绕过显式配置；需要 OCR 时由用户在设置中显式切换。
     let mut failures: Vec<String> = Vec::new();
@@ -7050,7 +7214,7 @@ fn user_message_with_attachments(text: &str, attachments: &[ValidatedAttachment]
 }
 
 // ============================================================================
-// 附件引用链路（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4/§5.2）
+// 附件引用链路（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4/§5.2）
 // ============================================================================
 
 /// staging 命令返回的引用 DTO（camelCase 对齐前端）。
@@ -13958,7 +14122,9 @@ async fn start_run_locked_with_message(
     // Freeze the native parent's delegation ceiling before the provider is allowed to execute its
     // first tool call. Project settings can change while a run is active, but every child of this
     // run must keep the TaskMode + workspace policy that the parent actually started with.
-    let (workspace_path, workspace_access_mode) = task_workspace_binding_from_db(db, task)?;
+    let (workspace_path, workspace_access_mode) = resolve_task_workspace_binding(db, task)
+        .map_err(product_err_str)?
+        .into_runtime_parts();
     let (parent_access_mode, parent_require_approval) = native_parent_subagent_access(
         task.mode,
         workspace_path.as_ref().map(|_| workspace_access_mode),
@@ -14773,7 +14939,7 @@ fn effective_max_tokens(name: &str, provider: &agent_config::ProviderConfig) -> 
             );
             Some(limit)
         }
-        // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.4：未显式配置时采用目录的
+        // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.4：未显式配置时采用目录的
         // recommended_output_tokens（如 DeepSeek V4 的 65,536），**不得**自动
         // 采用服务端硬上限——无条件预留 393,216 会把 1M 窗口的可用输入压掉
         // 近 40%，过早触发伪压缩。目录未给推荐值时保持 runtime 侧 8,192
@@ -19948,10 +20114,9 @@ async fn start_codex_main_with_resources(
     {
         return Err("当前 Codex 运行尚未结束".to_string());
     }
-    let (workspace_path, workspace_access_mode) = task_workspace_binding_from_db(&db, &task)?;
-    let workspace = workspace_path
-        .map(PathBuf::from)
-        .ok_or_else(|| "Codex 主 Agent 需要先附加本地工作区".to_string())?;
+    let workspace_binding = resolve_task_workspace_binding(&db, &task).map_err(product_err_str)?;
+    let workspace_access_mode = workspace_binding.access_mode();
+    let workspace = workspace_binding.root().to_path_buf();
     // “+ 新对话”的后台 prepare 会预先填充这份成功缓存；即使没有预热，首次
     // 发送也沿用同一检查路径。失败结果不缓存，用户完成安装或登录后可立即重试。
     let cli = probe_authenticated_codex_cached().await.map_err(err_str)?;
@@ -22432,6 +22597,64 @@ async fn respond_codex_dynamic_tool(
     }
 }
 
+async fn handle_codex_browser_dynamic_tool(
+    value: &serde_json::Value,
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
+    approval: &CodexAppServerApprovalContext,
+    cancellation: &CancellationToken,
+) -> CodexAppServerRequestHandling {
+    let Some(request_id) = value.get("id") else {
+        return CodexAppServerRequestHandling::Failed;
+    };
+    let params = value.get("params").cloned().unwrap_or_default();
+    let tool = params
+        .get("tool")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let Some(delegate) = approval.rcode_delegate.as_ref() else {
+        return respond_codex_dynamic_tool(writer, request_id, false, "Browser 工具当前不可用")
+            .await;
+    };
+    let input = params.get("arguments").cloned().unwrap_or_default();
+    let call_id = params.get("callId").and_then(serde_json::Value::as_str);
+    match crate::browser::execute_codex_browser_tool(
+        &delegate.db,
+        &delegate.tool_gateway,
+        &approval.task_id,
+        &approval.run_id,
+        &approval.caller,
+        call_id,
+        tool,
+        input,
+        cancellation.clone(),
+    )
+    .await
+    {
+        Ok(crate::browser::BrowserCodexExecution::Completed(outcome)) => {
+            respond_codex_dynamic_tool(writer, request_id, !outcome.is_error, outcome.content).await
+        }
+        Ok(crate::browser::BrowserCodexExecution::Cancelled) => {
+            CodexAppServerRequestHandling::Cancelled
+        }
+        Err(error) => {
+            tracing::warn!(
+                task_id = %approval.task_id,
+                run_id = %approval.run_id,
+                tool,
+                %error,
+                "Codex Browser dynamic tool failed"
+            );
+            respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                false,
+                "Browser 工具执行失败，详见 R-Code 诊断日志",
+            )
+            .await
+        }
+    }
+}
+
 /// 执行 Codex App Server 的会话内动态委派工具。
 ///
 /// 与全局 MCP 的 `delegate` 不同，本路径没有 Task 创建服务；它复用当前 task / parent
@@ -22454,6 +22677,12 @@ async fn handle_codex_rcode_dynamic_tool(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     if tool != CODEX_RCODE_DELEGATE_TOOL {
+        if approval.rcode_delegate.as_ref().is_some_and(|delegate| {
+            tool.parse::<crate::browser::BrowserToolName>().is_ok()
+                && delegate.tool_gateway.owns_tool(tool)
+        }) {
+            return handle_codex_browser_dynamic_tool(value, writer, approval, cancellation).await;
+        }
         return handle_codex_rcode_single_dynamic_tool(
             value,
             writer,
@@ -22713,17 +22942,8 @@ async fn handle_codex_rcode_single_dynamic_tool(
         }
     };
     let (workspace, workspace_access_mode) =
-        match task_workspace_binding_from_db(&delegate.db, &task) {
-            Ok((Some(workspace), access_mode)) => (PathBuf::from(workspace), access_mode),
-            Ok((None, _)) => {
-                return respond_codex_dynamic_tool(
-                    writer,
-                    request_id,
-                    false,
-                    "R-Code 子代理需要当前任务已附加本地工作区",
-                )
-                .await;
-            }
+        match resolve_task_workspace_binding(&delegate.db, &task) {
+            Ok(binding) => (binding.root().to_path_buf(), binding.access_mode()),
             Err(error) => {
                 tracing::warn!(
                     task_id = %approval.task_id,
@@ -23980,7 +24200,12 @@ async fn run_codex_app_server_process_with_images_and_registry(
                 ),
             );
     }
-    let dynamic_tools = codex_app_server_dynamic_tools(approval.rcode_delegate.is_some());
+    let mut dynamic_tools = codex_app_server_dynamic_tools(approval.rcode_delegate.is_some());
+    if let Some(delegate) = approval.rcode_delegate.as_ref() {
+        dynamic_tools.extend(crate::browser::codex_dynamic_browser_tools(
+            &delegate.tool_gateway,
+        ));
+    }
     if !dynamic_tools.is_empty() {
         thread_params
             .as_object_mut()
@@ -31487,7 +31712,7 @@ kind = "codex_cli"
             .unwrap();
     }
 
-    /// 阶段 A 冒烟的 cargo 级等价物（docs/archive/implementation/request-audit-and-anchoring.md 完成定义
+    /// 阶段 A 冒烟的 cargo 级等价物（docs/support/archive/implementation/request-audit-and-anchoring.md 完成定义
     /// 第 3 条）：开启 diagnostics.request_audit 后跑一条真实 run（本地 SSE
     /// provider），验证 sidecar 落在 sessions/request-audit/{storage_id}.jsonl、
     /// 首行 reason=="initial"、canonical 文件零污染、自检计数 (N, 0)；关闭开关后

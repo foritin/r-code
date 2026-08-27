@@ -8,6 +8,20 @@
 // ---------- 任务 ----------
 export type TaskMode = "ask" | "edit" | "auto" | "plan";
 export type TaskAgentEngine = "r_code" | "codex";
+export type {
+  AutomationDefinition,
+  AutomationDefinitionSnapshot,
+  AutomationDefinitionState,
+  AutomationPermission,
+  AutomationRun,
+  AutomationWeekday,
+  ExecutionProfile,
+  RunStatus,
+  RunTrigger,
+  ScheduleSpec,
+} from "./automation-types";
+export { HOURLY_INTERVAL_MINUTES } from "./automation-types";
+
 export interface InferenceOptions {
   /** 未设置表示沿用当前模型服务默认。 */
   thinking?: "enabled" | "disabled" | "adaptive" | string | null;
@@ -26,7 +40,7 @@ export interface AttachmentInput {
   nativeOcr?: boolean;
 }
 
-/** cmd_attachment_stage 返回的 Blob 引用（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4）。
+/** cmd_attachment_stage 返回的 Blob 引用（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4）。
  * 发送 IPC 只携带 attachmentId 列表；Base64 仅存在于 staging 的一次性载荷。 */
 export interface AttachmentRefDto {
   attachmentId: string;
@@ -66,6 +80,39 @@ export type TaskState =
   | "interrupted"
   | "review_ready"
   | "archived";
+
+/** 后端统一投影后的展示状态；所有任务界面必须优先使用它而不是重新推导优先级。 */
+export type TaskDisplayState =
+  | "archived"
+  | "waiting_for_approval"
+  | "waiting_for_question"
+  | "failed"
+  | "interrupted"
+  | "workspace_binding_invalid"
+  | "review_ready"
+  | "verification_required"
+  | "verifying"
+  | "running"
+  | "queued"
+  | "idle";
+
+export type TaskAttention =
+  | "approval_required"
+  | "user_question"
+  | "workspace_binding_invalid"
+  | "run_failed"
+  | "verification_required"
+  | "review_required";
+
+export interface TaskStatusView {
+  task_id: string;
+  persisted_state: TaskState;
+  display_state: TaskDisplayState;
+  attention: TaskAttention[];
+  active_run_id?: string | null;
+  queue_depth: number;
+  unread_count: number;
+}
 
 export interface Task {
   id: string;
@@ -430,6 +477,8 @@ export interface VerificationRecord {
 
 export interface TaskDetail {
   task: Task;
+  /** 单一权威展示状态，来自后端 TaskStatus projector。 */
+  status: TaskStatusView;
   active_branch: SessionBranch;
   branches: SessionBranch[];
   runs: AgentRun[];
@@ -484,6 +533,7 @@ export interface DashboardChangeSummary {
 
 export interface DashboardTaskSummary {
   task: Task;
+  status: TaskStatusView;
   activity: string;
   agent_label: string;
   pending_permission_count: number;
@@ -541,6 +591,7 @@ export interface ProjectActivityPage {
 export type NotificationKind =
   | "permission_requested"
   | "review_ready"
+  | "run_failed"
   | "change_requested"
   | "memory_approval_required"
   | "memory_project_updated";
@@ -560,6 +611,33 @@ export interface NotificationPage {
   notifications: Notification[];
   next_cursor?: string;
   unread_count: number;
+}
+
+export type NativeNotificationPermissionState = "granted" | "denied" | "prompt" | "unavailable";
+
+export type NativeNotificationKind =
+  | "permission_required"
+  | "run_failed"
+  | "review_ready"
+  | "automation_completed";
+
+export type NativeNotificationTarget =
+  | { type: "task"; task_id: string }
+  | { type: "automation_run"; automation_id: string; run_id: string };
+
+export interface NativeNotificationEvent {
+  notification_id: string;
+  source_key: string;
+  kind: NativeNotificationKind;
+  title: string;
+  body: string;
+  target: NativeNotificationTarget;
+  delivery: "in_app" | "system";
+}
+
+export interface NativeNotificationOpenPayload {
+  notification_id: string;
+  target: NativeNotificationTarget;
 }
 
 // ---------- 会话分支与运行控制 ----------

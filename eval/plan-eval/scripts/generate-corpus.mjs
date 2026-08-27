@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 生成冻结 corpus 的 25 个自包含 case（docs/archive/implementation/plan-mode-dual-track-gate.md §16.1）。
+ * 生成冻结 corpus 的 25 个自包含 case（docs/support/archive/implementation/plan-mode-dual-track-gate.md §16.1）。
  *
  * 每个 case 目录包含：
  * - case.json     元数据（任务指令 + 期望复杂度信号）

@@ -1,0 +1,201 @@
+{
+  "app": {
+    "skipToMain": "跳到主内容",
+    "opening": "正在打开…"
+  },
+  "shell": {
+    "navigationLabel": "项目与导航",
+    "brandNewConversationTitle": "R-Code — 新对话",
+    "brandNewConversationAria": "R-Code，新建对话",
+    "searchTitle": "搜索（{{shortcut}}）",
+    "searchAria": "搜索任务、文件和对话，{{shortcut}}",
+    "newConversation": "新对话",
+    "creatingConversation": "正在创建新对话",
+    "expandSidebar": "展开侧边栏",
+    "collapseSidebar": "收起侧边栏",
+    "globalNavigation": "全局功能",
+    "conversations": "对话",
+    "inbox": "待处理",
+    "activity": "活动",
+    "archive": "归档",
+    "recent": "最近",
+    "noChats": "无聊天",
+    "projects": "项目",
+    "runningCount": "{{count}} 运行中",
+    "addProject": "添加项目",
+    "addLocalProject": "添加本地项目",
+    "add": "添加",
+    "attachFirstProject": "附加第一个项目",
+    "expandProjectTasks": "展开 {{project}} 的任务列表",
+    "collapseProjectTasks": "收起 {{project}} 的任务列表",
+    "expandTasks": "展开任务",
+    "collapseTasks": "收起任务",
+    "openProjectOverview": "打开 {{project}} 项目概览",
+    "viewAllTasks": "查看全部 {{count}} 个任务",
+    "settings": "设置"
+  },
+  "settings": {
+    "pageTitle": "设置",
+    "categoriesLabel": "设置分类",
+    "preferences": {
+      "label": "外观与小助手",
+      "description": "选择界面语言与主题，并管理桌面小助手的反馈方式。"
+    },
+    "language": {
+      "heading": "界面语言",
+      "description": "选择 R-Code 使用的显示语言，切换后立即生效。",
+      "label": "语言",
+      "selectAria": "界面语言",
+      "zh-CN": "简体中文",
+      "en-US": "English (United States)"
+    },
+    "notifications": {
+      "heading": "系统通知",
+      "description": "R-Code 在后台运行时，通过系统横幅提醒你处理授权、失败和待审阅结果；应用在前台时优先使用应用内提示。",
+      "status": {
+        "loading": {
+          "label": "正在检查通知权限",
+          "description": "正在读取当前系统设置。"
+        },
+        "granted": {
+          "label": "系统通知已允许",
+          "description": "R-Code 在后台时可以发送系统横幅。"
+        },
+        "denied": {
+          "label": "系统通知已被拒绝",
+          "description": "提醒仍会保留在应用内；如果系统不再弹出授权框，请在操作系统的通知设置中允许 R-Code。"
+        },
+        "prompt": {
+          "label": "尚未请求通知权限",
+          "description": "R-Code 只会在你点击请求后显示系统授权框。"
+        },
+        "unavailable": {
+          "label": "系统通知不可用",
+          "description": "当前平台或运行环境不支持系统通知，提醒会自动退化为应用内提示。"
+        }
+      },
+      "requestPermission": "请求通知权限",
+      "requestingPermission": "正在请求…",
+      "checkAgain": "重新检测",
+      "checkingPermission": "正在检测…",
+      "permissionError": "无法读取系统通知权限：{{detail}}"
+    },
+    "updater": {
+      "heading": "应用更新",
+      "description": "检查签名的 R-Code 正式版本。下载、安装和重启始终需要你的明确操作。",
+      "currentVersion": "当前版本",
+      "loadingVersion": "正在读取…",
+      "statusLabel": "更新状态",
+      "lastChecked": "上次检查",
+      "neverChecked": "尚未检查",
+      "releaseVersion": "可用版本 {{version}}",
+      "releaseDate": "发布于 {{date}}",
+      "releaseNotes": "版本说明",
+      "noReleaseNotes": "此版本未提供版本说明。",
+      "downloadProgress": "下载进度",
+      "progressUnknown": "正在下载",
+      "progressPercent": "{{percent}}%",
+      "downloadedBytes": "已下载 {{downloaded}}",
+      "downloadedOfTotal": "{{downloaded}} / {{total}}",
+      "restartDeferred": "更新已安装。你可以继续当前工作，并在方便时重新启动 R-Code。",
+      "safetyNotice": "自动检查最多每 6 小时请求一次版本信息，不会自动下载或安装；更新失败不会替换当前可运行版本。",
+      "states": {
+        "idle": "等待检查",
+        "checking": "正在检查",
+        "up_to_date": "已是最新版本",
+        "available": "发现新版本",
+        "downloading": "正在下载",
+        "downloaded": "下载并验证完成",
+        "installing": "正在安装",
+        "restart_pending": "等待重新启动",
+        "failed": "更新操作失败"
+      },
+      "actions": {
+        "check": "检查更新",
+        "checking": "正在检查…",
+        "download": "下载更新",
+        "downloading": "正在下载…",
+        "installAndRestart": "安装并重启",
+        "installForLater": "安装，稍后重启",
+        "installing": "正在安装…",
+        "restartNow": "立即重启",
+        "restartLater": "稍后重启",
+        "restarting": "正在重启…"
+      }
+    }
+  },
+  "notifications": {
+    "ariaLabel": "通知",
+    "closeAria": "关闭通知",
+    "countdownPaused": "自动关闭倒计时已暂停",
+    "countdown": "{{count}} 秒后自动关闭",
+    "unnamedTask": "未命名会话",
+    "reviewPartialTitle": "修改待审阅：{{task}}",
+    "reviewPartialBody": "修改存在但总结失败。工作区改动已保留，请先审阅。",
+    "reviewReadyTitle": "待审阅：{{task}}",
+    "reviewReadyBody": "任务已跑完，改动等你确认。",
+    "runFailedTitle": "任务失败：{{task}}",
+    "runFailedBody": "运行未能完成。打开任务查看错误并重试。",
+    "interruptedTitle": "已中止：{{task}}",
+    "interruptedBody": "运行被打断，回到会话可以看最后一步。",
+    "permissionTitle": "需要授权：{{task}}",
+    "permissionSingleBody": "{{tool}} 需要你批准才能继续。",
+    "permissionManyBody": "{{count}} 个操作在等你批准（{{tool}} 等）。",
+    "actions": {
+      "reviewChanges": "审阅改动",
+      "openConversation": "打开会话",
+      "openTask": "打开任务",
+      "handleTask": "去处理"
+    },
+    "native": {
+      "permissionTitle": "需要批准：{{task}}",
+      "permissionBody": "{{tool}} 需要你的批准才能继续。",
+      "reviewTitle": "等待审核：{{task}}",
+      "reviewBody": "本轮变更已准备好验收。",
+      "failureTitle": "任务失败：{{task}}",
+      "failureBody": "运行未能完成。打开任务查看错误并重试。",
+      "automationTitle": "自动化已完成：{{automation}}",
+      "automationBody": "打开运行记录查看结果。"
+    }
+  },
+  "errors": {
+    "unknown": "R-Code 无法完成此操作。请重试，或复制技术详情以便排查。",
+    "workspace": {
+      "binding_invalid": "此任务的项目目录已不可用，请重新附加后继续。",
+      "home_unavailable": "R-Code 无法访问此会话所需的用户主目录。"
+    },
+    "worktree": {
+      "feature_disabled": "设置中尚未启用 Worktree 执行。",
+      "binding_invalid": "此任务的 Worktree 已失效，请重新启用后继续。",
+      "dirty": "此 Worktree 包含改动，无法自动删除。",
+      "required": "此操作需要隔离的 Worktree。"
+    },
+    "browser": {
+      "feature_disabled": "浏览器自动化当前未启用。",
+      "runtime_hash_mismatch": "浏览器运行时完整性校验失败，请先修复。",
+      "origin_permission_required": "需要授权才能浏览 {{origin}}。",
+      "interaction_permission_required": "需要授权才能与 {{origin}} 交互。"
+    },
+    "automation": {
+      "feature_disabled": "自动化当前未启用。",
+      "overlap_skipped": "该自动化已有运行中的任务，本次运行已跳过。",
+      "provider_unavailable": "配置的服务商当前不可用。",
+      "worktree_required": "隔离写入自动化需要启用 Worktree 执行。",
+      "capability_denied": "此自动化无权使用 {{capability}}。"
+    },
+    "updater": {
+      "signature_invalid": "更新签名无效，当前安装未被修改。",
+      "check_failed": "无法检查更新，请确认网络连接后重试。",
+      "download_failed": "无法下载版本 {{version}}，当前安装未被修改。",
+      "install_failed": "无法安装版本 {{version}}，当前版本仍可继续使用。",
+      "restart_failed": "更新已经安装，但 R-Code 无法自动重新启动。请手动重启应用。",
+      "persistence_failed": "无法保存更新检查状态，本次检查已停止。",
+      "operation_in_progress": "另一个更新操作正在进行，请等待其完成。",
+      "invalid_state": "当前更新状态不允许执行此操作。"
+    },
+    "notifications": {
+      "service_unavailable": "系统通知服务暂不可用，提醒仍会显示在应用内。",
+      "permission_request_failed": "无法请求系统通知权限，请检查操作系统的通知设置后重试。"
+    }
+  }
+}

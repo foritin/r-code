@@ -51,7 +51,10 @@ for (const referenced of [
 if (!architecture.includes("### 7.1 Codex 丰富交互")) {
   problems.push("architecture.md must document the rich-interaction layer (§7.1)");
 }
-const prd = fs.readFileSync(path.join(rootDir, "docs/codex-rich-interaction-prd.md"), "utf8");
+const prd = fs.readFileSync(
+  path.join(rootDir, "docs/support/contracts/codex-rich-interaction-prd.md"),
+  "utf8",
+);
 const checked = [...prd.matchAll(/^- \[x\] \*\*(M\d-\d\d)\*\*/gm)].map((match) => match[1]);
 for (const taskId of checked) {
   if (!fs.existsSync(path.join(rootDir, `artifacts/ai-tasks/evidence/codex-rich-interaction/${taskId}.yaml`))) {

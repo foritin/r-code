@@ -5,25 +5,31 @@
  * StatusBar 是内联的、贴在它所解释的那块 UI 旁边；toast 是全局的、用来把
  * 用户不在场时发生的事情捞回来。二者不互相替代。
  *
- * ---------------------------------------------------------------------------
- * 桌面系统通知（暂未接入）
- * src-tauri/Cargo.toml 目前没有 tauri-plugin-notification（依赖只有 updater 和
- * dialog），所以这里只做应用内 toast。后续要接系统通知时的接入点就是本文件的
- * notifyTask()：加上插件后在那里补一次
- *   import { isPermissionGranted, requestPermission, sendNotification }
- *     from "@tauri-apps/plugin-notification";
- *   import { getCurrentWindow } from "@tauri-apps/api/window";
- * 并且只在 `await getCurrentWindow().isFocused() === false` 时才发——窗口就在
- * 眼前还弹系统横幅是纯噪音。应用内 toast 无论如何都要留着（窗口聚焦时它才是
- * 唯一的提示）。
- * ---------------------------------------------------------------------------
+ * 后端 native_notification 模块负责前台/后台分流：前台事件在这里落成 toast，
+ * 后台优先交给系统通知；权限拒绝、不可用或发送失败时仍会回落到这里。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n, { getAppLocale, t as translate } from "../../i18n";
+import {
+  nativeNotificationSetLocale,
+  notificationMarkRead,
+  onNativeNotification,
+  onNativeNotificationOpen,
+} from "../../lib/ipc";
+import { routeNativeNotificationOpen } from "../../lib/native-notification-routing";
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { useToastStore, pushToast } from "../../store/toast";
 import type { Toast, ToastKind } from "../../store/toast";
-import type { PermissionRequest, Task, TaskDetail, TaskState } from "../../lib/types";
+import type {
+  NativeNotificationEvent,
+  NativeNotificationOpenPayload,
+  PermissionRequest,
+  Task,
+  TaskDetail,
+  TaskState,
+} from "../../lib/types";
 import { isPartialSuccess } from "../../lib/presentation";
 import { IconAlert, IconCheck, IconClose } from "../icons";
 
@@ -39,6 +45,11 @@ function prefersReducedMotion(): boolean {
   );
 }
 
+function appWindowIsForeground(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
 // ---------------------------------------------------------------- 容器
 
 /**
@@ -47,6 +58,7 @@ function prefersReducedMotion(): boolean {
  * 否则屏幕阅读器读不到后插入的那条。
  */
 export function ToastHost() {
+  const { t } = useTranslation();
   const toasts = useToastStore((s) => s.toasts);
   const hostRef = useRef<HTMLDivElement>(null);
   const latestToastStamp = toasts[toasts.length - 1]?.createdAt ?? 0;
@@ -64,7 +76,7 @@ export function ToastHost() {
       ref={hostRef}
       className="toast-host"
       role="status"
-      aria-label="通知"
+      aria-label={t("notifications.ariaLabel")}
       aria-live="polite"
       aria-atomic="false"
       aria-relevant="additions text"
@@ -78,6 +90,7 @@ export function ToastHost() {
 }
 
 function ToastCard({ toast }: { toast: Toast }) {
+  const { t } = useTranslation();
   const dismiss = useToastStore((s) => s.dismiss);
   const [paused, setPaused] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -181,12 +194,19 @@ function ToastCard({ toast }: { toast: Toast }) {
           <span
             className="toast-countdown"
             aria-hidden="true"
-            title={paused ? "自动关闭倒计时已暂停" : `${remainingSeconds} 秒后自动关闭`}
+            title={paused
+              ? t("notifications.countdownPaused")
+              : t("notifications.countdown", { count: remainingSeconds })}
           >
             {remainingSeconds}s
           </span>
         )}
-        <button type="button" className="iconbtn toast-close" onClick={beginDismiss} aria-label="关闭通知">
+        <button
+          type="button"
+          className="iconbtn toast-close"
+          onClick={beginDismiss}
+          aria-label={t("notifications.closeAria")}
+        >
           <IconClose width={12} height={12} />
         </button>
       </div>
@@ -204,8 +224,8 @@ const ACTIVE_STATES: ReadonlySet<TaskState> = new Set<TaskState>(["exploring", "
 
 /**
  * 终结态：本轮已经停下来了。
- * idle 是普通问答结束，archived 是用户主动归档；两者都只用于状态流转判定，
- * 不产出 toast（见 completionToast），避免每轮对话结束都打断用户。
+ * idle 通常是普通问答结束，archived 是用户主动归档；普通 idle 不产出 toast，
+ * 但 latest main run 明确失败时是例外，避免错误静默消失。
  */
 const TERMINAL_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
   "review_ready",
@@ -219,7 +239,7 @@ const INTERRUPTED_TOAST_TIMEOUT_MS = 5000;
 
 /** 与 Rail / Canvas 一致的任务显示名。 */
 function taskLabel(task: Task): string {
-  return task.title.trim() || task.goal.trim() || "未命名会话";
+  return task.title.trim() || task.goal.trim() || translate("notifications.unnamedTask");
 }
 
 /** 终结态 → 播报内容；返回 null 表示这个状态不值得打扰用户。 */
@@ -230,18 +250,29 @@ export function completionToast(task: Task, detail?: TaskDetail): { kind: ToastK
       if (isPartialSuccess(detail)) {
         return {
           kind: "warn",
-          title: `修改待审阅：${label}`,
-          body: "修改存在但总结失败。工作区改动已保留，请先审阅。",
+          title: translate("notifications.reviewPartialTitle", { task: label }),
+          body: translate("notifications.reviewPartialBody"),
         };
       }
-      return { kind: "success", title: `待审阅：${label}`, body: "任务已跑完，改动等你确认。" };
-    case "idle":
-      return null;
+      return {
+        kind: "success",
+        title: translate("notifications.reviewReadyTitle", { task: label }),
+        body: translate("notifications.reviewReadyBody"),
+      };
+    case "idle": {
+      const latestMainRun = detail?.runs.find((run) => run.agent_kind === "main");
+      if (latestMainRun?.review_state !== "failed") return null;
+      return {
+        kind: "error",
+        title: translate("notifications.runFailedTitle", { task: label }),
+        body: translate("notifications.runFailedBody"),
+      };
+    }
     case "interrupted":
       return {
         kind: "error",
-        title: `已中止：${label}`,
-        body: "运行被打断，回到会话可以看最后一步。",
+        title: translate("notifications.interruptedTitle", { task: label }),
+        body: translate("notifications.interruptedBody"),
         timeout: INTERRUPTED_TOAST_TIMEOUT_MS,
       };
     default:
@@ -278,6 +309,7 @@ export function useTaskCompletionToasts(): void {
     const seenState = new Map<string, TaskState>();
     const notifiedPermissions = new Set<string>();
     const pendingCompletionDetails = new Set<string>();
+    const seenNativeSources = new Set<string>();
     const initial = useTasksStore.getState();
     // task 列表和 detail 是异步分两批到达的；第一批 detail 只是初始基线，
     // 不能被误判成“刚刚出现”的权限请求。
@@ -289,7 +321,33 @@ export function useTaskCompletionToasts(): void {
       }
     }
 
+    const rememberNativeSource = (sourceKey: string) => {
+      // Set 保留插入顺序；刷新已存在项到末尾，形成轻量 LRU，避免长时间运行后无界增长。
+      seenNativeSources.delete(sourceKey);
+      seenNativeSources.add(sourceKey);
+      if (seenNativeSources.size > 512) {
+        const oldest = seenNativeSources.values().next().value;
+        if (oldest) seenNativeSources.delete(oldest);
+      }
+    };
+
+    const completionSourceKey = (task: Task, detail?: TaskDetail): string | null => {
+      const run = detail?.runs.find((candidate) => candidate.agent_kind === "main");
+      if (!run?.ended_at) return null;
+      if (task.state === "review_ready") return `review:${task.id}:${run.id}`;
+      if (task.state === "idle" && run.review_state === "failed") {
+        return `run_failed:${task.id}:${run.id}`;
+      }
+      return null;
+    };
+
     const notifyCompletion = (task: Task, detail?: TaskDetail) => {
+      const sourceKey = completionSourceKey(task, detail);
+      if (sourceKey && seenNativeSources.has(sourceKey)) return;
+      // A background result belongs to native_notification. Do not pre-claim its source here:
+      // the bridge still needs to distinguish a delivered system banner from an in-app fallback.
+      if (sourceKey && !appWindowIsForeground()) return;
+      if (sourceKey) rememberNativeSource(sourceKey);
       const spec = completionToast(task, detail);
       if (!spec) return;
       const app = useAppStore.getState();
@@ -300,13 +358,90 @@ export function useTaskCompletionToasts(): void {
       const partial = isPartialSuccess(detail);
       pushToast({
         ...spec,
-        action: partial
-          ? { label: "审阅改动", run: () => openRoom(task.id, "review") }
-          : { label: "打开会话", run: () => openRoom(task.id) },
+        action: task.state === "review_ready" || partial
+          ? {
+              label: translate("notifications.actions.reviewChanges"),
+              run: () => openRoom(task.id, "review"),
+            }
+          : {
+              label: translate(task.state === "idle"
+                ? "notifications.actions.openTask"
+                : "notifications.actions.openConversation"),
+              run: () => openRoom(task.id),
+            },
       });
     };
 
-    return useTasksStore.subscribe((state, prev) => {
+    const nativeEventAlreadyVisible = (event: NativeNotificationEvent): boolean => {
+      if (event.target.type !== "task") return false;
+      const taskId = event.target.task_id;
+      const app = useAppStore.getState();
+      if (app.scene === "room" && app.currentTaskId === taskId) return true;
+      if (event.kind !== "permission_required") return false;
+      if (app.scene === "inbox") return true;
+      if (app.scene !== "dashboard") return false;
+      const tasks = useTasksStore.getState();
+      const task = tasks.tasks.find((candidate) => candidate.id === taskId);
+      return task?.workspace_path === tasks.currentProjectId;
+    };
+
+    const handleNativeNotification = (event: NativeNotificationEvent) => {
+      if (seenNativeSources.has(event.source_key)) return;
+      rememberNativeSource(event.source_key);
+      // system 表示横幅已经交给操作系统；这里只登记 source，阻止轮询层再次弹 toast。
+      if (event.delivery !== "in_app" || nativeEventAlreadyVisible(event)) return;
+
+      const targetTaskId = event.target.type === "task" ? event.target.task_id : null;
+      const action = targetTaskId
+        ? {
+            label: translate(event.kind === "permission_required"
+              ? "notifications.actions.handleTask"
+              : event.kind === "review_ready"
+                ? "notifications.actions.reviewChanges"
+                : "notifications.actions.openTask"),
+            run: () => openRoom(
+              targetTaskId,
+              event.kind === "review_ready" ? "review" : undefined,
+            ),
+          }
+        : undefined;
+      const kind: ToastKind = event.kind === "permission_required"
+        ? "warn"
+        : event.kind === "run_failed"
+          ? "error"
+          : "success";
+      pushToast({
+        id: `native:${event.source_key}`,
+        kind,
+        title: event.title,
+        body: event.body,
+        action,
+      });
+    };
+
+    const handleNativeOpen = (payload: NativeNotificationOpenPayload) => {
+      routeNativeNotificationOpen(payload, (taskId) => openRoom(taskId));
+      void notificationMarkRead(payload.notification_id).catch(() => {});
+    };
+
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    const registerUnlistener = (promise: Promise<() => void>) => {
+      void promise.then((unlisten) => {
+        if (disposed) unlisten();
+        else unlisteners.push(unlisten);
+      }).catch(() => {});
+    };
+    registerUnlistener(onNativeNotification(handleNativeNotification));
+    registerUnlistener(onNativeNotificationOpen(handleNativeOpen));
+
+    const syncNativeLocale = () => {
+      void nativeNotificationSetLocale(getAppLocale()).catch(() => {});
+    };
+    syncNativeLocale();
+    i18n.on("languageChanged", syncNativeLocale);
+
+    const unsubscribeTasks = useTasksStore.subscribe((state, prev) => {
       if (state.tasks !== prev.tasks) {
         for (const task of state.tasks) {
           const before = seenState.get(task.id);
@@ -314,10 +449,10 @@ export function useTaskCompletionToasts(): void {
           // before === undefined：首次见到这个任务，它的当前状态属于初始快照。
           if (before === undefined || before === task.state) continue;
           if (!ACTIVE_STATES.has(before) || !TERMINAL_STATES.has(task.state)) continue;
-          if (task.state === "review_ready") {
+          if (task.state === "review_ready" || task.state === "idle") {
             const detail = state.details[task.id];
             // task 与 detail 分批刷新。等 run 的 ended_at/summary 到位后再决定是普通
-            // 成功还是“有修改但总结失败”，避免先弹一条误导性的成功通知。
+            // 成功、部分成功还是失败，避免先弹一条误导性的结果通知。
             if (!completionDetailReady(task, detail)) {
               pendingCompletionDetails.add(task.id);
               continue;
@@ -347,7 +482,7 @@ export function useTaskCompletionToasts(): void {
         for (const taskId of [...pendingCompletionDetails]) {
           const task = state.tasks.find((candidate) => candidate.id === taskId);
           const detail = state.details[taskId];
-          if (!task || task.state !== "review_ready") {
+          if (!task || (task.state !== "review_ready" && task.state !== "idle")) {
             pendingCompletionDetails.delete(taskId);
             continue;
           }
@@ -380,6 +515,14 @@ export function useTaskCompletionToasts(): void {
         for (const [taskId, fresh] of freshByTask) {
           const task = state.tasks.find((t) => t.id === taskId);
           if (!task) continue;
+          const unseen = fresh.filter(
+            (permission) => !seenNativeSources.has(`permission:${permission.id}`),
+          );
+          if (unseen.length === 0) continue;
+          if (!appWindowIsForeground()) continue;
+          for (const permission of unseen) {
+            rememberNativeSource(`permission:${permission.id}`);
+          }
           // 当前页面已经能直接处理该请求时，不再叠一层全局弹窗。
           // Dashboard 只展示当前项目的待处理项；Inbox 则展示全部待处理项。
           const alreadyVisible =
@@ -389,15 +532,28 @@ export function useTaskCompletionToasts(): void {
           if (alreadyVisible) continue;
           pushToast({
             kind: "warn",
-            title: `需要授权：${taskLabel(task)}`,
+            title: translate("notifications.permissionTitle", { task: taskLabel(task) }),
             body:
-              fresh.length > 1
-                ? `${fresh.length} 个操作在等你批准（${fresh[0].tool_name} 等）。`
-                : `${fresh[0].tool_name} 需要你批准才能继续。`,
-            action: { label: "去处理", run: () => openRoom(taskId) },
+              unseen.length > 1
+                ? translate("notifications.permissionManyBody", {
+                    count: unseen.length,
+                    tool: unseen[0].tool_name,
+                  })
+                : translate("notifications.permissionSingleBody", { tool: unseen[0].tool_name }),
+            action: {
+              label: translate("notifications.actions.handleTask"),
+              run: () => openRoom(taskId),
+            },
           });
         }
       }
     });
+
+    return () => {
+      disposed = true;
+      unsubscribeTasks();
+      i18n.off("languageChanged", syncNativeLocale);
+      for (const unlisten of unlisteners) unlisten();
+    };
   }, []);
 }

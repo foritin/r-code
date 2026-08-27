@@ -7,7 +7,7 @@ import path from "node:path";
 import process from "node:process";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
-const PRD = path.join(ROOT, "docs", "windows-command-reliability-prd.md");
+const PRD = path.join(ROOT, "docs", "support", "contracts", "windows-command-reliability-prd.md");
 const BASELINE_REPORT = path.join(
   ROOT,
   "artifacts",

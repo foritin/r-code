@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 从 `codex app-server generate-json-schema --out <dir>` 的产物中提取
-// docs/codex-rich-interaction-prd.md 涉及的最小协议 fixture。
+// docs/support/contracts/codex-rich-interaction-prd.md 涉及的最小协议 fixture。
 //
 // fixture 是离线重放的唯一事实源：Rust host 测试与 Node 检查脚本共用，
 // 不依赖真实 Codex 登录或账号。升级 Codex CLI 时重跑本脚本并复用

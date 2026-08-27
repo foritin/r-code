@@ -1264,7 +1264,7 @@
 }
 .tcard-mcp-draft-mark { display: grid; place-items: center; width: 40px; height: 34px; border: 1px solid var(--edge-accent); border-radius: 8px; color: var(--accent); font: 750 9px/1 var(--font-mono); letter-spacing: .08em; }
 .tcard-mcp-draft-copy { display: grid; min-width: 0; gap: 4px; }
-.tcard-mcp-draft-copy > span { color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.tcard-mcp-draft-copy > span { color: var(--accent); font-size: var(--text-meta); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .tcard-mcp-draft-copy > strong { color: var(--fg); font-size: 12px; }
 .tcard-mcp-draft-copy > p { margin: 0; color: var(--fg-muted); font-size: 11px; line-height: 1.5; }
 .tcard-mcp-draft-copy > code { overflow: hidden; color: var(--fg-faint); font: 9px/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }

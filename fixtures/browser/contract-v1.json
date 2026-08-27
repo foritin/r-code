@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "tool_names": [
+    "open",
+    "navigate",
+    "snapshot",
+    "screenshot",
+    "click",
+    "type",
+    "select",
+    "press",
+    "scroll",
+    "wait",
+    "tabs",
+    "console",
+    "network-errors",
+    "close"
+  ],
+  "runtime_manifest": {
+    "schema_version": 1,
+    "runtime_version": "1.0.0",
+    "target_platform": "windows",
+    "target_arch": "x86_64",
+    "wrapper_version": "1.0.0",
+    "node_version": "22.18.0",
+    "playwright_version": "1.55.0",
+    "chromium_revision": "1187",
+    "asset_url": "https://releases.example.invalid/browser/1.0.0/windows-x86_64.zip",
+    "asset_size": 123456789,
+    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "session": {
+    "session_id": "browser-session-1",
+    "task_id": "task-1",
+    "profile_path": "C:/R-Code/browser-profiles/task-1",
+    "runtime_version": "1.0.0",
+    "process_state": "running",
+    "active_tab_id": "tab-1",
+    "last_url": "http://localhost:3000/dashboard",
+    "last_screenshot": null
+  },
+  "tab": {
+    "tab_id": "tab-1",
+    "session_id": "browser-session-1",
+    "opener_tab_id": null,
+    "url": "http://localhost:3000/dashboard",
+    "title": "Dashboard",
+    "state": "ready",
+    "active": true,
+    "created_at": "2026-08-26T01:00:00Z",
+    "updated_at": "2026-08-26T01:00:01Z"
+  },
+  "permission_grants": [
+    {
+      "task_id": "task-1",
+      "origin": {
+        "scheme": "https",
+        "host": "example.com",
+        "effective_port": 443
+      },
+      "capability": "browse",
+      "scope": "task",
+      "granted_at": "2026-08-26T01:00:02Z",
+      "revoked_at": null
+    },
+    {
+      "task_id": "task-1",
+      "origin": {
+        "scheme": "https",
+        "host": "example.com",
+        "effective_port": 443
+      },
+      "capability": "interact",
+      "scope": "once",
+      "granted_at": "2026-08-26T01:00:03Z",
+      "revoked_at": null
+    }
+  ],
+  "tool_requests": [
+    {
+      "tool": "open",
+      "input": {
+        "target": { "kind": "url", "url": "http://localhost:3000" }
+      }
+    },
+    {
+      "tool": "navigate",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "target": { "kind": "workspace_file", "path": "docs/index.html" }
+      }
+    },
+    {
+      "tool": "snapshot",
+      "input": { "session_id": "browser-session-1", "tab_id": "tab-1" }
+    },
+    {
+      "tool": "screenshot",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "full_page": true
+      }
+    },
+    {
+      "tool": "click",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "target": { "kind": "snapshot_ref", "reference": "element-7" }
+      }
+    },
+    {
+      "tool": "type",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "target": { "kind": "css", "selector": "input[name=query]" },
+        "text": "browser contract",
+        "clear": true
+      }
+    },
+    {
+      "tool": "select",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "target": { "kind": "css", "selector": "select[name=locale]" },
+        "values": ["zh-CN"]
+      }
+    },
+    {
+      "tool": "press",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "target": { "kind": "text", "text": "Search", "exact": true },
+        "key": "Enter"
+      }
+    },
+    {
+      "tool": "scroll",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "delta_x": 0,
+        "delta_y": 640
+      }
+    },
+    {
+      "tool": "wait",
+      "input": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "condition": { "kind": "load_state", "state": "network_idle" },
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "tool": "tabs",
+      "input": { "session_id": "browser-session-1" }
+    },
+    {
+      "tool": "console",
+      "input": { "session_id": "browser-session-1", "tab_id": "tab-1" }
+    },
+    {
+      "tool": "network-errors",
+      "input": { "session_id": "browser-session-1", "tab_id": "tab-1" }
+    },
+    {
+      "tool": "close",
+      "input": { "session_id": "browser-session-1" }
+    }
+  ],
+  "tool_results": [
+    {
+      "tool": "open",
+      "output": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "url": "http://localhost:3000/dashboard",
+        "action_id": "action-open-1",
+        "timestamp": "2026-08-26T01:00:01Z",
+        "session": {
+          "session_id": "browser-session-1",
+          "task_id": "task-1",
+          "profile_path": "C:/R-Code/browser-profiles/task-1",
+          "runtime_version": "1.0.0",
+          "process_state": "running",
+          "active_tab_id": "tab-1",
+          "last_url": "http://localhost:3000/dashboard",
+          "last_screenshot": null
+        },
+        "tab": {
+          "tab_id": "tab-1",
+          "session_id": "browser-session-1",
+          "opener_tab_id": null,
+          "url": "http://localhost:3000/dashboard",
+          "title": "Dashboard",
+          "state": "ready",
+          "active": true,
+          "created_at": "2026-08-26T01:00:00Z",
+          "updated_at": "2026-08-26T01:00:01Z"
+        }
+      }
+    },
+    {
+      "tool": "snapshot",
+      "output": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "url": "https://example.com/login",
+        "action_id": "action-snapshot-1",
+        "timestamp": "2026-08-26T01:00:04Z",
+        "snapshot": {
+          "snapshot_id": "snapshot-1",
+          "text": "Login form",
+          "elements": [
+            {
+              "reference": "element-password",
+              "role": "textbox",
+              "name": "Password",
+              "value": { "state": "redacted" },
+              "disabled": false
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "tool": "screenshot",
+      "output": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "url": "https://example.com/login",
+        "action_id": "action-screenshot-1",
+        "timestamp": "2026-08-26T01:00:05Z",
+        "screenshot": {
+          "screenshot_id": "screenshot-1",
+          "path": "C:/R-Code/browser-screenshots/task-1/screenshot-1.png",
+          "media_type": "image/png",
+          "width": 1440,
+          "height": 900,
+          "captured_at": "2026-08-26T01:00:05Z"
+        }
+      }
+    },
+    {
+      "tool": "wait",
+      "output": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "url": "https://example.com/dashboard",
+        "action_id": "action-wait-1",
+        "timestamp": "2026-08-26T01:00:06Z",
+        "satisfied": true,
+        "load_state": "network_idle"
+      }
+    },
+    {
+      "tool": "console",
+      "output": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "url": "https://example.com/dashboard",
+        "action_id": "action-console-1",
+        "timestamp": "2026-08-26T01:00:07Z",
+        "entries": [
+          {
+            "level": "error",
+            "text": "Authorization: [REDACTED]",
+            "timestamp": "2026-08-26T01:00:07Z",
+            "redacted": true
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "tool": "network-errors",
+      "output": {
+        "session_id": "browser-session-1",
+        "tab_id": "tab-1",
+        "url": "https://example.com/dashboard",
+        "action_id": "action-network-1",
+        "timestamp": "2026-08-26T01:00:07Z",
+        "errors": [
+          {
+            "method": "GET",
+            "url": "https://example.com/api/items",
+            "error_text": "net::ERR_CONNECTION_RESET",
+            "timestamp": "2026-08-26T01:00:07Z",
+            "redacted": true
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "tool": "close",
+      "output": {
+        "session_id": "browser-session-1",
+        "tab_id": null,
+        "url": null,
+        "action_id": "action-close-1",
+        "timestamp": "2026-08-26T01:00:08Z",
+        "process_state": "stopped"
+      }
+    }
+  ],
+  "events": [
+    {
+      "schema_version": 1,
+      "event_id": "event-1",
+      "task_id": "task-1",
+      "session_id": "browser-session-1",
+      "occurred_at": "2026-08-26T01:00:03Z",
+      "event": {
+        "type": "permission_required",
+        "request": {
+          "request_id": "permission-1",
+          "task_id": "task-1",
+          "session_id": "browser-session-1",
+          "tab_id": "tab-1",
+          "origin": {
+            "scheme": "https",
+            "host": "example.com",
+            "effective_port": 443
+          },
+          "capability": "interact",
+          "requested_at": "2026-08-26T01:00:03Z"
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "event-2",
+      "task_id": "task-1",
+      "session_id": "browser-session-1",
+      "occurred_at": "2026-08-26T01:00:04Z",
+      "event": {
+        "type": "action_completed",
+        "action_id": "action-snapshot-1",
+        "tool": "snapshot",
+        "tab_id": "tab-1",
+        "url": "https://example.com/login"
+      }
+    }
+  ]
+}

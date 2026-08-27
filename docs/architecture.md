@@ -1,6 +1,6 @@
 # R-Code 架构与实现细节
 
-本文描述当前代码的实际结构，而不是历史设计目标。它面向维护者、评审者和需要扩展 R-Code 的开发者；发布操作另见 [RELEASING.md](./releasing.md)。
+本文描述当前代码的实际结构，而不是历史设计目标。它面向维护者、评审者和需要扩展 R-Code 的开发者；发布操作另见 [RELEASING.md](./support/operations/releasing.md)。
 
 ## 1. 系统概览
 
@@ -74,7 +74,7 @@ r-code-host mcp-server [--data-dir <path>]
 
 该顺序是协议不变量：stdout 上任何普通日志都可能破坏 JSON-RPC。这个模式主要由 Codex 配置和拉起，入口位于 `src-tauri/src/mcp_server.rs`。
 
-它与 R-Code 作为 MCP **客户端**连接第三方服务是两个独立方向。通用 MCP 客户端由 `r-code-mcp` 和 `McpManager` 提供，支持内置服务、stdio 与 streamable HTTP；配置、Registry 和安全边界见 [联网工具与 MCP](./mcp.md)。
+它与 R-Code 作为 MCP **客户端**连接第三方服务是两个独立方向。通用 MCP 客户端由 `r-code-mcp` 和 `McpManager` 提供，支持内置服务、stdio 与 streamable HTTP；配置、Registry 和安全边界见 [联网工具与 MCP](./support/guides/mcp.md)。
 
 ### 2.3 Windows 后台运行与显式退出
 
@@ -262,11 +262,11 @@ Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会�
 - Steer 消息在下一次模型请求前合入，而不是篡改已发出的 Provider 请求。
 - 编排策略包含委派路由、是否允许跨引擎、质量循环模式、Reviewer 和最大轮数。
 - 质量循环可以关闭、自动或总是运行；Reviewer 返回 `PASS` 或 `REVISE`，修订意见会进入下一轮可见草稿。
-- 首轮工具清单锚定（固定每次请求携带的 tools 清单的首轮形状，与项目文件夹无关）是 opt-in 实验（`orchestration.first_round_catalog` / `first_round_promote_on`，默认 `full`/`either` 即现状）：非默认值时主代理首轮只看到受限清单，首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单；会话级粘性保证每会话至多一次清单变化，两个旋钮纳入 runtime 重建指纹。清单裁剪只是呈现层，工具执行与审批边界不变（`docs/archive/implementation/request-audit-and-anchoring.md`）。两个旋钮可在「设置 → Agent 编排」的「首轮工具清单锚定（实验）」卡片中调整（经通用 `settings_set` 逐键写入并做类型化校验）。规划门为其 opt-in 扩展：`plan_gate` 档（零工作工具）+ `plan_complete` 晋升信号下，收窄目录注入唯一门铃工具 `plan_ready`（worker 侧拦截执行，不转发网关），工具剥夺跨回合持续至模型调用 plan_ready 声明规划完成才恢复完整目录；设置卡片以总开关滑纽控制整个实验的开/关。
+- 首轮工具清单锚定（固定每次请求携带的 tools 清单的首轮形状，与项目文件夹无关）是 opt-in 实验（`orchestration.first_round_catalog` / `first_round_promote_on`，默认 `full`/`either` 即现状）：非默认值时主代理首轮只看到受限清单，首轮出现任意回复（或按配置：首次工具调用）后恢复完整清单；会话级粘性保证每会话至多一次清单变化，两个旋钮纳入 runtime 重建指纹。清单裁剪只是呈现层，工具执行与审批边界不变（`docs/support/archive/implementation/request-audit-and-anchoring.md`）。两个旋钮可在「设置 → Agent 编排」的「首轮工具清单锚定（实验）」卡片中调整（经通用 `settings_set` 逐键写入并做类型化校验）。规划门为其 opt-in 扩展：`plan_gate` 档（零工作工具）+ `plan_complete` 晋升信号下，收窄目录注入唯一门铃工具 `plan_ready`（worker 侧拦截执行，不转发网关），工具剥夺跨回合持续至模型调用 plan_ready 声明规划完成才恢复完整目录；设置卡片以总开关滑纽控制整个实验的开/关。
 
 ### 6.3 DeepSeek 前缀缓存与请求字节稳定
 
-DeepSeek `/chat/completions` 的前缀缓存是字节级自动的（无 API 开关）：相邻请求公共前缀逐字节一致即命中，命中部分免 prefill、按低价计费。运行时围绕这一性质设计（历史 PRD 与验收：`docs/archive/deepseek-prefix-cache.md`，基线：`docs/archive/deepseek-cache-baseline.md`）：
+DeepSeek `/chat/completions` 的前缀缓存是字节级自动的（无 API 开关）：相邻请求公共前缀逐字节一致即命中，命中部分免 prefill、按低价计费。运行时围绕这一性质设计（历史 PRD 与验收：`docs/support/archive/deepseek-prefix-cache.md`，基线：`docs/support/archive/deepseek-cache-baseline.md`）：
 
 - **system 冻结**：system prompt 为常量拼接，run 开始构建一次、全程复用；时间（分钟级）、task_context、plan mode、委派提示等动态内容一律作为尾部 user 消息注入发送副本、迭代后摘除，不落历史（历史严格 append-only）；memory_context 以独立头部消息承载，不拼进主 system。
 - **请求字节确定性**：tools 按名称排序（gateway 与 SessionToolHost 两级）；`codex_available()` 在 run 内冻结；thinking 模式恒发 `reasoning_content` 键、tool 消息恒发 `name` 键；悬空工具调用对在发送前一次性修复并固化。
@@ -384,7 +384,7 @@ flowchart TD
 - SQLite 是产品状态 source of truth，承担列表、筛选、权限、通知、审核和审计查询。
 - Blob 以 BLAKE3 hash 为 key，用引用计数保存基线、大输出等内容。
 - 启动恢复先扫描 JSONL/未结束 Run，再读取 SQLite 状态；孤儿 Run 和待审批请求会出现在恢复页。
-- 请求信封审计（`diagnostics.request_audit`，默认关闭）开启时，agent runtime 在每轮模型派发前向旁路文件 `sessions/request-audit/{storage_id}.jsonl` 追加 `RequestHeader` 快照（system/tools/messages 指纹、工具清单名单与输出预算）并做重建自检（只记录不阻断）。该文件由 runtime 单写、子目录隔离，不参与会话枚举/恢复/导出，canonical JSONL 与其读者零改动；只读命令 `request_audit_counters` 暴露（追加数, 不一致数）计数（`docs/archive/implementation/request-audit-and-anchoring.md`）。开关位于「设置 → 诊断」的「请求构成审计」卡片。
+- 请求信封审计（`diagnostics.request_audit`，默认关闭）开启时，agent runtime 在每轮模型派发前向旁路文件 `sessions/request-audit/{storage_id}.jsonl` 追加 `RequestHeader` 快照（system/tools/messages 指纹、工具清单名单与输出预算）并做重建自检（只记录不阻断）。该文件由 runtime 单写、子目录隔离，不参与会话枚举/恢复/导出，canonical JSONL 与其读者零改动；只读命令 `request_audit_counters` 暴露（追加数, 不一致数）计数（`docs/support/archive/implementation/request-audit-and-anchoring.md`）。开关位于「设置 → 诊断」的「请求构成审计」卡片。
 
 ### 9.1 SQLite migration
 
@@ -402,7 +402,7 @@ flowchart TD
 
 当前没有自动 downgrade migration。发布后如需回退应用，应确认新 schema 能被旧二进制读取，否则只能前滚修复。
 
-正式桌面与独立 MCP 启动入口都会在创建连接池前运行 `MigrationManager`：同一数据目录的升级先用跨入口锁串行化；已有数据库先做完整性校验，再用 SQLite 在线备份生成可校验的 WAL 安全升级前快照；迁移或迁移后校验失败时恢复该快照并中止启动，不把部分迁移的数据库交给产品层。用户侧完整备份、恢复和卸载步骤见[安装、备份与恢复手册](./operations.md)。
+正式桌面与独立 MCP 启动入口都会在创建连接池前运行 `MigrationManager`：同一数据目录的升级先用跨入口锁串行化；已有数据库先做完整性校验，再用 SQLite 在线备份生成可校验的 WAL 安全升级前快照；迁移或迁移后校验失败时恢复该快照并中止启动，不把部分迁移的数据库交给产品层。用户侧完整备份、恢复和卸载步骤见[安装、备份与恢复手册](./support/operations/operations.md)。
 
 ### 9.2 演进记忆纵向链路
 
@@ -412,7 +412,7 @@ flowchart TD
 
 schema 26 把“用户是否显式要求记住”作为捕获时的结构化 provenance 持久化，而不是在复盘时重新解释对话文本。当前只从可见用户输入的 `/remember `、`remember:`、“记住：”和“请记住：”前缀产生 `explicit_remember = true`；助手文本永远不能授予该权限，手动复盘为旧历史补录证据时也固定写入 `false`。Reviewer 生成项目 proposal 时必须使用 `basis=explicit_user`，且只能引用 provenance 为真的轮次；迁移前的旧行默认不受信任。
 
-临时轮次、正文、候选与注入引用都只进入 AppData SQLite，不写项目目录。详细触发条件、清理策略、表结构和安全边界见 [演进记忆](./memory.md)。
+临时轮次、正文、候选与注入引用都只进入 AppData SQLite，不写项目目录。详细触发条件、清理策略、表结构和安全边界见 [演进记忆](./support/guides/memory.md)。
 
 ### 9.3 Plan、HITL 与稳定投影
 
@@ -420,7 +420,7 @@ Plan 是 SQLite 权威聚合：`plans` 保存稳定身份和乐观修订，`plan
 
 Plan 模式仅由原生 R-Code runtime 执行。运行时只开放只读工作区工具和宿主 Plan 工具，禁止写入、Shell、变更型 MCP 与委派。`request_user_input` 先持久化问题集，再通过 Gateway 的 typed `SuspendForUser` metadata 结束当前 Run；suspension gate 会拒绝同一 Run 后续工具调用，并跳过子代理收集、质量复核和 `ReviewReady`。用户回答使用幂等键原子保存，Host 再 claim continuation；失败可重试，不把模型等待放进数据库事务。批准后由 durable implementation dispatch 把任务模式、确定性队列消息和 Plan 派发状态一起提交。实施 Run 使用 typed continuation gate：只要仍有 `active_feature`，普通文本收尾不会结束 Run；`plan_item_update` 只有在全部完成或进入阻塞状态时才释放终止门。独立的只读调查或验证可以在当前叶子事项内并行委派并统一收集，写入仍由主 Agent 负责以保持增强审核归属确定。启动恢复会把中断状态转成可见失败并恢复仍在队列中的任务。
 
-每个 Plan 的人类可读投影位于 `<AppData>/r-code/plans/<plan-id>/plan.md`。投影路径由 Host 生成，后续修订只原子覆盖自己的稳定文件；SQLite 提交不等待文件 I/O，投影失败会记录错误并可显式修复。项目目录和 Git 中不创建 Plan 私有元数据。完整交互和安全语义见 [Plan 模式与增强审核](./plan-mode.md)。
+每个 Plan 的人类可读投影位于 `<AppData>/r-code/plans/<plan-id>/plan.md`。投影路径由 Host 生成，后续修订只原子覆盖自己的稳定文件；SQLite 提交不等待文件 I/O，投影失败会记录错误并可显式修复。项目目录和 Git 中不创建 Plan 私有元数据。完整交互和安全语义见 [Plan 模式与增强审核](./support/guides/plan-mode.md)。
 
 ## 10. 文件变更、审核与验证
 
@@ -563,9 +563,9 @@ CI 在 Linux 检查前端、锁定依赖审计、已验证 secret 扫描、格�
 - 后台 `agent_ipc` server 是兼容路径，只有少量 handler，不能视为完整远程控制 API。
 - SQLite migration 只前滚；发布 schema 后必须把兼容性纳入回退方案。
 - 发布矩阵当前覆盖 Windows x64、macOS Apple Silicon/Intel、Linux x64；新增架构需要同时更新构建、updater manifest 和文档。
-- updater 完整性签名与操作系统代码签名是两套机制。`PAT_TOKEN` 与 Tauri updater 私钥是硬门禁；缺少 Apple Developer ID/notarization 或 Windows Authenticode Secrets 时，稳定版会按平台降级并在 Release 显著警告，而不是伪装成已签名或静默失败，详见 [RELEASING.md](./releasing.md)。
+- updater 完整性签名与操作系统代码签名是两套机制。`PAT_TOKEN` 与 Tauri updater 私钥是硬门禁；缺少 Apple Developer ID/notarization 或 Windows Authenticode Secrets 时，稳定版会按平台降级并在 Release 显著警告，而不是伪装成已签名或静默失败，详见 [RELEASING.md](./support/operations/releasing.md)。
 - Release 会从锁定的 Cargo/npm 依赖图生成 CycloneDX SBOM 和第三方许可证清单；缺失许可证声明时发布失败。
-- GitHub ruleset、tag protection、受审批保护的 release Environment、Secret Scanning/Push Protection 与 Dependabot 属于仓库管理员配置，不能由仓库代码自行启用；发布前必须按 [RELEASING.md](./releasing.md) 的外部控制清单确认。
+- GitHub ruleset、tag protection、受审批保护的 release Environment、Secret Scanning/Push Protection 与 Dependabot 属于仓库管理员配置，不能由仓库代码自行启用；发布前必须按 [RELEASING.md](./support/operations/releasing.md) 的外部控制清单确认。
 
 ## 16. 代码导航索引
 

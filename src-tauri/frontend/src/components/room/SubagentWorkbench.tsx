@@ -395,7 +395,7 @@ function SubagentTabsHeader({
         />
         {toolTabsAfter}
       </div>
-      <button type="button" className="workbench-head-action workbench-add-button" onClick={onOpenLauncher} aria-label="打开工具启动器" title="新增扩展">
+      <button type="button" className="workbench-head-action workbench-add-button" onClick={onOpenLauncher} aria-label="打开任务工具" title="打开任务工具">
         <IconPlus width={16} height={16} />
       </button>
       <span className="subagent-page-header-spacer" />

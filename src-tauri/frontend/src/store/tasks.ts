@@ -91,6 +91,7 @@ function detailSignature(detail: TaskDetail | undefined) {
   if (!detail) return "";
   return cachedSignature(detail, () => [
     taskStamp(detail.task),
+    `status:${detail.status?.display_state ?? "legacy"}:${detail.status?.attention.join(",") ?? ""}:${detail.status?.active_run_id ?? ""}:${detail.status?.queue_depth ?? 0}:${detail.status?.unread_count ?? 0}`,
     `active:${detail.active_branch.id}`,
     `branches:${detail.branches.map((item) => `${item.id}:${item.is_active}`).join(",")}`,
     `runs:${detail.runs.map((item) => `${item.id}:${item.started_at}:${item.ended_at ?? ""}:${item.review_state}:${item.summary ?? ""}`).join(",")}`,
@@ -111,7 +112,7 @@ function dashboardSignature(dashboard: WorkspaceDashboard | undefined) {
   return cachedSignature(dashboard, () => [
     `${dashboard.workspace.id}:${dashboard.workspace.memory_generation}:${dashboard.workspace.access_mode}`,
     Object.values(dashboard.metrics).join(":"),
-    dashboard.tasks.map((item) => `${taskStamp(item.task)}:${item.activity}:${item.pending_permission_count}:${item.active_run?.id ?? ""}:${item.active_run?.ended_at ?? ""}:${Object.values(item.change_summary).join(",")}:${item.latest_verification?.id ?? ""}:${item.latest_verification?.status ?? ""}`).join("\u001e"),
+    dashboard.tasks.map((item) => `${taskStamp(item.task)}:${item.status?.display_state ?? "legacy"}:${item.status?.attention.join(",") ?? ""}:${item.status?.queue_depth ?? 0}:${item.status?.unread_count ?? 0}:${item.activity}:${item.pending_permission_count}:${item.active_run?.id ?? ""}:${item.active_run?.ended_at ?? ""}:${Object.values(item.change_summary).join(",")}:${item.latest_verification?.id ?? ""}:${item.latest_verification?.status ?? ""}`).join("\u001e"),
     dashboard.attention.map((item) => `${item.kind}:${item.task.id}:${item.permission?.id ?? ""}:${item.permission?.decision ?? ""}:${item.since}`).join("\u001e"),
     dashboard.archived.map(taskStamp).join("\u001e"),
   ].join("\u001f"));
@@ -321,7 +322,7 @@ interface TaskDetailSelectorCache<T> {
 }
 
 let runningCache: TaskDetailSelectorCache<Task[]> = { tasks: null, details: null, value: [] };
-let reviewReadyCache: { tasks: Task[] | null; value: Task[] } = { tasks: null, value: [] };
+let reviewReadyCache: TaskDetailSelectorCache<Task[]> = { tasks: null, details: null, value: [] };
 let pendingPermissionsCache: TaskDetailSelectorCache<NeedsYouItem[]> = { tasks: null, details: null, value: [] };
 let needsYouCache: {
   permissions: NeedsYouItem[] | null;
@@ -342,8 +343,8 @@ export const selectRunning = (s: TasksState): Task[] => {
   }
   const value = s.tasks.filter(
     (t) =>
-      t.state === "in_progress" ||
-      t.state === "exploring" ||
+      s.details[t.id]?.status?.display_state === "running" ||
+      s.details[t.id]?.status?.display_state === "verifying" ||
       s.details[t.id]?.runs.some((run) => run.ended_at == null) === true
   );
   runningCache = { tasks: s.tasks, details: s.details, value };
@@ -351,9 +352,14 @@ export const selectRunning = (s: TasksState): Task[] => {
 };
 
 export const selectReviewReady = (s: TasksState): Task[] => {
-  if (reviewReadyCache.tasks === s.tasks) return reviewReadyCache.value;
-  const value = s.tasks.filter((t) => t.state === "review_ready");
-  reviewReadyCache = { tasks: s.tasks, value };
+  if (reviewReadyCache.tasks === s.tasks && reviewReadyCache.details === s.details) {
+    return reviewReadyCache.value;
+  }
+  const value = s.tasks.filter((t) =>
+    s.details[t.id]?.status?.display_state === "review_ready"
+      || (!s.details[t.id] && t.state === "review_ready")
+  );
+  reviewReadyCache = { tasks: s.tasks, details: s.details, value };
   return value;
 };
 

@@ -38,7 +38,7 @@ R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展�
 | macOS | Apple Silicon、Intel | 各架构 `.app`、`.dmg` |
 | Linux | x86_64 GNU | `.AppImage`、`.deb` |
 
-安装包由 `v*` tag 的 GitHub Actions 构建。平台代码签名、首次发布和自动更新要求见 [发布手册](./docs/releasing.md)。
+安装包由 `v*` tag 的 GitHub Actions 构建。平台代码签名、首次发布和自动更新要求见 [发布手册](./docs/support/operations/releasing.md)。
 
 ## 架构
 
@@ -144,7 +144,7 @@ bash ./scripts/manual/package-macos.sh --signed
 cargo tauri build --bundles appimage,deb
 ```
 
-输出目录、签名变量和正式分发要求见 [发布手册](./docs/releasing.md)。
+输出目录、签名变量和正式分发要求见 [发布手册](./docs/support/operations/releasing.md)。
 
 ## 发布
 
@@ -157,7 +157,7 @@ node scripts/publish-release.mjs vX.Y.Z --dry-run
 node scripts/publish-release.mjs vX.Y.Z
 ```
 
-发布闸门只会在 `main` 上该精确 commit 的完整 CI 成功后创建不可变 tag；Release workflow 会再次核对 tag 来源和每个必需 CI job，之后才进入四平台构建、等待与资产验收。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、仓库控制、失败恢复和发布后验收见 [发布手册](./docs/releasing.md)。
+发布闸门只会在 `main` 上该精确 commit 的完整 CI 成功后创建不可变 tag；Release workflow 会再次核对 tag 来源和每个必需 CI job，之后才进入四平台构建、等待与资产验收。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、仓库控制、失败恢复和发布后验收见 [发布手册](./docs/support/operations/releasing.md)。
 
 ## 项目结构
 
@@ -182,11 +182,11 @@ r-code/
 - [支持与问题反馈](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
 - [架构与实现细节](./docs/architecture.md)
-- [Plan 模式与增强审核](./docs/plan-mode.md)
-- [联网工具与 MCP](./docs/mcp.md)
-- [演进记忆](./docs/memory.md)
-- [安装、备份、恢复与卸载](./docs/operations.md)
-- [发布手册](./docs/releasing.md)
+- [Plan 模式与增强审核](./docs/support/guides/plan-mode.md)
+- [联网工具与 MCP](./docs/support/guides/mcp.md)
+- [演进记忆](./docs/support/guides/memory.md)
+- [安装、备份、恢复与卸载](./docs/support/operations/operations.md)
+- [发布手册](./docs/support/operations/releasing.md)
 - [Security Policy](./SECURITY.md)
 - [Privacy Notice](./PRIVACY.md)
 - [CHANGELOG](./CHANGELOG.md)

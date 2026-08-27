@@ -268,7 +268,7 @@ pub struct Plan {
     pub implementation_dispatch_error: Option<String>,
     pub implementation_queue_message_id: Option<String>,
     pub implementation_dispatched_at: Option<DateTime<Utc>>,
-    /// 创建时冻结的运行 profile（docs/archive/implementation/plan-mode-dual-track-gate.md §14）。旧 Plan 与
+    /// 创建时冻结的运行 profile（docs/support/archive/implementation/plan-mode-dual-track-gate.md §14）。旧 Plan 与
     /// baseline Plan 为 None；非 None 时 Plan 使用该不可变快照而非全局设置。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_profile: Option<crate::plan_entry::ResolvedPlanRuntimeProfile>,

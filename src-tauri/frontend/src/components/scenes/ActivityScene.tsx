@@ -27,8 +27,15 @@ export function ActivityScene() {
 
   usePoll(async () => {
     await refreshTasks();
-    const ids = useTasksStore.getState().tasks
-      .filter((task) => task.state !== "idle" && task.state !== "archived")
+    const snapshot = useTasksStore.getState();
+    const ids = snapshot.tasks
+      .filter((task) => task.state !== "archived")
+      .filter((task) => {
+        const detail = snapshot.details[task.id];
+        return !detail?.status
+          || detail.task.updated_at !== task.updated_at
+          || detail.status.active_run_id != null;
+      })
       .map((task) => task.id);
     if (ids.length) await refreshDetails(ids);
   }, 2_500, true, "工作进展");

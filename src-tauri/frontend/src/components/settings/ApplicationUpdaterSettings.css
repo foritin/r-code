@@ -1,0 +1,113 @@
+.application-updater-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.application-updater-summary > div,
+.application-updater-release,
+.application-updater-progress {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+.application-updater-summary > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.application-updater-summary span,
+.application-updater-progress span,
+.application-updater-release-title span,
+.application-updater-notes-label,
+.application-updater-safety {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.application-updater-summary strong,
+.application-updater-progress strong {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.application-updater-state.is-available,
+.application-updater-state.is-downloaded,
+.application-updater-state.is-restart_pending {
+  color: var(--accent);
+}
+
+.application-updater-state.is-failed {
+  color: var(--danger);
+}
+
+.application-updater-release,
+.application-updater-progress {
+  margin-top: 12px;
+  padding: 12px;
+}
+
+.application-updater-release-title,
+.application-updater-progress > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.application-updater-notes-label {
+  display: block;
+  margin-top: 12px;
+}
+
+.application-updater-notes {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.application-updater-progress progress {
+  display: block;
+  width: 100%;
+  height: 7px;
+  margin: 10px 0 7px;
+  accent-color: var(--accent);
+}
+
+.application-updater-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.application-updater-deferred,
+.application-updater-error {
+  margin-top: 12px;
+}
+
+.application-updater-safety {
+  margin: 12px 0 0;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .application-updater-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .application-updater-release-title,
+  .application-updater-progress > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}

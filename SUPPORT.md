@@ -2,7 +2,7 @@
 
 R-Code 目前处于 `0.x` 阶段。公开支持以 GitHub Issues 为主，请先搜索现有问题，再选择合适的 issue 表单：
 
-安装、升级、备份、恢复或卸载请先按[安装、备份与恢复手册](./docs/operations.md)执行；它包含数据目录、迁移失败和支持包的安全操作边界。
+安装、升级、备份、恢复或卸载请先按[安装、备份与恢复手册](./docs/support/operations/operations.md)执行；它包含数据目录、迁移失败和支持包的安全操作边界。
 
 - 可复现的产品缺陷使用 **Bug report**；
 - 产品能力建议使用 **Feature request**；

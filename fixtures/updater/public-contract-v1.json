@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "state_event": "application-updater-state",
+  "auto_check_hours": 6,
+  "phases": [
+    "idle",
+    "checking",
+    "up_to_date",
+    "available",
+    "downloading",
+    "downloaded",
+    "installing",
+    "restart_pending",
+    "failed"
+  ],
+  "operations": [
+    "check",
+    "download",
+    "install",
+    "restart"
+  ],
+  "commands": {
+    "status": "cmd_updater_status",
+    "check": "cmd_updater_check",
+    "download": "cmd_updater_download",
+    "install": "cmd_updater_install",
+    "restart": "cmd_updater_restart"
+  },
+  "explicit_ui_actions": [
+    "check",
+    "download",
+    "install_and_restart",
+    "install_restart_later",
+    "restart_now",
+    "restart_later"
+  ],
+  "automatic_path": {
+    "operation": "check",
+    "force": false,
+    "forbidden_operations": [
+      "download",
+      "install",
+      "restart"
+    ]
+  },
+  "error_codes": [
+    "updater.signature_invalid",
+    "updater.check_failed",
+    "updater.download_failed",
+    "updater.install_failed",
+    "updater.restart_failed",
+    "updater.persistence_failed",
+    "updater.operation_in_progress",
+    "updater.invalid_state"
+  ],
+  "endpoints": {
+    "production": "https://github.com/foritin/r-code/releases/latest/download/latest.json",
+    "development": "https://github.com/foritin/r-code/releases/latest/download/dev-latest.json"
+  },
+  "snapshot": {
+    "current_version": "1.0.0",
+    "state": "available",
+    "release": {
+      "version": "1.1.0",
+      "notes": "Signed release fixture",
+      "published_at": "2026-08-26T00:00:00Z"
+    },
+    "progress": {
+      "downloaded_bytes": 0,
+      "total_bytes": null,
+      "percent": null
+    },
+    "last_check_at": "2026-08-26T01:00:00Z",
+    "next_auto_check_at": "2026-08-26T07:00:00Z",
+    "error_code": null,
+    "error_args": {},
+    "failed_operation": null
+  }
+}

@@ -1,0 +1,53 @@
+schema_version: ai-worklist-freeze.v1
+skill_contract:
+  name: prd-to-ai-worklist
+  version: 1.1.0
+
+status: frozen
+source_document: docs/support/contracts/codex-rich-interaction-prd.md
+
+normative_input:
+  files:
+    - docs/support/contracts/codex-rich-interaction-prd.md
+  refs:
+    - docs/support/contracts/codex-rich-interaction-prd.md#1-背景目标终态与非目标
+    - docs/support/contracts/codex-rich-interaction-prd.md#2-已冻结决策
+    - docs/support/contracts/codex-rich-interaction-prd.md#4-机器合同
+    - docs/support/contracts/codex-rich-interaction-prd.md#5-产品与-ui-行为
+    - docs/support/contracts/codex-rich-interaction-prd.md#6-质量性能与安全门禁
+    - docs/support/contracts/codex-rich-interaction-prd.md#7-需求追踪表
+  digest_algorithm: sha256
+  normalization: ai-worklist-markers-v1
+  digest: 92f2982c11c76fb543dd9de3dd9870f983eb8fd46b0acfb72fdfe011ff236c0a
+
+worklist:
+  refs:
+    - docs/support/contracts/codex-rich-interaction-prd.md#8-verification-harness-与里程碑
+    - docs/support/contracts/codex-rich-interaction-prd.md#9-主-checklist唯一状态源
+    - docs/support/contracts/codex-rich-interaction-prd.md#10-详细任务卡
+    - docs/support/contracts/codex-rich-interaction-prd.md#11-连续执行恢复与证据协议
+  task_count: 12
+  required_task_count: 12
+  digest_algorithm: sha256
+  normalization: ai-worklist-contract-markers-v1
+  digest: 667bf2993ca1a945808e775f52197d7fd93df793264a5751443cb6a91a11ce8e
+
+completion_gate:
+  passed: true
+  blocking_issues: 0
+  major_issues: 0
+  report_path: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/worklist-gate.json
+
+material_change_triggers:
+  - normative_requirement_changed
+  - repository_fact_invalidates_task
+  - blocking_or_major_gate_failure
+  - state_or_evidence_contradiction
+  - explicit_scope_change
+
+volatile_fields_excluded:
+  - checkbox_state
+  - progress_counts
+  - current_task
+  - evidence_paths
+  - run_metadata

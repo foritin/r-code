@@ -1,0 +1,730 @@
+{
+  "status": "passed",
+  "artifact": "D:\\project\\rust\\r-code\\docs\\product-experience-redesign\\prototype.html",
+  "prototype_sha256": "a9e457a8e84bff96838762d923a36c0cdeb52440b663462ce153f6466e3afd8d",
+  "viewports": [
+    {
+      "width": 1600,
+      "height": 960
+    },
+    {
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "width": 1024,
+      "height": 768
+    },
+    {
+      "width": 960,
+      "height": 640
+    },
+    {
+      "width": 740,
+      "height": 800
+    },
+    {
+      "width": 390,
+      "height": 844
+    }
+  ],
+  "evidence": {
+    "provider_startup": {
+      "checking": 2,
+      "queued": 1,
+      "startup_opt_out_no_false_success": "passed",
+      "manual_when_auto_off": "passed"
+    },
+    "run_semantics": {
+      "running_spinner": "passed",
+      "colored_session_dots": 0,
+      "terminal_static_mark": "passed"
+    },
+    "tasks": {
+      "new_task": "created",
+      "draft_isolation": "passed",
+      "filters": 3
+    },
+    "selectors_and_project": {
+      "selectors": [
+        "agent",
+        "model",
+        "policy"
+      ],
+      "project": "added"
+    },
+    "subagents_and_diff": {
+      "created": 1,
+      "stopped": 1,
+      "diff_review": "passed"
+    },
+    "provider_recovery": {
+      "flow": "401 -> providers -> credential -> save -> recovered"
+    },
+    "window_lifecycle": {
+      "remembered_tray_bypass": "passed",
+      "tray_restore": "passed",
+      "public_preference_reset": "passed",
+      "exit_terminal": "passed",
+      "exit_cancel_cascade": "passed",
+      "restart_snapshot": "non_running"
+    },
+    "settings_navigation": {
+      "mouse_pages": 12,
+      "keyboard_pages": 12,
+      "ocr_deeplink": "passed"
+    },
+    "settings_states": {
+      "subagent_slots": [
+        "invalid",
+        "saved"
+      ],
+      "browser": [
+        "installing",
+        "ready",
+        "revoked"
+      ],
+      "permissions": "approved",
+      "notifications": [
+        "checking",
+        "granted"
+      ],
+      "updates": [
+        "checking",
+        "available",
+        "downloading",
+        "downloaded",
+        "install_and_restart:installing",
+        "install_and_restart:up_to_date:0.8.1",
+        "install_later:installing",
+        "install_later:restart_pending:0.8.0-dev",
+        "restart_now:up_to_date:0.8.1"
+      ],
+      "diagnostics": [
+        "self-check",
+        "support-preview"
+      ]
+    },
+    "settings_capability_depth": {
+      "provider": [
+        "catalog",
+        "validation",
+        "unsaved",
+        "model-orphan"
+      ],
+      "agent": [
+        "guardrails",
+        "codex-preferences"
+      ],
+      "subagents": [
+        "prompt",
+        "revision"
+      ],
+      "mcp": [
+        "launch-plan",
+        "ready",
+        "cancelled"
+      ],
+      "knowledge": [
+        "memory",
+        "prompt",
+        "skills"
+      ],
+      "companion": "complete",
+      "support_bundle": "export-path"
+    },
+    "light_theme": {
+      "light_pages": 4,
+      "black_wash_guard": true,
+      "material_tokens": {
+        "--panel": "rgba(248, 251, 253, .72)",
+        "--panel-strong": "rgba(252, 253, 254, .93)",
+        "--surface-content": "rgba(255, 255, 255, .9)",
+        "--surface-sunken": "rgba(226, 233, 238, .64)",
+        "--canvas-wash": "rgba(31, 45, 56, .018)",
+        "--scrim": "rgba(29, 43, 55, .3)"
+      }
+    },
+    "responsive": {
+      "viewports": [
+        "1600x960",
+        "1280x800",
+        "1024x768",
+        "960x640",
+        "740x800",
+        "390x844"
+      ]
+    },
+    "scale_and_motion": {
+      "scale": "800x480@2x",
+      "reduced_motion": {
+        "spinner": "none",
+        "dock": "1e-05s"
+      }
+    },
+    "completeness_pages": {
+      "settings_responsive": [
+        "740x800",
+        "390x844"
+      ],
+      "light_provider_editor": "passed"
+    },
+    "keyboard": {
+      "modal": "passed",
+      "tree": "passed",
+      "tabs": "passed",
+      "composer": [
+        "Enter",
+        "Alt+Enter",
+        "Shift+Enter"
+      ]
+    },
+    "settings_load": {
+      "states": [
+        "loading",
+        "failed-last-good",
+        "failed-empty",
+        "save-rejected",
+        "revision-conflict",
+        "ready"
+      ],
+      "last_good_readonly": true,
+      "no_snapshot_no_defaults": true,
+      "save_rejected_recovery": [
+        "retry",
+        "discard"
+      ],
+      "revision_conflict_recovery": [
+        "discard",
+        "reapply",
+        "merge"
+      ],
+      "banner_dismiss_preserved_state": true,
+      "all_panels_inert_during_failure": true,
+      "failed_keyboard_isolation": [
+        "Tab",
+        "Shift+Tab"
+      ],
+      "retry_focus_restored": true
+    },
+    "provider_and_codex_depth": {
+      "provider_vendor_targets": 2,
+      "provider_default_reject_rollback": "deepseek",
+      "provider_canonical_default": "ark",
+      "provider_previous_default_deleted": "deepseek",
+      "image_historical_value": "provider_deleted",
+      "codex_catalog": [
+        "login_required",
+        "ready"
+      ],
+      "codex_cancel": "host_process_terminate_ack",
+      "codex_effort_cleanup": "ultra -> model default"
+    },
+    "subagent_rtk_mcp_depth": {
+      "subagent": {
+        "initial_availability": "trust_required",
+        "initial_health": "untested",
+        "final_availability": "ready",
+        "final_health": "connected"
+      },
+      "availability_states": [
+        "ready",
+        "needs_configuration",
+        "not_installed",
+        "login_required",
+        "trust_required",
+        "unsupported"
+      ],
+      "health_states": [
+        "untested",
+        "checking",
+        "connected",
+        "stale",
+        "failed"
+      ],
+      "rtk": [
+        "not_installed",
+        "installing",
+        "managed_ready",
+        "blocked"
+      ],
+      "mcp": {
+        "config": [
+          "stdio",
+          "http",
+          "tested",
+          "saved_disabled",
+          "existing_id_immutable"
+        ],
+        "credential_partial_failure": true,
+        "independent_enable_approval": true,
+        "registry": [
+          "cursor_append",
+          "stale_cache",
+          "error_cache"
+        ]
+      }
+    },
+    "memory_skills_companion_depth": {
+      "memory_jobs": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "interrupted",
+        "cancelled"
+      ],
+      "memory_poll": [
+        "error_keep_last_good",
+        "live_recovered"
+      ],
+      "memory_conflict": [
+        "proposal",
+        "reapply"
+      ],
+      "skills_single_enabled": [
+        false,
+        true
+      ],
+      "companion": {
+        "defaults": {
+          "enabled": true,
+          "mode": "full",
+          "sound": false,
+          "motion": "system"
+        },
+        "left_click": "task_panel",
+        "right_click_items": 1,
+        "create_failure_rollback": true
+      }
+    },
+    "latest_production_contracts": {
+      "provider_sync": [
+        "success",
+        "failure_backoff",
+        "race_ignored"
+      ],
+      "image_routing": [
+        "direct",
+        "explicit_ocr",
+        "unknown_explicit_ocr",
+        "unknown_complete_vision_helper",
+        "vision_failure_no_ocr"
+      ],
+      "orchestration": [
+        "ready",
+        "provider_unavailable",
+        "customer_off",
+        "emergency_off",
+        "task_declined"
+      ],
+      "codex_setup": [
+        "install_cli",
+        "login",
+        "check",
+        "configure",
+        "ready",
+        "upgrade_failed"
+      ],
+      "codex_custom": "historical_readonly_only",
+      "locale_visible_cjk": {
+        "zh_cn": 378,
+        "en_us": 0,
+        "zh_cn_restored": 378
+      },
+      "locale_dom_contract": {
+        "initial_en_us": {
+          "cjk_count": 0,
+          "missing_count": 0,
+          "cjk_samples": [],
+          "missing_samples": []
+        },
+        "dynamic_en_us": {
+          "cjk_count": 0,
+          "missing_count": 0,
+          "cjk_samples": [],
+          "missing_samples": []
+        },
+        "dynamic_en_us_attributes": {
+          "theme_toggle": "Switch to dark theme",
+          "maximize_window": "Restore window size"
+        },
+        "dynamic_zh_cn_restored": {
+          "theme_toggle": "切换到深色主题",
+          "maximize_window": "还原窗口"
+        },
+        "zh_cn_missing_marker_count": 0
+      },
+      "shell": [
+        "ready_actual_program",
+        "error_old_snapshot"
+      ],
+      "skill_validation": [
+        "double_hyphen",
+        "empty_description",
+        "empty_instructions",
+        "scope_duplicate"
+      ],
+      "knowledge_project_removal": "global_reread",
+      "companion": [
+        "legacy_to_v2",
+        "stale_ignored"
+      ]
+    },
+    "mcp_approval": {
+      "dialog_role": "alertdialog",
+      "approval": [
+        "cancel",
+        "ready",
+        "error",
+        "retry",
+        "confirm"
+      ],
+      "runtime": [
+        "starting",
+        "running"
+      ],
+      "dismissal_guards": [
+        "cancel",
+        "escape",
+        "backdrop"
+      ],
+      "hidden_confirm_inert": true
+    },
+    "subagent_prompts": {
+      "receipt_add_remove_reload": true,
+      "per_slot_isolation": true,
+      "whole_pool_reload": true,
+      "revision_conflict_local_visible": true,
+      "revision_conflict_recovery": [
+        "discard",
+        "reapply",
+        "merge"
+      ]
+    },
+    "guide_sheets": {
+      "provider": [
+        "focus-trap",
+        "escape",
+        "backdrop",
+        "action",
+        "trigger-focus-restore"
+      ],
+      "image": [
+        "focus-trap",
+        "escape",
+        "backdrop",
+        "action",
+        "trigger-focus-restore"
+      ],
+      "plan": [
+        "focus-trap",
+        "escape",
+        "backdrop",
+        "action",
+        "trigger-focus-restore"
+      ],
+      "subagent": [
+        "focus-trap",
+        "escape",
+        "backdrop",
+        "action",
+        "trigger-focus-restore"
+      ]
+    },
+    "shell_save_detect": {
+      "save_status_copy_persisted": true,
+      "detect_reusable_after_save": true,
+      "second_detect_receipt": "ready · dialect=pwsh · program=C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+    },
+    "explicit_save_back_warnings": {
+      "domains": [
+        "image",
+        "guardrails",
+        "permission",
+        "shell",
+        "providerSync",
+        "projectPermission",
+        "notificationRouting",
+        "diagnosticPolicy"
+      ],
+      "domain_count": 8,
+      "shared_alertdialog": true,
+      "continue_preserves": true,
+      "discard_restores": true,
+      "save_clears_dirty": true,
+      "companion_sound_is_immediate": true,
+      "companion_sound_dirty_back": false
+    },
+    "knowledge_scope": {
+      "scopes": [
+        "project-r-code",
+        "project-falib",
+        "global"
+      ],
+      "draft_isolation": true,
+      "scope_reload_isolated": true,
+      "inherited_rows_read_only": true,
+      "prompt_modes": {
+        "project-r-code_initial": "append",
+        "project-falib_initial": "override",
+        "global_control": "hidden",
+        "save_reload": true,
+        "remove_undo_preserved": true,
+        "manual_return_cleared_dirty": true
+      }
+    },
+    "mobile_touch_targets": {
+      "viewport": "390x844",
+      "panels": 12,
+      "targets_measured": 432,
+      "minimum_width": 44,
+      "minimum_height": 44,
+      "threshold": "44x44",
+      "expanded_details": true,
+      "knowledge_tabs": [
+        "memory",
+        "prompt",
+        "skills"
+      ],
+      "modal": "capability-map"
+    }
+  },
+  "generated_screenshots": 227,
+  "screenshots": [
+    "01-launch-provider-checking-dark.png",
+    "02-launch-provider-recovered-dark.png",
+    "02a-startup-opt-out-no-false-success-dark.png",
+    "03-provider-manual-check-with-auto-off-dark.png",
+    "04-provider-manual-check-recovered-dark.png",
+    "05-workspace-running-dark.png",
+    "06-run-expanded-dark.png",
+    "07-run-tools-dark.png",
+    "08-terminal-state-without-spinner-dark.png",
+    "09-new-task-empty-dark.png",
+    "10-new-task-created-dark.png",
+    "11-task-switch-and-draft-isolation-dark.png",
+    "12-filter-running-dark.png",
+    "13-filter-attention-dark.png",
+    "14-filter-history-dark.png",
+    "15-selector-agent-dark.png",
+    "16-selector-model-dark.png",
+    "17-selector-policy-dark.png",
+    "18-project-add-dialog-dark.png",
+    "19-project-added-dark.png",
+    "20-subagent-tree-dark.png",
+    "21-subagent-created-detail-dark.png",
+    "22-subagent-stopped-detail-dark.png",
+    "23-subagent-stopped-tree-dark.png",
+    "24-changes-list-dark.png",
+    "25-diff-open-dark.png",
+    "26-diff-reviewed-dark.png",
+    "27-provider-401-dark.png",
+    "28-provider-credential-edit-dark.png",
+    "29-provider-credential-testing-dark.png",
+    "30-provider-credential-tested-dark.png",
+    "31-provider-recovered-after-save-dark.png",
+    "32-close-choice-dark.png",
+    "33-tray-hidden-dark.png",
+    "34-tray-restored-dark.png",
+    "34a-close-remembered-tray-bypass-dark.png",
+    "35-exit-terminal-without-spinner-dark.png",
+    "36-settings-01-providers-dark.png",
+    "37-settings-02-agents-dark.png",
+    "38-settings-03-subagents-dark.png",
+    "39-settings-04-tools-dark.png",
+    "40-settings-05-knowledge-dark.png",
+    "41-settings-06-permissions-dark.png",
+    "42-settings-07-security-dark.png",
+    "43-settings-08-appearance-dark.png",
+    "44-settings-09-notifications-dark.png",
+    "45-settings-10-lifecycle-dark.png",
+    "46-settings-11-updates-dark.png",
+    "47-settings-12-diagnostics-dark.png",
+    "48-settings-search-ocr-dark.png",
+    "49-settings-search-ocr-deeplink-dark.png",
+    "50-subagent-slots-invalid-dark.png",
+    "51-subagent-slots-saved-dark.png",
+    "52-browser-planning-installing-dark.png",
+    "53-browser-planning-ready-dark.png",
+    "54-permissions-approved-dark.png",
+    "55-notification-permission-checking-dark.png",
+    "56-notification-permission-granted-dark.png",
+    "57-update-checking-dark.png",
+    "58-update-available-dark.png",
+    "59-update-downloading-dark.png",
+    "60-update-downloaded-dark.png",
+    "61-update-install-and-restart-up-to-date-dark.png",
+    "61b-update-install-later-restart-pending-dark.png",
+    "61c-update-install-later-up-to-date-dark.png",
+    "62-diagnostics-self-check-and-support-dark.png",
+    "83-settings-capability-map-dark.png",
+    "84-provider-preset-catalog-dark.png",
+    "85-provider-validation-blocked-dark.png",
+    "86-provider-unsaved-confirm-dark.png",
+    "87-image-provider-missing-dark.png",
+    "88-agent-run-guardrails-dark.png",
+    "89-codex-runtime-preferences-dark.png",
+    "90-subagent-prompt-and-revision-dark.png",
+    "91-mcp-approval-requesting-dark.png",
+    "92-mcp-launch-ready-dark.png",
+    "93-knowledge-memory-review-dark.png",
+    "94-knowledge-prompt-append-override-dark.png",
+    "95-knowledge-skills-inheritance-dark.png",
+    "96-skill-editor-dark.png",
+    "97-codex-permission-scope-dark.png",
+    "98-companion-complete-settings-dark.png",
+    "99-support-bundle-export-path-dark.png",
+    "63-settings-appearance-light.png",
+    "64-settings-providers-light.png",
+    "65-workspace-light.png",
+    "66-diff-light.png",
+    "67-responsive-1600x960-dark.png",
+    "68-responsive-1280x800-dark.png",
+    "69-responsive-1024x768-dark.png",
+    "73-responsive-1024-dock-open-dark.png",
+    "70-responsive-960x640-dark.png",
+    "71-responsive-740x800-dark.png",
+    "74-responsive-740-task-navigation-open-dark.png",
+    "72-responsive-390x844-dark.png",
+    "75-responsive-390-task-navigation-open-dark.png",
+    "76-scale-200-workspace-dark.png",
+    "77-scale-200-settings-dark.png",
+    "78-scale-200-provider-popover-dark.png",
+    "79-reduced-motion-running-state-dark.png",
+    "80-settings-responsive-740-dark.png",
+    "81-settings-responsive-390-dark.png",
+    "82-provider-editor-light.png",
+    "100-settings-load-loading-inert-dark.png",
+    "101-settings-load-failed-retry-dark.png",
+    "101a-settings-load-last-good-readonly-dark.png",
+    "102-settings-load-retry-ready-dark.png",
+    "102a-settings-load-failed-empty-no-defaults-dark.png",
+    "102b-settings-save-rejected-draft-retained-dark.png",
+    "102c-settings-revision-conflict-three-paths-dark.png",
+    "132-provider-vendor-targets-dark.png",
+    "132a-provider-default-reject-rollback-dark.png",
+    "132b-provider-canonical-default-ark-dark.png",
+    "132b1-provider-referenced-delete-blocked-dark.png",
+    "132c-provider-previous-default-deleted-dark.png",
+    "133-image-historical-provider-value-dark.png",
+    "133a-codex-login-cancel-terminate-ack-dark.png",
+    "134-codex-catalog-login-required-dark.png",
+    "135-codex-catalog-ready-dark.png",
+    "136-codex-effort-incompatible-cleanup-dark.png",
+    "128-subagent-trust-required-health-untested-dark.png",
+    "129-subagent-ready-health-untested-dark.png",
+    "130-subagent-ready-health-checking-dark.png",
+    "131-subagent-ready-health-connected-dark.png",
+    "131a-subagent-ready-health-stale-dark.png",
+    "131b-subagent-ready-health-failed-dark.png",
+    "137-subagent-availability-needs_configuration-dark.png",
+    "138-subagent-availability-not_installed-dark.png",
+    "139-subagent-availability-login_required-dark.png",
+    "140-subagent-availability-trust_required-dark.png",
+    "141-subagent-availability-unsupported-dark.png",
+    "142-rtk-not-installed-dark.png",
+    "143-rtk-managed-installing-dark.png",
+    "144-rtk-managed-ready-v045-dark.png",
+    "145-rtk-security-blocked-rollback-dark.png",
+    "146-mcp-stdio-config-editor-dark.png",
+    "147-mcp-http-config-testing-dark.png",
+    "148-mcp-http-config-tested-dark.png",
+    "149-mcp-saved-disabled-before-approval-dark.png",
+    "149a-mcp-existing-id-immutable-dark.png",
+    "150-mcp-credential-partial-failure-dark.png",
+    "151-mcp-independent-enable-approval-dark.png",
+    "152-mcp-running-after-independent-approval-dark.png",
+    "153-mcp-registry-cursor-append-dark.png",
+    "154-mcp-registry-stale-cache-dark.png",
+    "155-mcp-registry-error-with-cache-dark.png",
+    "156-memory-job-queued-dark.png",
+    "157-memory-job-running-dark.png",
+    "158-memory-job-succeeded-dark.png",
+    "159-memory-job-failed-dark.png",
+    "160-memory-job-interrupted-dark.png",
+    "161-memory-job-cancelled-dark.png",
+    "162-memory-poll-error-last-good-dark.png",
+    "163-memory-conflict-proposal-dark.png",
+    "164-memory-conflict-reapplied-dark.png",
+    "165-skill-single-enabled-off-dark.png",
+    "166-skill-single-enabled-on-dark.png",
+    "167-companion-production-defaults-dark.png",
+    "168-companion-left-click-task-panel-dark.png",
+    "169-companion-right-click-single-menu-dark.png",
+    "170-companion-create-checking-dark.png",
+    "171-companion-create-failure-rollback-dark.png",
+    "172-provider-sync-checking-last-good-dark.png",
+    "173-provider-sync-success-shared-catalog-dark.png",
+    "174-provider-sync-failure-backoff-dark.png",
+    "175-provider-sync-race-stale-pending-dark.png",
+    "176-provider-sync-race-old-result-ignored-dark.png",
+    "177-image-route-direct-multimodal-dark.png",
+    "178-image-route-explicit-ocr-dark.png",
+    "178a-image-route-unknown-explicit-ocr-dark.png",
+    "178b-image-route-unknown-vision-helper-dark.png",
+    "179-image-vision-failure-no-auto-ocr-dark.png",
+    "180-image-vision-failure-explicit-ocr-retry-dark.png",
+    "181-codex-setup-auto-check-dark.png",
+    "182-codex-setup-ready-dark.png",
+    "183-orchestration-ready-dark.png",
+    "184-orchestration-provider_unavailable-dark.png",
+    "185-orchestration-customer_off-dark.png",
+    "186-orchestration-emergency_off-dark.png",
+    "187-orchestration-task_declined-dark.png",
+    "188-codex-setup-six-state-contract-dark.png",
+    "189-codex-historical-custom-readonly-dark.png",
+    "190-interface-language-en-us-zero-visible-cjk-dark.png",
+    "190b-interface-language-en-us-dynamic-aria-light.png",
+    "191-interface-language-zh-cn-restored-dark.png",
+    "192-shell-ready-actual-program-dark.png",
+    "193-shell-error-old-snapshot-dark.png",
+    "194-skill-reject-double-hyphen-dark.png",
+    "195-skill-reject-empty-description-dark.png",
+    "196-skill-reject-empty-instructions-dark.png",
+    "197-skill-reject-scope-duplicate-dark.png",
+    "198-knowledge-project-removal-global-fallback-dark.png",
+    "199-companion-legacy-to-v2-migration-dark.png",
+    "200-companion-stale-revision-ignored-dark.png",
+    "103-mcp-approval-requesting-dark.png",
+    "104-mcp-approval-ready-dark.png",
+    "105-mcp-approval-host-error-dark.png",
+    "106-mcp-approval-retrying-dark.png",
+    "107-mcp-starting-dark.png",
+    "108-mcp-running-dark.png",
+    "108a-subagent-receipt-and-add-dark.png",
+    "108b-subagent-remove-and-pool-reload-dark.png",
+    "109-subagent-per-slot-drafts-isolated-dark.png",
+    "110-subagent-whole-pool-reloaded-dark.png",
+    "111-subagent-revision-conflict-local-visible-dark.png",
+    "111a-subagent-conflict-discard-host-dark.png",
+    "112-subagent-conflict-reapplied-dark.png",
+    "112a-subagent-conflict-merged-dark.png",
+    "113-guide-provider-dark.png",
+    "114-guide-image-dark.png",
+    "115-guide-plan-dark.png",
+    "116-guide-subagent-dark.png",
+    "117-shell-saved-status-copy-dark.png",
+    "118-shell-redetected-after-save-dark.png",
+    "119-dirty-back-warning-image-dark.png",
+    "120-dirty-back-warning-guardrails-dark.png",
+    "121-dirty-back-warning-permission-dark.png",
+    "122-dirty-back-warning-shell-dark.png",
+    "123-dirty-back-warning-providerSync-dark.png",
+    "124-dirty-back-warning-projectPermission-dark.png",
+    "125-dirty-back-warning-notificationRouting-dark.png",
+    "126-dirty-back-warning-diagnosticPolicy-dark.png",
+    "124-knowledge-global-scope-dark.png",
+    "125-knowledge-project-scope-isolated-dark.png",
+    "125b-knowledge-mode-lifecycle-dark.png",
+    "126a-settings-coverage-modal-390-dark.png",
+    "126-settings-touch-targets-390-dark.png"
+  ],
+  "deleted_orphan_pngs": [],
+  "diagnostics": {
+    "console_warning": 0,
+    "console_error": 0,
+    "pageerror": 0,
+    "requestfailed": 0
+  }
+}

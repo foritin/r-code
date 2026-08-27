@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { taskList } from "../../lib/ipc";
 import { elapsedMinutes } from "../../lib/format";
-import { isTaskLive, sortTasksByUrgency, taskActivity, taskStateLabel, taskTitle, visualTaskState, workspaceName } from "../../lib/presentation";
+import { sortTasksByUrgency, taskActivity, taskDisplayState, taskStateLabel, taskTitle, visualTaskState, workspaceName } from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
 import { selectNeedsYouTaskIds, useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
@@ -45,7 +45,16 @@ export function ConversationsScene() {
 
   usePoll(async () => {
     await refreshTasks();
-    const ids = useTasksStore.getState().tasks.filter((task) => task.state !== "idle" && task.state !== "archived").map((task) => task.id);
+    const snapshot = useTasksStore.getState();
+    const ids = snapshot.tasks
+      .filter((task) => task.state !== "archived")
+      .filter((task) => {
+        const detail = snapshot.details[task.id];
+        return !detail?.status
+          || detail.task.updated_at !== task.updated_at
+          || detail.status.active_run_id != null;
+      })
+      .map((task) => task.id);
     if (ids.length) await refreshDetails(ids);
   }, 2500);
 
@@ -54,12 +63,13 @@ export function ConversationsScene() {
     const source = filter === "archived" ? archivedTasks : tasks;
     return sortTasksByUrgency(source, details).filter((task) => {
       const visual = visualTaskState(task, details[task.id]);
+      const display = taskDisplayState(task, details[task.id]);
       const matchesFilter = filter === "all"
-        || (filter === "running" && isTaskLive(task, details[task.id]))
+        || (filter === "running" && visual === "running")
         || (filter === "attention" && visual === "attention")
         || (filter === "review" && visual === "review")
-        || (filter === "completed" && task.state === "idle")
-        || (filter === "archived" && task.state === "archived");
+        || (filter === "completed" && display === "idle")
+        || (filter === "archived" && display === "archived");
       const haystack = `${taskTitle(task)} ${task.goal} ${workspaceName(task.workspace_path, workspaces)}`.toLocaleLowerCase();
       return matchesFilter && (!normalized || haystack.includes(normalized));
     });
@@ -112,12 +122,13 @@ function ConversationRow({ task, needsAttention, onChanged }: { task: Task; need
   const workspaces = useTasksStore((s) => s.workspaces);
   const openRoom = useAppStore((s) => s.openRoom);
   const visual = visualTaskState(task, detail);
+  const highlighted = needsAttention || visual === "attention";
   return (
     <article className="conversation-row">
       <span className={`conversation-status ${visual}`}><i /></span>
       <button className="conversation-main" onClick={() => openRoom(task.id)}><strong>{taskTitle(task)}</strong><small>{taskActivity(task, detail)}</small></button>
       <span className="conversation-project"><IconProjects width={15} height={15} />{workspaceName(task.workspace_path, workspaces)}</span>
-      <span className={`conversation-state ${needsAttention ? "needs" : ""}`}>{taskStateLabel(task.state, detail)}</span>
+      <span className={`conversation-state ${highlighted ? "needs" : ""}`}>{taskStateLabel(task.state, detail)}</span>
       <time>{elapsedMinutes(task.updated_at)}</time>
       <span className="conversation-row-actions">
         <TaskActionsMenu task={task} detail={detail} onChanged={onChanged} />

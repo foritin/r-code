@@ -1,0 +1,18 @@
+{
+  "schema_version": "ai-worklist-gate.v1",
+  "mode": "check",
+  "document": "docs/support/contracts/codex-rich-interaction-prd.md",
+  "freeze": "docs/support/contracts/codex-rich-interaction-freeze.yaml",
+  "passed": true,
+  "counts": {
+    "requirements": 13,
+    "checklist_tasks": 12,
+    "task_cards": 12,
+    "assertions": 39
+  },
+  "digests": {
+    "normative": "92f2982c11c76fb543dd9de3dd9870f983eb8fd46b0acfb72fdfe011ff236c0a",
+    "worklist": "667bf2993ca1a945808e775f52197d7fd93df793264a5751443cb6a91a11ce8e"
+  },
+  "issues": []
+}

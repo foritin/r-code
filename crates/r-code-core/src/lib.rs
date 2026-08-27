@@ -11,6 +11,7 @@
 
 #![allow(clippy::doc_nested_refdefs)]
 
+pub mod automation;
 pub mod dto;
 pub mod error;
 pub mod ids;
@@ -22,6 +23,8 @@ pub mod progress_contract;
 pub mod secret;
 pub mod security;
 pub mod state;
+pub mod task_status;
+pub mod user_error;
 #[cfg(windows)]
 pub mod win_env;
 
@@ -34,4 +37,13 @@ pub use agent_contract::{
     SessionMeta, SessionStatus, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
 };
 pub use agent_error::{Error, Result, ResultExt};
+pub use automation::{
+    AutomationDefinition, AutomationDefinitionSnapshot, AutomationDefinitionState,
+    AutomationPermission, AutomationRun, AutomationWeekday, ExecutionProfile, RunStatus,
+    RunTrigger, ScheduleSpec, HOURLY_INTERVAL_MINUTES,
+};
 pub use memory::*;
+pub use task_status::{
+    project_task_status, TaskAttention, TaskDisplayState, TaskStatusProjectionInput, TaskStatusView,
+};
+pub use user_error::UserFacingError;

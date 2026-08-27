@@ -1,0 +1,73 @@
+schema_version: ai-worklist-freeze.v1
+skill_contract:
+  name: prd-to-ai-worklist
+  version: 1.1.0
+
+status: frozen
+source_document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+
+normative_input:
+  files:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md
+    - docs/product-experience-redesign/settings-capability-baseline.json
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#1-背景目标终态与非目标
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#2-已冻结产品与架构决策
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#3-仓库事实基线
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#4-机器合同
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#5-产品流程与状态矩阵
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#6-平台延续边界
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#7-质量性能与安全门禁
+  digest_algorithm: sha256
+  normalization: ai-worklist-markers-v1 + canonical-json-v1
+  component_digests:
+    prd_normative: 180e6a2e752d5a1b1e465b22685639da795d22897960bebe93b2e2ec6177eb6e
+    settings_capability_baseline: bf34b651809f0ca1690da92be5142fcdf2c3277aa8aaa6d228bb11c369ff7ac1
+  digest: a7f01f4f13d997c613f8db4f318d67fd38ee6513039793d6cdeb13091d519dbc
+
+settings_validation:
+  executed_live: true
+  validator: docs/product-experience-redesign/tools/settings_capability_gate.py
+  validator_digest: c82c19e22ec1ce25ba9247e5440386af0a1b7a70a12ff91b5536b54d8a5f00f9
+  report_schema: settings-capability-gate.v3
+  report_status: passed
+  report_digest: 1c6907f485a4f2f5398b78ba40caa85957ff2b5acaeff170f2f1bdac47b373d6
+  baseline_count: 111
+  mapped_count: 111
+  verified_count: 0
+  d0_semantic_proof: passed
+
+worklist:
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#8-verification-harness
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#9-依赖-dag-与并行协议
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#10-主-checklist唯一状态源
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#11-详细任务卡
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#12-连续执行与恢复状态机
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#13-证据追踪与完成协议
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#14-风险兼容发布与外部放行
+  task_count: 42
+  required_task_count: 42
+  digest_algorithm: sha256
+  normalization: ai-worklist-contract-markers-v1
+  digest: 68b8d22d857794baacada8f35afb64c28c849632fb3eab8cd8446e417eb821c4
+
+completion_gate:
+  passed: true
+  blocking_issues: 0
+  major_issues: 0
+  report_path: docs/product-experience-redesign/worklist-gate.json
+
+material_change_triggers:
+  - normative_requirement_changed
+  - repository_fact_invalidates_task
+  - blocking_or_major_gate_failure
+  - state_or_evidence_contradiction
+  - explicit_scope_change
+
+volatile_fields_excluded:
+  - checkbox_state
+  - progress_counts
+  - current_task
+  - evidence_paths
+  - run_metadata

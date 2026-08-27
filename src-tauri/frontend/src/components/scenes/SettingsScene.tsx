@@ -1,7 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { errText } from "../../lib/format";
 import { useAppStore, type SettingsPane } from "../../store/app";
 import { usePoll } from "../../lib/poll";
+import { LanguageSettingsSection } from "../settings/LanguageSettingsSection";
+import { NativeNotificationSettings } from "../settings/NativeNotificationSettings";
+import { ApplicationUpdaterSettings } from "../settings/ApplicationUpdaterSettings";
 import {
   codexCliPreferences,
   codexIntegrationStatus,
@@ -120,6 +124,8 @@ const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   { pane: "tools", blockId: "mcp-panel-block", title: "工具与连接（MCP）", keywords: ["mcp", "工具", "连接", "市场", "扩展", "rtk"] },
   { pane: "tools", blockId: "execution-env-block", title: "执行环境（Windows Shell）", keywords: ["shell", "bash", "git bash", "powershell", "执行环境", "命令", "路径", "回落", "方言"] },
   { pane: "knowledge", blockId: "knowledge-block", title: "知识与指令", keywords: ["记忆", "prompt", "提示词", "skills", "技能", "知识库", "指令"] },
+  { pane: "preferences", blockId: "language-block", title: "界面语言", keywords: ["语言", "language", "中文", "english", "locale"] },
+  { pane: "preferences", blockId: "native-notifications-block", title: "系统通知", keywords: ["通知", "系统通知", "桌面通知", "notification", "permission", "权限", "后台"] },
   { pane: "preferences", blockId: "appearance-block", title: "界面主题", keywords: ["主题", "外观", "亮色", "暗色", "跟随系统"] },
   { pane: "preferences", blockId: "companion-block", title: "桌面小助手", keywords: ["小助手", "悬浮", "提示音", "动效", "形态"] },
   { pane: "diagnostics", blockId: "request-audit-block", title: "请求构成审计", keywords: ["审计", "请求信封", "旁路", "request audit"] },
@@ -540,6 +546,7 @@ function providerStateLabel(status: ProviderStatus | undefined) {
  * settingsGet 失败（配置损坏等）时表单区显示错误条而非空白。
  */
 export function SettingsScene() {
+  const { t } = useTranslation();
   const activePane = useAppStore((state) => state.settingsPane);
   const setActivePane = useAppStore((state) => state.setSettingsPane);
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -627,7 +634,16 @@ export function SettingsScene() {
     [config],
   );
 
-  const pane = SETTINGS_PANES.find((item) => item.key === activePane) ?? SETTINGS_PANES[0];
+  const settingsPanes = useMemo(() => SETTINGS_PANES.map((item) => (
+    item.key === "preferences"
+      ? {
+          ...item,
+          label: t("settings.preferences.label"),
+          description: t("settings.preferences.description"),
+        }
+      : item
+  )), [t]);
+  const pane = settingsPanes.find((item) => item.key === activePane) ?? settingsPanes[0];
 
   // E4 设置搜索：命中跨面板区块时经既有深链机制定位（切换页签 + 闪烁聚焦）。
   const [searchQuery, setSearchQuery] = useState("");
@@ -647,7 +663,7 @@ export function SettingsScene() {
     <div className="scene">
       <div className="scene-scroll">
         <div className="page-head">
-          <h1>设置</h1>
+          <h1>{t("settings.pageTitle")}</h1>
           <div className="settings-search">
             <IconSearch width={14} height={14} aria-hidden="true" />
             <input
@@ -680,7 +696,7 @@ export function SettingsScene() {
                     >
                       <span className="settings-search-title">{entry.title}</span>
                       <span className="settings-search-pane">
-                        {SETTINGS_PANES.find((item) => item.key === entry.pane)?.label ?? entry.pane}
+                        {settingsPanes.find((item) => item.key === entry.pane)?.label ?? entry.pane}
                       </span>
                     </button>
                   </li>
@@ -694,8 +710,8 @@ export function SettingsScene() {
         </div>
 
         <div className="settings-layout">
-          <nav className="settings-nav" aria-label="设置分类">
-            {SETTINGS_PANES.map((item) => (
+          <nav className="settings-nav" aria-label={t("settings.categoriesLabel")}>
+            {settingsPanes.map((item) => (
               <button
                 key={item.key}
                 className={activePane === item.key ? "active" : ""}
@@ -745,6 +761,9 @@ export function SettingsScene() {
 
             {activePane === "preferences" && (
               <div className="settings-preferences">
+                <LanguageSettingsSection />
+                <NativeNotificationSettings />
+                <ApplicationUpdaterSettings />
                 <AppearanceSection />
                 <CompanionSection />
               </div>
@@ -1096,7 +1115,7 @@ function ProviderSection({
     : "尚未保存";
   const deepSeekV4 = isDeepSeekV4(fields.base_url, fields.model, presetName);
   const outputValue = Number(fields.max_tokens.trim());
-  // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.4：本字段是「每轮最大输出」（用户可编辑，
+  // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §6.4：本字段是「每轮最大输出」（用户可编辑，
   // 范围 2,048 到厂商上限）；Provider 的服务端上限只作为上界展示，不再锁死
   // 输入框。未填写时后端采用目录 recommended_output_tokens（如 DeepSeek 65,536）。
   const providerMaxOutput = activePreset?.max_output_tokens ?? null;
@@ -1980,7 +1999,7 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
   );
 }
 
-/** DeepSeek Plan 锚定滑钮（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §9）。与建议开关互不
+/** DeepSeek Plan 锚定滑钮（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §9）。与建议开关互不
  * 替代：锚定控制实际进入 DeepSeek Plan 后是否启用最小轨迹与批准后的完整恢复；
  * 开关值在 Plan 创建时冻结，运行中切换只影响之后新建的 Plan。 */
 function AnchoringToggle({ config, reload, status, busy, setBusy }: {

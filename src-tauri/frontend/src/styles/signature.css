@@ -1,6 +1,7 @@
 /* R-Code Signature
    --------------------------------------------------------------------------
-   Production translation of docs/ui/signature-dark.
+   Legacy production layer retained until the product-experience M2 token migration.
+   Current design direction: docs/product-experience-redesign/prototype.html.
    It is intentionally loaded last: existing components keep their behavior while
    the application shell, hierarchy and finish share one visual language. */
 

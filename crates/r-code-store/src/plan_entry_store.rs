@@ -1,4 +1,4 @@
-//! Plan 入口建议聚合的持久化（docs/archive/implementation/plan-mode-dual-track-gate.md §11、§12）。
+//! Plan 入口建议聚合的持久化（docs/support/archive/implementation/plan-mode-dual-track-gate.md §11、§12）。
 //!
 //! 核心不变量：
 //! - `pending` 建议不修改 `tasks.mode`、不创建 `plans` 行、不派发任何 continuation；

@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "definition": {
+    "id": "automation-01",
+    "name": "Daily repository report",
+    "workspace_path": "D:/work/example",
+    "prompt": "Summarize changes since the previous run.",
+    "execution_profile": {
+      "agent_engine": "r_code",
+      "provider_name": "openai-primary",
+      "model": "gpt-5.6",
+      "reasoning_effort": "high"
+    },
+    "schedule": {
+      "kind": "daily",
+      "local_time": "09:30:00"
+    },
+    "timezone": "Asia/Shanghai",
+    "permission": "isolated_write",
+    "base_ref": "main",
+    "state": "active",
+    "next_run_at_utc": "2026-08-27T01:30:00Z",
+    "created_at": "2026-08-26T00:00:00Z",
+    "updated_at": "2026-08-26T00:05:00Z"
+  },
+  "run": {
+    "id": "automation-run-01",
+    "automation_id": "automation-01",
+    "task_id": null,
+    "trigger": "scheduled",
+    "scheduled_for": "2026-08-27T01:30:00Z",
+    "definition_snapshot": {
+      "definition_id": "automation-01",
+      "name": "Daily repository report",
+      "workspace_path": "D:/work/example",
+      "prompt": "Summarize changes since the previous run.",
+      "execution_profile": {
+        "agent_engine": "r_code",
+        "provider_name": "openai-primary",
+        "model": "gpt-5.6",
+        "reasoning_effort": "high"
+      },
+      "schedule": {
+        "kind": "daily",
+        "local_time": "09:30:00"
+      },
+      "timezone": "Asia/Shanghai",
+      "permission": "isolated_write",
+      "base_ref": "main",
+      "definition_updated_at": "2026-08-26T00:05:00Z"
+    },
+    "status": "queued",
+    "idempotency_key": "automation-01:2026-08-27T01:30:00Z",
+    "lease_owner": null,
+    "lease_expires_at": null,
+    "missed_count": 0,
+    "started_at": null,
+    "finished_at": null,
+    "error_code": null
+  },
+  "schedule_specs": [
+    {
+      "kind": "once",
+      "run_at_utc": "2026-09-01T08:00:00Z"
+    },
+    {
+      "kind": "hourly",
+      "anchor_at_utc": "2026-08-26T00:00:00Z",
+      "interval_minutes": 60
+    },
+    {
+      "kind": "daily",
+      "local_time": "09:30:00"
+    },
+    {
+      "kind": "weekdays",
+      "local_time": "10:00:00"
+    },
+    {
+      "kind": "weekly",
+      "weekday": "monday",
+      "local_time": "11:15:00"
+    }
+  ],
+  "stable_names": {
+    "permissions": ["read_only", "isolated_write"],
+    "definition_states": ["active", "paused", "completed"],
+    "run_triggers": ["scheduled", "catch_up", "manual"],
+    "run_statuses": [
+      "queued",
+      "running",
+      "waiting_approval",
+      "succeeded",
+      "failed",
+      "skipped",
+      "cancelled"
+    ],
+    "weekdays": [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+      "sunday"
+    ]
+  }
+}

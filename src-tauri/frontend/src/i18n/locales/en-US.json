@@ -1,0 +1,201 @@
+{
+  "app": {
+    "skipToMain": "Skip to main content",
+    "opening": "Opening…"
+  },
+  "shell": {
+    "navigationLabel": "Projects and navigation",
+    "brandNewConversationTitle": "R-Code — New conversation",
+    "brandNewConversationAria": "R-Code, new conversation",
+    "searchTitle": "Search ({{shortcut}})",
+    "searchAria": "Search tasks, files, and conversations, {{shortcut}}",
+    "newConversation": "New conversation",
+    "creatingConversation": "Creating conversation",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar",
+    "globalNavigation": "Global navigation",
+    "conversations": "Conversations",
+    "inbox": "Needs attention",
+    "activity": "Activity",
+    "archive": "Archive",
+    "recent": "Recent",
+    "noChats": "No conversations",
+    "projects": "Projects",
+    "runningCount": "{{count}} running",
+    "addProject": "Add project",
+    "addLocalProject": "Add local project",
+    "add": "Add",
+    "attachFirstProject": "Attach your first project",
+    "expandProjectTasks": "Expand tasks for {{project}}",
+    "collapseProjectTasks": "Collapse tasks for {{project}}",
+    "expandTasks": "Expand tasks",
+    "collapseTasks": "Collapse tasks",
+    "openProjectOverview": "Open the {{project}} project overview",
+    "viewAllTasks": "View all {{count}} tasks",
+    "settings": "Settings"
+  },
+  "settings": {
+    "pageTitle": "Settings",
+    "categoriesLabel": "Settings categories",
+    "preferences": {
+      "label": "Appearance & companion",
+      "description": "Choose the interface language and theme, and manage desktop companion feedback."
+    },
+    "language": {
+      "heading": "Interface language",
+      "description": "Choose the language R-Code uses. Changes take effect immediately.",
+      "label": "Language",
+      "selectAria": "Interface language",
+      "zh-CN": "简体中文",
+      "en-US": "English (United States)"
+    },
+    "notifications": {
+      "heading": "System notifications",
+      "description": "While R-Code is in the background, system banners alert you to approvals, failed runs, and results ready for review. In the foreground, R-Code uses in-app messages first.",
+      "status": {
+        "loading": {
+          "label": "Checking notification permission",
+          "description": "Reading the current system setting."
+        },
+        "granted": {
+          "label": "System notifications allowed",
+          "description": "R-Code can show system banners while it is in the background."
+        },
+        "denied": {
+          "label": "System notifications denied",
+          "description": "Alerts will still appear in the app. If no permission prompt appears, allow R-Code in the operating system's notification settings."
+        },
+        "prompt": {
+          "label": "Notification permission not requested",
+          "description": "R-Code only shows the system permission prompt after you request it here."
+        },
+        "unavailable": {
+          "label": "System notifications unavailable",
+          "description": "This platform or runtime cannot send system notifications. Alerts will fall back to in-app messages."
+        }
+      },
+      "requestPermission": "Request notification permission",
+      "requestingPermission": "Requesting…",
+      "checkAgain": "Check again",
+      "checkingPermission": "Checking…",
+      "permissionError": "Could not read system notification permission: {{detail}}"
+    },
+    "updater": {
+      "heading": "Application updates",
+      "description": "Check for signed R-Code releases. Downloading, installing, and restarting always require an explicit action from you.",
+      "currentVersion": "Current version",
+      "loadingVersion": "Loading…",
+      "statusLabel": "Update status",
+      "lastChecked": "Last checked",
+      "neverChecked": "Not checked yet",
+      "releaseVersion": "Version {{version}} available",
+      "releaseDate": "Released {{date}}",
+      "releaseNotes": "Release notes",
+      "noReleaseNotes": "No release notes were provided for this version.",
+      "downloadProgress": "Download progress",
+      "progressUnknown": "Downloading",
+      "progressPercent": "{{percent}}%",
+      "downloadedBytes": "{{downloaded}} downloaded",
+      "downloadedOfTotal": "{{downloaded}} / {{total}}",
+      "restartDeferred": "The update is installed. You can continue working and restart R-Code when convenient.",
+      "safetyNotice": "Automatic checks request version information at most once every 6 hours and never download or install. A failed update does not replace the working version.",
+      "states": {
+        "idle": "Ready to check",
+        "checking": "Checking",
+        "up_to_date": "Up to date",
+        "available": "Update available",
+        "downloading": "Downloading",
+        "downloaded": "Downloaded and verified",
+        "installing": "Installing",
+        "restart_pending": "Restart pending",
+        "failed": "Update action failed"
+      },
+      "actions": {
+        "check": "Check for updates",
+        "checking": "Checking…",
+        "download": "Download update",
+        "downloading": "Downloading…",
+        "installAndRestart": "Install and restart",
+        "installForLater": "Install, restart later",
+        "installing": "Installing…",
+        "restartNow": "Restart now",
+        "restartLater": "Restart later",
+        "restarting": "Restarting…"
+      }
+    }
+  },
+  "notifications": {
+    "ariaLabel": "Notifications",
+    "closeAria": "Dismiss notification",
+    "countdownPaused": "Auto-dismiss countdown paused",
+    "countdown": "Closes automatically in {{count}} seconds",
+    "unnamedTask": "Untitled conversation",
+    "reviewPartialTitle": "Changes need review: {{task}}",
+    "reviewPartialBody": "Changes were preserved, but the summary failed. Review the workspace before continuing.",
+    "reviewReadyTitle": "Ready for review: {{task}}",
+    "reviewReadyBody": "The task finished and its changes are ready for your review.",
+    "runFailedTitle": "Task failed: {{task}}",
+    "runFailedBody": "The run could not finish. Open the task to review the error and retry.",
+    "interruptedTitle": "Interrupted: {{task}}",
+    "interruptedBody": "The run was interrupted. Open the conversation to review its last step.",
+    "permissionTitle": "Approval required: {{task}}",
+    "permissionSingleBody": "{{tool}} needs your approval to continue.",
+    "permissionManyBody": "{{count}} actions need approval (including {{tool}}).",
+    "actions": {
+      "reviewChanges": "Review changes",
+      "openConversation": "Open conversation",
+      "openTask": "Open task",
+      "handleTask": "Review request"
+    },
+    "native": {
+      "permissionTitle": "Approval required: {{task}}",
+      "permissionBody": "{{tool}} needs your approval to continue.",
+      "reviewTitle": "Ready for review: {{task}}",
+      "reviewBody": "The latest changes are ready for your review.",
+      "failureTitle": "Task failed: {{task}}",
+      "failureBody": "The run could not finish. Open the task to review the error and retry.",
+      "automationTitle": "Automation completed: {{automation}}",
+      "automationBody": "Open the run to review the result."
+    }
+  },
+  "errors": {
+    "unknown": "R-Code couldn't complete that action. Try again or copy the technical details for support.",
+    "workspace": {
+      "binding_invalid": "This task's project folder is no longer available. Reattach it before continuing.",
+      "home_unavailable": "R-Code cannot access your home folder for this conversation."
+    },
+    "worktree": {
+      "feature_disabled": "Worktree execution is disabled in Settings.",
+      "binding_invalid": "This task's worktree is no longer valid. Re-enable it before continuing.",
+      "dirty": "This worktree contains changes and cannot be removed automatically.",
+      "required": "This action requires an isolated worktree."
+    },
+    "browser": {
+      "feature_disabled": "Browser automation is currently disabled.",
+      "runtime_hash_mismatch": "The browser runtime failed its integrity check. Repair it before continuing.",
+      "origin_permission_required": "Permission is required to browse {{origin}}.",
+      "interaction_permission_required": "Permission is required to interact with {{origin}}."
+    },
+    "automation": {
+      "feature_disabled": "Automations are currently disabled.",
+      "overlap_skipped": "This run was skipped because the automation is already running.",
+      "provider_unavailable": "The configured provider is unavailable.",
+      "worktree_required": "Isolated-write automation requires Worktree execution.",
+      "capability_denied": "This automation is not allowed to use {{capability}}."
+    },
+    "updater": {
+      "signature_invalid": "The update signature is invalid. Your current installation was not changed.",
+      "check_failed": "R-Code could not check for updates. Check your network connection and try again.",
+      "download_failed": "R-Code could not download version {{version}}. Your current installation was not changed.",
+      "install_failed": "R-Code could not install version {{version}}. The current version remains usable.",
+      "restart_failed": "The update was installed, but R-Code could not restart automatically. Restart the application manually.",
+      "persistence_failed": "R-Code could not save the update-check state, so this check was stopped.",
+      "operation_in_progress": "Another update action is in progress. Wait for it to finish.",
+      "invalid_state": "This action is not available in the current update state."
+    },
+    "notifications": {
+      "service_unavailable": "System notifications are temporarily unavailable. Alerts will still appear in the app.",
+      "permission_request_failed": "R-Code could not request system notification permission. Check the operating system's notification settings and try again."
+    }
+  }
+}

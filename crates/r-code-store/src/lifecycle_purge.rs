@@ -338,7 +338,7 @@ fn collect_task_blob_references(
          WHERE task_id = ?1 AND before_blob_hash IS NOT NULL GROUP BY before_blob_hash",
         "SELECT after_blob_hash, COUNT(*) FROM plan_change_events \
          WHERE task_id = ?1 AND after_blob_hash IS NOT NULL GROUP BY after_blob_hash",
-        // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.5：任务删除按 attachments 逻辑引用逐个
+        // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.5：任务删除按 attachments 逻辑引用逐个
         // 释放（同一内容多行 = 多次递减）；物理 Blob 仍被其他任务引用时保留。
         "SELECT blob_hash, COUNT(*) FROM attachments WHERE task_id = ?1 GROUP BY blob_hash",
     ] {

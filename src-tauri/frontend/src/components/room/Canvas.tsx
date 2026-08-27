@@ -44,6 +44,7 @@ import {
   type FileTreeEntry,
 } from "../../lib/ipc";
 import { guardTripLabel } from "./model";
+import { taskDisplayState, taskStateLabel } from "../../lib/presentation";
 import type {
   ChangeDiff,
   ChangeDiffLine,
@@ -468,7 +469,7 @@ export function Canvas({
           />
           {toolTabsAfterSubagents}
         </div>
-        <button ref={launcherTriggerRef} type="button" className="workbench-head-action workbench-add-button" onClick={openLauncher} aria-label="打开工具启动器" title="新增扩展" aria-pressed={launcherOpen}>
+        <button ref={launcherTriggerRef} type="button" className="workbench-head-action workbench-add-button" onClick={openLauncher} aria-label="打开任务工具" title="打开任务工具" aria-pressed={launcherOpen}>
           <IconPlus width={16} height={16} />
         </button>
         <span className="workbench-head-spacer" />
@@ -574,15 +575,6 @@ export function Canvas({
 
 // ---------- Summary ----------
 
-const STATE_LABEL: Record<string, string> = {
-  idle: "空闲",
-  exploring: "探索中",
-  in_progress: "运行中",
-  interrupted: "已中止",
-  review_ready: "待审阅",
-  archived: "已归档",
-};
-
 /** 审计流一次展示的最大条数；再多就该去时间线或 Review 页翻。 */
 const AUDIT_LIMIT = 12;
 
@@ -684,8 +676,8 @@ function SummaryPanel({
   return (
     <div className="sum-wrap">
       <div className="sum-head">
-        <span className={"st-chip " + (task.state === "review_ready" ? "warn" : runningCls(task.state))}>
-          {STATE_LABEL[task.state] ?? task.state}
+        <span className={"st-chip " + statusChipClass(detail)}>
+          {taskStateLabel(task.state, detail)}
         </span>
         <span className="sum-title" title={title}>{title}</span>
         <span className="sum-age" title={`会话开始于 ${clockSeconds(task.created_at)}`}>
@@ -785,9 +777,25 @@ function SummaryPanel({
   );
 }
 
-function runningCls(state: string): string {
-  if (state === "interrupted") return "bad";
-  return state === "in_progress" || state === "exploring" ? "run" : "";
+function statusChipClass(detail: TaskDetail): string {
+  switch (taskDisplayState(detail.task, detail)) {
+    case "waiting_for_approval":
+    case "waiting_for_question":
+    case "review_ready":
+    case "verification_required":
+      return "warn";
+    case "failed":
+    case "interrupted":
+    case "workspace_binding_invalid":
+      return "bad";
+    case "verifying":
+    case "running":
+    case "queued":
+      return "run";
+    case "archived":
+    case "idle":
+      return "";
+  }
 }
 
 // ---------- Changes ----------

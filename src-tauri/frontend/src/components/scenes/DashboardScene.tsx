@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { permissionApprove, taskDelete, taskRestore } from "../../lib/ipc";
 import { elapsedMinutes, elapsedSince, permissionRiskLabel } from "../../lib/format";
-import { taskTitle } from "../../lib/presentation";
+import { taskDisplayStateLabel, taskTitle, visualTaskDisplayState } from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
@@ -179,22 +179,11 @@ function Metric({ label, value, tone }: { label: string; value: number; tone?: "
 }
 
 function summaryVisual(summary: DashboardTaskSummary): "running" | "attention" | "review" | "done" | "stopped" | "idle" {
-  if (summary.pending_permission_count > 0) return "attention";
-  if (summary.task.state === "review_ready") return "review";
-  if (summary.active_run?.ended_at === null || summary.task.state === "exploring" || summary.task.state === "in_progress") return "running";
-  if (summary.task.state === "interrupted") return "stopped";
-  if (summary.task.state === "idle") return "done";
-  return "idle";
+  return visualTaskDisplayState(summary.status.display_state);
 }
 
 function summaryStateLabel(summary: DashboardTaskSummary): string {
-  if (summary.pending_permission_count > 0) return "等待你的处理";
-  if (summary.task.state === "exploring") return "正在分析";
-  if (summary.task.state === "in_progress") return "正在执行";
-  if (summary.task.state === "review_ready") return "等待审查";
-  if (summary.task.state === "interrupted") return "已中止";
-  if (summary.task.state === "archived") return "已归档";
-  return "已完成";
+  return taskDisplayStateLabel(summary.status.display_state, summary.status.persisted_state);
 }
 
 function TaskRow({ summary, onOpen }: { summary: DashboardTaskSummary; onOpen: () => void }) {

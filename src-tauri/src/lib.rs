@@ -9,6 +9,8 @@
 
 pub mod app_paths;
 pub mod attachment_migration;
+pub mod automation;
+pub mod browser;
 pub mod codex_app_server;
 pub mod codex_interaction;
 pub mod codex_mcp;
@@ -16,6 +18,7 @@ pub mod codex_permissions;
 pub mod commands;
 #[cfg(unix)] // Control Door 仅 Unix（Windows 不编译且 main.rs 未启动）
 pub mod control_door;
+pub mod feature_flags;
 pub mod ipc;
 pub mod legacy_memory;
 pub mod log_buffer;
@@ -28,6 +31,7 @@ pub mod mcp_settings;
 pub mod memory_runtime;
 pub mod migration;
 pub mod model_capabilities;
+pub mod native_notification;
 pub mod packaging;
 pub mod plan_entry_commands;
 pub mod plan_policy;
@@ -45,6 +49,8 @@ pub mod skills;
 pub mod subagent_providers;
 pub mod support_bundle;
 pub mod system_integration;
+pub mod task_workspace_binding;
+pub mod updater;
 #[cfg(target_os = "windows")]
 mod windows_ocr;
 pub mod work_card;

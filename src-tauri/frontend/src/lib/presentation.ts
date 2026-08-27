@@ -4,7 +4,16 @@
  * 任务房间和侧栏使用原始任务记录推导展示语义。项目仪表盘则直接使用后端的
  * `WorkspaceDashboard` 聚合响应，避免逐任务详情请求和前端统计口径漂移。
  */
-import type { AgentRun, FileChange, Task, TaskDetail, TaskState, Workspace } from "./types";
+import type {
+  AgentRun,
+  FileChange,
+  Task,
+  TaskDetail,
+  TaskDisplayState,
+  TaskState,
+  TaskStatusView,
+  Workspace,
+} from "./types";
 
 export type VisualTaskState = "running" | "attention" | "review" | "done" | "stopped" | "idle";
 
@@ -60,6 +69,11 @@ export function workspaceName(path: string | null, workspaces: readonly Workspac
 }
 
 export function isTaskLive(task: Task, detail?: TaskDetail): boolean {
+  if (detail?.status) {
+    return detail.status.active_run_id != null
+      || detail.status.display_state === "running"
+      || detail.status.display_state === "verifying";
+  }
   return task.state === "in_progress"
     || task.state === "exploring"
     || detail?.runs.some((run) => run.ended_at === null) === true;
@@ -69,24 +83,83 @@ export function pendingPermissionCount(detail?: TaskDetail): number {
   return detail?.permissions.filter((permission) => permission.decision === "pending").length ?? 0;
 }
 
-export function visualTaskState(task: Task, detail?: TaskDetail): VisualTaskState {
-  if (pendingPermissionCount(detail) > 0) return "attention";
-  if (task.state === "review_ready") return "review";
+function legacyDisplayState(task: Task, detail?: TaskDetail): TaskDisplayState {
+  if (pendingPermissionCount(detail) > 0) return "waiting_for_approval";
+  if (task.state === "archived") return "archived";
+  if (task.state === "review_ready") return "review_ready";
   if (isTaskLive(task, detail)) return "running";
-  if (task.state === "interrupted") return "stopped";
-  if (task.state === "idle") return "done";
+  if (task.state === "interrupted") return "interrupted";
+  if (task.state === "idle" && isCompletedWithError(detail)) return "failed";
   return "idle";
 }
 
+/** Browser demo/旧桌面端没有 status 时才使用兼容投影；正式 IPC 始终提供后端视图。 */
+export function taskStatus(_task: Task, detail?: TaskDetail): TaskStatusView | undefined {
+  return detail?.status;
+}
+
+export function taskDisplayState(task: Task, detail?: TaskDetail): TaskDisplayState {
+  return taskStatus(task, detail)?.display_state ?? legacyDisplayState(task, detail);
+}
+
+export function visualTaskDisplayState(display: TaskDisplayState): VisualTaskState {
+  switch (display) {
+    case "waiting_for_approval":
+    case "waiting_for_question":
+    case "failed":
+    case "workspace_binding_invalid":
+    case "verification_required":
+      return "attention";
+    case "review_ready":
+      return "review";
+    case "verifying":
+    case "running":
+    case "queued":
+      return "running";
+    case "interrupted":
+      return "stopped";
+    case "idle":
+      return "done";
+    case "archived":
+      return "idle";
+  }
+}
+
+export function visualTaskState(task: Task, detail?: TaskDetail): VisualTaskState {
+  return visualTaskDisplayState(taskDisplayState(task, detail));
+}
+
+export function taskDisplayStateLabel(display: TaskDisplayState, persistedState?: TaskState): string {
+  const labels: Record<TaskDisplayState, string> = {
+    archived: "已归档",
+    waiting_for_approval: "等待审批",
+    waiting_for_question: "等待回答",
+    failed: "执行失败",
+    interrupted: "已中止",
+    workspace_binding_invalid: "工作区失效",
+    review_ready: "等待审查",
+    verification_required: "需要验证",
+    verifying: "正在验证",
+    running: persistedState === "exploring" ? "正在分析" : "正在执行",
+    queued: "排队中",
+    idle: "已完成",
+  };
+  return labels[display];
+}
+
 export function taskStateLabel(state: TaskState, detail?: TaskDetail): string {
-  if (pendingPermissionCount(detail) > 0) return "等待你的处理";
-  if (state === "exploring") return "正在分析";
-  if (state === "in_progress") return "正在执行";
-  if (state === "review_ready") return "等待审查";
-  if (state === "interrupted") return "已中止";
-  if (state === "archived") return "已归档";
-  if (state === "idle" && isCompletedWithError(detail)) return "已完成（含错误）";
-  return "已完成";
+  const display = detail?.status?.display_state;
+  if (!display) {
+    if (pendingPermissionCount(detail) > 0) return "等待你的处理";
+    if (state === "exploring") return "正在分析";
+    if (state === "in_progress") return "正在执行";
+    if (state === "review_ready") return "等待审查";
+    if (state === "interrupted") return "已中止";
+    if (state === "archived") return "已归档";
+    if (state === "idle" && isCompletedWithError(detail)) return "已完成（含错误）";
+    return "已完成";
+  }
+  return taskDisplayStateLabel(display, state);
 }
 
 export function activeRun(detail?: TaskDetail): AgentRun | undefined {
@@ -101,6 +174,12 @@ export function activeRun(detail?: TaskDetail): AgentRun | undefined {
 export function taskActivity(task: Task, detail?: TaskDetail): string {
   const permission = detail?.permissions.find((item) => item.decision === "pending");
   if (permission) return `等待授权 · ${permission.tool_name}`;
+  const display = detail?.status?.display_state;
+  if (display === "waiting_for_question") return "等待你回答问题";
+  if (display === "workspace_binding_invalid") return "工作区绑定失效，需要恢复";
+  if (display === "verification_required") return "当前结果需要重新验证";
+  if (display === "verifying") return "正在验证变更";
+  if (display === "queued") return `已有 ${detail?.status.queue_depth ?? 0} 条消息排队`;
   const run = activeRun(detail);
   if (run?.summary?.trim()) return run.summary.trim();
   if (task.state === "exploring") return "梳理代码与执行路径";

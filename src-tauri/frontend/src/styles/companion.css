@@ -152,7 +152,7 @@
   border-radius: 10px;
   background: rgba(80, 19, 28, .92);
   color: #ffc3c8;
-  font-size: 10px;
+  font-size: var(--text-meta);
   pointer-events: auto;
 }
 
@@ -220,7 +220,7 @@
 
 .companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-copy small {
   margin-top: 3px;
-  font-size: 10px;
+  font-size: var(--text-meta);
 }
 
 .companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-arrow {
@@ -479,7 +479,7 @@
   right: 3px;
   min-width: 19px;
   height: 19px;
-  font-size: 10px;
+  font-size: var(--text-meta);
 }
 
 .companion-session-panel {
@@ -548,7 +548,7 @@
   display: block;
   margin-bottom: 3px;
   color: #68ddd5;
-  font-size: 9px;
+  font-size: var(--text-meta);
   font-weight: 800;
   letter-spacing: 0.16em;
 }
@@ -688,7 +688,7 @@
   white-space: normal;
 }
 .companion-session-copy strong { font-size: 12px; font-weight: 700; }
-.companion-session-copy small { margin-top: 4px; color: #91a4a8; font-size: 10px; }
+.companion-session-copy small { margin-top: 4px; color: #a7b7ba; font-size: var(--text-meta); }
 
 .companion-session-card:hover .companion-session-copy small,
 .companion-session-card:focus-within .companion-session-copy small,
@@ -750,7 +750,7 @@
   color: #d8fbf8;
   cursor: pointer;
   font: inherit;
-  font-size: 9px;
+  font-size: var(--text-meta);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -767,7 +767,7 @@
 .companion-session-error {
   margin: 4px 8px 2px;
   color: #ff9da5;
-  font-size: 10px;
+  font-size: var(--text-meta);
   line-height: 1.35;
 }
 
@@ -777,7 +777,7 @@
   margin: 7px 2px 0;
   overflow: auto;
   color: #ff8b94;
-  font-size: 10px;
+  font-size: var(--text-meta);
   line-height: 1.35;
 }
 

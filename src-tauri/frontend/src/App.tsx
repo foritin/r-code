@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, type CSSProperties } from "react";
+import { useTranslation } from "react-i18next";
 import { MAX_RAIL_WIDTH, MIN_RAIL_WIDTH, useAppStore } from "./store/app";
 import { useTasksStore } from "./store/tasks";
 import { isMacPlatform, useGlobalKeys } from "./lib/keys";
@@ -53,6 +54,7 @@ const SearchOverlay = lazy(() =>
  * 主题（亮/暗/跟随系统）解析后写入 <html data-theme>。
  */
 export default function App() {
+  const { t } = useTranslation();
   const scene = useAppStore((s) => s.scene);
   const themeMode = useAppStore((s) => s.themeMode);
   const searchOpen = useAppStore((s) => s.searchOpen);
@@ -119,12 +121,12 @@ export default function App() {
         "--rc-rail-w": `max(${MIN_RAIL_WIDTH}px, min(${MAX_RAIL_WIDTH}px, var(--rc-rail-preferred-w), calc(100% - ${MIN_MAIN_WIDTH}px)))`,
       } as CSSProperties}
     >
-      <a className="skip-link" href="#main-content">跳到主内容</a>
+      <a className="skip-link" href="#main-content">{t("app.skipToMain")}</a>
       <MenuBar />
       <Rail />
       <RailResizeHandle />
       <main className="main" id="main-content" role="main" tabIndex={-1}>
-        <Suspense fallback={<div className="scene empty" role="status">正在打开…</div>}>
+        <Suspense fallback={<div className="scene empty" role="status">{t("app.opening")}</div>}>
           {scene === "home" && <HomeScene />}
           {scene === "dashboard" && <DashboardScene />}
           {scene === "conversations" && <ConversationsScene />}

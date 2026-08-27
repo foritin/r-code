@@ -1362,33 +1362,64 @@ impl<'a> NotificationRepository<'a> {
     }
 
     /// 新建或刷新一条通知，同时保留既有的创建时间和已读状态。
+    ///
+    /// 返回 `true` 表示本次真正插入了新来源；调用方可据此只投递一次系统通知。
     pub fn upsert(
         &self,
         source_key: &str,
         notification: &Notification,
-    ) -> Result<(), ProductError> {
+    ) -> Result<bool, ProductError> {
         let conn = self.db.conn()?;
-        conn.execute(
-            "INSERT INTO notifications \
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO notifications \
              (id, source_key, kind, title, body, task_id, workspace_path, created_at, read_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
-             ON CONFLICT(source_key) DO UPDATE SET \
-               kind = excluded.kind, title = excluded.title, body = excluded.body, \
-               task_id = excluded.task_id, workspace_path = excluded.workspace_path",
-            params![
-                notification.id,
-                source_key,
-                notification.kind.to_string(),
-                notification.title,
-                notification.body,
-                notification.task_id,
-                notification.workspace_path,
-                notification.created_at.to_rfc3339(),
-                notification.read_at.map(|time| time.to_rfc3339()),
-            ],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    notification.id,
+                    source_key,
+                    notification.kind.to_string(),
+                    notification.title,
+                    notification.body,
+                    notification.task_id,
+                    notification.workspace_path,
+                    notification.created_at.to_rfc3339(),
+                    notification.read_at.map(|time| time.to_rfc3339()),
+                ],
+            )
+            .map_err(db_err)?
+            > 0;
+        if !inserted {
+            conn.execute(
+                "UPDATE notifications SET kind = ?1, title = ?2, body = ?3, \
+                   task_id = ?4, workspace_path = ?5 WHERE source_key = ?6",
+                params![
+                    notification.kind.to_string(),
+                    notification.title,
+                    notification.body,
+                    notification.task_id,
+                    notification.workspace_path,
+                    source_key,
+                ],
+            )
+            .map_err(db_err)?;
+        }
+        Ok(inserted)
+    }
+
+    /// Resolve the stable persisted identifier for an idempotency source.
+    ///
+    /// A live producer can race the pull-based Notification Center synchronizer. In that case the
+    /// source already exists and its original ID must be used by the system-notification deep link.
+    pub fn id_for_source(&self, source_key: &str) -> Result<Option<String>, ProductError> {
+        let conn = self.db.conn()?;
+        conn.query_row(
+            "SELECT id FROM notifications WHERE source_key = ?1",
+            params![source_key],
+            |row| row.get(0),
         )
-        .map_err(db_err)?;
-        Ok(())
+        .optional()
+        .map_err(db_err)
     }
 
     /// 列出通知及其内部顺序号（用于构造下一页游标）。
@@ -1426,6 +1457,19 @@ impl<'a> NotificationRepository<'a> {
             .query_row(
                 "SELECT COUNT(*) FROM notifications WHERE read_at IS NULL",
                 [],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// 返回一个任务的准确未读数量，不受通知分页或其他任务影响。
+    pub fn unread_count_for_task(&self, task_id: &str) -> Result<u64, ProductError> {
+        let conn = self.db.conn()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notifications WHERE task_id = ?1 AND read_at IS NULL",
+                params![task_id],
                 |row| row.get(0),
             )
             .map_err(db_err)?;
@@ -2116,7 +2160,7 @@ impl<'a> BlobStore<'a> {
 
     /// 写入内容，返回 blake3 哈希。相同内容去重（不覆盖已存在的文件）。
     ///
-    /// 原子安装（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.3）：临时文件 + `sync_all()` +
+    /// 原子安装（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.3）：临时文件 + `sync_all()` +
     /// 同目录 rename。目标已存在时删除临时文件并复用目标。崩溃窗口只会留下
     /// 无 ledger 的临时/半装文件，由 `prune_unreferenced_files()` 回收——绝无
     /// 「数据库已提交但 Blob 尚未安装」的顺序。

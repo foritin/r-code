@@ -8893,7 +8893,7 @@ async fn delegate_task_rejects_goal_of_running_child() {
 }
 
 // ---------------------------------------------------------------------------
-// 1.3（docs/archive/implementation/harness-migration.md §1.3）：request/header 快照 + 派发前重建自检。
+// 1.3（docs/support/archive/implementation/harness-migration.md §1.3）：request/header 快照 + 派发前重建自检。
 // 三场景：a 正常轮追加且自检通过；b 篡改触发不一致但不阻断；c 尾部注入登记
 // 后不误报。纯函数直测判定逻辑，journal 集成测试走完整 run 循环。
 // ---------------------------------------------------------------------------
@@ -9292,7 +9292,7 @@ async fn request_journal_target_overrides_session_id_for_file_name() {
 }
 
 // ---------------------------------------------------------------------------
-// C4：首轮目录锚定（docs/archive/implementation/request-audit-and-anchoring.md 阶段 C）。观测通道
+// C4：首轮目录锚定（docs/support/archive/implementation/request-audit-and-anchoring.md 阶段 C）。观测通道
 // 复用 A 阶段的审计 journal——每轮 RequestHeader.tool_names 即「模型实际看到
 // 的目录」的权威记录。
 // ---------------------------------------------------------------------------

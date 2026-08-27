@@ -1,4 +1,4 @@
-//! 附件引用存储（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.3）。
+//! 附件引用存储（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.3）。
 //!
 //! 二进制附件只在 BlobStore 保存一份物理副本；`attachments` 表是逻辑引用账本
 //! （同一内容可在多条消息中各有一条记录）。staged 记录带 24 小时租约，草稿
@@ -546,7 +546,7 @@ impl<'a> AttachmentStore<'a> {
         Ok(collected)
     }
 
-    // ── JSONL 迁移状态机（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.3）─────────────────
+    // ── JSONL 迁移状态机（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.3）─────────────────
 
     /// 迁移行的当前状态，见 [`MigrationStateRow`]。
     pub fn migration_state(

@@ -204,7 +204,8 @@ mod tests {
 
     #[test]
     fn recognizes_text_from_a_local_product_screenshot() {
-        let image = include_bytes!("../../docs/ui/dark/50-model-configuration-dark.png");
+        let image =
+            include_bytes!("../../fixtures/windows-ocr/deepseek-model-configuration-dark.png");
         let text = recognize_text(image).expect("Windows OCR should recognize the local fixture");
         assert!(text.to_ascii_lowercase().contains("deepseek"), "{text}");
     }

@@ -1,4 +1,4 @@
-//! Plan 双轨三臂评估器（docs/archive/implementation/plan-mode-dual-track-gate.md §16，M0-11a）。
+//! Plan 双轨三臂评估器（docs/support/archive/implementation/plan-mode-dual-track-gate.md §16，M0-11a）。
 //!
 //! 用法：
 //! ```text

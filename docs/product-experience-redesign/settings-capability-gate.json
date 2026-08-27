@@ -1,0 +1,4877 @@
+{
+  "schema_version": "settings-capability-gate.v3",
+  "status": "passed",
+  "mode": "update_report",
+  "stage": "source_audit_and_design_traceability",
+  "source_manifest": {
+    "revision": {
+      "branch": "dev",
+      "head": "a55b34ce3957430f84f0646e3179d80154dd5d71",
+      "worktree": "dirty-source-snapshot",
+      "snapshot_policy": "Each production source file below is pinned by its exact SHA-256; any change makes the design baseline stale and requires a new read-only audit."
+    },
+    "manifest_count": 47,
+    "manifest_digest": "ff166363e08ea376af4c6d856aefc0b040eb370e8c2bd48f08a8b094bafef593",
+    "resolved_source_count": 47,
+    "declared_symbol_locator_count": 52,
+    "stale_source_files": [],
+    "unused_source_ids": []
+  },
+  "source_inventory_proof": {
+    "status": "passed",
+    "source_snapshot_verified": true,
+    "inventory_items": 127,
+    "item_source_evidenced_count": 111,
+    "contract_complete_count": 127,
+    "symbol_resolution_failures": [],
+    "missing_item_source_evidence": [],
+    "invalid_item_source_evidence": [],
+    "incomplete_contract_dimensions": {},
+    "placeholder_contracts": {},
+    "group_contract_placeholders": [],
+    "meta_state_only_contracts": [],
+    "invalid_apply_modes": [],
+    "invalid_operation_failure_modes": [],
+    "unproven_atomicity_claims": [],
+    "unmapped": [],
+    "duplicate_mapping": [],
+    "orphan_capabilities": [],
+    "empty_provenance": [],
+    "non_production_basis_failures": [],
+    "provenance_counts": {
+      "production_existing": 111,
+      "new_requirement": 14,
+      "planned_demo": 2
+    },
+    "disposition_counts": {
+      "add": 14,
+      "demo": 2,
+      "migrate": 8,
+      "preserve": 103
+    }
+  },
+  "settings_capabilities": {
+    "baseline_digest": "074506f0de0181529d3cc50a0a65a977f17bf7a537bdbddbdd5b1296d4dc1693",
+    "baseline_normative_digest": "bf34b651809f0ca1690da92be5142fcdf2c3277aa8aaa6d228bb11c369ff7ac1",
+    "inventory_digest": "8685f38612aa44e4ea23f10eb63b3ab0743d8df1f3d432cd73bfef8ec8ac4cdd",
+    "production_inventory_digest": "41739784667aa0a2627403db63b6f6c372c82217926ba372f9af2fb59f2313cd",
+    "inventory_count": 127,
+    "production_existing_count": 111,
+    "new_requirement_count": 14,
+    "planned_demo_count": 2,
+    "source_audited_count": 127,
+    "production_source_audited_count": 111,
+    "item_source_evidenced_count": 111,
+    "production_item_source_evidenced_count": 111,
+    "contract_complete_count": 127,
+    "production_contract_complete_count": 111,
+    "baseline_count": 111,
+    "mapped_count": 111,
+    "inventory_mapped_count": 127,
+    "prototype_mapped_count": 127,
+    "planned_product_target_count": 127,
+    "verified_count": 0,
+    "verified_count_note": "Production verification intentionally remains zero until M5 executes SettingsScene -> IPC -> Host -> persistence evidence.",
+    "dispositions": {
+      "preserve": 103,
+      "merge": 0,
+      "migrate": 8,
+      "explicitly_retired": 0,
+      "add": 0,
+      "demo": 0
+    },
+    "by_group": {
+      "agents_codex": 18,
+      "diagnostics": 6,
+      "image_understanding": 9,
+      "knowledge": 19,
+      "preferences": 12,
+      "providers": 15,
+      "settings_shell": 3,
+      "subagents": 10,
+      "tools_mcp_rtk": 19
+    },
+    "inventory_by_group": {
+      "agents_codex": 19,
+      "browser": 2,
+      "diagnostics": 7,
+      "image_understanding": 9,
+      "knowledge": 19,
+      "lifecycle": 1,
+      "permissions": 1,
+      "preferences": 15,
+      "providers": 18,
+      "security": 2,
+      "settings_shell": 4,
+      "subagents": 11,
+      "tools_mcp_rtk": 19
+    },
+    "inventory_dispositions": {
+      "add": 14,
+      "demo": 2,
+      "migrate": 8,
+      "preserve": 103
+    },
+    "unmapped_inventory_items": [],
+    "duplicate_mappings": [],
+    "orphan_capabilities": [],
+    "missing_targets": [],
+    "missing_assertions": [],
+    "prototype_only_evidence": [],
+    "invalid_merges": [],
+    "invalid_migrations": [],
+    "unauthorized_retirements": []
+  },
+  "coverage_binding": {
+    "baseline_normative_digest": "bf34b651809f0ca1690da92be5142fcdf2c3277aa8aaa6d228bb11c369ff7ac1",
+    "coverage_digest": "3e13ee7af65daaaf473106d7109186dc914eb7478d12c7df382fec1bda19fedf"
+  },
+  "traceability": [
+    {
+      "inventory_item_id": "INV-SET-SHELL-001",
+      "capability_id": "SET-SHELL-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-TAURI-MAIN"
+      ],
+      "item_source_evidence_count": 1,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.shell.set-shell-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SHELL-002",
+      "capability_id": "SET-SHELL-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-TAURI-MAIN"
+      ],
+      "item_source_evidence_count": 1,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.shell.set-shell-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SHELL-003",
+      "capability_id": "SET-SHELL-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-TAURI-MAIN"
+      ],
+      "item_source_evidence_count": 1,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.shell.set-shell-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-001",
+      "capability_id": "SET-PROV-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-002",
+      "capability_id": "SET-PROV-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-003",
+      "capability_id": "SET-PROV-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-004",
+      "capability_id": "SET-PROV-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-005",
+      "capability_id": "SET-PROV-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-006",
+      "capability_id": "SET-PROV-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-007",
+      "capability_id": "SET-PROV-007",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-007",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-008",
+      "capability_id": "SET-PROV-008",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-008",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-009",
+      "capability_id": "SET-PROV-009",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-009",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-010",
+      "capability_id": "SET-PROV-010",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-010",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-011",
+      "capability_id": "SET-PROV-011",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-011",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-012",
+      "capability_id": "SET-PROV-012",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-012",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-013",
+      "capability_id": "SET-PROV-013",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-013",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-014",
+      "capability_id": "SET-PROV-014",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-014",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-015",
+      "capability_id": "SET-PROV-015",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-015",
+      "requirement_refs": [
+        "R-PROV-03",
+        "R-PROV-04",
+        "R-SET-06"
+      ],
+      "task_ids": [
+        "M3-04",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M3-04.A2",
+        "M3-04.A3",
+        "M5-02.A1",
+        "M5-02.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-016",
+      "capability_id": "SET-PROV-016",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-PROVIDER-CATALOG",
+        "SRC-GUIDE-SHEET"
+      ],
+      "item_source_evidence_count": 1,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-016",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-001",
+      "capability_id": "SET-IMG-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-002",
+      "capability_id": "SET-IMG-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-003",
+      "capability_id": "SET-IMG-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-004",
+      "capability_id": "SET-IMG-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-005",
+      "capability_id": "SET-IMG-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-006",
+      "capability_id": "SET-IMG-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-007",
+      "capability_id": "SET-IMG-007",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-007",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-008",
+      "capability_id": "SET-IMG-008",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-008",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-IMG-009",
+      "capability_id": "SET-IMG-009",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-IMAGE-UNDERSTANDING",
+        "SRC-GUIDE-SHEET",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-img-009",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-001",
+      "capability_id": "SET-AGENT-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-002",
+      "capability_id": "SET-AGENT-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-003",
+      "capability_id": "SET-AGENT-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-004",
+      "capability_id": "SET-AGENT-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-005",
+      "capability_id": "SET-AGENT-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-006",
+      "capability_id": "SET-AGENT-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-007",
+      "capability_id": "SET-AGENT-007",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-007",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-008",
+      "capability_id": "SET-AGENT-008",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-008",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-009",
+      "capability_id": "SET-AGENT-009",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-009",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-AGENT-010",
+      "capability_id": "SET-AGENT-010",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-agent-010",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-001",
+      "capability_id": "SET-CODEX-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-002",
+      "capability_id": "SET-CODEX-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-003",
+      "capability_id": "SET-CODEX-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-004",
+      "capability_id": "SET-CODEX-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-005",
+      "capability_id": "SET-CODEX-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-006",
+      "capability_id": "SET-CODEX-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-007",
+      "capability_id": "SET-CODEX-007",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.permissions.set-codex-007",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-008",
+      "capability_id": "SET-CODEX-008",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-CODEX-APP-SERVER",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-008",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-001",
+      "capability_id": "SET-SUB-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-002",
+      "capability_id": "SET-SUB-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-003",
+      "capability_id": "SET-SUB-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-004",
+      "capability_id": "SET-SUB-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-005",
+      "capability_id": "SET-SUB-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-006",
+      "capability_id": "SET-SUB-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-007",
+      "capability_id": "SET-SUB-007",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-007",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-008",
+      "capability_id": "SET-SUB-008",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-008",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-009",
+      "capability_id": "SET-SUB-009",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-009",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-010",
+      "capability_id": "SET-SUB-010",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-010",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-TOOL-001",
+      "capability_id": "SET-TOOL-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-tool-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-TOOL-002",
+      "capability_id": "SET-TOOL-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-tool-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-TOOL-003",
+      "capability_id": "SET-TOOL-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 1,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-tool-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-RTK-001",
+      "capability_id": "SET-RTK-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS",
+        "SRC-RTK"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-rtk-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-RTK-002",
+      "capability_id": "SET-RTK-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS",
+        "SRC-RTK"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-rtk-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-RTK-003",
+      "capability_id": "SET-RTK-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS",
+        "SRC-RTK"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-rtk-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-RTK-004",
+      "capability_id": "SET-RTK-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS",
+        "SRC-RTK"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-rtk-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-001",
+      "capability_id": "SET-MCP-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-002",
+      "capability_id": "SET-MCP-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-003",
+      "capability_id": "SET-MCP-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-004",
+      "capability_id": "SET-MCP-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-005",
+      "capability_id": "SET-MCP-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-006",
+      "capability_id": "SET-MCP-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-007",
+      "capability_id": "SET-MCP-007",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-007",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-008",
+      "capability_id": "SET-MCP-008",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-008",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-009",
+      "capability_id": "SET-MCP-009",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-009",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-010",
+      "capability_id": "SET-MCP-010",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS",
+        "SRC-MCP-REGISTRY"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-010",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-011",
+      "capability_id": "SET-MCP-011",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS",
+        "SRC-MCP-REGISTRY"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-011",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MCP-012",
+      "capability_id": "SET-MCP-012",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-MCP-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-MCP-MANAGER",
+        "SRC-MCP-SERVER",
+        "SRC-MCP-SETTINGS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.tools.set-mcp-012",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-KNOW-001",
+      "capability_id": "SET-KNOW-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 1,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-know-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-001",
+      "capability_id": "SET-MEM-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-002",
+      "capability_id": "SET-MEM-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-003",
+      "capability_id": "SET-MEM-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-004",
+      "capability_id": "SET-MEM-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-005",
+      "capability_id": "SET-MEM-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-006",
+      "capability_id": "SET-MEM-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-007",
+      "capability_id": "SET-MEM-007",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-007",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-MEM-008",
+      "capability_id": "SET-MEM-008",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-mem-008",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROMPT-001",
+      "capability_id": "SET-PROMPT-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-prompt-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROMPT-002",
+      "capability_id": "SET-PROMPT-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-prompt-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROMPT-003",
+      "capability_id": "SET-PROMPT-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-prompt-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROMPT-004",
+      "capability_id": "SET-PROMPT-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-prompt-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SKILL-001",
+      "capability_id": "SET-SKILL-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-skill-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SKILL-002",
+      "capability_id": "SET-SKILL-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-skill-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SKILL-003",
+      "capability_id": "SET-SKILL-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-skill-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SKILL-004",
+      "capability_id": "SET-SKILL-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-skill-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SKILL-005",
+      "capability_id": "SET-SKILL-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-skill-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SKILL-006",
+      "capability_id": "SET-SKILL-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-KNOWLEDGE-PANE",
+        "SRC-MEMORY-PANEL",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-MEMORY-RUNTIME",
+        "SRC-LEGACY-MEMORY",
+        "SRC-CORE-MEMORY",
+        "SRC-STORE-MEMORY",
+        "SRC-STORE-MIGRATIONS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.knowledge.set-skill-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PREF-001",
+      "capability_id": "SET-PREF-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-pref-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PREF-002",
+      "capability_id": "SET-PREF-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-pref-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-COMPANION-001",
+      "capability_id": "SET-COMPANION-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-COMPANION-WINDOW",
+        "SRC-COMPANION-CONTROLLER"
+      ],
+      "item_source_evidence_count": 4,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-companion-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-COMPANION-002",
+      "capability_id": "SET-COMPANION-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-COMPANION-WINDOW",
+        "SRC-COMPANION-CONTROLLER"
+      ],
+      "item_source_evidence_count": 3,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-companion-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-COMPANION-003",
+      "capability_id": "SET-COMPANION-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-COMPANION-WINDOW",
+        "SRC-COMPANION-CONTROLLER"
+      ],
+      "item_source_evidence_count": 3,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-companion-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-COMPANION-004",
+      "capability_id": "SET-COMPANION-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-COMPANION-WINDOW",
+        "SRC-COMPANION-CONTROLLER"
+      ],
+      "item_source_evidence_count": 3,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-companion-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-NOTIF-001",
+      "capability_id": "SET-NOTIF-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.notifications.set-notif-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-UPD-001",
+      "capability_id": "SET-UPD-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.updates.set-upd-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4",
+        "M2-03.A9",
+        "M5-03.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-UPD-002",
+      "capability_id": "SET-UPD-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.updates.set-upd-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-UPD-003",
+      "capability_id": "SET-UPD-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.updates.set-upd-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-UPD-004",
+      "capability_id": "SET-UPD-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.updates.set-upd-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-UPD-005",
+      "capability_id": "SET-UPD-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE",
+        "SRC-LANGUAGE-SETTINGS",
+        "SRC-I18N",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-UPDATER-SETTINGS",
+        "SRC-UPDATER-FRONTEND-CONTRACT",
+        "SRC-UPDATER-CONTRACT",
+        "SRC-UPDATER-DOMAIN",
+        "SRC-UPDATER-PERSISTENCE",
+        "SRC-UPDATER-MOD",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.updates.set-upd-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-DIAG-001",
+      "capability_id": "SET-DIAG-001",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-LOG-BUFFER"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.diagnostics.set-diag-001",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-DIAG-002",
+      "capability_id": "SET-DIAG-002",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-LOG-BUFFER"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.diagnostics.set-diag-002",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-DIAG-003",
+      "capability_id": "SET-DIAG-003",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-LOG-BUFFER"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.diagnostics.set-diag-003",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-DIAG-004",
+      "capability_id": "SET-DIAG-004",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-LOG-BUFFER"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.diagnostics.set-diag-004",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-DIAG-005",
+      "capability_id": "SET-DIAG-005",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-LOG-BUFFER"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.diagnostics.set-diag-005",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-DIAG-006",
+      "capability_id": "SET-DIAG-006",
+      "classification": "production_existing",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-LOG-BUFFER"
+      ],
+      "item_source_evidence_count": 2,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.diagnostics.set-diag-006",
+      "requirement_refs": [
+        "R-SET-07"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02",
+        "M5-03"
+      ],
+      "assertion_ids": [
+        "D0-01.A6",
+        "D0-01.A7",
+        "M2-03.A7",
+        "M2-03.A8",
+        "M5-02.A7",
+        "M5-02.A8",
+        "M5-02.A9",
+        "M5-03.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SHELL-004",
+      "capability_id": "SET-SHELL-004",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-FRONTEND-IPC",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.shell.set-shell-004",
+      "requirement_refs": [
+        "R-SET-09",
+        "R-SET-04"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "D0-01.A4",
+        "D0-01.A8",
+        "M2-03.A10",
+        "M5-02.A10"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-017",
+      "capability_id": "SET-PROV-017",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SETTINGS-STORE",
+        "SRC-SUBAGENT-PROVIDERS"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-017",
+      "requirement_refs": [
+        "R-PROV-01",
+        "R-PROV-02",
+        "R-PROV-04"
+      ],
+      "task_ids": [
+        "M3-03",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M3-03.A1",
+        "M3-03.A2",
+        "M3-03.A4",
+        "M5-02.A1"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PROV-018",
+      "capability_id": "SET-PROV-018",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-PROVIDER-LIB",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.providers.set-prov-018",
+      "requirement_refs": [
+        "R-PROV-03",
+        "R-PROV-05"
+      ],
+      "task_ids": [
+        "M3-04",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M3-04.A1",
+        "M3-04.A2",
+        "M3-04.A3",
+        "M3-04.A4",
+        "M5-02.A1"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-CODEX-009",
+      "capability_id": "SET-CODEX-009",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-CODEX-GATE",
+        "SRC-CODEX-LOGIN-WATCHER",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.agents.set-codex-009",
+      "requirement_refs": [
+        "R-SET-04",
+        "R-SET-09"
+      ],
+      "task_ids": [
+        "M2-03",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M2-03.A8",
+        "M5-02.A1",
+        "M5-02.A11"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SUB-011",
+      "capability_id": "SET-SUB-011",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SUBAGENT-PANEL",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUBAGENT-PROVIDERS"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.subagents.set-sub-011",
+      "requirement_refs": [
+        "R-SUB-03",
+        "R-SET-09"
+      ],
+      "task_ids": [
+        "M2-03",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M2-03.A10",
+        "M2-03.A11",
+        "M5-02.A10",
+        "M5-02.A11"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-BROWSER-001",
+      "capability_id": "SET-BROWSER-001",
+      "classification": "planned_demo",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-EXECUTION-ENV-CARD",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-TAURI-MAIN"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.browser.set-browser-001",
+      "requirement_refs": [
+        "R-BR-01",
+        "R-FLAG-01"
+      ],
+      "task_ids": [
+        "M1-05",
+        "M7-01",
+        "M7-02",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M1-05.A3",
+        "M7-01.A1",
+        "M7-01.A2",
+        "M7-02.A1",
+        "M7-02.A3",
+        "M5-02.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-BROWSER-002",
+      "capability_id": "SET-BROWSER-002",
+      "classification": "planned_demo",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-HOST-COMMANDS"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.browser.set-browser-002",
+      "requirement_refs": [
+        "R-BR-04",
+        "R-FLAG-01"
+      ],
+      "task_ids": [
+        "M1-05",
+        "M7-04",
+        "M7-05",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M1-05.A2",
+        "M1-05.A3",
+        "M7-04.A1",
+        "M7-04.A2",
+        "M7-04.A3",
+        "M7-05.A2",
+        "M7-05.A4",
+        "M5-02.A5"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PERM-001",
+      "capability_id": "SET-PERM-001",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-HOST-COMMANDS",
+        "SRC-CODEX-PERMISSIONS"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.permissions.set-perm-001",
+      "requirement_refs": [
+        "R-PERM-01"
+      ],
+      "task_ids": [
+        "M4-04",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M4-04.A2",
+        "M5-02.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SEC-001",
+      "capability_id": "SET-SEC-001",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-SETTINGS-STORE",
+        "SRC-MCP-SETTINGS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-TAURI-MAIN"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.security.set-sec-001",
+      "requirement_refs": [
+        "R-SEC-01",
+        "R-SET-01"
+      ],
+      "task_ids": [
+        "D0-01",
+        "M2-03",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "D0-01.A4",
+        "M2-03.A6",
+        "M5-02.A4",
+        "M5-02.A6"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-SEC-002",
+      "capability_id": "SET-SEC-002",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-SETTINGS-STORE",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-TAURI-MAIN"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.security.set-sec-002",
+      "requirement_refs": [
+        "R-SET-01",
+        "R-SEC-01"
+      ],
+      "task_ids": [
+        "M2-03",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M2-03.A6",
+        "M5-02.A1",
+        "M5-02.A4"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PREF-003",
+      "capability_id": "SET-PREF-003",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-pref-003",
+      "requirement_refs": [
+        "R-SET-04",
+        "R-ACC-01"
+      ],
+      "task_ids": [
+        "M2-04",
+        "M5-01",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M2-04.A1",
+        "M2-04.A3",
+        "M5-01.A3",
+        "M5-02.A3"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-PREF-004",
+      "capability_id": "SET-PREF-004",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-COMPANION-STORE"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.appearance.set-pref-004",
+      "requirement_refs": [
+        "R-SET-05",
+        "R-ACC-01"
+      ],
+      "task_ids": [
+        "M2-04",
+        "M5-01",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M2-04.A1",
+        "M5-01.A4",
+        "M5-02.A3"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-NOTIF-002",
+      "capability_id": "SET-NOTIF-002",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-NOTIFICATION-SETTINGS",
+        "SRC-NATIVE-NOTIFICATION",
+        "SRC-APP-STORE"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.notifications.set-notif-002",
+      "requirement_refs": [
+        "R-NOTIF-01",
+        "R-SET-06"
+      ],
+      "task_ids": [
+        "M1-03",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M1-03.A3",
+        "M1-03.A4",
+        "M5-02.A1"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-LIFE-001",
+      "capability_id": "SET-LIFE-001",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-APP-STORE",
+        "SRC-FRONTEND-IPC",
+        "SRC-TAURI-COMMANDS",
+        "SRC-TAURI-MAIN"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.lifecycle.set-life-001",
+      "requirement_refs": [
+        "R-CLOSE-01",
+        "R-CLOSE-02",
+        "R-CLOSE-03"
+      ],
+      "task_ids": [
+        "M3-01",
+        "M3-02",
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M3-01.A1",
+        "M3-01.A2",
+        "M3-01.A3",
+        "M3-01.A4",
+        "M3-02.A1",
+        "M3-02.A2",
+        "M3-02.A3",
+        "M3-02.A4",
+        "M5-02.A1"
+      ]
+    },
+    {
+      "inventory_item_id": "INV-SET-DIAG-007",
+      "capability_id": "SET-DIAG-007",
+      "classification": "new_requirement",
+      "source_ids": [
+        "SRC-SETTINGS-SCENE",
+        "SRC-FRONTEND-TYPES",
+        "SRC-FRONTEND-IPC",
+        "SRC-HOST-COMMANDS",
+        "SRC-SUPPORT-BUNDLE",
+        "SRC-LOG-BUFFER"
+      ],
+      "item_source_evidence_count": 0,
+      "contract_complete": true,
+      "planned_product_target_id": "settings.diagnostics.set-diag-007",
+      "requirement_refs": [
+        "R-SET-06",
+        "R-SEC-01"
+      ],
+      "task_ids": [
+        "M5-02"
+      ],
+      "assertion_ids": [
+        "M5-02.A1",
+        "M5-02.A4",
+        "M5-02.A5"
+      ]
+    }
+  ],
+  "issue_summary": {},
+  "issues": []
+}

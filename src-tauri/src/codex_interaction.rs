@@ -3,7 +3,7 @@
 //! 职责边界：原始 JSON-RPC 帧 -> 版本化宿主事件（`CodexTimelineEventV1`）。
 //! React/持久化只消费归一化事件，永不直接理解 App Server JSON（§2 决策 2）。
 //!
-//! 冻结语义（docs/codex-rich-interaction-prd.md §4.1/§4.5）：
+//! 冻结语义（docs/support/contracts/codex-rich-interaction-prd.md §4.1/§4.5）：
 //! - `scope` 至少含 run/thread/turn；不完整或不匹配的 run 事件不得进入时间线；
 //! - phase 与 item kind 是显式枚举 + unknown 兼容分支，禁止裸字符串驱动 UI；
 //! - 文本/数组/问题数量全部有界；secret、raw reasoning 永不进入事件或诊断正文；

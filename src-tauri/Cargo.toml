@@ -76,6 +76,8 @@ ring = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-updater = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
+tauri-plugin-notification = { workspace = true }
+notify-rust = { workspace = true }
 tauri-plugin-opener = "2"
 anyhow = { workspace = true }
 

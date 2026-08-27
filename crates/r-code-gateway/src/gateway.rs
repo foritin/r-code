@@ -90,13 +90,13 @@ pub struct ToolExecutionContext {
     pub caller: Option<String>,
     pub access_mode: ProjectAccessMode,
     /// Origin request key bound by the trusted host for the current run
-    /// (docs/archive/implementation/plan-mode-dual-track-gate.md §10). Host-owned identity data: tools must
+    /// (docs/support/archive/implementation/plan-mode-dual-track-gate.md §10). Host-owned identity data: tools must
     /// use this field for request-scoped dedup instead of accepting keys from
     /// model-controlled JSON input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_request_key: Option<String>,
     /// Host-installed Windows shell override (`execution.bash_shell_path`,
-    /// docs/windows-command-reliability-prd.md §4.5). `Some("")` forces the
+    /// docs/support/contracts/windows-command-reliability-prd.md §4.5). `Some("")` forces the
     /// PowerShell fallback chain; the bash tool is the only consumer today.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_override: Option<String>,

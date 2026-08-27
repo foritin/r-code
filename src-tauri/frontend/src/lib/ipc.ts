@@ -12,6 +12,9 @@ import type {
   AgentSendMode,
   ChangeDiff,
   NotificationPage,
+  NativeNotificationEvent,
+  NativeNotificationOpenPayload,
+  NativeNotificationPermissionState,
   PlanEntryOfferView,
   PlanningStatusView,
   ProjectActivityPage,
@@ -114,6 +117,11 @@ import {
   shouldUseBrowserMock,
 } from "./mock-data";
 import { browserMockInvoke } from "./browser-mock-runtime";
+import { toUserFacingIpcError } from "./ipc-error";
+import type { UpdaterSnapshot } from "./updater-contract";
+import { APPLICATION_UPDATER_STATE_EVENT } from "./updater-contract";
+
+export { UserFacingIpcError, type UserFacingErrorPayload } from "./ipc-error";
 
 export const PROJECT_CONVERSATION_LIMIT_REACHED_CODE =
   "PROJECT_CONVERSATION_LIMIT_REACHED";
@@ -168,6 +176,8 @@ async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<
     }
     return await invoke<T>(command, args);
   } catch (cause) {
+    const userFacingError = toUserFacingIpcError(cause);
+    if (userFacingError) throw userFacingError;
     const payload = commandErrorPayload(cause);
     if (payload) throw new IpcCommandError(payload);
     throw cause;
@@ -190,6 +200,22 @@ export const companionEnsure = async (): Promise<boolean> => {
   }
 };
 export const platformCapabilities = () => ipc<PlatformCapabilities>("cmd_platform_capabilities");
+
+// ---------- Application Updater ----------
+export const updaterStatus = () => ipc<UpdaterSnapshot>("cmd_updater_status");
+export const updaterCheck = (force = true) =>
+  ipc<UpdaterSnapshot>("cmd_updater_check", { force });
+export const updaterDownload = () => ipc<UpdaterSnapshot>("cmd_updater_download");
+export const updaterInstall = () => ipc<UpdaterSnapshot>("cmd_updater_install");
+export const updaterRestart = () => ipc<void>("cmd_updater_restart");
+export const onUpdaterState = (
+  handler: (snapshot: UpdaterSnapshot) => void,
+): Promise<UnlistenFn> => {
+  if (shouldUseBrowserMock()) return Promise.resolve(() => {});
+  return listen<UpdaterSnapshot>(APPLICATION_UPDATER_STATE_EVENT, (event) => {
+    handler(event.payload);
+  });
+};
 
 // ---------- 任务 ----------
 export const taskCreate = (
@@ -352,7 +378,7 @@ export const agentSend = (
   return result;
 });
 
-/** 附件 staging（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §2.2 边界 1）：一次性 Base64 → Blob 引用。 */
+/** 附件 staging（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §2.2 边界 1）：一次性 Base64 → Blob 引用。 */
 export const attachmentStage = (taskId: string, attachment: AttachmentInput) =>
   ipc<import("./types").AttachmentRefDto>("cmd_attachment_stage", { taskId, attachment });
 
@@ -455,6 +481,49 @@ export const notificationMarkAllRead = async () => {
     if (!shouldUseBrowserMock()) throw error;
     return browserMockMarkAllNotificationsRead();
   }
+};
+
+export const NATIVE_NOTIFICATION_EVENT = "r-code:native-notification";
+export const NATIVE_NOTIFICATION_OPEN_EVENT = "r-code:native-notification-open";
+
+export const nativeNotificationPermissionState = async (): Promise<NativeNotificationPermissionState> => {
+  try {
+    return await ipc<NativeNotificationPermissionState>("cmd_native_notification_permission_state");
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    return "unavailable";
+  }
+};
+
+export const nativeNotificationRequestPermission = async (): Promise<NativeNotificationPermissionState> => {
+  try {
+    return await ipc<NativeNotificationPermissionState>("cmd_native_notification_request_permission");
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    return "unavailable";
+  }
+};
+
+export const nativeNotificationSetLocale = async (locale: string): Promise<void> => {
+  try {
+    await ipc<void>("cmd_native_notification_set_locale", { locale });
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+  }
+};
+
+export const onNativeNotification = (
+  handler: (event: NativeNotificationEvent) => void,
+): Promise<UnlistenFn> => {
+  if (shouldUseBrowserMock()) return Promise.resolve(() => {});
+  return listen<NativeNotificationEvent>(NATIVE_NOTIFICATION_EVENT, (event) => handler(event.payload));
+};
+
+export const onNativeNotificationOpen = (
+  handler: (payload: NativeNotificationOpenPayload) => void,
+): Promise<UnlistenFn> => {
+  if (shouldUseBrowserMock()) return Promise.resolve(() => {});
+  return listen<NativeNotificationOpenPayload>(NATIVE_NOTIFICATION_OPEN_EVENT, (event) => handler(event.payload));
 };
 
 // ---------- 变更 / 审查 ----------

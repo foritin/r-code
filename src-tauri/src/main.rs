@@ -334,6 +334,7 @@ fn main() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         // `<a target="_blank">` 交给系统默认浏览器，避免 WebView 内部静默吞掉外链。
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|_window, _event| {
@@ -460,6 +461,16 @@ fn main() {
                 project_root,
                 Some(db_path),
             );
+            app.manage(r_code_host::native_notification::NativeNotificationState::default());
+            let application_updater = r_code_host::updater::ApplicationUpdaterState::new(
+                app.handle().clone(),
+                state.config_dir.clone(),
+            );
+            r_code_host::updater::start_application_updater(
+                app.handle().clone(),
+                application_updater.clone(),
+            );
+            app.manage(application_updater);
             // Only the authoritative desktop startup performs crash recovery. MCP sibling
             // processes also construct CommandState against the same database and must not mark
             // a live desktop continuation as interrupted.
@@ -516,7 +527,7 @@ fn main() {
                 }
                 _ => {}
             }
-            // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.3/§4.3：会话附件 JSONL 原子迁移 +
+            // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.3/§4.3：会话附件 JSONL 原子迁移 +
             // 过期 staged 附件 GC。同步文件 IO 放在启动维护线程（当前即为阻塞
             // 上下文）；failed 会话保留原文件并在日志中报告 storage id。
             {
@@ -587,12 +598,54 @@ fn main() {
             }
             // agent 事件出口：drain 循环 → WebView（"agent-event" 信封 {task_id, event}）
             let app_handle = app.handle().clone();
+            let notification_app_handle = app_handle.clone();
+            let notification_db = state.db.clone();
             state.set_agent_event_sink(Arc::new(move |task_id, event| {
+                if let Err(error) = r_code_host::native_notification::record_agent_event(
+                    &notification_app_handle,
+                    &notification_db,
+                    task_id,
+                    event,
+                ) {
+                    tracing::warn!(task_id, %error, "failed to route agent notification");
+                }
+                // Queue the delivery decision before the task-state event. This preserves strict
+                // foreground Toast / background system-notification semantics even when the
+                // WebView processes both events in the same turn.
                 let payload = serde_json::json!({ "task_id": task_id, "event": event });
                 if let Err(e) = app_handle.emit("agent-event", payload) {
                     tracing::warn!("emit agent-event failed: {e}");
                 }
             }));
+            let mut permission_requests = state.permission_engine.subscribe_requests();
+            let permission_app_handle = app.handle().clone();
+            let permission_db = state.db.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match permission_requests.recv().await {
+                        Ok(request) => {
+                            if let Err(error) =
+                                r_code_host::native_notification::record_permission_request(
+                                    &permission_app_handle,
+                                    &permission_db,
+                                    &request,
+                                )
+                            {
+                                tracing::warn!(
+                                    task_id = %request.task_id,
+                                    request_id = %request.id,
+                                    %error,
+                                    "failed to route permission notification"
+                                );
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(skipped, "permission notification stream lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
             // PTY reader 只发轻量“有输出”信号；WebView 收到后按绝对游标拉取有界
             // 增量。相比固定轮询，这既消除键入回显延迟，也不会把大段输出复制进事件。
             let mut terminal_output = state.terminal_manager.subscribe_output();
@@ -670,6 +723,12 @@ fn main() {
             tauri_commands::cmd_app_quit,
             tauri_commands::cmd_companion_ensure,
             tauri_commands::cmd_platform_capabilities,
+            tauri_commands::cmd_updater_status,
+            tauri_commands::cmd_updater_check,
+            tauri_commands::cmd_updater_download,
+            tauri_commands::cmd_updater_install,
+            tauri_commands::cmd_updater_restart,
+            tauri_commands::cmd_browser_agent_contract,
             tauri_commands::cmd_task_create,
             tauri_commands::cmd_project_conversation_create,
             tauri_commands::cmd_task_prepare,
@@ -729,6 +788,9 @@ fn main() {
             tauri_commands::cmd_notification_list,
             tauri_commands::cmd_notification_mark_read,
             tauri_commands::cmd_notification_mark_all_read,
+            tauri_commands::cmd_native_notification_permission_state,
+            tauri_commands::cmd_native_notification_request_permission,
+            tauri_commands::cmd_native_notification_set_locale,
             tauri_commands::cmd_changes_list,
             tauri_commands::cmd_change_diff,
             tauri_commands::cmd_rollback_file,

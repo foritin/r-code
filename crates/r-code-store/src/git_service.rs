@@ -111,6 +111,36 @@ impl GitService {
         Ok(PathBuf::from(out.trim()))
     }
 
+    /// 获取共享 Git 元数据目录（`git rev-parse --git-common-dir`）。
+    ///
+    /// linked worktree 的 `.git` 是一个指向私有 worktree 元数据的文件；只有
+    /// `--git-common-dir` 能稳定判断两个工作目录是否属于同一个仓库。Git 可能返回
+    /// 相对路径，因此这里先相对命令的工作目录解析，canonicalize 由安全边界调用方
+    /// 在需要比较物理目录时完成。
+    pub fn common_dir(&self) -> Result<PathBuf, ProductError> {
+        let out = self.run_git(&["rev-parse", "--git-common-dir"])?;
+        let path = PathBuf::from(out.trim());
+        Ok(if path.is_absolute() {
+            path
+        } else {
+            self.repo_path.join(path)
+        })
+    }
+
+    /// 列出当前仓库登记的全部 worktree 根目录。
+    ///
+    /// 使用 porcelain + NUL 分隔格式，避免空格或换行等合法路径字符破坏解析。
+    /// 返回值保留 Git 输出的路径拼写；需要做身份判断的调用方必须 canonicalize。
+    pub fn worktree_paths(&self) -> Result<Vec<PathBuf>, ProductError> {
+        let output = self.run_git_bytes(&["worktree", "list", "--porcelain", "-z"])?;
+        Ok(output
+            .split(|byte| *byte == 0)
+            .filter_map(|field| field.strip_prefix(b"worktree "))
+            .filter(|path| !path.is_empty())
+            .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
+            .collect())
+    }
+
     /// 获取工作区状态（porcelain v2 格式，解析为 `GitFileStatus` 列表）。
     ///
     /// 包含未跟踪文件（`--untracked-files=all`）。

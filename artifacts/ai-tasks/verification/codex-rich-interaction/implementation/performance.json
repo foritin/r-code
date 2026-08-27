@@ -1,6 +1,6 @@
 {
   "schema_version": "codex-interaction-performance.v1",
-  "generated_at": "2026-08-25T11:44:10.912Z",
+  "generated_at": "2026-08-27T03:51:29.210Z",
   "platform": {
     "node": "v24.9.0",
     "os": "win32"
@@ -10,8 +10,8 @@
     "applied_events": 10000,
     "visible_applies": 19,
     "propagation_latency_ms": {
-      "p95": 104.7,
-      "max": 104.7,
+      "p95": 119.6,
+      "max": 119.6,
       "samples": 19
     },
     "visible_density_hz_estimate": 1.9,

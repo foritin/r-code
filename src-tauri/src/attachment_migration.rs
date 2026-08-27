@@ -1,4 +1,4 @@
-//! 会话附件 JSONL 原子迁移器（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.3）。
+//! 会话附件 JSONL 原子迁移器（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §7.3）。
 //!
 //! 启动后的后台迁移器按单个 `storage_id` 串行处理：
 //! 1. 计算源 JSONL SHA-256，在 `session_attachment_migrations` 写 pending；

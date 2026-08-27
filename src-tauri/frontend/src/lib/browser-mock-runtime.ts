@@ -65,6 +65,7 @@ import type {
   PlanEntryOfferView,
   PlanningStatusView,
 } from "./types";
+import type { UpdaterSnapshot } from "./updater-contract";
 import {
   browserMockAbortSubagent,
   browserMockActivityList,
@@ -805,6 +806,15 @@ function createTask(args: MockArgs): Task {
   browserMockTasks.unshift(task);
   browserMockDetails[task.id] = {
     task,
+    status: {
+      task_id: task.id,
+      persisted_state: task.state,
+      display_state: "idle",
+      attention: [],
+      active_run_id: null,
+      queue_depth: 0,
+      unread_count: 0,
+    },
     active_branch: branch,
     branches: [],
     runs: [],
@@ -2047,6 +2057,18 @@ function mockMcpViewFromRequest(request: McpUpsertRequest): McpServerView {
   };
 }
 
+let browserMockUpdaterState: UpdaterSnapshot = {
+  current_version: "1.0.0",
+  state: "idle",
+  release: null,
+  progress: { downloaded_bytes: 0, total_bytes: null, percent: null },
+  last_check_at: null,
+  next_auto_check_at: null,
+  error_code: null,
+  error_args: {},
+  failed_operation: null,
+};
+
 /** 执行一条浏览器 Demo IPC，并返回与正式后端同形状的数据。 */
 export async function browserMockInvoke(command: string, args: MockArgs = {}): Promise<unknown> {
   (globalThis as { __rCodePerformanceIpcProbe?: (name: string, args: MockArgs) => void })
@@ -2084,6 +2106,48 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
         nativeOcrFormats: nativeOcr ? ["image/png", "image/jpeg"] : [],
       };
     }
+    case "cmd_updater_status": return copy(browserMockUpdaterState);
+    case "cmd_updater_check": {
+      const checkedAt = new Date();
+      browserMockUpdaterState = {
+        ...browserMockUpdaterState,
+        state: "available",
+        release: {
+          version: "1.1.0",
+          notes: "Updater browser-mock release",
+          published_at: checkedAt.toISOString(),
+        },
+        progress: { downloaded_bytes: 0, total_bytes: null, percent: null },
+        last_check_at: checkedAt.toISOString(),
+        next_auto_check_at: new Date(checkedAt.getTime() + 6 * 60 * 60 * 1000).toISOString(),
+        error_code: null,
+        error_args: {},
+        failed_operation: null,
+      };
+      return copy(browserMockUpdaterState);
+    }
+    case "cmd_updater_download": {
+      browserMockUpdaterState = {
+        ...browserMockUpdaterState,
+        state: "downloaded",
+        progress: { downloaded_bytes: 42_000_000, total_bytes: 42_000_000, percent: 100 },
+        error_code: null,
+        error_args: {},
+        failed_operation: null,
+      };
+      return copy(browserMockUpdaterState);
+    }
+    case "cmd_updater_install": {
+      browserMockUpdaterState = {
+        ...browserMockUpdaterState,
+        state: "restart_pending",
+        error_code: null,
+        error_args: {},
+        failed_operation: null,
+      };
+      return copy(browserMockUpdaterState);
+    }
+    case "cmd_updater_restart": return undefined;
 
     case "cmd_task_create": return copy(createTask(args));
     case "cmd_project_conversation_create": return copy(createProjectConversation(args));

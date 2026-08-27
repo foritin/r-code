@@ -383,7 +383,7 @@
 }
 .plan-subagent-summary { display: grid; min-width: 0; gap: 1px; }
 .plan-subagent-summary strong { color: var(--fg); font-size: var(--text-meta); font-weight: 620; }
-.plan-subagent-summary small { color: var(--fg-faint); font-size: 10px; }
+.plan-subagent-summary small { color: var(--fg-muted); font-size: var(--text-meta); }
 .plan-subagent-rows { display: grid; border-top: 1px solid var(--border); }
 .plan-subagent-rows[hidden] { display: none; }
 .plan-subagent-row {
@@ -418,7 +418,7 @@
 .plan-subagent-copy em {
   flex: none;
   color: var(--fg-faint);
-  font-size: 10px;
+  font-size: var(--text-meta);
   font-style: normal;
 }
 .plan-subagent-row.status-running .plan-subagent-copy em,
@@ -429,7 +429,7 @@
 .plan-subagent-copy small {
   overflow: hidden;
   color: var(--fg-faint);
-  font-size: 10px;
+  font-size: var(--text-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

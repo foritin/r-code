@@ -3962,7 +3962,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
         .locator(".hint")
         .textContent(),
       /开 = 复杂任务先询问/);
-    // docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §9：DeepSeek Plan 锚定滑钮与建议滑钮同卡展示、
+    // docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §9：DeepSeek Plan 锚定滑钮与建议滑钮同卡展示、
     // 独立保存；默认关闭。
     const anchoringSwitch = page.locator("#set-planning-anchoring");
     assert.equal(await anchoringSwitch.count(), 1, "deepseek configured: anchoring card visible");

@@ -5,6 +5,8 @@
 
 use thiserror::Error;
 
+use crate::user_error::UserFacingError;
+
 /// Stable IPC-facing code for the per-project active conversation limit.
 pub const PROJECT_CONVERSATION_LIMIT_REACHED_CODE: &str = "PROJECT_CONVERSATION_LIMIT_REACHED";
 
@@ -14,6 +16,11 @@ pub const PROJECT_CONVERSATION_LIMIT_REACHED_CODE: &str = "PROJECT_CONVERSATION_
 /// 通过 `From<ProductError> for agent_error::Error` 互转。
 #[derive(Debug, Clone, Error)]
 pub enum ProductError {
+    /// Stable, localizable error intended for an IPC/user boundary. The technical detail is kept
+    /// out of `Display` and ordinary UI surfaces by [`UserFacingError`].
+    #[error("{0}")]
+    UserFacing(#[from] UserFacingError),
+
     /// A workspace already owns the maximum number of unarchived conversations.
     #[error("该项目最多保留 {limit} 个未归档对话，请先归档一个后再新建")]
     ProjectConversationLimitReached { limit: usize },
@@ -199,6 +206,13 @@ pub enum ProductError {
 impl From<ProductError> for agent_error::Error {
     fn from(err: ProductError) -> Self {
         match err {
+            ProductError::UserFacing(error) => Self::Other(
+                serde_json::json!({
+                    "code": error.code,
+                    "args": error.args,
+                })
+                .to_string(),
+            ),
             ProductError::ProjectConversationLimitReached { limit } => Self::Other(format!(
                 "该项目最多保留 {limit} 个未归档对话，请先归档一个后再新建"
             )),

@@ -98,6 +98,56 @@ pub fn cmd_platform_capabilities() -> r_code_host::commands::PlatformCapabilitie
     r_code_host::commands::platform_capabilities()
 }
 
+/// Read the product-owned updater state. This never performs network or installation work.
+#[tauri::command]
+pub fn cmd_updater_status(
+    state: State<'_, r_code_host::updater::ApplicationUpdaterState>,
+) -> r_code_host::updater::UpdaterSnapshot {
+    state.status()
+}
+
+/// Check release metadata. Settings uses `force = true`; startup uses `force = false` so the
+/// persisted six-hour automatic-check limit cannot be bypassed.
+#[tauri::command]
+pub async fn cmd_updater_check(
+    state: State<'_, r_code_host::updater::ApplicationUpdaterState>,
+    force: bool,
+) -> Result<r_code_host::updater::UpdaterSnapshot, r_code_core::UserFacingError> {
+    state.check(force).await
+}
+
+/// Explicitly download and verify the selected release without installing it.
+#[tauri::command]
+pub async fn cmd_updater_download(
+    state: State<'_, r_code_host::updater::ApplicationUpdaterState>,
+) -> Result<r_code_host::updater::UpdaterSnapshot, r_code_core::UserFacingError> {
+    state.download().await
+}
+
+/// Explicitly install an already downloaded payload without restarting the application.
+#[tauri::command]
+pub async fn cmd_updater_install(
+    state: State<'_, r_code_host::updater::ApplicationUpdaterState>,
+) -> Result<r_code_host::updater::UpdaterSnapshot, r_code_core::UserFacingError> {
+    state.install().await
+}
+
+/// Restart only after installation has reached `restart_pending`.
+#[tauri::command]
+pub async fn cmd_updater_restart(
+    state: State<'_, r_code_host::updater::ApplicationUpdaterState>,
+) -> Result<(), r_code_core::UserFacingError> {
+    state.restart().await
+}
+
+/// Return the frozen Browser agent contract only when its backend feature flag is enabled.
+#[tauri::command]
+pub fn cmd_browser_agent_contract(
+    state: State<'_, CommandState>,
+) -> Result<r_code_host::browser::BrowserAgentContract, r_code_core::UserFacingError> {
+    r_code_host::browser::browser_agent_contract(&state.config_dir)
+}
+
 /// 任务创建命令。 [doc-09]
 #[tauri::command]
 pub async fn cmd_task_create(
@@ -490,7 +540,7 @@ pub async fn cmd_agent_send(
             .ok_or_else(|| format!("invalid agent send mode: {value}"))?,
         None => AgentSendMode::Auto,
     };
-    // 新引用链路（docs/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4）：只传 attachment id；
+    // 新引用链路（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4）：只传 attachment id；
     // 旧 Base64 载荷仅继续服务尚未迁移的调用方。
     if let Some(ids) = attachment_ids.as_deref() {
         if !ids.is_empty() {
@@ -692,12 +742,21 @@ pub async fn cmd_permission_pending(
 /// 列出可已读的顶栏通知。
 #[tauri::command]
 pub async fn cmd_notification_list(
+    app: AppHandle,
     state: State<'_, CommandState>,
     cursor: Option<String>,
     limit: u32,
     unread_only: bool,
 ) -> Result<NotificationPage, String> {
-    r_code_host::commands::notification_list(&state, cursor.as_deref(), limit, unread_only).await
+    let locale = r_code_host::native_notification::locale_code(&app);
+    r_code_host::commands::notification_list_for_locale(
+        &state,
+        cursor.as_deref(),
+        limit,
+        unread_only,
+        locale,
+    )
+    .await
 }
 
 /// 将一条通知标记为已读。
@@ -713,6 +772,34 @@ pub async fn cmd_notification_mark_read(
 #[tauri::command]
 pub async fn cmd_notification_mark_all_read(state: State<'_, CommandState>) -> Result<u64, String> {
     r_code_host::commands::notification_mark_all_read(&state).await
+}
+
+/// 读取桌面系统通知权限状态。
+#[tauri::command]
+pub fn cmd_native_notification_permission_state(
+    app: AppHandle,
+) -> r_code_host::native_notification::NativeNotificationPermissionState {
+    r_code_host::commands::native_notification_permission_state(&app)
+}
+
+/// 由用户在设置页显式请求桌面系统通知权限。
+#[tauri::command]
+pub fn cmd_native_notification_request_permission(
+    app: AppHandle,
+) -> Result<
+    r_code_host::native_notification::NativeNotificationPermissionState,
+    r_code_core::UserFacingError,
+> {
+    r_code_host::commands::native_notification_request_permission(&app)
+}
+
+/// 同步前端当前语言，供后台通知选择中文或英文文案。
+#[tauri::command]
+pub fn cmd_native_notification_set_locale(
+    app: AppHandle,
+    locale: String,
+) -> Result<(), r_code_core::UserFacingError> {
+    r_code_host::commands::native_notification_set_locale(&app, &locale)
 }
 
 /// 获取任务的文件变更列表。

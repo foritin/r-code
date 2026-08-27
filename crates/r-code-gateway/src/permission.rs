@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use r_code_core::dto::{PermissionDecision, PermissionRequest, ProjectAccessMode, RiskLevel};
 use r_code_core::error::ProductError;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 /// A synchronous cancellation probe evaluated while the permission state lock is held.
 ///
@@ -55,6 +55,8 @@ pub struct PermissionEngine {
     /// Pending requests, terminal decisions and standing rules share one lock so a terminal
     /// transition is committed without an intervening `.await` or partial authorization state.
     state: Arc<Mutex<PermissionState>>,
+    /// 新待批请求的轻量广播；通知等观察者不能反向改变权限状态。
+    requests: broadcast::Sender<PermissionRequest>,
 }
 
 #[derive(Default)]
@@ -146,9 +148,29 @@ pub enum PermissionCheckResult {
 impl PermissionEngine {
     /// 创建空的权限引擎。
     pub fn new() -> Self {
+        let (requests, _) = broadcast::channel(128);
         Self {
             state: Arc::new(Mutex::new(PermissionState::default())),
+            requests,
         }
+    }
+
+    async fn insert_pending(
+        &self,
+        request: PermissionRequest,
+        cancellation: Option<PermissionCancellation>,
+        timeout: Option<std::time::Duration>,
+    ) {
+        self.state.lock().await.pending_requests.insert(
+            request.id.clone(),
+            PendingPermission::new(request.clone(), cancellation, timeout),
+        );
+        let _ = self.requests.send(request);
+    }
+
+    /// 订阅新创建的待审批请求。慢观察者只会丢通知，不会阻塞权限执行路径。
+    pub fn subscribe_requests(&self) -> broadcast::Receiver<PermissionRequest> {
+        self.requests.subscribe()
     }
 
     fn retain_recent_decisions(state: &mut PermissionState) {
@@ -275,10 +297,7 @@ impl PermissionEngine {
             tool_name, risk_level, "", // input_summary -- check 阶段未知
         )
         .with_target(target);
-        self.state.lock().await.pending_requests.insert(
-            request.id.clone(),
-            PendingPermission::new(request.clone(), None, None),
-        );
+        self.insert_pending(request.clone(), None, None).await;
         PermissionCheckResult::NeedsApproval(request)
     }
 
@@ -296,10 +315,7 @@ impl PermissionEngine {
     ) -> PermissionRequest {
         let request =
             PermissionRequest::new(task_id, tool_call_id, tool_name, risk_level, input_summary);
-        self.state.lock().await.pending_requests.insert(
-            request.id.clone(),
-            PendingPermission::new(request.clone(), None, None),
-        );
+        self.insert_pending(request.clone(), None, None).await;
         request
     }
 
@@ -485,10 +501,8 @@ impl PermissionEngine {
             PermissionRequest::new(task_id, tool_call_id, tool_name, risk_level, input_summary)
                 .with_origin(run_id, caller)
                 .with_target(target);
-        self.state.lock().await.pending_requests.insert(
-            request.id.clone(),
-            PendingPermission::new(request.clone(), cancellation, timeout),
-        );
+        self.insert_pending(request.clone(), cancellation, timeout)
+            .await;
         PermissionCheckResult::NeedsApproval(request)
     }
 

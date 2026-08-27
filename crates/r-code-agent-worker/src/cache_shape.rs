@@ -1,4 +1,4 @@
-//! P2-H（docs/archive/deepseek-prefix-cache.md §5 P2-H）：DeepSeek 前缀缓存形状归因。
+//! P2-H（docs/support/archive/deepseek-prefix-cache.md §5 P2-H）：DeepSeek 前缀缓存形状归因。
 //!
 //! 每轮请求前捕获可缓存前缀的指纹（system 哈希、tools 哈希、历史改写版本号），
 //! 请求后比对，把缓存变化归因到具体原因（system/tools/压缩/修复/工作区/委派开关），

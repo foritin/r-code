@@ -144,6 +144,25 @@ function detail(task: Task): TaskDetail {
   const branchId = task.id === "mock-task-queue" ? "branch-queue-fix" : "main";
   return {
     task,
+    status: {
+      task_id: task.id,
+      persisted_state: task.state,
+      display_state: isPermission
+        ? "waiting_for_approval"
+        : isReview
+          ? "review_ready"
+          : task.state === "archived"
+            ? "archived"
+            : task.state === "interrupted"
+              ? "interrupted"
+              : isLive
+                ? "running"
+                : "idle",
+      attention: isPermission ? ["approval_required"] : isReview ? ["review_required"] : [],
+      active_run_id: isLive ? runId : null,
+      queue_depth: 0,
+      unread_count: 0,
+    },
     active_branch: task.id === "mock-task-queue"
       ? { id: branchId, task_id: task.id, parent_branch_id: "main", forked_from_message_id: "main:7", storage_id: branchId, is_active: true, created_at: at(35) }
       : { id: "main", task_id: task.id, parent_branch_id: null, forked_from_message_id: null, storage_id: "main", is_active: true, created_at: task.created_at },
@@ -943,6 +962,7 @@ function mockTaskSummary(task: Task): DashboardTaskSummary {
     : activeRun?.summary || (task.state === "review_ready" ? "变更已准备好审查" : task.state === "idle" ? "任务已完成" : "正在推进任务");
   return {
     task,
+    status: detail.status,
     activity,
     agent_label: activeRun?.agent_label || (activeRun?.agent_kind === "subagent" ? "子代理" : "主代理"),
     pending_permission_count: detail?.permissions.filter((item) => item.decision === "pending").length ?? 0,
