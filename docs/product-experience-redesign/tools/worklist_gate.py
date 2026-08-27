@@ -184,7 +184,7 @@ def run_settings_validator(
     """Execute the Settings validator in-process without allowing report writes."""
 
     validator_digest = (
-        hashlib.sha256(validator_path.read_bytes()).hexdigest()
+        digest(validator_path.read_text(encoding="utf-8"))
         if validator_path.is_file()
         else "missing"
     )

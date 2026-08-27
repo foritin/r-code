@@ -8,10 +8,10 @@
       "branch": "dev",
       "head": "a55b34ce3957430f84f0646e3179d80154dd5d71",
       "worktree": "dirty-source-snapshot",
-      "snapshot_policy": "Each production source file below is pinned by its exact SHA-256; any change makes the design baseline stale and requires a new read-only audit."
+      "snapshot_policy": "Each production UTF-8 source file below is pinned by SHA-256 after CRLF/CR to LF normalization; the dirty-source baseline head must remain an ancestor of the checked revision, and any normalized content change requires a new read-only audit."
     },
     "manifest_count": 47,
-    "manifest_digest": "ff166363e08ea376af4c6d856aefc0b040eb370e8c2bd48f08a8b094bafef593",
+    "manifest_digest": "2f1af5daee3f898095e97dcf76f474ec91863a3eeeb9095415ee3db2f802e3e7",
     "resolved_source_count": 47,
     "declared_symbol_locator_count": 52,
     "stale_source_files": [],
@@ -51,8 +51,8 @@
     }
   },
   "settings_capabilities": {
-    "baseline_digest": "074506f0de0181529d3cc50a0a65a977f17bf7a537bdbddbdd5b1296d4dc1693",
-    "baseline_normative_digest": "bf34b651809f0ca1690da92be5142fcdf2c3277aa8aaa6d228bb11c369ff7ac1",
+    "baseline_digest": "45d2ee0020e4f9ee859c02581fe4ed63424a263d3c1390333b23724c398dccc3",
+    "baseline_normative_digest": "4241a7a1feace7690352164461d46eb301ad2457cbfe580ac4f9eca0cd2ee01b",
     "inventory_digest": "8685f38612aa44e4ea23f10eb63b3ab0743d8df1f3d432cd73bfef8ec8ac4cdd",
     "production_inventory_digest": "41739784667aa0a2627403db63b6f6c372c82217926ba372f9af2fb59f2313cd",
     "inventory_count": 127,
@@ -123,8 +123,8 @@
     "unauthorized_retirements": []
   },
   "coverage_binding": {
-    "baseline_normative_digest": "bf34b651809f0ca1690da92be5142fcdf2c3277aa8aaa6d228bb11c369ff7ac1",
-    "coverage_digest": "3e13ee7af65daaaf473106d7109186dc914eb7478d12c7df382fec1bda19fedf"
+    "baseline_normative_digest": "4241a7a1feace7690352164461d46eb301ad2457cbfe580ac4f9eca0cd2ee01b",
+    "coverage_digest": "30efacd3beb0070ff912a6d2dc4ea0061a5854c08de33ba3f6c7548b4ddcf019"
   },
   "traceability": [
     {

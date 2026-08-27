@@ -1,6 +1,6 @@
 # Settings 功能保全与设计盘点矩阵
 
-<!-- generated_from_settings_capability_baseline: bf34b651809f0ca1690da92be5142fcdf2c3277aa8aaa6d228bb11c369ff7ac1 -->
+<!-- generated_from_settings_capability_baseline: 4241a7a1feace7690352164461d46eb301ad2457cbfe580ac4f9eca0cd2ee01b -->
 
 > 本文区分两件事：结构化 inventory 对当前 `dev` 能力的分类，以及逐项源码证据、精确行为合同和运行时验证。前者不能替代后三者。
 >
@@ -9,7 +9,7 @@
 ## 1. 权威边界
 
 - 权威来源是当前生产 `SettingsScene`、Settings 子面板、类型、frontend IPC、Tauri/Host command、持久化和相关运行代码。HTML 原型、截图和 PRD 只能定义目标，不能证明生产能力存在。
-- 2026-08-27 的只读审计固定了 47 个 SourceID、仓库相对路径、角色、SHA-256 和至少一个非空 locator；未读取真实配置值、用户内容或密钥。文件级 locator 解析成功只证明“该文件与锚点存在”，不证明任一 CapabilityID 的完整行为。
+- 2026-08-27 的只读审计固定了 47 个 SourceID、仓库相对路径、角色、严格 UTF-8 文本经 CRLF/CR → LF 规范化后的 SHA-256，以及至少一个非空 locator；未读取真实配置值、用户内容或密钥。文件级 locator 解析成功只证明“该文件与锚点存在”，不证明任一 CapabilityID 的完整行为。
 - `production_existing` 每项均把唯一可解析的 item-level locator 绑定到 authority、positive、failure，适用时再绑定 disabled 与 atomicity；当前为 111/111。该证明固定“现有源码实际表达什么”，不替代 M5 运行验收。
 - `new_requirement` 与 `planned_demo` 均有 `read_only_source_absence_review`、固定 SourceID 和明确的 `classification_basis`。它们参与 capability mapping、17 维合同、原型目标、正式目标和 trace 校验，但不能计入生产下界；当前合同完成度为 127/127。
 - 当前 `verified_count=0` 是刻意保留的诚实状态。只有正式产品完成 UI → IPC → Host → persistence、失败保旧值、重启恢复和迁移往返验证后，才可增加生产验证计数。
@@ -63,6 +63,7 @@
 
 本轮重新核对源码后，以下能力按真实行为收窄，避免原型反向改写生产事实：
 
+- 摘要算法迁移时，对 `SettingsScene.tsx`、`lib/ipc.ts`、`lib/types.ts`、`main.rs`、`tauri_commands.rs` 的真实内容漂移另做了 `a55b34ce… → a1afe400…` 只读 delta audit（合计 `+327/-12`），没有把它们伪装成换行迁移。新增接线分别落入既有 `SET-PREF-002`、`SET-NOTIF-001`、`SET-UPD-001..005`；通知分类/测试仍为 `SET-NOTIF-002 new_requirement`，Browser 仍为 `SET-BROWSER-001/002 planned_demo`，关闭询问仍为 `SET-LIFE-001 new_requirement`。当前五个 normalized SHA 可接受并与文件精确匹配。
 - `SET-PROV-015`：固定的 Settings/IPC/Host 来源没有通用 Provider 测试 command 或回执 UI；生产中只有子代理 Provider 的单项/批量 probe。因此它从错误的生产 `merge` 改为 `new_requirement/add`，目标为 `#provider-test-editor`。
 - `SET-CODEX-003`：生产浏览器/设备码登录采用串行 2 秒轮询和 3 分钟 timeout；“取消等待”只清理前端 timer，不会终止已启动的 CLI 登录进程。真正取消底层进程单列为 `SET-CODEX-009` 新需求。
 - `SET-SUB-009`：生产整池保存使用 CAS 与 Host 回执复验；revision 冲突后调用 `load(true)` 载入最新 Host snapshot，并会覆盖本地槽位草稿。保留 local/Host 双快照和 discard/reapply/merge 单列为 `SET-SUB-011` 新需求。
@@ -112,7 +113,7 @@
 
 每个 inventory item 都必须完成以下链路：
 
-    47 个文件的 SHA-256 + manifest-level locator
+    47 个 UTF-8 文件的换行规范化 SHA-256 + manifest-level locator
       → production item 的可解析 source_evidence（authority / positive / failure / disabled / atomicity）
         或固定边界的 absence review
       → classification + disposition
@@ -135,7 +136,7 @@
 | `source_inventory_proof.status` | passed | D0 源码语义证明通过 |
 | `verified_count` | 0 / 111 | 尚未执行真实产品链路 |
 
-源码与合同缺口数组当前均为空。整体报告仍会保持 `failed`，直到拥有该文件写权限的工作流把最新 baseline normative digest 同步到 freeze；这属于文档绑定一致性，不会把 `verified_count` 从 0 提前标绿。
+源码与合同缺口数组当前均为空，baseline、coverage、freeze 与 live Settings report 的摘要绑定已经同步，整体门禁为 `passed`。这只证明 D0 文档与源码语义链闭合，不会把 `verified_count` 从 0 提前标绿。
 
 D0 通过条件包括 127/127 映射、111/111 production locator/role、127/127 份 17 维合同、空缺口数组和 `source_inventory_proof.status == passed`。实现阶段另要求 `verified_count == baseline_count`；截图或 HTML mock 不能提前标绿。
 

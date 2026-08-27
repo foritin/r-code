@@ -1,9 +1,9 @@
 # Codex 主代理丰富交互与 App Server 事件投影 PRD / AI 实施清单
 
-> 文档状态：`frozen`（只表示执行合同已完整，不表示产品功能已经实现）  
-> 执行合同：`prd-to-ai-worklist` v1.1.0  
-> 协议基线：本机 `codex-cli 0.145.0` 生成 schema + OpenAI Codex App Server 官方文档  
-> 固化清单：[`codex-rich-interaction-freeze.yaml`](./codex-rich-interaction-freeze.yaml)  
+> 文档状态：`frozen`（只表示执行合同已完整，不表示产品功能已经实现）<br>
+> 执行合同：`prd-to-ai-worklist` v1.1.0<br>
+> 协议基线：本机 `codex-cli 0.145.0` 生成 schema + OpenAI Codex App Server 官方文档<br>
+> 固化清单：[`codex-rich-interaction-freeze.yaml`](./codex-rich-interaction-freeze.yaml)<br>
 > 唯一完成状态：本文 §9 主 Checklist；任务卡、任务包与证据不得维护第二套 Checkbox
 
 ## 执行导航
@@ -702,4 +702,3 @@ preflight
 外部 production 放行只包括真实账号、真实安装包、签名/更新环境与最终人工视觉抽查；这些条件不改变 implementation checklist 的完成判据，也不授权本任务发布。
 
 <!-- AI_WORKLIST_CONTRACT_END -->
-

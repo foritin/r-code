@@ -276,6 +276,14 @@ def digest_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def normalized_source_digest(payload: bytes) -> str:
+    """Hash UTF-8 source text independently of checkout newline policy."""
+
+    text = payload.decode("utf-8")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return digest_bytes(normalized.encode("utf-8"))
+
+
 def canonical_digest(value: Any) -> str:
     payload = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -340,6 +348,24 @@ def current_git_head(repo: Path) -> str | None:
     return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
 
 
+def git_commit_is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool | None:
+    try:
+        completed = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if completed.returncode == 0:
+        return True
+    if completed.returncode == 1:
+        return False
+    return None
+
+
 def is_repo_relative(path: str) -> bool:
     candidate = Path(path)
     return bool(path) and not candidate.is_absolute() and ".." not in candidate.parts
@@ -373,7 +399,21 @@ def main() -> int:
 
     baseline_bytes = BASELINE.read_bytes()
     try:
-        baseline = json.loads(baseline_bytes)
+        baseline_text = baseline_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        result = {
+            "status": "failed",
+            "issues": [{
+                "code": "invalid_utf8",
+                "message": f"{BASELINE}: byte {exc.start}: {exc.reason}",
+            }],
+        }
+        if args.update_report:
+            write_if_changed(REPORT, json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 1
+    try:
+        baseline = json.loads(baseline_text)
     except json.JSONDecodeError as exc:
         result = {
             "status": "failed",
@@ -412,7 +452,7 @@ def main() -> int:
     if duplicate_html_ids:
         issue("duplicate_html_ids", ", ".join(duplicate_html_ids))
 
-    baseline_digest = digest_bytes(baseline_bytes)
+    baseline_digest = normalized_source_digest(baseline_bytes)
     baseline_normative_digest = canonical_digest(baseline)
 
     revision = baseline.get("baseline_revision", {})
@@ -426,11 +466,20 @@ def main() -> int:
     git_head = current_git_head(repo)
     if git_head is None:
         issue("git_head_unavailable", str(repo))
-    elif revision.get("head") != git_head:
-        issue(
-            "baseline_revision_stale",
-            f"expected={revision.get('head')} actual={git_head}",
+    else:
+        expected_head = revision.get("head")
+        exact_revision = expected_head == git_head
+        descendant_revision = (
+            revision.get("worktree") == "dirty-source-snapshot"
+            and isinstance(expected_head, str)
+            and re.fullmatch(r"[0-9a-f]{40}", expected_head) is not None
+            and git_commit_is_ancestor(repo, expected_head, git_head) is True
         )
+        if not exact_revision and not descendant_revision:
+            issue(
+                "baseline_revision_stale",
+                f"expected={expected_head} actual={git_head}",
+            )
 
     manifest = baseline.get("source_manifest", [])
     manifest_by_id: dict[str, dict[str, Any]] = {}
@@ -491,7 +540,14 @@ def main() -> int:
             issue("missing_source_file", f"{source_id}: {source_path}")
             continue
         source_bytes = full_path.read_bytes()
-        actual_sha = digest_bytes(source_bytes)
+        try:
+            actual_sha = normalized_source_digest(source_bytes)
+        except UnicodeDecodeError as exc:
+            issue(
+                "invalid_source_encoding",
+                f"{source_id}: {source_path}: byte {exc.start}: {exc.reason}",
+            )
+            continue
         if actual_sha != expected_sha:
             stale_source_files.append(
                 f"{source_id}:{source_path}:expected={expected_sha}:actual={actual_sha}"

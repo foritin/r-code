@@ -19636,7 +19636,7 @@ Stop immediately once the assignment is supported. Do not invoke \
 unrelated skills, MCP servers, or web research. {CODEX_PARALLEL_EXECUTION_HINT} \
 {rtk} {CODEX_FILE_LINK_HINT} {report_guidance} \
 Do not expose private chain-of-thought. {CODEX_CROSS_PLATFORM_SHELL_HINT} \
-{CODEX_WINDOWS_COMMAND_CONVENTION} 
+{CODEX_WINDOWS_COMMAND_CONVENTION}
 {SUBAGENT_REPORTING_CONTRACT}{editable}{memory}\n\nAssignment:\n{goal}"
     )
 }

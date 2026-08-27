@@ -12,18 +12,18 @@
     "assertions": 176
   },
   "digests": {
-    "normative": "a7f01f4f13d997c613f8db4f318d67fd38ee6513039793d6cdeb13091d519dbc",
+    "normative": "c25ed78be4a2ae421a2ae2206117eec43db3f52b713e29c7b79f77fef687d1f3",
     "prd_normative": "180e6a2e752d5a1b1e465b22685639da795d22897960bebe93b2e2ec6177eb6e",
-    "settings_capability_baseline": "bf34b651809f0ca1690da92be5142fcdf2c3277aa8aaa6d228bb11c369ff7ac1",
+    "settings_capability_baseline": "4241a7a1feace7690352164461d46eb301ad2457cbfe580ac4f9eca0cd2ee01b",
     "worklist": "68b8d22d857794baacada8f35afb64c28c849632fb3eab8cd8446e417eb821c4"
   },
   "settings_validation": {
     "executed_live": true,
     "validator": "docs/product-experience-redesign/tools/settings_capability_gate.py",
-    "validator_digest": "c82c19e22ec1ce25ba9247e5440386af0a1b7a70a12ff91b5536b54d8a5f00f9",
+    "validator_digest": "0bb74b37f2a21538a4aacfa0defdc4bcf60ac3a63537b051133f61fbd24c4029",
     "report_schema": "settings-capability-gate.v3",
     "report_status": "passed",
-    "report_digest": "1c6907f485a4f2f5398b78ba40caa85957ff2b5acaeff170f2f1bdac47b373d6",
+    "report_digest": "247bc17207ff09110be293eaef3f934a1fa20393af6184d1d8cf76b355b9e796",
     "baseline_count": 111,
     "mapped_count": 111,
     "verified_count": 0,
