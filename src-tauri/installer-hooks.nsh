@@ -5,10 +5,17 @@
   ClearErrors
   ${GetOptions} $CMDLINE "/BRANDED_PROGRESS=" $R8
   ${IfNot} ${Errors}
-    FileOpen $R9 "$R8" w
-    ${IfNot} ${Errors}
-      FileWrite $R9 "${VALUE}"
-      FileClose $R9
+    ; 只接受 $TEMP 前缀的路径：命令行可携带任意路径，无限制时本宏会以固定
+    ; 内容截断该文件（F-sec-08）。$TEMP 由安装器解析，不受命令行控制。
+    StrCpy $R7 "$TEMP\"
+    StrLen $R6 "$TEMP\"
+    StrCpy $R5 $R8 $R6
+    ${If} $R5 == $R7
+      FileOpen $R9 "$R8" w
+      ${IfNot} ${Errors}
+        FileWrite $R9 "${VALUE}"
+        FileClose $R9
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 !macroend

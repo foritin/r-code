@@ -28,9 +28,13 @@ impl SecurityConfig {
     /// 生产环境安全配置（最严格）。
     ///
     /// Production security configuration.
+    ///
+    /// 注意：**生效的 CSP 权威源是 `tauri.conf.json`**；本预设当前无生产消费方
+    ///（仅测试引用），保留时必须与 tauri.conf.json 一致（F-obs-07：曾漂移，
+    /// img-src 缺 `blob:`），接线前先消重。
     pub fn production() -> Self {
         Self {
-            csp: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost".to_string(),
+            csp: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost".to_string(),
             devtools_enabled: false,
             remote_debugging_disabled: true,
             sandbox_enabled: true,

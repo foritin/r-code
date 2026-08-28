@@ -596,9 +596,15 @@ impl SettingsService {
             let content = std::fs::read_to_string(&ws_path).map_err(|e| {
                 ProductError::ConfigError(format!("read {}: {e}", ws_path.display()))
             })?;
-            let over: toml::Value = toml::from_str(&content).map_err(|e| {
+            let mut over: toml::Value = toml::from_str(&content).map_err(|e| {
                 ProductError::ConfigError(format!("parse {}: {e}", ws_path.display()))
             })?;
+            // 凭据外泄防线（F-sec-03）：仓库内文件是低信任输入，绝不允许它
+            // 改写 provider 的网络面字段（把请求重定向到攻击者网关并按名注入
+            // keyring 密钥）。需要显式环境开关才放行。
+            if std::env::var("R_CODE_ALLOW_WORKSPACE_PROVIDER_OVERRIDE").as_deref() != Ok("1") {
+                strip_workspace_provider_overrides(&mut over, &ws_path);
+            }
             merge_toml(&mut base, &over);
         }
 
@@ -888,6 +894,35 @@ fn apply_env(config: &mut Config) {
 ///
 /// - 两边均为 table：深度合并（`over` 的叶子覆盖 `base` 同名键）。
 /// - 否则：`over` 整体覆盖 `base`。
+/// 工作区 `.r-code/config.toml` 的 provider 网络面字段剥离（F-sec-03）。
+///
+/// base_url/api_key/protocol/provider_kind 决定请求去向与凭据注入目标：
+/// 仓库文件（可能随第三方代码被 clone 进来）不可信，默认全部剥除并留痕。
+fn strip_workspace_provider_overrides(over: &mut toml::Value, ws_path: &std::path::Path) {
+    let Some(providers) = over
+        .get_mut("providers")
+        .and_then(|value| value.as_table_mut())
+    else {
+        return;
+    };
+    const NETWORK_FIELDS: [&str; 4] = ["base_url", "api_key", "protocol", "provider_kind"];
+    for (name, provider) in providers.iter_mut() {
+        let Some(table) = provider.as_table_mut() else {
+            continue;
+        };
+        for field in NETWORK_FIELDS {
+            if table.remove(field).is_some() {
+                tracing::warn!(
+                    provider = %name,
+                    field,
+                    source = %ws_path.display(),
+                    "workspace config tried to override a provider network field; ignored"
+                );
+            }
+        }
+    }
+}
+
 fn merge_toml(base: &mut toml::Value, over: &toml::Value) {
     use toml::Value;
     match (base, over) {
