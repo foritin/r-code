@@ -106,7 +106,7 @@ tasks:
 
   - id: FX-06
     title: 工具目录缓存 + 工具输入序列化削减（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-perf-06, F-perf-08]
     root_cause: 每轮全量重建目录（无版本失效缓存）；审计/权限检查各自全量序列化同一 Value
@@ -121,7 +121,7 @@ tasks:
 
   - id: FX-07
     title: 宿主模块环解除 + provider 辅助函数落地（major）
-    status: pending
+    status: done
     depends_on: [FX-09]
     findings: [F-arch-03, F-arch-06, F-arch-07]
     root_cause: provider 辅助函数被困上帝模块，plan_entry_commands/memory_runtime/mcp_server 反向依赖 commands.rs 形成文件级环；文档声明与实际依赖漂移
@@ -137,7 +137,7 @@ tasks:
 
   - id: FX-08
     title: host 层生产裸 SQL 收敛到 r-code-store（major）
-    status: pending
+    status: deferred——~20处SQL迁移为专项体量，设计与位点已冻结，随拆分campaign执行
     depends_on: [FX-09]
     findings: [F-arch-02]
     root_cause: host 层直接对 store 所属表写裸 SQL（约 20 处），与 repositories 形成同表双写路径，schema 变更必炸一处
@@ -165,7 +165,7 @@ tasks:
 
   - id: FX-10
     title: provider 身份判定统一（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-maint-02]
     root_cause: 厂商身份判定三份实现、两种口径（provider_kind vs 名字清单）
@@ -179,7 +179,7 @@ tasks:
 
   - id: FX-11
     title: IPC 结构化错误契约（major）
-    status: pending
+    status: deferred——177签名+前端联动为专项体量，设计已冻结
     depends_on: [FX-07]
     findings: [F-corr-07]
     root_cause: IPC 边界无结构化错误类型，ProductError 链在 Result<_, String> 拍平，前端只能启发式恢复
@@ -195,7 +195,7 @@ tasks:
 
   - id: FX-12
     title: 配置原子写 + 版本字段（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-obs-05, F-obs-06, F-obs-08]
     root_cause: 主配置用裸 fs::write 非原子（同仓已有原子写范式未复用）；无版本字段，schema 演进靠 serde default 静默吞
@@ -209,7 +209,7 @@ tasks:
 
   - id: FX-13
     title: 日志大小上限 + 水合 tail 化 + 控制台脱敏（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-obs-01, F-obs-02, F-sec-01]
     root_cause: 按日滚动无字节上限（RUST_LOG=trace 可写满磁盘）；启动水合全量解析；脱敏只挂 BufferLayer 未覆盖控制台 fmt
@@ -224,7 +224,7 @@ tasks:
 
   - id: FX-14
     title: provider 指标计数器（major）
-    status: pending
+    status: done
     depends_on: [FX-03]
     findings: [F-obs-04]
     root_cause: 无指标面：调用/失败/重试/延迟只能翻日志
@@ -238,7 +238,7 @@ tasks:
 
   - id: FX-15
     title: 前端 Room 轮询降频（major）
-    status: pending
+    status: deferred——轮询行为变更面大且文件为用户WIP重构区
     depends_on: [FX-00]
     findings: [F-perf-07]
     root_cause: 常驻轮询矩阵无空闲/可见性降级，空闲任务也全速轮询（含 2s git 子进程与近乎 2s 全量 JSONL 重读）
@@ -252,7 +252,7 @@ tasks:
 
   - id: FX-16
     title: Markdown 流式增量解析（major）
-    status: pending
+    status: deferred——增量解析+渲染一致性钉住需独立专项
     depends_on: [FX-00]
     findings: [F-perf-09]
     root_cause: text 每 ~100ms 变化即全文重解析 + 全部 Block 重渲染，memo 在变化流上必然失效
@@ -265,7 +265,7 @@ tasks:
 
   - id: FX-17
     title: 前端时间格式化统一（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-maint-04]
     root_cause: 7 个格式化函数两套体系并存，调用方随手选
@@ -296,7 +296,7 @@ tasks:
 
   - id: FX-19
     title: MCP 会话驱逐 + PTY 退出收束（minor）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-robust-10, F-robust-08]
     steps:
@@ -308,7 +308,7 @@ tasks:
 
   - id: FX-20
     title: 小安全加固（minor）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-sec-03, F-sec-08, F-obs-07]
     steps:

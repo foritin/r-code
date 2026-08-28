@@ -1,16 +1,14 @@
 # 唯一恢复锚点。每完成一个可验证子步更新。
-phase: B
-current_task: FX-06
+phase: F            # final
+current_task: final-report + 收尾
 current_task_status: in_progress
 blocked: []
-last_completed: [FX-00, 基线修复, FX-18(9868f51), style(2f2dfe3), FX-01(d1a2320), FX-02(140f7d5), FX-03(9006092), FX-09(2d282a5), FX-04(41e3e05), FX-05(e5179ea)]
+last_completed: [FX-00, 基线修复, FX-18, style, FX-01, FX-02, FX-03, FX-09, FX-04, FX-05, FX-06, FX-07, FX-10, FX-12, FX-19, FX-20, FX-13, FX-14, FX-17]
+deferred: [FX-08(SQL迁移专项), FX-11(IPC错误契约专项), FX-15(轮询降频), FX-16(Markdown增量)]
 next_action: >
-  FX-06 工具目录缓存+输入序列化削减（gateway.rs tool_specs~827、mcp_manager direct_catalog~1328、
-  to_string取长度、gateway.rs input 3x克隆、agent_loop 989-1002）→ FX-07 破环 → FX-08 SQL收敛 →
-  FX-10 → FX-11 → FX-12 → FX-13 → FX-14 → FX-15 → FX-16 → FX-17 → FX-19 → FX-20 → final-report
+  等 final-cargo-test.log 跑完 -> 结果写入 final-report 第三节 -> docs(review) 收尾提交 ->
+  交付最终回复。
 notes: >
-  测试面：host lib 704/704、agent-worker 299/299、core 172、store+core 519、全仓 0 warning、
-  前端 codex-message-stream 3/3（FX-05 信封契约验证过）。
-  FX-05 交付：event_coalesce.rs（pub API 供 bin main.rs 用）+ ensure_session_log 记忆集 +
-  params 借用 x5 + emit 单消费者免 clone x2。
-  纪律：提交前 git branch --show-current；fix(review): FX-NN 前缀；每任务后更新本文件。
+  final-report-2026-08-29.md 已写（发现统计/修复统计/测试验证/遗留清单/revert指引）。
+  前端 build EXIT=0。全量 cargo 回归后台运行中（evidence/final-cargo-test.log）。
+  若恢复时 cargo 未完：读该 log 的 EXIT= 与 test result 行补进报告即可，其余步骤不变。
