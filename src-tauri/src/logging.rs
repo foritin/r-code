@@ -7,7 +7,55 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use tracing_appender::non_blocking::WorkerGuard;
+#[cfg(test)]
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::fmt::{format::Writer as FmtWriter, FormatEvent, FormatFields};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+/// 控制台事件格式器（F-sec-01）：消息经 [`crate::log_buffer::redacted_event_message`]
+/// 与落盘/环形缓冲同源脱敏——此前控制台 fmt 层独立格式化字段，启动期 stderr
+/// 可以输出未脱敏内容。`json` 对应生产控制台（单行 JSON），否则为开发可读行。
+struct RedactedEventFormat {
+    json: bool,
+}
+
+impl<S, N> FormatEvent<S, N> for RedactedEventFormat
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        _ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
+        mut writer: FmtWriter<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        let meta = event.metadata();
+        let message = crate::log_buffer::redacted_event_message(event);
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        if self.json {
+            write!(
+                writer,
+                "{{\"timestamp\":{},\"level\":\"{}\",\"target\":{},\"message\":{}}}",
+                serde_json::to_string(&timestamp).map_err(|_| std::fmt::Error)?,
+                meta.level(),
+                serde_json::to_string(meta.target()).map_err(|_| std::fmt::Error)?,
+                serde_json::to_string(&message).map_err(|_| std::fmt::Error)?,
+            )
+        } else {
+            let location = match (meta.file(), meta.line()) {
+                (Some(file), Some(line)) => format!(" {file}:{line}"),
+                _ => String::new(),
+            };
+            write!(
+                writer,
+                "{timestamp} {} {}{location}: {message}",
+                meta.level(),
+                meta.target()
+            )
+        }
+    }
+}
 
 static LOG_WRITER_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
@@ -64,12 +112,8 @@ pub fn init() {
     let (writer, guard, warning) = persistent_writer();
 
     let console_layer = fmt::layer()
-        .json()
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_thread_names(false)
-        .with_file(false)
-        .with_line_number(false);
+        .with_writer(std::io::stderr)
+        .event_format(RedactedEventFormat { json: true });
 
     let initialized = tracing_subscriber::registry()
         .with(env_filter)
@@ -93,9 +137,8 @@ pub fn init_dev() {
         .unwrap_or_else(|_| EnvFilter::new("debug,tauri_plugin_updater=off"));
     let (writer, guard, warning) = persistent_writer();
     let console_layer = fmt::layer()
-        .with_target(true)
-        .with_file(true)
-        .with_line_number(true);
+        .with_writer(std::io::stderr)
+        .event_format(RedactedEventFormat { json: false });
 
     let initialized = tracing_subscriber::registry()
         .with(env_filter)
@@ -124,6 +167,50 @@ mod tests {
             log_dir_for_config(&config),
             PathBuf::from("root").join("r-code").join("logs")
         );
+    }
+
+    /// 控制台格式器必须与落盘同一脱敏规则（F-sec-01 钉子）。
+    #[test]
+    fn console_formatter_redacts_sensitive_fields() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+        impl Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl MakeWriter<'_> for SharedBuf {
+            type Writer = Self;
+            fn make_writer(&self) -> Self {
+                self.clone()
+            }
+        }
+
+        let buffer = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let layer = fmt::layer()
+            .with_writer(buffer.clone())
+            .event_format(RedactedEventFormat { json: false });
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(
+                token = "console-secret-value",
+                api_key = "console-api-key",
+                "console redaction probe"
+            );
+        });
+        let text = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("console redaction probe"));
+        assert!(text.contains("token=***"));
+        assert!(text.contains("api_key=***"));
+        assert!(!text.contains("console-secret-value"));
+        assert!(!text.contains("console-api-key"));
     }
 
     #[test]

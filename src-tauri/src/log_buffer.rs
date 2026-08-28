@@ -27,6 +27,57 @@ pub const LOG_FILE_PREFIX: &str = "r-code.jsonl";
 /// 固定保留天数。该策略是产品安全边界，不暴露为用户设置。
 pub const LOG_RETENTION_DAYS: i64 = 7;
 
+/// 单日日志文件的字节上限（F-obs-01）：7 天保留是时间界不是字节界，
+/// `RUST_LOG=trace` 下高频事件可以在一天内写满磁盘。超限后停止落盘
+///（内存环形缓冲照常，诊断页仍可见），并告警一次。
+pub const LOG_DAILY_FILE_BYTE_CAP: u64 = 64 * 1024 * 1024;
+
+/// 当日落盘预算：跨日自动重置；超限只告警一次。
+#[derive(Default)]
+struct FileBudget {
+    day: Mutex<String>,
+    written: std::sync::atomic::AtomicU64,
+    capped: std::sync::atomic::AtomicBool,
+    cap_override: Option<u64>,
+}
+
+impl FileBudget {
+    fn file_byte_cap(&self) -> u64 {
+        self.cap_override.unwrap_or(LOG_DAILY_FILE_BYTE_CAP)
+    }
+
+    /// 返回该条（日期 + 字节数）是否仍应落盘；跨日时先重置。
+    fn admit(&self, date: &str, bytes: u64) -> bool {
+        {
+            let mut day = self
+                .day
+                .lock()
+                .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
+            if day.as_str() != date {
+                day.clear();
+                day.push_str(date);
+                self.written.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.capped
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let written = self
+            .written
+            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed)
+            + bytes;
+        if written <= self.file_byte_cap() {
+            return true;
+        }
+        if !self.capped.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                cap_bytes = self.file_byte_cap(),
+                "daily diagnostic log file reached its byte cap; file writes paused until tomorrow"
+            );
+        }
+        false
+    }
+}
+
 /// 一条日志条目（cmd_logs_tail 返回形状）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -66,11 +117,23 @@ pub fn tail(limit: usize, level: Option<&str>) -> Vec<LogEntry> {
 /// tracing Layer：把事件同时写入环形缓冲和按日滚动的 JSONL 文件。
 pub struct BufferLayer {
     writer: Option<NonBlocking>,
+    budget: FileBudget,
 }
 
 impl BufferLayer {
     pub fn new(writer: Option<NonBlocking>) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            budget: FileBudget::default(),
+        }
+    }
+
+    /// 测试注入小上限以钉住封顶行为。
+    #[cfg(test)]
+    fn with_file_byte_cap(writer: Option<NonBlocking>, cap: u64) -> Self {
+        let mut layer = Self::new(writer);
+        layer.budget.cap_override = Some(cap);
+        layer
     }
 }
 
@@ -100,9 +163,15 @@ impl<S: tracing::Subscriber> Layer<S> for BufferLayer {
         drop(buf);
 
         if let Some(writer) = &self.writer {
-            let mut writer = writer.make_writer();
-            if serde_json::to_writer(&mut writer, &entry).is_ok() {
-                let _ = writer.write_all(b"\n");
+            let mut line = Vec::with_capacity(256);
+            if serde_json::to_writer(&mut line, &entry).is_ok() {
+                line.push(b'\n');
+                // RFC3339 时间戳前 10 字符即 UTC 日期；跨日自动重置预算。
+                let day = entry.timestamp.get(..10).unwrap_or("").to_string();
+                if self.budget.admit(&day, line.len() as u64) {
+                    let mut writer = writer.make_writer();
+                    let _ = writer.write_all(&line);
+                }
             }
         }
     }
@@ -126,7 +195,8 @@ pub fn tail_levels_with_persistence(
 /// 重扫日志文件；新事件仍由 [`BufferLayer`] 实时追加。
 pub fn hydrate_from_persistence(log_dir: &Path) -> std::io::Result<usize> {
     let cutoff = Utc::now() - Duration::days(LOG_RETENTION_DAYS);
-    let mut entries = read_persisted_entries(log_dir)?;
+    // 只需尾部 CAPACITY 条：tail 读避免全量解析 7 天文件（F-obs-02）。
+    let mut entries = read_persisted_tail(log_dir, CAPACITY)?;
     entries.retain(|entry| {
         DateTime::parse_from_rfc3339(&entry.timestamp)
             .map(|timestamp| timestamp.with_timezone(&Utc) >= cutoff)
@@ -175,6 +245,99 @@ fn collect_with_persistence(
     });
     if entries.len() > limit {
         entries.drain(..entries.len() - limit);
+    }
+    Ok(entries)
+}
+
+/// 从文件末尾反向分块读取，只解析最后 `max_lines` 行（F-obs-02：启动水合
+/// 不应为了取 1000 条尾部而完整解析当天可能上百 MB 的日志）。
+fn read_file_tail(path: &Path, max_lines: usize) -> std::io::Result<Vec<LogEntry>> {
+    use std::io::{Read, Seek};
+    let mut file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    const CHUNK: u64 = 64 * 1024;
+    // 头部片段：当前已读区域最前面、尚未见到其行首之前内容的半行。
+    let mut pending: Vec<u8> = Vec::new();
+    let mut lines: VecDeque<String> = VecDeque::new();
+    let mut pos = size;
+    while pos > 0 && lines.len() < max_lines {
+        let read_len = pos.min(CHUNK) as usize;
+        pos -= read_len as u64;
+        file.seek(std::io::SeekFrom::Start(pos))?;
+        let mut chunk = vec![0u8; read_len];
+        file.read_exact(&mut chunk)?;
+        // 文件顺序：更早的块在前，先前留下的半行在后。
+        chunk.extend_from_slice(&pending);
+        let newline_positions: Vec<usize> = chunk
+            .iter()
+            .enumerate()
+            .filter(|(_, byte)| **byte == b'\n')
+            .map(|(index, _)| index)
+            .collect();
+        let Some(&first_nl) = newline_positions.first() else {
+            // 整块没有换行：并入半行继续向前读。
+            pending = chunk;
+            continue;
+        };
+        let last_nl = newline_positions[newline_positions.len() - 1];
+        // 末段（最后一个换行之后）：首块时是文件最后一行；后续块时补全了上块
+        // 遗留的 pending 半行——两种情况它现在都是完整行，且是最新的一条。
+        if lines.len() < max_lines {
+            let tail = &chunk[last_nl + 1..];
+            if !tail.is_empty() {
+                lines.push_back(String::from_utf8_lossy(tail).into_owned());
+            }
+        }
+        // 相邻换行之间的都是完整行（从后往前收，保持时间序）。
+        for pair in newline_positions.windows(2).rev() {
+            let line = &chunk[pair[0] + 1..pair[1]];
+            if line.is_empty() {
+                continue;
+            }
+            lines.push_front(String::from_utf8_lossy(line).into_owned());
+            if lines.len() >= max_lines {
+                break;
+            }
+        }
+        // 首个换行之前的片段是新的半行。
+        pending = chunk[..first_nl].to_vec();
+    }
+    // 读到文件头：剩余半行就是第一行。
+    if pos == 0 && !pending.is_empty() && lines.len() < max_lines {
+        lines.push_front(String::from_utf8_lossy(&pending).into_owned());
+    }
+    let mut entries = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let Ok(mut entry) = serde_json::from_str::<LogEntry>(&line) {
+            entry.message = redact_text(&entry.message);
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
+/// 启动水合专用：按新→旧逐文件 tail 读，凑满 [`CAPACITY`] 即停。
+fn read_persisted_tail(log_dir: &Path, max_entries: usize) -> std::io::Result<Vec<LogEntry>> {
+    let mut paths = match std::fs::read_dir(log_dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| is_log_file(path))
+            .collect::<Vec<_>>(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    paths.sort();
+    paths.reverse();
+    let mut entries = Vec::new();
+    for path in paths {
+        if entries.len() >= max_entries {
+            break;
+        }
+        let need = max_entries - entries.len();
+        let mut tail = read_file_tail(&path, need)?;
+        tail.truncate(need);
+        entries.extend(tail);
     }
     Ok(entries)
 }
@@ -271,6 +434,14 @@ impl MessageVisitor {
             format!("{} {}", self.message, self.fields.join(" "))
         }
     }
+}
+
+/// 事件级脱敏消息（F-sec-01）：与 BufferLayer 同一 visitor/脱敏规则，
+/// 供 logging.rs 的控制台格式器复用——控制台不再绕过脱敏。
+pub(crate) fn redacted_event_message(event: &tracing::Event<'_>) -> String {
+    let mut visitor = MessageVisitor::default();
+    event.record(&mut visitor);
+    redact_text(&visitor.finish())
 }
 
 fn sensitive_log_field(name: &str) -> bool {
@@ -472,6 +643,56 @@ mod tests {
             .message
             .contains("github_pat_abcdefghijklmnopqrstuvwxyz123456"));
         assert!(entries[0].message.contains("api_key=***"));
+    }
+
+    #[test]
+    fn daily_file_cap_pauses_writes_and_keeps_memory_buffer() {
+        let dir = TempDir::new().unwrap();
+        let appender = tracing_appender::rolling::daily(dir.path(), LOG_FILE_PREFIX);
+        let (writer, guard) = tracing_appender::non_blocking(appender);
+        let layer = BufferLayer::with_file_byte_cap(Some(writer), 120);
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            for index in 0..30 {
+                tracing::warn!(index, "cap probe message that is long enough to matter");
+            }
+        });
+        drop(guard);
+
+        let persisted = read_persisted_entries(dir.path()).unwrap();
+        assert!(
+            persisted.len() < 30,
+            "file writes must pause after the tiny cap; got {}",
+            persisted.len()
+        );
+        let memory = tail(50, Some("WARN"));
+        assert!(memory.len() >= 30, "memory buffer keeps every event");
+    }
+
+    #[test]
+    fn file_tail_reads_only_the_last_lines() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("r-code.jsonl.2026-08-29");
+        let mut content = String::new();
+        for index in 0..10_000 {
+            let entry = LogEntry {
+                timestamp: format!("2026-08-29T00:00:{index:05}Z"),
+                level: "INFO".into(),
+                target: "t".into(),
+                message: format!("line-{index}"),
+            };
+            content.push_str(&serde_json::to_string(&entry).unwrap());
+            content.push('\n');
+        }
+        std::fs::write(&path, content).unwrap();
+
+        let tail_entries = read_file_tail(&path, 5).unwrap();
+        assert_eq!(tail_entries.len(), 5);
+        assert_eq!(tail_entries[0].message, "line-9995");
+        assert_eq!(tail_entries[4].message, "line-9999");
+
+        let tail_entries = read_file_tail(&path, 100_000).unwrap();
+        assert_eq!(tail_entries.len(), 10_000, "cap larger than file reads all");
     }
 
     #[test]
