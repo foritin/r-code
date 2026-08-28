@@ -637,10 +637,15 @@ fn main() {
                 }
                 Err(error) => tracing::warn!(%error, "failed to prune orphan Plan projections"),
             }
-            // agent 事件出口：drain 循环 → WebView（"agent-event" 信封 {task_id, event}）
+            // agent 事件出口：drain 循环 → WebView（"agent-event" 信封 {task_id, event}）。
+            // F-perf-03：通知路由仍逐事件；IPC 出口经 DeltaCoalescer 合并批内连续
+            // 文本 delta，并用借用型 Envelope 直发（去 json! 中间树）。
             let app_handle = app.handle().clone();
             let notification_app_handle = app_handle.clone();
             let notification_db = state.db.clone();
+            let coalescer = Arc::new(std::sync::Mutex::new(
+                r_code_host::event_coalesce::DeltaCoalescer::default(),
+            ));
             state.set_agent_event_sink(Arc::new(move |task_id, event| {
                 if let Err(error) = r_code_host::native_notification::record_agent_event(
                     &notification_app_handle,
@@ -653,9 +658,35 @@ fn main() {
                 // Queue the delivery decision before the task-state event. This preserves strict
                 // foreground Toast / background system-notification semantics even when the
                 // WebView processes both events in the same turn.
-                let payload = serde_json::json!({ "task_id": task_id, "event": event });
-                if let Err(e) = app_handle.emit("agent-event", payload) {
-                    tracing::warn!("emit agent-event failed: {e}");
+                use r_code_host::event_coalesce::{AgentEventEnvelope, CoalesceStep};
+                let step = {
+                    let mut coalescer = coalescer
+                        .lock()
+                        .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
+                    coalescer.step(task_id, event)
+                };
+                let emit_envelope = |handle: &tauri::AppHandle,
+                                     task_id: &str,
+                                     event: &r_code_core::dto::AgentEvent| {
+                    let envelope = AgentEventEnvelope { task_id, event };
+                    if let Err(e) = handle.emit("agent-event", &envelope) {
+                        tracing::warn!("emit agent-event failed: {e}");
+                    }
+                };
+                match step {
+                    CoalesceStep::Merged => {}
+                    CoalesceStep::Emit { task_id, event } => {
+                        emit_envelope(&app_handle, task_id, event);
+                    }
+                    CoalesceStep::FlushThenEmit {
+                        flushed_task_id,
+                        flushed_event,
+                        task_id,
+                        event,
+                    } => {
+                        emit_envelope(&app_handle, &flushed_task_id, &flushed_event);
+                        emit_envelope(&app_handle, task_id, event);
+                    }
                 }
             }));
             let mut permission_requests = state.permission_engine.subscribe_requests();

@@ -5433,12 +5433,34 @@ fn observed_tool_risk(tool_name: &str) -> RiskLevel {
     }
 }
 
+/// 已确保存在的会话日志文件记忆集（F-perf-04）：persist_runtime_event 每个
+/// 事件（含每个文本 delta）都会调 ensure_session_log，Windows 上 `.exists()`
+/// 是一次真实 syscall。条目按 storage_id 有界（每会话 ~40B 字符串），不驱逐。
+/// 取舍：进程运行中外部删除会话文件不再自动重建；后续 append 按需重建文件。
+fn ensured_session_log_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static ENSURED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    ENSURED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
 async fn ensure_session_log(
     session_store: &SessionStore,
     sessions_dir: &Path,
     storage_id: &str,
 ) -> Result<(), String> {
+    {
+        let set = ensured_session_log_set()
+            .lock()
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
+        if set.contains(storage_id) {
+            return Ok(());
+        }
+    }
     if session_file_path(sessions_dir, storage_id).exists() {
+        let mut set = ensured_session_log_set()
+            .lock()
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
+        set.insert(storage_id.to_string());
         return Ok(());
     }
     let meta = SessionMeta {
@@ -5448,10 +5470,17 @@ async fn ensure_session_log(
         provider: "unknown".to_string(),
         title: None,
     };
-    session_store
+    let result = session_store
         .append(storage_id, SessionEvent::Meta(meta))
         .await
-        .map_err(err_str)
+        .map_err(err_str);
+    if result.is_ok() {
+        let mut set = ensured_session_log_set()
+            .lock()
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
+        set.insert(storage_id.to_string());
+    }
+    result
 }
 
 /// 解开嵌套运行作用域；旧主 Agent 事件保持没有 scope，因而对旧 runtime 完全兼容。
@@ -20903,21 +20932,26 @@ async fn emit_codex_observable_event(
     event_sink: Option<&CodexSubagentEventSink>,
     event: AgentEvent,
 ) {
+    // F-perf-15：仅一个消费者时不付整事件 clone（大 delta 文本可达百余 KB）。
+    let Some(observer) = observer else {
+        if let Some(event_sink) = event_sink {
+            event_sink(event);
+        }
+        return;
+    };
     if let Some(event_sink) = event_sink {
         event_sink(event.clone());
     }
-    if let Some(observer) = observer {
-        persist_and_emit_external_event(
-            observer.db,
-            observer.session_store,
-            observer.sessions_dir,
-            observer.parent_storage_id,
-            observer.run,
-            observable_external_event(observer.run, event),
-            observer.sink,
-        )
-        .await;
-    }
+    persist_and_emit_external_event(
+        observer.db,
+        observer.session_store,
+        observer.sessions_dir,
+        observer.parent_storage_id,
+        observer.run,
+        observable_external_event(observer.run, event),
+        observer.sink,
+    )
+    .await;
 }
 
 /// Dynamic R-Code children can stream many text deltas. Unlike one-shot Codex events, their
@@ -22768,7 +22802,7 @@ async fn handle_codex_browser_dynamic_tool(
     let Some(request_id) = value.get("id") else {
         return CodexAppServerRequestHandling::Failed;
     };
-    let params = value.get("params").cloned().unwrap_or_default();
+    let params = value.get("params").unwrap_or(value);
     let tool = params
         .get("tool")
         .and_then(serde_json::Value::as_str)
@@ -22833,7 +22867,7 @@ async fn handle_codex_rcode_dynamic_tool(
     let Some(request_id) = value.get("id") else {
         return CodexAppServerRequestHandling::Failed;
     };
-    let params = value.get("params").cloned().unwrap_or_default();
+    let params = value.get("params").unwrap_or(value);
     let tool = params
         .get("tool")
         .and_then(serde_json::Value::as_str)
@@ -23013,7 +23047,7 @@ async fn handle_codex_rcode_single_dynamic_tool(
     let Some(request_id) = value.get("id") else {
         return CodexAppServerRequestHandling::Failed;
     };
-    let params = value.get("params").cloned().unwrap_or_default();
+    let params = value.get("params").unwrap_or(value);
     let tool = params
         .get("tool")
         .and_then(serde_json::Value::as_str)
@@ -23485,7 +23519,7 @@ async fn handle_codex_app_server_request(
     let Some(request_id) = value.get("id") else {
         return CodexAppServerRequestHandling::Failed;
     };
-    let params = value.get("params").cloned().unwrap_or_default();
+    let params = value.get("params").unwrap_or(value);
     let item_id = params
         .get("itemId")
         .and_then(serde_json::Value::as_str)
@@ -23676,7 +23710,7 @@ async fn observe_codex_app_server_event(
     policy_rejections: &mut Option<PolicyRejectionTracker>,
 ) -> Option<CodexExecFailure> {
     let method = value.get("method").and_then(serde_json::Value::as_str)?;
-    let params = value.get("params").cloned().unwrap_or_default();
+    let params = value.get("params").unwrap_or(value);
 
     // M1-01：agentMessage 生命周期（started/delta/completed）经归一化层投影。
     // 同一 item 的增量原位累计，completed 是权威封口——全文与累计一致时只
@@ -24047,13 +24081,18 @@ async fn emit_codex_frontend_event(
     event_sink: Option<&CodexSubagentEventSink>,
     event: AgentEvent,
 ) {
+    // 同 observable 版：仅 event_sink 一个消费者时直接 move，不 clone。
+    let Some(observer) = observer else {
+        if let Some(event_sink) = event_sink {
+            event_sink(event);
+        }
+        return;
+    };
     if let Some(event_sink) = event_sink {
         event_sink(event.clone());
     }
-    if let Some(observer) = observer {
-        if let Some(sink) = observer.sink.as_ref() {
-            sink(&observer.run.task_id, &event);
-        }
+    if let Some(sink) = observer.sink.as_ref() {
+        sink(&observer.run.task_id, &event);
     }
 }
 

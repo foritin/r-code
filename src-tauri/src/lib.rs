@@ -19,6 +19,7 @@ pub mod codex_permissions;
 pub mod commands;
 #[cfg(unix)] // Control Door 仅 Unix（Windows 不编译且 main.rs 未启动）
 pub mod control_door;
+pub mod event_coalesce;
 pub mod feature_flags;
 pub mod ipc;
 pub mod legacy_memory;
