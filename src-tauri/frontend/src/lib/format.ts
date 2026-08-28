@@ -108,6 +108,40 @@ export function clockSeconds(iso: string | null | undefined): string {
     .join(":");
 }
 
+/** 毫秒时长 → "123ms" / "1.5s" / "2分05秒"。审计流的统一时长格式（F-maint-04 收敛）。 */
+export function formatDurationMs(ms: number): string {
+  const value = Math.max(0, Math.round(ms));
+  if (value < 1_000) return `${value}ms`;
+  if (value < 60_000) return `${(value / 1_000).toFixed(1)}s`;
+  const minutes = Math.floor(value / 60_000);
+  const seconds = Math.round((value % 60_000) / 1_000);
+  return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+}
+
+/** RFC3339 → 本地化中等日期时间（更新设置卡等场景的统一实现）。 */
+export function formatDateTimeMedium(value: string | null, locale: string): string | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
+}
+
+/** RFC3339 → "MM-DD HH:MM" 紧凑本地时间（记忆面板等空间受限列表的统一实现）。 */
+export function formatDateTimeCompact(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString(undefined, {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
+
 /** 从 task id 派生确定性的会话光谱色（rail 色条 / 会话标识）。 */
 const HUES = ["#6ee7f2", "#eebf6d", "#8b7cf6", "#5fe3a1", "#f2a3d8", "#8fb8e8", "#f0a05a"];
 export function hueFor(id: string): string {

@@ -18,7 +18,7 @@ import type {
   TaskEventType,
   VerificationRecord,
 } from "../../lib/types";
-import { permissionRiskLabel, toolTarget, toolVerb } from "../../lib/format";
+import { formatDurationMs, permissionRiskLabel, toolTarget, toolVerb } from "../../lib/format";
 import { summarizeOutput } from "./model";
 
 /** 工具调用构成：按动词聚合（读取/命令/检索/编辑/写入/其他）。 */
@@ -435,11 +435,7 @@ function shortTarget(value: string): string {
   return cut(parts.length > 2 ? `…/${tail}` : tail, 44);
 }
 
+// 时长格式化唯一实现在 lib/format.ts（F-maint-04 收敛；语义不变）。
 function formatDuration(ms: number): string {
-  const value = Math.max(0, Math.round(ms));
-  if (value < 1_000) return `${value}ms`;
-  if (value < 60_000) return `${(value / 1_000).toFixed(1)}s`;
-  const minutes = Math.floor(value / 60_000);
-  const seconds = Math.round((value % 60_000) / 1_000);
-  return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+  return formatDurationMs(ms);
 }

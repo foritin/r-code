@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { errText } from "../../lib/format";
+import { formatDateTimeMedium } from "../../lib/format";
 import {
   onUpdaterState,
   updaterCheck,
@@ -14,14 +15,9 @@ import "./ApplicationUpdaterSettings.css";
 
 type BusyAction = "check" | "download" | "install" | "restart";
 
+// 日期时间格式化唯一实现在 lib/format.ts（F-maint-04 收敛；语义不变）。
 function formatDate(value: string | null, locale: string): string | null {
-  if (!value) return null;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return null;
-  return new Intl.DateTimeFormat(locale, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(timestamp);
+  return formatDateTimeMedium(value, locale);
 }
 
 function formatMegabytes(bytes: number, locale: string): string {

@@ -1,3 +1,4 @@
+import { formatDateTimeCompact } from "../../lib/format";
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   legacyMemoryStatus,
@@ -48,14 +49,9 @@ function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+// 紧凑日期时间唯一实现在 lib/format.ts（F-maint-04 收敛；语义不变）。
 function formatTime(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDateTimeCompact(value);
 }
 
 function kindLabel(kind: MemoryKind) {
