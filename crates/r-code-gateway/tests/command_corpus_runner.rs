@@ -228,13 +228,14 @@ fn host_platform() -> Option<&'static str> {
     }
 }
 
+// 金集属显式选择执行：默认 `cargo test` 报 ignored（而非"静默 pass"掩盖金集
+// 0 执行）；经 scripts/windows-reliability/corpus-run.mjs（CI Windows 门禁）或
+// `cargo test --test command_corpus_runner -- --ignored` + CORPUS_RUN 环境变量执行。
 #[tokio::test]
+#[ignore = "golden corpus 需显式执行：CORPUS_RUN=fast|slow|all + windows/darwin 平台（corpus-run.mjs 或 -- --ignored）"]
 async fn command_corpus_run() {
     let Some(tier_selection) = std::env::var("CORPUS_RUN").ok() else {
-        println!(
-            "corpus runner skipped: set CORPUS_RUN=fast|slow|all to execute the golden corpus"
-        );
-        return;
+        panic!("CORPUS_RUN=fast|slow|all 未设置：--ignored 显式执行金集时必须选择档位");
     };
     let tiers: Vec<&str> = match tier_selection.as_str() {
         "fast" => vec!["fast"],
@@ -243,8 +244,7 @@ async fn command_corpus_run() {
         other => panic!("CORPUS_RUN must be fast|slow|all, got {other}"),
     };
     let Some(platform) = host_platform() else {
-        println!("corpus runner skipped: unsupported host platform for golden corpus");
-        return;
+        panic!("golden corpus 仅支持 windows/darwin 宿主平台");
     };
 
     let entries = load_corpus().expect("corpus.jsonl must load");

@@ -230,7 +230,8 @@ export function writeCacheEntry(id, profile, revision, ok, commandLabel_, report
 }
 
 /** 选择集执行入口：selection 为任务 ID 数组（调用方已做依赖闭包校验）。
- *  报告落盘 <rootDir>/<reportRoot>/<profile>/<fileName>.json 并返回。 */
+ *  报告落盘 <rootDir>/<reportRoot>/<profile>/<fileName>.json 并返回。
+ *  registry 可注入 { REGISTRY, registryDigest }（自测合成 fixture 用）；默认读真实注册表。 */
 export async function runVerification({
   selection,
   profile,
@@ -239,8 +240,9 @@ export async function runVerification({
   targetLabel,
   fileName,
   cache = true,
+  registry = null,
 }) {
-  const { REGISTRY, registryDigest } = await import("./registry.mjs");
+  const { REGISTRY, registryDigest } = registry ?? (await import("./registry.mjs"));
   const meta = collectWorktreeDigest(rootDir);
   const results = [];
   for (const tid of selection) {

@@ -23,7 +23,7 @@
 
 | 文档 | 状态 |
 | --- | --- |
-| [产品体验重构 PRD / AI 实施清单](./product-experience-redesign/r-code-experience-redesign-prd.md) | `frozen`，当前进度 `1/42`；本次只完成原型和实施合同，产品代码尚未按清单实施 |
+| [产品体验重构 PRD / AI 实施清单](./product-experience-redesign/r-code-experience-redesign-prd.md) | `frozen`，42/42 已实施闭环；唯一状态源是 [`worklist-gate.json`](./product-experience-redesign/worklist-gate.json)（`--update-freeze` 重刷），本表不再手写进度 |
 | [Codex 主代理丰富交互历史合同](./support/contracts/codex-rich-interaction-prd.md) | 特定 2026-08-25 revision 的 `38/38` 历史证据已通过；当前 dirty `dev` 仍需新清单 M0-02 回归 |
 | [Windows 命令可靠性历史合同](./support/contracts/windows-command-reliability-prd.md) | 已完成 revision 的冻结合同；当前位置仅作维护与追溯，不是新的待办状态源 |
 

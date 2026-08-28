@@ -19,39 +19,45 @@ function sha256(text) {
 }
 
 // 生成 JSON 的顺序稳定，直接遍历即为稳定注册序。
-export const REGISTRY = Object.fromEntries(
-  Object.entries(generated.tasks).map(([taskId, card]) => [
-    taskId,
-    {
-      title: card.title,
-      milestone: card.milestone,
-      requirement_refs: card.requirement_refs,
-      depends_on: card.depends_on,
-      baseline_done: generated.baseline_done.includes(taskId),
-      assertions: card.assertions.map((a) => {
-        const w = WIRING[a.id];
-        if (w) {
-          if (w.id !== a.id) {
-            throw new Error(`wiring id mismatch: ${w.id} != ${a.id}`);
+// buildRegistry 独立导出：自测/合成 fixture 用它构造确定性注册表，
+// 不再依赖真实注册表的瞬态进度（如某任务恰好未接线）。
+export function buildRegistry(generatedSource, wiring = WIRING) {
+  return Object.fromEntries(
+    Object.entries(generatedSource.tasks).map(([taskId, card]) => [
+      taskId,
+      {
+        title: card.title,
+        milestone: card.milestone,
+        requirement_refs: card.requirement_refs,
+        depends_on: card.depends_on,
+        baseline_done: generatedSource.baseline_done.includes(taskId),
+        assertions: card.assertions.map((a) => {
+          const w = wiring[a.id];
+          if (w) {
+            if (w.id !== a.id) {
+              throw new Error(`wiring id mismatch: ${w.id} != ${a.id}`);
+            }
+            return {
+              ...a,
+              ...w,
+              not_implemented: false,
+            };
           }
           return {
             ...a,
-            ...w,
-            not_implemented: false,
+            type: "not_implemented",
+            command: null,
+            profiles: ["implementation"],
+            note: "待对应里程碑实施时接线；在此之前为显式 required 失败",
+            not_implemented: true,
           };
-        }
-        return {
-          ...a,
-          type: "not_implemented",
-          command: null,
-          profiles: ["implementation"],
-          note: "待对应里程碑实施时接线；在此之前为显式 required 失败",
-          not_implemented: true,
-        };
-      }),
-    },
-  ]),
-);
+        }),
+      },
+    ]),
+  );
+}
+
+export const REGISTRY = buildRegistry(generated);
 
 /** 已接线但 registry 中不存在的 id（防止接线表拼错后静默失效）。 */
 const ORPHAN_WIRING = [...wiredIds].filter((id) => !REGISTRY[id.split(".")[0]]);

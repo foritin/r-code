@@ -492,7 +492,19 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&foreign, temp.path().join("escape")).unwrap();
         #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&foreign, temp.path().join("escape")).unwrap();
+        {
+            // 未开启开发者模式且非 admin 的 Windows 主机拒绝创建 symlink
+            //（os error 1314）。这是宿主能力缺失而非被测行为回归：前提造不出
+            // 时跳过本用例，而不是把环境限制误报成失败。
+            let escape = temp.path().join("escape");
+            if let Err(error) = std::os::windows::fs::symlink_dir(&foreign, &escape) {
+                if error.raw_os_error() == Some(1314) {
+                    eprintln!("SKIP: host lacks the symlink privilege (os error 1314)");
+                    return;
+                }
+                panic!("create symlink: {error}");
+            }
+        }
 
         let db = Database::open_in_memory().expect("in-memory db");
         WorkspaceService::new(&db)

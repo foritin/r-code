@@ -6,7 +6,8 @@
 //
 // 行为：
 // 1. 在净化 PATH（剥离 Git Bash 的 bin/usr/bin/mingw64 目录，模拟 GUI 启动的
-//    干净环境）下运行 `cargo test -p r-code-gateway --test command_corpus_runner`，
+//    干净环境）下运行 `cargo test -p r-code-gateway --test command_corpus_runner
+//    -- --ignored`（金集测试标记 #[ignore]，默认 cargo test 如实报 ignored），
 //    通过 CORPUS_RUN / CORPUS_GIT_SHA 环境变量选择档位与报告 sha；
 // 2. 读取生成的 report-<sha>-<platform>.json，按 --check 断言检查；
 // 3. 任一检查失败退出码 1 并列出精确条目。
@@ -152,7 +153,7 @@ async function main() {
   process.stdout.write(`corpus-run: CORPUS_RUN=${tier} sha=${sha.slice(0, 10)} platform=${platform}（PATH 已净化）\n`);
   const run = spawnSync(
     "cargo",
-    ["test", "-p", "r-code-gateway", "--test", "command_corpus_runner", "--", "--nocapture"],
+    ["test", "-p", "r-code-gateway", "--test", "command_corpus_runner", "--", "--ignored", "--nocapture"],
     { cwd: ROOT, encoding: "utf8", timeout: CORPUS_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, env: childEnv },
   );
   if (run.error) {

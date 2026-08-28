@@ -4,13 +4,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { sanitizeText } from "./product-experience/runner.mjs";
+import { runVerification, sanitizeText } from "./product-experience/runner.mjs";
 import {
   MILESTONES,
   REGISTRY,
+  buildRegistry,
   findCycles,
   registryDigest,
   tasksThroughMilestone,
@@ -97,16 +99,61 @@ test("CLI：未知里程碑 → 非 0 且报值", () => {
   assert.match(r.stderr + r.stdout, /M99/);
 });
 
-test("CLI：失败子命令 → 非 0 且失败列表含准确断言 ID（not_implemented 视为显式失败）", () => {
-  // M9-04 全部断言未接线 → 必须整体失败并逐 ID 列出
-  const pending = Object.values(REGISTRY["M9-04"].assertions)
-    .filter((a) => a.not_implemented)
-    .map((a) => a.id);
-  assert.ok(pending.length > 0, "fixture 需要 M9-04 存在未接线断言");
-  const r = cli(["--task", "M9-04", "--report-root", ".tmp-selftest-reports"]);
-  assert.equal(r.status, 1);
-  for (const id of pending) {
-    assert.match(r.stdout, new RegExp(`FAIL ${id}`));
+test("runVerification：not_implemented/失败命令都按显式失败列出精确断言 ID（合成 fixture，不依赖真实进度）", async () => {
+  // 真实注册表 42/42 已接线后不存在 not_implemented 断言；失败路径语义改用
+  // 注入的合成注册表钉住：A1 未接线 → not_implemented 显式失败；A2 命令退出 3 → failed。
+  const synthetic = buildRegistry(
+    {
+      task_count: 1,
+      assertion_count: 2,
+      tasks: {
+        "T9-99": {
+          title: "selftest synthetic task",
+          milestone: "M9",
+          requirement_refs: [],
+          depends_on: [],
+          assertions: [
+            { id: "T9-99.A1", level: "required" },
+            { id: "T9-99.A2", level: "required" },
+          ],
+        },
+      },
+      baseline_done: [],
+    },
+    {
+      "T9-99.A2": {
+        id: "T9-99.A2",
+        type: "command",
+        command: [process.execPath, "-e", "process.exit(3)"],
+        profiles: ["implementation"],
+        cwd: null,
+        env: null,
+        timeout_ms: 30_000,
+      },
+    },
+  );
+  const reportRoot = ".tmp-selftest-reports";
+  try {
+    const { report } = await runVerification({
+      selection: ["T9-99"],
+      profile: "implementation",
+      reportRoot,
+      rootDir: process.cwd(),
+      targetLabel: "T9-99",
+      fileName: "selftest-t9-99",
+      cache: false,
+      registry: { REGISTRY: synthetic, registryDigest: () => "0".repeat(64) },
+    });
+    assert.equal(report.ok, false);
+    assert.deepEqual([...report.failures].sort(), ["T9-99.A1", "T9-99.A2"]);
+    assert.equal(report.summary.not_implemented, 1);
+    const a1 = report.results.find((r) => r.assertion_id === "T9-99.A1");
+    assert.equal(a1.outcome, "not_implemented");
+    const a2 = report.results.find((r) => r.assertion_id === "T9-99.A2");
+    assert.equal(a2.outcome, "failed");
+    assert.equal(a2.exit_code, 3);
+  } finally {
+    rmSync(path.join(process.cwd(), reportRoot), { recursive: true, force: true });
   }
 });
 

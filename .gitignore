@@ -33,6 +33,7 @@ Thumbs.db
 
 # Local reference clones (R-Code 等外部参照仓库)
 .reference/
+.reasonix/
 
 # Local agent plans, ledgers, snapshots, and performance scratch data
 /sandbox/
