@@ -397,17 +397,23 @@ mod tests {
         git_init_at(&workspace);
 
         let worktree = ws_temp.path().join("wt-task42");
-        git(&workspace, &[
-            "worktree",
-            "add",
-            "-b",
-            "r-code/task42",
-            worktree.to_str().unwrap(),
-            "HEAD",
-        ]);
+        git(
+            &workspace,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "r-code/task42",
+                worktree.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
 
         let db_path = ws_temp.path().join("state.sqlite");
-        let task = task_for(Some(workspace.to_str().unwrap()), Some(worktree.to_str().unwrap()));
+        let task = task_for(
+            Some(workspace.to_str().unwrap()),
+            Some(worktree.to_str().unwrap()),
+        );
         let resolve_once = || {
             let db = Database::open(&db_path).expect("open database");
             WorkspaceService::new(&db)
@@ -444,8 +450,9 @@ mod tests {
 
         let ghost = temp.path().join("never-registered");
         std::fs::create_dir_all(&ghost).unwrap();
-        let err = resolve_task_workspace_binding(&db, &task_for(Some(ghost.to_str().unwrap()), None))
-            .expect_err("unregistered workspace must fail closed");
+        let err =
+            resolve_task_workspace_binding(&db, &task_for(Some(ghost.to_str().unwrap()), None))
+                .expect_err("unregistered workspace must fail closed");
         assert!(err.to_string().contains("workspace"), "{err}");
 
         let vanished = temp.path().join("vanishes-later");
@@ -454,8 +461,9 @@ mod tests {
             .open(vanished.to_str().unwrap(), "later-removed")
             .expect("register then delete target");
         std::fs::remove_dir_all(&vanished).unwrap();
-        let err = resolve_task_workspace_binding(&db, &task_for(Some(vanished.to_str().unwrap()), None))
-            .expect_err("removed workspace dir must fail closed");
+        let err =
+            resolve_task_workspace_binding(&db, &task_for(Some(vanished.to_str().unwrap()), None))
+                .expect_err("removed workspace dir must fail closed");
         assert!(err.to_string().contains("workspace"), "{err}");
     }
 
@@ -474,7 +482,10 @@ mod tests {
         WorkspaceService::new(&db)
             .open(workspace.to_str().unwrap(), "nogit")
             .unwrap();
-        let task = task_for(Some(workspace.to_str().unwrap()), Some(plain_dir.to_str().unwrap()));
+        let task = task_for(
+            Some(workspace.to_str().unwrap()),
+            Some(plain_dir.to_str().unwrap()),
+        );
         let result = resolve_task_workspace_binding(&db, &task);
         assert!(result.is_err(), "plain directory must be rejected");
         assert!(!matches!(result, Ok(TaskWorkspaceBinding::Local(_))));
@@ -532,14 +543,17 @@ mod tests {
 
         // worktree 属于另一个仓库 common dir；registered 只是普通 git 仓库目录。
         let foreign_worktree = temp.path().join("foreign-wt");
-        git(&other_repo, &[
-            "worktree",
-            "add",
-            "-b",
-            "r-code/foreign",
-            foreign_worktree.to_str().unwrap(),
-            "HEAD",
-        ]);
+        git(
+            &other_repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "r-code/foreign",
+                foreign_worktree.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
         // 该 worktree 的 .git 是文件 → 通过第一道检查，随后必须在
         // "belongs to a different Git repository" 处被拒。
 

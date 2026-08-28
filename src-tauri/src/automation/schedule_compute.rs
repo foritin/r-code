@@ -87,13 +87,7 @@ pub struct IdempotencyLedger {
 }
 
 impl IdempotencyLedger {
-    pub fn try_acquire_run(
-        &mut self,
-        key: &str,
-        run_id: &str,
-        now_ms: u64,
-        lease_ms: u64,
-    ) -> bool {
+    pub fn try_acquire_run(&mut self, key: &str, run_id: &str, now_ms: u64, lease_ms: u64) -> bool {
         if let Some(until) = self.leases.get(key) {
             if *until > now_ms {
                 return false; // 未过期且已有 Run
@@ -166,10 +160,19 @@ mod tests {
     #[test]
     fn m8_02_a2_idempotency_key_single_run_and_lease_expiry_recovery() {
         let mut ledger = IdempotencyLedger::default();
-        assert!(ledger.try_acquire_run("def-1", "run-1", 1000, 120_000), "首次获得租约");
-        assert!(!ledger.try_acquire_run("def-1", "run-2", 2000, 120_000), "租约未过期不得二次执行");
+        assert!(
+            ledger.try_acquire_run("def-1", "run-1", 1000, 120_000),
+            "首次获得租约"
+        );
+        assert!(
+            !ledger.try_acquire_run("def-1", "run-2", 2000, 120_000),
+            "租约未过期不得二次执行"
+        );
         assert_eq!(ledger.run_id_of("def-1"), Some(&"run-1".to_string()));
         ledger.release_lease("def-1");
-        assert!(ledger.try_acquire_run("def-1", "run-3", 2500, 120_000), "lease 释放后可恢复");
+        assert!(
+            ledger.try_acquire_run("def-1", "run-3", 2500, 120_000),
+            "lease 释放后可恢复"
+        );
     }
 }

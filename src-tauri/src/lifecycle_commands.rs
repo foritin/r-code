@@ -102,12 +102,26 @@ pub fn cmd_close_prompt_decision(
 pub fn cmd_lifecycle_explicit_quit(app: AppHandle) -> Result<bool, String> {
     use crate::shutdown_coordinator::{ShutdownCoordinator, SubsystemOutcome};
     let mut coordinator = ShutdownCoordinator::new();
-    for name in ["agent_runs", "tools_gateway", "browser_runtime", "automation", "companion", "persistence_flush"] {
+    for name in [
+        "agent_runs",
+        "tools_gateway",
+        "browser_runtime",
+        "automation",
+        "companion",
+        "persistence_flush",
+    ] {
         coordinator.register(name);
     }
     // 每个已注册面以同步 ACK 收尾（真实异步收尾在既有 Drop/事件路径发生，
     // Host exit 的 atomically-join 保证进程不残留；失败也计入摘要）。
-    for name in ["agent_runs", "tools_gateway", "browser_runtime", "automation", "companion", "persistence_flush"] {
+    for name in [
+        "agent_runs",
+        "tools_gateway",
+        "browser_runtime",
+        "automation",
+        "companion",
+        "persistence_flush",
+    ] {
         coordinator.report(name, SubsystemOutcome::Acked);
     }
     coordinator.persist_terminal_projection();

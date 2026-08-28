@@ -29,8 +29,7 @@ struct Fixture {
 fn load_fixture() -> Vec<FixtureCase> {
     let raw = std::fs::read_to_string(FIXTURE_PATH)
         .unwrap_or_else(|error| panic!("read shared user error fixture: {error}"));
-    let fixture: Fixture =
-        serde_json::from_str(&raw).expect("parse shared user error fixture");
+    let fixture: Fixture = serde_json::from_str(&raw).expect("parse shared user error fixture");
     fixture.cases
 }
 
@@ -42,7 +41,9 @@ fn shared_fixture_decodes_to_identical_code_and_args() {
 
         assert_eq!(
             error.code,
-            case.payload["code"].as_str().expect("fixture code is string"),
+            case.payload["code"]
+                .as_str()
+                .expect("fixture code is string"),
             "case {} code mismatch",
             case.name
         );
@@ -52,7 +53,11 @@ fn shared_fixture_decodes_to_identical_code_and_args() {
             .cloned()
             .unwrap_or_else(|| Value::Object(Default::default()));
         let actual_args = serde_json::to_value(&error.args).expect("serialize args");
-        assert_eq!(actual_args, expected_args, "case {} args mismatch", case.name);
+        assert_eq!(
+            actual_args, expected_args,
+            "case {} args mismatch",
+            case.name
+        );
     }
 }
 
@@ -77,7 +82,11 @@ fn debug_detail_survives_round_trip_but_stays_optional() {
             ),
         }
         // code/args 部分与原始 payload 完全一致
-        assert_eq!(reserialized["code"], case.payload["code"], "case {}", case.name);
+        assert_eq!(
+            reserialized["code"], case.payload["code"],
+            "case {}",
+            case.name
+        );
         let empty = Value::Object(Default::default());
         assert_eq!(
             reserialized.get("args").cloned().unwrap_or(empty.clone()),

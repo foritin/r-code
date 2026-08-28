@@ -5,9 +5,9 @@
 //! consumed by both native R-Code runs and Codex App Server dynamic tools.
 
 pub mod asset_manifest;
-pub mod installer;
 mod commands;
 mod events;
+pub mod installer;
 mod runtime;
 mod scope;
 mod tool_gateway;

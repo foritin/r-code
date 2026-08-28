@@ -71,10 +71,16 @@ impl ShutdownCoordinator {
         let reports = self
             .subsystems
             .iter()
-            .map(|(name, outcome)| SubsystemReport { name, outcome: *outcome })
+            .map(|(name, outcome)| SubsystemReport {
+                name,
+                outcome: *outcome,
+            })
             .collect();
         let complete = self.terminal_projection_persisted
-            && self.subsystems.iter().all(|(_, o)| *o == SubsystemOutcome::Acked);
+            && self
+                .subsystems
+                .iter()
+                .all(|(_, o)| *o == SubsystemOutcome::Acked);
         ShutdownSummary {
             complete,
             reports,
@@ -127,19 +133,33 @@ mod tests {
         c.persist_terminal_projection();
         let s = c.summarize();
         assert!(!s.complete);
-        assert!(s.reports.iter().any(|r| r.name == "a" && r.outcome == SubsystemOutcome::Failed));
-        assert!(s.reports.iter().any(|r| r.name == "b" && r.outcome == SubsystemOutcome::Acked));
+        assert!(s
+            .reports
+            .iter()
+            .any(|r| r.name == "a" && r.outcome == SubsystemOutcome::Failed));
+        assert!(s
+            .reports
+            .iter()
+            .any(|r| r.name == "b" && r.outcome == SubsystemOutcome::Acked));
     }
 
     #[test]
     fn bounded_timeout_marks_missing_subsystems() {
         let reports = vec![
-            SubsystemReport { name: "fast", outcome: SubsystemOutcome::Acked },
-            SubsystemReport { name: "slow", outcome: SubsystemOutcome::TimedOut },
+            SubsystemReport {
+                name: "fast",
+                outcome: SubsystemOutcome::Acked,
+            },
+            SubsystemReport {
+                name: "slow",
+                outcome: SubsystemOutcome::TimedOut,
+            },
         ];
         let out = bounded_timeout_all(Duration::from_secs(2), &reports);
         assert_eq!(out.len(), 2);
-        assert!(out.iter().any(|r| r.name == "slow" && r.outcome == SubsystemOutcome::TimedOut));
+        assert!(out
+            .iter()
+            .any(|r| r.name == "slow" && r.outcome == SubsystemOutcome::TimedOut));
     }
 
     #[test]

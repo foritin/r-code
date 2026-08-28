@@ -8310,7 +8310,9 @@ delegate_task 的 agent 枚举",
             if let Err(error) = self.validate_candidate_pool() {
                 return Ok((
                     SubagentBackend::RCode,
-                    degrade_note(format!("候选池结构无效（{error}）；本次委派回退 R-Code 自身")),
+                    degrade_note(format!(
+                        "候选池结构无效（{error}）；本次委派回退 R-Code 自身"
+                    )),
                 ));
             }
             let found = self
@@ -8356,7 +8358,9 @@ delegate_task 的 agent 枚举",
                 }
                 return Ok((
                     SubagentBackend::RCode,
-                    degrade_note(format!("候选池结构无效（{error}）；本次委派回退 R-Code 自身")),
+                    degrade_note(format!(
+                        "候选池结构无效（{error}）；本次委派回退 R-Code 自身"
+                    )),
                 ));
             }
             // roll 按剩余槽位的权重和归一化：坏槽被剔除后权重和可能小于 100，

@@ -237,8 +237,14 @@ mod m7_04_tests {
 
     #[test]
     fn a4_file_and_wildcard_origins_are_rejected() {
-        assert!(BrowserOrigin::parse("file:///etc/passwd").is_err(), "file:// 必须拒绝");
-        assert!(BrowserOrigin::parse("https://*.example.com").is_err() || BrowserOrigin::parse("https://*.example.com").is_ok());
+        assert!(
+            BrowserOrigin::parse("file:///etc/passwd").is_err(),
+            "file:// 必须拒绝"
+        );
+        assert!(
+            BrowserOrigin::parse("https://*.example.com").is_err()
+                || BrowserOrigin::parse("https://*.example.com").is_ok()
+        );
         // localhost 可浏览
         assert!(BrowserOrigin::parse("http://localhost:3000").is_ok());
         assert!(BrowserOrigin::parse("http://127.0.0.1:9222").is_ok());
@@ -248,6 +254,9 @@ mod m7_04_tests {
     fn a4_unknown_hosts_still_parse_but_require_explicit_grant() {
         // 外部 exact origin 需要 browse 授权：parse 允许，授权由 grant 层判定。
         let origin = BrowserOrigin::parse("https://external.example.org");
-        assert!(origin.is_ok(), "exact origin 本身合法；是否可浏览由 grant 决定");
+        assert!(
+            origin.is_ok(),
+            "exact origin 本身合法；是否可浏览由 grant 决定"
+        );
     }
 }

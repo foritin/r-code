@@ -3,8 +3,8 @@
 //! This module intentionally contains only feature gating and pure scheduling semantics. Durable
 //! repositories, scheduler threads, task dispatch, and UI commands are introduced by later gates.
 
-pub mod schedule_compute;
 mod clock;
+pub mod schedule_compute;
 mod semantics;
 
 use r_code_core::UserFacingError;

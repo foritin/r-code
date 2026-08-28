@@ -54,7 +54,11 @@ impl InstallCoordinator {
     }
 
     pub fn installed_version(&self) -> Option<String> {
-        self.inner.lock().expect("install lock").installed_version.clone()
+        self.inner
+            .lock()
+            .expect("install lock")
+            .installed_version
+            .clone()
     }
 
     pub fn current_corrupt(&self) -> bool {
@@ -87,7 +91,12 @@ impl SessionRegistry {
     }
 
     /// 每 Task 独立 profile：不同 task 的 profile_path 永不相同。
-    pub fn create_session(&mut self, task_id: &str, session_id: &str, profile_root: &str) -> SessionRecord {
+    pub fn create_session(
+        &mut self,
+        task_id: &str,
+        session_id: &str,
+        profile_root: &str,
+    ) -> SessionRecord {
         let profile_path = format!("{profile_root}/{task_id}/{session_id}");
         let record = SessionRecord {
             session_id: session_id.to_string(),
@@ -95,13 +104,19 @@ impl SessionRegistry {
             profile_path: profile_path.clone(),
             state_after_restart: "stopped",
         };
-        self.sessions.entry(task_id.to_string()).or_default().push(record.clone());
+        self.sessions
+            .entry(task_id.to_string())
+            .or_default()
+            .push(record.clone());
         self.profiles.insert(session_id.to_string(), profile_path);
         record
     }
 
     pub fn sessions_of_task(&self, task_id: &str) -> Vec<&SessionRecord> {
-        self.sessions.get(task_id).map(|v| v.iter().collect()).unwrap_or_default()
+        self.sessions
+            .get(task_id)
+            .map(|v| v.iter().collect())
+            .unwrap_or_default()
     }
 
     /// 重启恢复：所有 Session 一律 stopped（不自动拉起）。
@@ -110,7 +125,10 @@ impl SessionRegistry {
             .get(task_id)
             .map(|v| {
                 v.iter()
-                    .map(|r| SessionRecord { state_after_restart: "stopped", ..r.clone() })
+                    .map(|r| SessionRecord {
+                        state_after_restart: "stopped",
+                        ..r.clone()
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -141,8 +159,14 @@ mod tests {
     #[test]
     fn concurrent_first_use_installs_once() {
         let coordinator = InstallCoordinator::default();
-        assert!(coordinator.try_begin_install("playwright-1.54.2"), "首个安装者获得安装权");
-        assert!(!coordinator.try_begin_install("playwright-1.54.2"), "并发安装被单飞锁拒绝");
+        assert!(
+            coordinator.try_begin_install("playwright-1.54.2"),
+            "首个安装者获得安装权"
+        );
+        assert!(
+            !coordinator.try_begin_install("playwright-1.54.2"),
+            "并发安装被单飞锁拒绝"
+        );
         coordinator.finish_install("playwright-1.54.2", "1.54.2");
         assert_eq!(coordinator.installed_version().as_deref(), Some("1.54.2"));
     }
@@ -161,8 +185,14 @@ mod tests {
         let mut registry = SessionRegistry::new();
         let s1 = registry.create_session("task-a", "s-a1", "/profiles");
         let s2 = registry.create_session("task-b", "s-b1", "/profiles");
-        assert_ne!(s1.profile_path, s2.profile_path, "不同 task 的 profile 必须隔离");
-        assert!(registry.sessions_of_task("task-a").iter().all(|r| r.task_id == "task-a"));
+        assert_ne!(
+            s1.profile_path, s2.profile_path,
+            "不同 task 的 profile 必须隔离"
+        );
+        assert!(registry
+            .sessions_of_task("task-a")
+            .iter()
+            .all(|r| r.task_id == "task-a"));
     }
 
     #[test]
@@ -181,6 +211,9 @@ mod tests {
         let _ = registry.create_session("task-b", "sb", "/profiles");
         let removed = registry.remove_task("task-a");
         assert_eq!(removed, vec![a.profile_path.clone()]);
-        assert!(registry.profile_of_session("sb").is_some(), "其他 task 的 profile 不受影响");
+        assert!(
+            registry.profile_of_session("sb").is_some(),
+            "其他 task 的 profile 不受影响"
+        );
     }
 }

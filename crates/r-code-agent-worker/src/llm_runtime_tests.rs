@@ -2078,7 +2078,11 @@ fn degraded_pool_serves_remaining_slots_or_falls_back_to_r_code_never_the_legacy
     let (backend, note) = degraded_empty
         .route_backend_for_run("auto", TaskComplexity::Standard, "child")
         .unwrap();
-    assert_eq!(backend, SubagentBackend::RCode, "all-degraded pool serves self");
+    assert_eq!(
+        backend,
+        SubagentBackend::RCode,
+        "all-degraded pool serves self"
+    );
     assert!(note.contains("stale-revision"));
     assert!(note.contains("已全部降级"));
     assert!(note.contains("R-Code 自身"));

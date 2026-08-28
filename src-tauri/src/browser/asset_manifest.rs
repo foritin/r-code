@@ -86,14 +86,16 @@ pub fn resolve_asset<'a>(
 ) -> Result<&'a PlatformAsset, String> {
     let matches: Vec<&PlatformAsset> = assets
         .iter()
-        .filter(|a| {
-            a.kind == kind && a.platform == platform && a.arch == arch
-        })
+        .filter(|a| a.kind == kind && a.platform == platform && a.arch == arch)
         .collect();
     match matches.len() {
         1 => Ok(matches[0]),
-        0 => Err(format!("unsupported platform asset: {kind:?}/{platform}/{arch}")),
-        _ => Err(format!("ambiguous platform asset: {kind:?}/{platform}/{arch}")),
+        0 => Err(format!(
+            "unsupported platform asset: {kind:?}/{platform}/{arch}"
+        )),
+        _ => Err(format!(
+            "ambiguous platform asset: {kind:?}/{platform}/{arch}"
+        )),
     }
 }
 
@@ -147,10 +149,16 @@ mod tests {
         let mut asset = asset(PlatformAssetKind::Chromium, "linux", "x64");
         let bytes = vec![0u8; 1024];
         asset.sha256 = format!("{:x}", Sha256::digest(&bytes));
-        assert!(verify_downloaded_bytes(&asset, &bytes).is_ok(), "一致字节应通过");
+        assert!(
+            verify_downloaded_bytes(&asset, &bytes).is_ok(),
+            "一致字节应通过"
+        );
         // 篡改一个字节 → 拒绝
         let tampered = vec![1u8; 1024];
-        assert!(verify_downloaded_bytes(&asset, &tampered).is_err(), "篡改必须拒绝");
+        assert!(
+            verify_downloaded_bytes(&asset, &tampered).is_err(),
+            "篡改必须拒绝"
+        );
         // size 缺失（0）→ validate 拒绝
         let mut broken = asset.clone();
         broken.size_bytes = 0;
