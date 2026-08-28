@@ -51,6 +51,8 @@ pub struct ToolMetadataObservation {
 pub struct AgentLoopOutcome {
     /// 本轮是否发起了工具调用；为真时模型需要收到工具结果后继续下一轮。
     pub had_tool_call: bool,
+    /// 本轮流中断重放次数（F-obs-04 指标输入；语义见 P1-E 冻结重放）。
+    pub stream_recoveries: u32,
     /// Successful metadata envelopes emitted by tools in this iteration. The run coordinator
     /// applies only explicitly allowlisted host-owned state updates before constructing the next
     /// model request; metadata is never added to model-visible ToolResult content.
@@ -888,6 +890,7 @@ where
             if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Ok(AgentLoopOutcome {
                     had_tool_call: false,
+                    stream_recoveries,
                     tool_metadata: Vec::new(),
                     usage: total_usage.clone(),
                     reasoning_chars,
@@ -1138,6 +1141,7 @@ where
                         if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                             break 'attempt Ok(AgentLoopOutcome {
                                 had_tool_call: false,
+                                stream_recoveries,
                                 tool_metadata: Vec::new(),
                                 usage: total_usage.clone(),
                                 reasoning_chars,
@@ -1228,6 +1232,7 @@ where
                 if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                     break 'attempt Ok(AgentLoopOutcome {
                         had_tool_call: false,
+                        stream_recoveries,
                         tool_metadata: Vec::new(),
                         usage: total_usage.clone(),
                         reasoning_chars,
@@ -1364,6 +1369,7 @@ where
 
         break 'attempt Ok(AgentLoopOutcome {
             had_tool_call,
+            stream_recoveries,
             tool_metadata,
             usage: total_usage.clone(),
             reasoning_chars,

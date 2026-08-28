@@ -56,6 +56,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
 };
+use r_code_agent_worker::ProviderMetricsSnapshot;
 use r_code_agent_worker::{
     native_parent_subagent_access, AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome,
     CodexSubagentRequest, CodexSubagentRunner, DelegationRouterMode as RuntimeDelegationRouterMode,
@@ -16539,6 +16540,22 @@ pub fn diagnosis_hint_counters() -> Vec<(String, u64)> {
         .into_iter()
         .map(|(label, count)| (label.to_string(), count))
         .collect()
+}
+
+/// 进程级 provider 调用指标（F-obs-04）：requests/failures/retries/aborted
+/// 与延迟聚合。任一任务的 bridge 都能取到同一份（计数器挂在 runtime 上）。
+pub async fn provider_metrics(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<Option<ProviderMetricsSnapshot>, String> {
+    let Some(bridge) = state.agent.existing_bridge_for(task_id).await else {
+        return Ok(None);
+    };
+    let bridge = bridge.lock().await;
+    Ok(match &bridge.kind {
+        AgentRuntimeKind::Real(runtime) => Some(runtime.provider_metrics_snapshot()),
+        AgentRuntimeKind::Mock(_) => None,
+    })
 }
 
 pub async fn request_audit_counters(

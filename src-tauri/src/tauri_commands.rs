@@ -1754,6 +1754,16 @@ pub async fn cmd_rtk_status(
     r_code_host::commands::rtk_status(&state).await
 }
 
+/// F-obs-04：进程级 provider 调用指标（requests/failures/retries/aborted/
+/// 延迟聚合）。Real runtime 不在场时返回 None；经 devtools/诊断消费。
+#[tauri::command]
+pub async fn cmd_provider_metrics(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<r_code_agent_worker::ProviderMetricsSnapshot>, String> {
+    r_code_host::commands::provider_metrics(&state, &task_id).await
+}
+
 /// A4：请求信封审计自检计数（headers_appended, mismatches）。Real runtime
 /// 不在场时返回 None；soak 期间经 devtools 消费，不进设置 UI。
 #[tauri::command]

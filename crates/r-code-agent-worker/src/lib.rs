@@ -34,12 +34,13 @@ pub use llm_runtime::{
     ExternalAgentOutcome, ExternalAgentRequest, ExternalAgentRunner, FrozenSubagentCandidatePool,
     FrozenSubagentSlot, FrozenSubagentSlotDescriptor, LlmAgentRuntime,
     NativeSubagentRuntimeOptions, OrchestrationPolicy, PlanNativeCatalogConfig,
-    PlanNativeCatalogPhase, QualityLoopMode, QualityReviewer, RCodeSubagentOutcome,
-    RCodeSubagentRequest, RCodeSubagentRunner, RequestBudgetV1, RequestKind, ResolvedAttachment,
-    ResolvedOutputBudget, RouteDescriptor, SubagentCandidateOutcome, SubagentCandidateRequest,
-    SubagentCandidateRunner, SubagentCandidateSource, SubagentProviderCapabilities,
-    DEFAULT_MAIN_AGENT_PROMPT, DEFAULT_SUBAGENT_PROMPT, MAX_ACTIVE_DESCENDANTS,
-    MAX_DESCENDANTS_PER_TREE, MAX_DIRECT_SUBAGENTS_PER_RUN, MAX_SUBAGENT_DEPTH,
+    PlanNativeCatalogPhase, ProviderMetricsCounters, ProviderMetricsSnapshot, QualityLoopMode,
+    QualityReviewer, RCodeSubagentOutcome, RCodeSubagentRequest, RCodeSubagentRunner,
+    RequestBudgetV1, RequestKind, ResolvedAttachment, ResolvedOutputBudget, RouteDescriptor,
+    SubagentCandidateOutcome, SubagentCandidateRequest, SubagentCandidateRunner,
+    SubagentCandidateSource, SubagentProviderCapabilities, DEFAULT_MAIN_AGENT_PROMPT,
+    DEFAULT_SUBAGENT_PROMPT, MAX_ACTIVE_DESCENDANTS, MAX_DESCENDANTS_PER_TREE,
+    MAX_DIRECT_SUBAGENTS_PER_RUN, MAX_SUBAGENT_DEPTH,
 };
 pub use mock_runtime::MockAgentRuntime;
 pub use recovery::{scan_orphaned_runs, RecoveryState};

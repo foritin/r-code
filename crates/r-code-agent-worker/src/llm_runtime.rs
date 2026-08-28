@@ -1939,6 +1939,7 @@ pub struct LlmAgentRuntime {
     /// 1.3 自检观测计数（headers / mismatches）。自检只记录不阻断，计数供
     /// 宿主接线与单测断言「追加了几枚、误报了几次」，不参与任何控制流。
     request_self_check: Arc<RequestSelfCheckCounters>,
+    provider_metrics: Arc<ProviderMetricsCounters>,
     /// Plan 原生目录的晋升钩子（宿主安装；docs §14.3）。None 时不晋升。
     plan_catalog_promotion: Option<PlanCatalogPromotionHook>,
     /// 宿主注入的附件解析器（docs §6.3）。None = 无持久附件链路；Some 时主
@@ -2066,6 +2067,7 @@ impl LlmAgentRuntime {
             agent_prompts: AgentPromptPolicy::default(),
             request_journal: None,
             request_self_check: Arc::new(RequestSelfCheckCounters::default()),
+            provider_metrics: Arc::new(ProviderMetricsCounters::default()),
             plan_catalog_promotion: None,
             attachment_resolver: None,
         }
@@ -2097,6 +2099,11 @@ impl LlmAgentRuntime {
     ///
     /// 不一致计数只增不减且不影响运行（只记录不阻断，风险表首期策略）；
     /// 长期观察零误报后再考虑升级为阻断并清零观察。
+    /// 进程级 provider 调用指标快照（F-obs-04）。
+    pub fn provider_metrics_snapshot(&self) -> ProviderMetricsSnapshot {
+        self.provider_metrics.snapshot()
+    }
+
     pub fn request_self_check_counters(&self) -> (usize, usize) {
         (
             self.request_self_check
@@ -2500,6 +2507,7 @@ impl AgentRuntime for LlmAgentRuntime {
             memory_context,
             request_journal: self.request_journal.clone(),
             request_self_check: self.request_self_check.clone(),
+            provider_metrics: self.provider_metrics.clone(),
             request_journal_id: journal_target,
         }));
 
@@ -2877,6 +2885,7 @@ struct RunLoopCtx {
     request_journal: Option<Arc<agent_store::SessionStore>>,
     /// 1.3 自检观测计数（与 runtime 共享，供外部断言）。
     request_self_check: Arc<RequestSelfCheckCounters>,
+    provider_metrics: Arc<ProviderMetricsCounters>,
     /// A3：本会话 journal 落盘目标 id（宿主传入 branch.storage_id）。
     /// None 时回退 session_id（既有测试接线行为不变）。
     request_journal_id: Option<String>,
@@ -4020,6 +4029,78 @@ fn capture_run_prefix_shape(system: &str, tools: &[ToolSpec], rewrite_version: u
 // ---------------------------------------------------------------------------
 
 /// 1.3 自检观测计数（跨 run 累计；只记录，绝不参与控制流）。
+/// Provider 调用指标（F-obs-04）：进程级聚合，诊断命令直读，
+/// 替代"翻日志估错误率/延迟"。
+#[derive(Debug, Default)]
+pub struct ProviderMetricsCounters {
+    requests: std::sync::atomic::AtomicU64,
+    failures: std::sync::atomic::AtomicU64,
+    retries: std::sync::atomic::AtomicU64,
+    aborted: std::sync::atomic::AtomicU64,
+    total_duration_ms: std::sync::atomic::AtomicU64,
+    slowest_ms: std::sync::atomic::AtomicU64,
+}
+
+/// 指标快照（诊断命令返回形状）。
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct ProviderMetricsSnapshot {
+    pub requests: u64,
+    pub failures: u64,
+    pub retries: u64,
+    pub aborted: u64,
+    pub total_duration_ms: u64,
+    pub slowest_ms: u64,
+    pub avg_ms: u64,
+}
+
+/// 单轮 provider 交互的终态分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderRoundOutcome {
+    Completed,
+    Failed,
+    Aborted,
+}
+
+impl ProviderMetricsCounters {
+    /// 记录一轮 provider 交互（一次 agent 迭代 = 一次或多次底层流尝试）。
+    pub fn observe(
+        &self,
+        outcome: ProviderRoundOutcome,
+        stream_recoveries: u32,
+        duration: std::time::Duration,
+    ) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.retries
+            .fetch_add(u64::from(stream_recoveries), Ordering::Relaxed);
+        let millis = duration.as_millis().min(u64::MAX as u128) as u64;
+        self.total_duration_ms.fetch_add(millis, Ordering::Relaxed);
+        self.slowest_ms.fetch_max(millis, Ordering::Relaxed);
+        match outcome {
+            ProviderRoundOutcome::Completed => {}
+            ProviderRoundOutcome::Failed => {
+                self.failures.fetch_add(1, Ordering::Relaxed);
+            }
+            ProviderRoundOutcome::Aborted => {
+                self.aborted.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn snapshot(&self) -> ProviderMetricsSnapshot {
+        let requests = self.requests.load(Ordering::Relaxed);
+        let total = self.total_duration_ms.load(Ordering::Relaxed);
+        ProviderMetricsSnapshot {
+            requests,
+            failures: self.failures.load(Ordering::Relaxed),
+            retries: self.retries.load(Ordering::Relaxed),
+            aborted: self.aborted.load(Ordering::Relaxed),
+            total_duration_ms: total,
+            slowest_ms: self.slowest_ms.load(Ordering::Relaxed),
+            avg_ms: if requests > 0 { total / requests } else { 0 },
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct RequestSelfCheckCounters {
     headers_appended: AtomicUsize,
@@ -5258,6 +5339,7 @@ async fn run_loop(mut ctx: RunLoopCtx) {
             provider_ceiling: capabilities.max_output_tokens,
             headroom_clamped: resolved_output.headroom_clamped,
         };
+        let round_started = std::time::Instant::now();
         let result = run_agent_loop_iteration_streaming_with_abort(
             ctx.provider.as_ref(),
             iteration_tool_host,
@@ -5270,6 +5352,19 @@ async fn run_loop(mut ctx: RunLoopCtx) {
             output_budget_context,
         )
         .await;
+        // F-obs-04：每轮一次结构化聚合（请求/失败/重试/中止/耗时），诊断
+        // 命令直读，不再需要翻日志估错误率。
+        {
+            let aborted_round = ctx.abort.load(Ordering::Relaxed);
+            let outcome = match &result {
+                Err(_) => ProviderRoundOutcome::Failed,
+                Ok(_) if aborted_round => ProviderRoundOutcome::Aborted,
+                Ok(_) => ProviderRoundOutcome::Completed,
+            };
+            let recoveries = result.as_ref().map(|o| o.stream_recoveries).unwrap_or(0);
+            ctx.provider_metrics
+                .observe(outcome, recoveries, round_started.elapsed());
+        }
 
         match result {
             Ok(outcome) => {
@@ -11293,6 +11388,7 @@ mod compaction_tests {
         // P2-G：AgentLoopOutcome 携带本轮真实 usage，供 tokPerChar 校准。
         let outcome = crate::agent_loop::AgentLoopOutcome {
             had_tool_call: true,
+            stream_recoveries: 0,
             tool_metadata: Vec::new(),
             usage: Usage::new(1_234, 56),
             reasoning_chars: 6_001,
@@ -11312,6 +11408,7 @@ mod compaction_tests {
     ) -> crate::agent_loop::AgentLoopOutcome {
         crate::agent_loop::AgentLoopOutcome {
             had_tool_call: !names.is_empty(),
+            stream_recoveries: 0,
             tool_metadata: Vec::new(),
             usage: Usage::default(),
             reasoning_chars,
@@ -11943,6 +12040,56 @@ mod compaction_tests {
             .contains("[R-Code 已截断超长内容]"));
         let total_chars = trimmed.iter().map(message_text_chars).sum::<usize>();
         assert!(total_chars <= 40_000);
+    }
+}
+
+#[cfg(test)]
+mod provider_metrics_tests {
+    use super::*;
+
+    #[test]
+    fn counters_aggregate_outcomes_retries_and_durations() {
+        let counters = ProviderMetricsCounters::default();
+        counters.observe(
+            ProviderRoundOutcome::Completed,
+            0,
+            std::time::Duration::from_millis(100),
+        );
+        counters.observe(
+            ProviderRoundOutcome::Failed,
+            2,
+            std::time::Duration::from_millis(300),
+        );
+        counters.observe(
+            ProviderRoundOutcome::Aborted,
+            1,
+            std::time::Duration::from_millis(50),
+        );
+        let snapshot = counters.snapshot();
+        assert_eq!(snapshot.requests, 3);
+        assert_eq!(snapshot.failures, 1);
+        assert_eq!(snapshot.aborted, 1);
+        assert_eq!(snapshot.retries, 3);
+        assert_eq!(snapshot.total_duration_ms, 450);
+        assert_eq!(snapshot.slowest_ms, 300);
+        assert_eq!(snapshot.avg_ms, 150);
+    }
+
+    #[test]
+    fn empty_counters_snapshot_is_all_zero() {
+        let snapshot = ProviderMetricsCounters::default().snapshot();
+        assert_eq!(
+            snapshot,
+            ProviderMetricsSnapshot {
+                requests: 0,
+                failures: 0,
+                retries: 0,
+                aborted: 0,
+                total_duration_ms: 0,
+                slowest_ms: 0,
+                avg_ms: 0,
+            }
+        );
     }
 }
 
