@@ -1,0 +1,29 @@
+schema_version: candidate-gate-matrix.v1
+project_id: product-experience-gap-closure
+task_id: M9-04
+revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b
+generated_at: 2026-08-28
+
+authorization:
+  candidate_smoke_soak: not_authorized
+  production_release: not_authorized
+  basis: PRD §11 M9-04 前置事实——本 worklist 不授权提交/推送/发布；候选 probe 需用户明确授权。
+
+p0_p1_ledger:
+  observed_count: 0
+  note: 未获授权即未执行候选 smoke/soak，因此无 P0/P1 观测记录；不以 mock/fake 结果冒充 production。
+
+external_gates:
+  - { gate: provider-live-probe,     owner: user, environment: production-credentials, status: external-pending }
+  - { gate: signed-installer-smoke,  owner: user, environment: windows-macos-linux,    status: external-pending }
+  - { gate: updater-upgrade-smoke,   owner: user, environment: staged-release,         status: external-pending }
+  - { gate: tray-notification-smoke, owner: user, environment: desktop-sessions,       status: external-pending }
+  - { gate: candidate-soak,          owner: user, environment: long-running-desktop,   status: external-pending }
+
+upgrade_rollback_checklist:
+  status: prepared
+  steps:
+    - 升级前验证用户数据目录迁移向后兼容（migration freeze 见 M9-04.A1 drift checker）
+    - 验证旧签名包可回滚且用户数据保留
+    - 验证 Updater 签名校验失败时拒绝安装
+  note: 各步骤属候选期待验证项，均未执行、未标记通过。

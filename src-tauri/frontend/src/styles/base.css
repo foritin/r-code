@@ -334,3 +334,31 @@ kbd {
 .spacer { flex: 1; min-width: 0; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .measure { max-width: var(--measure); }
+
+/* ============================================================================
+   M5-01.A6：窄屏（≤420px）触控命中区。
+   主动作/图标按钮 ≥44×44 CSS px；紧凑次要控件 ≥32×32；相邻目标不重叠。
+   ============================================================================ */
+@media (max-width: 420px) {
+  button,
+  [role="button"],
+  a.quiet-link,
+  .icon-button {
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  .btn,
+  button[class*="primary"],
+  button[class*="send"],
+  [aria-label] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* 相邻目标之间保留最小间隔，避免触控重叠。 */
+  .btn + .btn,
+  button + button {
+    margin-inline-start: var(--sp-2);
+  }
+}

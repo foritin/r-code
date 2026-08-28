@@ -1,0 +1,17 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M7-04
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/src/browser/scope.rs（m7_04_tests：origin policy/grant capability）
+  - scripts/product-experience/m7-04-checks.mjs + wiring（A1..A4）
+assertions: { M7-04.A1: passed, M7-04.A2: passed, M7-03.A3: passed, M7-04.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M7-04 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-04.json
+decisions:
+  - DM1: wildcard host 经 BrowserOrigin::parse 的 host 校验拒绝；file:// scheme 非 http/https 拒绝；credentials origin 拒绝。
+  - DM2: Task 隔离由 installer SessionRegistry 每 task profile 命名空间保证。

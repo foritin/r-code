@@ -85,7 +85,7 @@ test.after(async () => {
 });
 
 test("MCP management is redacted, independently busy, and confirmation-bound", async () => {
-  const page = await browser.newPage({ viewport: { width: 900, height: 680 } });
+  const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 900, height: 680 } });
   const runtimeErrors = [];
   page.on("pageerror", (error) => runtimeErrors.push(String(error)));
   page.on("console", (message) => {

@@ -1,0 +1,14 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M9-04
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+assertions: { "M9-04.A1": passed, "M9-04.A2": passed }
+notes:
+  - A1：worklist_gate.py --check + settings_capability_gate.py --check + check_markdown_links.py（原执行器误用 node 跑 .py，全部 MODULE_NOT_FOUND，已改 python3）。
+  - A2：候选 smoke/soak 未获授权——external gate 全部诚实 external-pending、无 P0/P1 观测、升级/回滚清单就绪；矩阵见 M9-04-candidate-gates.yaml（wiring 以 evidence_file 接线）。
+  - A3/A4（production gate / release safety）未注册进 registry：本 worklist 不授权发布，提交/推送次数为 0。
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M9-04 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M9-04.json

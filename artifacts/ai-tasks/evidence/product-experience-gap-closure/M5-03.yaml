@@ -1,0 +1,16 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M5-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m5-03-checks.mjs + wiring（A1..A6 六腿）
+assertions: { M5-03.A1: passed, M5-03.A2: passed, M5-03.A3: passed, M5-03.A4: passed, M5-03.A5: passed, M5-03.A6: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M5-03 --profile implementation
+  exit_code: 0
+  assertions_passed: 6/6
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-03.json
+decisions:
+  - DM1: 新旧表现等价 = 同 fixture 双源对比（flags 矩阵/capsule 投影/settings 语义/mcp 权限决定）+ alias 往返（preferences→appearance、codex→agents）。
+  - DM2: 回退面 = M1-02 三位 feature flags（browser/automation/worktree）+ capability retirement_policy；gating-parity 回归持续锁定。

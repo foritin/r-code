@@ -1,0 +1,18 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M3-04
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/src/lib/provider-health.ts（五态非颜色视图：label+glyph、configured≠connected、retry 矩阵、checking 唯一 spinner）
+  - src-tauri/src/provider_readiness.rs（单飞/重试去重/TTL fresh 零请求）
+  - scripts/product-experience/m3-04-checks.mjs + wiring（A1..A4）
+assertions: { M3-04.A1: passed, M3-04.A2: passed, M3-04.A3: passed, M3-04.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M3-04 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json
+decisions:
+  - DM1: 全部消费面（Provider mini/Shell/Composer/Settings/health）订阅同一 providerStatus 快照（SettingsScene 单源），静态锁定无第二存储。
+  - DM2: 设置页切页零探测（静态扫描 pane 切换路径无 probe invoke）；TTL fresh 内请求数 0 由 readiness FreshSkip 单测锁定。

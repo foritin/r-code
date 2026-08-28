@@ -1,0 +1,84 @@
+schema_version: ai-task-packet.v1
+project_id: r-code-windows-reliability
+task_id: M4-03
+status: passed
+source:
+  document: docs/windows-command-reliability-prd.md
+  refs:
+    - docs/windows-command-reliability-prd.md#9-详细任务卡（M0-01）
+    - docs/windows-command-reliability-prd.md#44-金集与报告-schema
+    - docs/windows-command-reliability-prd.md#71-唯一产品验收入口
+objective: （项目终态）11/11 MUST 任务全部完成；最终累计门禁 --through M4 [implementation] 35/35 通过。续跑入口：本文件仅为单项恢复状态，项目状态以 PRD §8 唯一 Checklist 为准。
+depends_on: []
+fixed_constraints:
+  - 语料 ≥40 条、八类下限与 §4.4 schema 完全一致（六字段、枚举合法、无重复 id）。
+  - corpus 命令不得写用户目录；required 断言缺失视为失败。
+  - Harness 非交互；0 仅代表全部 required 断言通过；报告含 revision/worktree digest/平台/方言档。
+decision_criteria:
+  - 复用 codex-interaction 的 Node orchestrator 模式（决策 8）；corpus runner 用 Rust integration test 经真实 BashTool/gateway 路径执行。
+inputs:
+  - scripts/verify-codex-interaction.mjs 与 scripts/codex-interaction/{registry,runner}.mjs 模式
+  - crates/r-code-gateway/src/tools_command.rs（execute_bash 真实执行路径）
+deliverables:
+  - scripts/verify-windows-reliability.mjs + scripts/windows-reliability/{registry,runner,corpus-schema,corpus-run,corpus-report-check}.mjs
+  - crates/r-code-gateway/tests/command_corpus/corpus.jsonl（44 条）+ tests/command_corpus_runner.rs（env 门控 CORPUS_RUN）
+  - crates/r-code-gateway：新增只读自省 pub fn current_shell_dialect_label（报告 dialect 字段来源，不改变执行行为）
+  - scripts/verify-windows-reliability.test.mjs（Harness 自测）
+  - artifacts/ai-tasks/{evidence,verification}/windows-reliability/ 目录约定
+steps:
+  - id: S1
+    status: done
+    action: 盘点既有 Rust/Node 测试命令与 CI Windows job 结构（探查代理报告：test job 为 matrix cargo test --workspace；frontend job node --test）
+  - id: S2
+    status: done
+    action: 编写 corpus.jsonl（八类 44 条、双平台标记、fast/slow 分层）与 schema 校验器 corpus-schema.mjs
+  - id: S3
+    status: done
+    action: 实现 --task/--through/--profile、JSON 报告、required 缺失失败；注册全部 11 任务 36 断言
+  - id: S4
+    status: done
+    action: runner 在临时工作区逐条真实执行（fast 档），产出 §4.4 报告（policy 类经真实 gateway R4 前置拒绝链路）
+  - id: S5
+    status: done
+    action: runner/registry 自测（scripts/verify-windows-reliability.test.mjs，11 用例全绿）
+acceptance_assertions:
+  - id: M0-01.A1
+    level: contract
+    command: node --test scripts/verify-windows-reliability.test.mjs
+    expected: 未知 task、缺失 required assertion、失败子命令均非 0 退出且报告列出准确失败 ID
+    evidence_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-01.json
+  - id: M0-01.A2
+    level: contract
+    command: node scripts/windows-reliability/corpus-schema.mjs
+    expected: corpus.jsonl 通过 schema 校验（44 条、八类下限、无重复 id）
+    evidence_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-01.json
+  - id: M0-01.A3
+    level: integration
+    command: node scripts/windows-reliability/corpus-run.mjs --tier fast --check dialect-field --check both-executed=1
+    expected: runner 真实执行 both/fast 命令并产出含 dialect 字段的报告（首跑：dialect=pwsh total=41）
+    evidence_path: artifacts/ai-tasks/verification/windows-reliability/implementation/M0-01.json
+completed_assertions: []
+remaining_assertions: [M0-01.A1, M0-01.A2, M0-01.A3]
+changed_paths:
+  - crates/r-code-gateway/src/tools_command.rs
+  - crates/r-code-gateway/src/lib.rs
+  - crates/r-code-gateway/tests/command_corpus/corpus.jsonl
+  - crates/r-code-gateway/tests/command_corpus_runner.rs
+  - scripts/verify-windows-reliability.mjs
+  - scripts/verify-windows-reliability.test.mjs
+  - scripts/windows-reliability/registry.mjs
+  - scripts/windows-reliability/runner.mjs
+  - scripts/windows-reliability/corpus-schema.mjs
+  - scripts/windows-reliability/corpus-run.mjs
+  - scripts/windows-reliability/corpus-report-check.mjs
+  - artifacts/metrics/command-corpus/report-69ab1637c1ea346e0241a52ba4d939626dce9958-windows.json
+decisions:
+  - id: D1
+    note: corpus 的 policy 类经真实 ToolGateway（R4 前置拒绝文本）而非直接 spawn——fail-with-hint 断言据此判定 M2-02 的 gateway 挂载
+  - id: D2
+    note: 报告 ok 语义 = 结果符合 expect（含预期失败）；dialect_failures 只在不符合且命中方言错误签名时计数
+  - id: D3
+    note: corpus-run.mjs 在 cargo 子进程上净化 PATH（剥离 Git Bash bin/usr/bin/mingw64），模拟 GUI 干净启动环境，防基线被开发 shell 的 MSYS 目录污染
+attempts: 1
+evidence: []
+last_verified_revision: null

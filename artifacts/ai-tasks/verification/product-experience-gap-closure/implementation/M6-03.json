@@ -1,0 +1,74 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "M6-03",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "8bff628600586773071e64be3c0c68c7946d91e82a1e23636bcb8e4abe896816",
+  "dirty_files": 296,
+  "finished_at": "2026-08-27T18:54:19.133Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "M6-03.A1",
+      "task_id": "M6-03",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-03.A2",
+      "task_id": "M6-03",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-03.A3",
+      "task_id": "M6-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-03-checks.mjs --part a3",
+      "duration_ms": 248,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS compat:feature-flag-matrix (226ms)\n{\n  \"schema_version\": \"m6-03-checks.v1\",\n  \"part\": \"a3\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"compat:feature-flag-matrix\",\n      \"command\": \"/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/feature-flag-matrix.test.mjs\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 226,\n      \"stdout_tail\": \"ℹ suites 0\\nℹ pass 4\\nℹ fail 0\\nℹ cancelled 0\\nℹ skipped 0\\nℹ todo 0\\nℹ duration_ms 202.863501\\n\",\n      \"stderr_tail\": \"\"\n    }\n  ]\n}\n",
+      "stderr": null
+    }
+  ]
+}

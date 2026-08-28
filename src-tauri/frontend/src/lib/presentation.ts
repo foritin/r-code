@@ -98,6 +98,29 @@ export function taskStatus(_task: Task, detail?: TaskDetail): TaskStatusView | u
   return detail?.status;
 }
 
+// ---- M1-03：共享投影单点委托 ----
+// Rail/Room/Workbench/通知/Automation 的状态语义唯一来源是 task-status-projection；
+// 这里只做薄委托与兼容别名，禁止在各消费面重新手写 display_state 推导。
+export {
+  mergeMonotonic,
+  projectStatus,
+  statusGlyph,
+  STATUS_GLYPHS,
+  TERMINAL_DISPLAY_STATES,
+} from "./task-status-projection";
+import { mergeMonotonic as mergeMonotonicFrame } from "./task-status-projection";
+
+/**
+ * 有状态持有方（如 Rail 内存的任务投影缓存）接入迟到帧时的唯一入口：
+ * 终态不可被迟到的 running/attention 帧复活。
+ */
+export function applyStatusFrame(
+  previous: TaskDisplayState | undefined,
+  incoming: TaskDisplayState,
+): TaskDisplayState {
+  return mergeMonotonicFrame(previous, incoming);
+}
+
 export function taskDisplayState(task: Task, detail?: TaskDetail): TaskDisplayState {
   return taskStatus(task, detail)?.display_state ?? legacyDisplayState(task, detail);
 }

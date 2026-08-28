@@ -7,7 +7,7 @@ export const APP_LOCALES = ["zh-CN", "en-US"] as const;
 export type AppLocale = (typeof APP_LOCALES)[number];
 
 export const LOCALE_STORAGE_KEY = "r-code.locale";
-const R_CODE_STORAGE_PREFIX = "r-code.";
+export const LOCALE_SOURCE_KEY = "r-code.locale-source";
 
 interface LocaleStorage {
   readonly length: number;
@@ -29,53 +29,43 @@ function browserStorage(): LocaleStorage | null {
   }
 }
 
-function browserLanguages(): readonly string[] {
-  if (typeof navigator === "undefined") return [];
-  return navigator.languages?.length ? navigator.languages : [navigator.language];
-}
-
-export function localeFromLanguages(languages: readonly string[]): AppLocale {
-  return languages.some((language) => language.toLowerCase().startsWith("zh"))
-    ? "zh-CN"
-    : "en-US";
-}
-
-function hasExistingRCodePreferences(storage: LocaleStorage): boolean {
-  for (let index = 0; index < storage.length; index += 1) {
-    const key = storage.key(index);
-    if (key?.startsWith(R_CODE_STORAGE_PREFIX) && key !== LOCALE_STORAGE_KEY) return true;
-  }
-  return false;
+/**
+ * 2026-08-28 产品决定：默认语言始终为中文（zh-CN）。
+ * 系统/浏览器语言不再决定初始语言；外观页显式切换并保存是唯一的换语入口。
+ */
+export function localeFromLanguages(_languages: readonly string[]): AppLocale {
+  return "zh-CN";
 }
 
 /**
- * Upgrades keep the historical Chinese default. A genuinely empty R-Code
- * profile follows the OS language, then persists that decision immediately.
+ * 初始语言解析：
+ * - 显式保存过（`r-code.locale-source` = "explicit"）→ 跟随用户选择；
+ * - 旧版"跟随系统"策略自动持久化的 locale（无 source 标记）→ 一次性重置为 zh-CN，
+ *   否则 2026-08-28 的默认中文策略对存量档案永远不生效（旧策略首启即落盘）；
+ * - 无存档 → zh-CN。除显式切换外，结果立即持久化。
  */
 export function resolveInitialLocale(
   storage: LocaleStorage | null = browserStorage(),
-  languages: readonly string[] = browserLanguages(),
 ): AppLocale {
-  if (!storage) return localeFromLanguages(languages);
+  if (!storage) return "zh-CN";
 
-  let locale: AppLocale;
+  let saved: string | null = null;
+  let source: string | null = null;
   try {
-    const saved = storage.getItem(LOCALE_STORAGE_KEY);
-    if (isAppLocale(saved)) return saved;
-
-    locale = saved !== null || hasExistingRCodePreferences(storage)
-      ? "zh-CN"
-      : localeFromLanguages(languages);
+    saved = storage.getItem(LOCALE_STORAGE_KEY);
+    source = storage.getItem(LOCALE_SOURCE_KEY);
   } catch {
-    return localeFromLanguages(languages);
+    return "zh-CN";
   }
+  if (isAppLocale(saved) && source === "explicit") return saved;
 
   try {
-    storage.setItem(LOCALE_STORAGE_KEY, locale);
+    storage.setItem(LOCALE_STORAGE_KEY, "zh-CN");
+    storage.setItem(LOCALE_SOURCE_KEY, "auto");
   } catch {
     // The selected locale still applies for this session when persistence fails.
   }
-  return locale;
+  return "zh-CN";
 }
 
 function normalizeLocale(language: string | null | undefined): AppLocale {
@@ -115,6 +105,8 @@ export async function setAppLocale(locale: AppLocale): Promise<void> {
   const storage = browserStorage();
   try {
     storage?.setItem(LOCALE_STORAGE_KEY, locale);
+    // 显式切换打上标记，避免被「旧策略残留重置」逻辑误重置。
+    storage?.setItem(LOCALE_SOURCE_KEY, "explicit");
   } catch {
     // Restricted WebViews still keep the selected language for this session.
   }

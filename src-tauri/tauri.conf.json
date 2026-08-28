@@ -22,6 +22,7 @@
         "minWidth": 960,
         "minHeight": 640,
         "center": true,
+        "maximized": true,
         "resizable": true,
         "zoomHotkeysEnabled": true,
         "decorations": false

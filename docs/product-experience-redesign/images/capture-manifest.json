@@ -1,6 +1,6 @@
 {
   "status": "passed",
-  "artifact": "D:\\project\\rust\\r-code\\docs\\product-experience-redesign\\prototype.html",
+  "artifact": "/root/project/r-code/docs/product-experience-redesign/prototype.html",
   "prototype_sha256": "a9e457a8e84bff96838762d923a36c0cdeb52440b663462ce153f6466e3afd8d",
   "viewports": [
     {
@@ -477,7 +477,7 @@
     "mobile_touch_targets": {
       "viewport": "390x844",
       "panels": 12,
-      "targets_measured": 432,
+      "targets_measured": 430,
       "minimum_width": 44,
       "minimum_height": 44,
       "threshold": "44x44",

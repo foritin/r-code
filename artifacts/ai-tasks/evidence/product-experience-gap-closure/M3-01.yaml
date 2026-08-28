@@ -1,0 +1,22 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M3-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/src/close_gate.rs（纯核心状态机：三触发等价/重入门/epoch 拒绝/restore 能力降级 + lifecycle.toml 持久化服务；6 测试）
+  - src-tauri/src/lifecycle_commands.rs（偏好 get/set + prompt 决定落账，hide/quit 由 Host 执行）
+  - src-tauri/src/main.rs（统一 CloseRequested 臂：companion 拦截保留、restore 能力按平台计算、prompt 经 close-prompt-request 事件 + 聚焦、命令注册）
+  - src-tauri/frontend/src/components/shell/ClosePromptDialog.tsx（Host prompt 的唯一渲染面：aria-modal/Esc/记住选择）
+  - SettingsScene LifecycleSection（close ask/hide/quit 真控件，settingsSet 即时生效）
+assertions: { M3-01.A1: passed, M3-01.A2: passed, M3-01.A3: passed, M3-01.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M3-01 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-01.json
+decisions:
+  - DM1: 偏好持久化采用独立 lifecycle.toml 服务（FeatureFlagService 模式），不经 settings_set 分发器——避免触碰 pinned commands.rs；Host 关闭处理直接读 config_dir。
+  - DM2: macos 旧行为（close→hide 固定）与 windows hide-if-tray、linux quit 全部收敛为偏好驱动，缺省安全 ask；restore 能力按平台：windows=tray 存在性、macos=Dock、linux=None（当前构建无恢复面，hide 自动降级询问，A4）。
+  - DM3: prompt 单例由 gate epoch 保证——重复 close 只 emit focus；迟到/重复决定返回 Stale/AlreadyResolved。
+  - DM4: pinned 文件演进流程再验证：main.rs/ipc.ts/SettingsScene/app-store 重钉（重算 sha→update-report→update-freeze→双检）全部绿。

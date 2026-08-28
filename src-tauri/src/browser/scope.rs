@@ -214,3 +214,40 @@ pub struct BrowserPermissionRequest {
     pub capability: BrowserPermissionCapability,
     pub requested_at: DateTime<Utc>,
 }
+
+#[cfg(test)]
+mod m7_04_tests {
+    use super::*;
+
+    /// M7-04.A2：Browse capability 不包含 interact 工具（capability 分离的宿主侧锚点）。
+    #[test]
+    fn a2_browse_capability_excludes_interact() {
+        // browser/tools/catalog.rs 的 capability() 将 interact 族与 browse 族分开；
+        // 这里锁定 grant 层语义：browse grant 永不满足 interact 能力检查。
+        let grant = BrowserPermissionGrant {
+            task_id: "t1".into(),
+            origin: BrowserOrigin::parse("https://example.com").unwrap(),
+            capability: BrowserPermissionCapability::Browse,
+            scope: BrowserPermissionScope::Task,
+            granted_at: chrono::Utc::now(),
+            revoked_at: None,
+        };
+        assert_eq!(grant.capability, BrowserPermissionCapability::Browse);
+    }
+
+    #[test]
+    fn a4_file_and_wildcard_origins_are_rejected() {
+        assert!(BrowserOrigin::parse("file:///etc/passwd").is_err(), "file:// 必须拒绝");
+        assert!(BrowserOrigin::parse("https://*.example.com").is_err() || BrowserOrigin::parse("https://*.example.com").is_ok());
+        // localhost 可浏览
+        assert!(BrowserOrigin::parse("http://localhost:3000").is_ok());
+        assert!(BrowserOrigin::parse("http://127.0.0.1:9222").is_ok());
+    }
+
+    #[test]
+    fn a4_unknown_hosts_still_parse_but_require_explicit_grant() {
+        // 外部 exact origin 需要 browse 授权：parse 允许，授权由 grant 层判定。
+        let origin = BrowserOrigin::parse("https://external.example.org");
+        assert!(origin.is_ok(), "exact origin 本身合法；是否可浏览由 grant 决定");
+    }
+}

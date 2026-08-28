@@ -1,0 +1,185 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "M5-02",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "2098776f41c64557e8b174e47e70bf62e692236c28c7ba28e3e47ce4616551c9",
+  "dirty_files": 303,
+  "finished_at": "2026-08-28T04:56:33.484Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 10,
+    "passed": 10,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "M5-02.A1",
+      "task_id": "M5-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A2",
+      "task_id": "M5-02",
+      "level": "performance",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A3",
+      "task_id": "M5-02",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A5",
+      "task_id": "M5-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A6",
+      "task_id": "M5-02",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a5",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A7",
+      "task_id": "M5-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a6",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A8",
+      "task_id": "M5-02",
+      "level": "integration/E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a7",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A9",
+      "task_id": "M5-02",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-03-workbench-ia.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A10",
+      "task_id": "M5-02",
+      "level": "E2E/reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m2-03-a10-lifecycle.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A11",
+      "task_id": "M5-02",
+      "level": "integration/security/accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-01-capsule.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    }
+  ]
+}

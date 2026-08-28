@@ -16,6 +16,7 @@ import { CompanionWindowController } from "./components/companion/CompanionWindo
 import { OnboardingCampaign } from "./components/onboarding/OnboardingCampaign";
 import { GuideSheet } from "./components/settings/GuideSheet";
 import { clearSyncFailure, reportSyncFailure } from "./store/sync-health";
+import ClosePromptDialog from "./components/shell/ClosePromptDialog";
 
 const DashboardScene = lazy(() =>
   import("./components/scenes/DashboardScene").then((module) => ({ default: module.DashboardScene })),
@@ -121,6 +122,7 @@ export default function App() {
         "--rc-rail-w": `max(${MIN_RAIL_WIDTH}px, min(${MAX_RAIL_WIDTH}px, var(--rc-rail-preferred-w), calc(100% - ${MIN_MAIN_WIDTH}px)))`,
       } as CSSProperties}
     >
+      <ClosePromptDialog />
       <a className="skip-link" href="#main-content">{t("app.skipToMain")}</a>
       <MenuBar />
       <Rail />

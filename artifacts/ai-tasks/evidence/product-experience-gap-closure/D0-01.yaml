@@ -1,0 +1,69 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: D0-01
+status: passed
+
+source:
+  document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#d0-01-交付完整-app-demo设计说明与冻结实施合同
+
+revision:
+  git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b
+  worktree_digest: null
+
+deliverables:
+  - docs/product-experience-redesign/images/capture-manifest.json
+  - docs/product-experience-redesign/settings-capability-gate.json
+  - docs/product-experience-redesign/settings-capability-baseline.json
+  - docs/product-experience-redesign/worklist-gate.json
+  - docs/product-experience-redesign/r-code-experience-redesign-freeze.yaml
+changed_paths:
+  - artifacts/ai-tasks/current.yaml
+  - artifacts/ai-tasks/evidence/windows-reliability/M4-03.packet.yaml
+  - artifacts/ai-tasks/evidence/product-experience-gap-closure/D0-01.yaml
+  - docs/product-experience-redesign/images/（227 张截图同 revision 重新生成）
+  - docs/product-experience-redesign/images/capture-manifest.json
+  - docs/product-experience-redesign/r-code-experience-redesign-prd.md（仅 §0 volatile 与 §10 D0-01 checkbox）
+
+assertions:
+  - id: D0-01.A1
+    passed: true
+    command: ~/.venvs/r-code-d0/bin/python docs/product-experience-redesign/tools/capture_states.py
+    exit_code: 0
+    report_path: docs/product-experience-redesign/images/capture-manifest.json
+  - id: D0-01.A2
+    passed: true
+    command: ~/.venvs/r-code-d0/bin/python docs/product-experience-redesign/tools/worklist_gate.py --check
+    exit_code: 0
+    report_path: docs/product-experience-redesign/worklist-gate.json
+  - id: D0-01.A3
+    passed: true
+    command: ~/.venvs/r-code-d0/bin/python docs/product-experience-redesign/tools/check_markdown_links.py
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/link-check/D0-01-link-check.json
+  - id: D0-01.A6
+    passed: true
+    command: ~/.venvs/r-code-d0/bin/python docs/product-experience-redesign/tools/worklist_gate.py --update-freeze（内部实时执行 settings_capability_gate.py）
+    exit_code: 0
+    report_path: docs/product-experience-redesign/settings-capability-gate.json
+  - id: D0-01.A8
+    passed: true
+    command: ~/.venvs/r-code-d0/bin/python docs/product-experience-redesign/tools/worklist_gate.py --update-freeze
+    exit_code: 0
+    report_path: docs/product-experience-redesign/worklist-gate.json
+
+cumulative_verification:
+  command: ~/.venvs/r-code-d0/bin/python docs/product-experience-redesign/tools/worklist_gate.py --check（连续两次，均只读、exit 0、digest 相同）
+  exit_code: 0
+  report_path: docs/product-experience-redesign/worklist-gate.json
+
+decisions:
+  - id: DD1
+    note: 截图于 linux/chromium-151 复证生成；manifest 状态、required evidence 枚举、diagnostics 全部由 capture_states.py 自身判定并写入，未人工编辑。
+  - id: DD2
+    note: 归档旧 windows-reliability packet 时保留其原路径命名约定（evidence/windows-reliability/M4-03.packet.yaml），不覆盖既有 M4-03.yaml。
+external_gates_remaining:
+  - M2/M5 的正式 UI→IPC→Host→persistence 实现验证（verified_count 仍为 0）
+notes:
+  - prototype sha256=a9e457a8e84bff96838762d923a36c0cdeb52440b663462ce153f6466e3afd8d 与 manifest 记录一致。

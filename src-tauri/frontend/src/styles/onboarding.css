@@ -39,7 +39,7 @@
   border: 1px solid #46473f;
   border-radius: 10px;
   background: var(--ob-black);
-  box-shadow: 0 38px 110px rgba(0, 0, 0, .78), 0 0 0 8px rgba(0, 0, 0, .2);
+  box-shadow: 0 38px 110px color-mix(in srgb, #000 78%, transparent), 0 0 0 8px color-mix(in srgb, #000 20%, transparent);
 }
 
 .onboarding-header,
@@ -391,7 +391,7 @@
   border-top: 12px solid var(--ob-orange);
   background: var(--ob-cream);
   color: var(--ob-black);
-  box-shadow: 0 32px 90px rgba(0, 0, 0, .7);
+  box-shadow: 0 32px 90px color-mix(in srgb, #000 70%, transparent);
 }
 .onboarding-confirm b { color: #9b3d0b; font: 800 9px/1 Consolas, monospace; letter-spacing: .15em; }
 .onboarding-confirm h2 { margin: 13px 0 0; font-size: 32px; letter-spacing: -.04em; }

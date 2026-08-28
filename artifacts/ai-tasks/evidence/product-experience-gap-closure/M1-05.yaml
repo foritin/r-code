@@ -1,0 +1,16 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M1-05
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m1-05-checks.mjs + wiring（A1..A3 三腿）
+  - 冻结面：browser/tools/{catalog,request}.rs（capability 分离+deny_unknown_fields）、automation/mod.rs（require_feature_enabled）、browser/commands.rs（disabled 入口拒绝）
+assertions: { M1-05.A1: passed, M1-05.A2: passed, M1-05.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M1-05 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-05.json
+decisions:
+  - DM1: M7/M8 最小 handler/registry 接口由 catalog.rs capability() 与 automation 门函数承担；不实现假按钮。

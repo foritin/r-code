@@ -1,0 +1,10 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M8-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+assertions: { "M8-01.A1": passed, "M8-01.A2": passed, "M8-01.A3": passed, "M8-01.A4": passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M8-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-01.json

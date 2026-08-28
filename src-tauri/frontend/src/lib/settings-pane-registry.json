@@ -1,0 +1,97 @@
+{
+  "schema_version": "settings-pane-registry.v1",
+  "authority": "docs/product-experience-redesign/r-code-experience-redesign-prd.md#57-完整-settings-scene-页面矩阵",
+  "owner_task": "M2-03",
+  "panes": [
+    {
+      "id": "providers",
+      "label": "模型服务",
+      "status": "implemented",
+      "source": "production_existing + new_requirement",
+      "scene_key": "providers"
+    },
+    {
+      "id": "agents",
+      "label": "Agent 编排",
+      "status": "implemented",
+      "source": "production_existing + new_requirement",
+      "scene_key": "agents"
+    },
+    {
+      "id": "subagents",
+      "label": "子代理配置",
+      "status": "implemented",
+      "source": "production_existing + new_requirement",
+      "scene_key": "subagents"
+    },
+    {
+      "id": "tools",
+      "label": "工具与连接",
+      "status": "implemented",
+      "source": "production_existing + new_requirement + planned_demo",
+      "scene_key": "tools"
+    },
+    {
+      "id": "knowledge",
+      "label": "知识与指令",
+      "status": "implemented",
+      "source": "production_existing",
+      "scene_key": "knowledge"
+    },
+    {
+      "id": "permissions",
+      "label": "权限",
+      "status": "implemented",
+      "source": "production_existing + new_requirement + planned_demo",
+      "scene_key": "permissions",
+      "note": "权威视图+单编辑面深链（Codex 运行时 permission_mode 单 authority）"
+    },
+    {
+      "id": "security",
+      "label": "隐私与安全",
+      "status": "implemented",
+      "source": "production_existing + new_requirement",
+      "scene_key": "security",
+      "note": "密钥存储/脱敏/CSP 只读强制状态卡"
+    },
+    {
+      "id": "appearance",
+      "label": "外观与语言",
+      "status": "implemented",
+      "source": "production_existing + new_requirement",
+      "scene_key": "appearance",
+      "note": "原 preferences 页升格：外观+语言+Companion"
+    },
+    {
+      "id": "notifications",
+      "label": "通知",
+      "status": "implemented",
+      "source": "production_existing + new_requirement",
+      "scene_key": "notifications",
+      "note": "OS 权限/类别开关/应用内测试；拒绝仅降级"
+    },
+    {
+      "id": "lifecycle",
+      "label": "启动与关闭",
+      "status": "implemented",
+      "source": "new_requirement",
+      "scene_key": "lifecycle",
+      "note": "close ask/hide/quit 已由 M3-01 Host 状态机落地；退出级联/托盘恢复归 M3-02"
+    },
+    {
+      "id": "updates",
+      "label": "更新",
+      "status": "implemented",
+      "source": "production_existing",
+      "scene_key": "updates",
+      "note": "9 相状态机消费（M1-04 域已就绪）+ restart 显式 bypass"
+    },
+    {
+      "id": "diagnostics",
+      "label": "诊断",
+      "status": "implemented",
+      "source": "production_existing + new_requirement",
+      "scene_key": "diagnostics"
+    }
+  ]
+}

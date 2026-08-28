@@ -1,0 +1,89 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "M3-04",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "8bff628600586773071e64be3c0c68c7946d91e82a1e23636bcb8e4abe896816",
+  "dirty_files": 296,
+  "finished_at": "2026-08-27T18:39:31.356Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "M3-04.A1",
+      "task_id": "M3-04",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-04.A2",
+      "task_id": "M3-04",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-04.A3",
+      "task_id": "M3-04",
+      "level": "visual/accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-04.A4",
+      "task_id": "M3-04",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    }
+  ]
+}

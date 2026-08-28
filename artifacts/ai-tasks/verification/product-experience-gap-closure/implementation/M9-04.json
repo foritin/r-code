@@ -1,0 +1,55 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "M9-04",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "2098776f41c64557e8b174e47e70bf62e692236c28c7ba28e3e47ce4616551c9",
+  "dirty_files": 303,
+  "finished_at": "2026-08-28T05:00:10.492Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "M9-04.A1",
+      "task_id": "M9-04",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m9-04-checks.mjs --part a1",
+      "duration_ms": 377,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS docs:freeze-digest-stable (171ms)\nPASS docs:settings-gate-stable (152ms)\nPASS docs:markdown-links (33ms)\n{\n  \"schema_version\": \"m9-04-checks.v1\",\n  \"part\": \"a1\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"docs:freeze-digest-stable\",\n      \"command\": \"/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/worklist_gate.py --check\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 171,\n      \"stdout_tail\": \"    \\\"baseline_count\\\": 111,\\n    \\\"mapped_count\\\": 111,\\n    \\\"verified_count\\\": 0,\\n    \\\"d0_semantic_proof\\\": \\\"passed\\\"\\n  },\\n  \\\"issues\\\": []\\n}\\n\",\n      \"stderr_tail\": \"\"\n    },\n    {\n      \"name\": \"docs:settings-gate-stable\",\n      \"command\": \"/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/settings_capability_gate.py --check\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 152,\n      \"stdout_tail\": \"        \\\"M5-02.A5\\\"\\n      ]\\n    }\\n  ],\\n  \\\"issue_summary\\\": {},\\n  \\\"issues\\\": []\\n}\\n\",\n      \"stderr_tail\": \"\"\n    },\n    {\n      \"name\": \"docs:markdown-links\",\n      \"command\": \"/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/check_markdown_links.py\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 33,\n      \"stdout_tail\": \"{\\n  \\\"schema_version\\\": \\\"markdown-link-check.v1\\\",\\n  \\\"checked\\\": 276,\\n  \\\"broken\\\": []\\n}\\n\",\n      \"stderr_tail\": \"\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M9-04.A2",
+      "task_id": "M9-04",
+      "level": "candidate",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "候选 smoke/soak 未获授权：external gate 全部诚实 pending，无 P0/P1 观测记录",
+      "outcome": "passed",
+      "ok": true,
+      "evidence_path": "artifacts/ai-tasks/evidence/product-experience-gap-closure/M9-04-candidate-gates.yaml",
+      "detail": "1242 bytes"
+    }
+  ]
+}

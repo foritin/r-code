@@ -1,0 +1,20 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M3-02
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/src/shutdown_coordinator.rs（有界清理/局部失败汇总/terminal projection 单调；4 测试）
+  - src-tauri/src/lifecycle_commands.rs（偏好 get/set + prompt 决定 + 显式退出 bypass 命令）
+  - src-tauri/frontend/src/components/shell/ClosePromptDialog.tsx（Host prompt 渲染面）
+  - SettingsScene LifecycleSection（行为选择/重置/立即退出）
+  - scripts/product-experience/m3-02-checks.mjs + wiring
+assertions: { M3-02.A1: passed, M3-02.A2: passed, M3-02.A3: passed, M3-02.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M3-02 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-02.json
+decisions:
+  - DM1: 关闭对话框为 Host prompt 事件的唯一渲染面（React 非权威）；cancel 不经任何保存路径。
+  - DM2: 显式退出命令（cmd_lifecycle_explicit_quit）走 ShutdownCoordinator bypass，不重复询问；tray quit / updater restart 的 coordinator 收敛随 M3-04 剩余面并入。

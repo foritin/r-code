@@ -1,0 +1,68 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M0-01
+status: passed
+
+source:
+  document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#m0-01-建立统一-verification-harness-与证据入口
+
+revision:
+  git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b
+  worktree_digest: 见 implementation/M0-01.json（含 dirty_files 计数）
+
+deliverables:
+  - scripts/verify-product-experience.mjs
+  - scripts/verify-product-experience.test.mjs
+  - scripts/product-experience/generate_registry_from_prd.py
+  - scripts/product-experience/registry.generated.json
+  - scripts/product-experience/wiring.mjs
+  - scripts/product-experience/registry.mjs
+  - scripts/product-experience/runner.mjs
+  - scripts/product-experience/bootstrap-suite.mjs
+  - scripts/product-experience/evidence-hygiene.mjs
+changed_paths:
+  - scripts/verify-product-experience.mjs
+  - scripts/verify-product-experience.test.mjs
+  - scripts/product-experience/
+  - artifacts/ai-tasks/current.yaml
+  - docs/product-experience-redesign/r-code-experience-redesign-prd.md（§0 volatile 与 §10 M0-01 checkbox）
+
+assertions:
+  - id: M0-01.A1
+    passed: true
+    command: node --test scripts/verify-product-experience.test.mjs
+    exit_code: 0
+    report_path: /tmp/pe-run.log（stdout；12/12 用例：未知任务、--task/--through 并用、未知里程碑均非 0 且报准确 ID，失败子命令场景列出全部未接线断言 ID）
+  - id: M0-01.A2
+    passed: true
+    command: node scripts/verify-product-experience.mjs --task M0-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M0-01.json
+  - id: M0-01.A3
+    passed: true
+    command: node scripts/product-experience/evidence-hygiene.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M0-01.json
+
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M0-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M0-01.json
+
+decisions:
+  - id: DM1
+    note: registry 由 generate_registry_from_prd.py 从 PRD §11 机械提取（42 任务/155 唯一断言），wiring.mjs 单独持有命令接线；未接线断言按显式 required 失败处理。PRD 变化时重跑生成器即可，无第二套枚举。
+  - id: DM2
+    note: gate 的 176 断言计数包含同一 ID 在文中的重复引用行；registry 以唯一 required ID=155 为准，两边均无重复 ID。
+  - id: DM3
+    note: --task 只验证目标任务自身（依赖就绪交给 --through 累计门禁与无环校验）；否则任意单任务都会因 DAG 根部 D0 的截图重摄而变慢数分钟。
+  - id: DM4
+    note: Rust git 依赖（fix-path-env）在本沙箱需 CARGO_NET_GIT_FETCH_WITH_CLI=true 经系统 git 拉取，已固化进 wiring 的 CARGO_ENV 与 bootstrap-suite。
+  - id: DM5
+    note: 平台适配——D0 python 工具依赖 playwright，经 VERIFY_PRODUCT_EXPERIENCE_PYTHON 指向 ~/.venvs/r-code-d0/bin/python 注入；其他环境缺省 python3 即可。
+external_gates_remaining:
+  - bootstrap-suite 当前为 M0 自举子集（r-code-mcp lib 15 tests + 2 个零依赖前端套件）；全量 npm test、rich-interaction 与三平台项在 M0-02 冻结基线时接入。
+notes:
+  - 本报告与运行输出不含 secret/raw reasoning；evidence-hygiene 扫描 oracle_hits=0（扫描范围=current.yaml+本 worklist evidence/verification/templates）。

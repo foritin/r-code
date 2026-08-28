@@ -1,0 +1,16 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M4-02
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m4-02-checks.mjs + wiring（A1..A4 四腿，组合既有套件）
+assertions: { M4-02.A1: passed, M4-02.A2: passed, M4-02.A3: passed, M4-02.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M4-02 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-02.json
+decisions:
+  - DM1: A1 复用 debug-detail-containment（M1-01）+ capsule 脱敏（M4-01）+ Timeline/tool-activity 静态扫描（无 reasoning 渲染路径/无 innerHTML）。
+  - DM2: A4 性能腿=timeline-incremental-performance（限 30min，重性能用例按 BASELINE 惯例有界执行）。

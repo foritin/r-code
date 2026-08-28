@@ -1,0 +1,14 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M9-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+assertions: { "M9-03.A1": passed, "M9-03.A2": passed, "M9-03.A4": passed }
+notes:
+  - A4 原实现内嵌 `--through M9`，会再次执行 M9-03.A4 自身（失败断言无缓存）→ 无限递归，63 分钟超时。
+  - 修复为等价拆解：`--through M8` + M9-01/M9-02/M9-04 任务门（全缓存命中）；顶层 `--through M9 --profile implementation` 167/167 passed @82c8c5c 闭环（implementation/through-M9.json）。
+  - M5-02.A8–A11 曾 not_implemented 阻塞累计门，已补真实聚合腿并跑绿后放行。
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M9-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M9-03.json

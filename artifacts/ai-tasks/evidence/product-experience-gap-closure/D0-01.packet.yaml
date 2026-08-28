@@ -1,0 +1,96 @@
+schema_version: ai-task-packet.v1
+project_id: product-experience-gap-closure
+task_id: D0-01
+status: passed
+
+source:
+  document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#10-主-checklist唯一状态源
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#d0-01-交付完整-app-demo设计说明与冻结实施合同
+
+objective: 在同一 revision（main@82c8c5c，prototype sha256=a9e457a8e84bff96838762d923a36c0cdeb52440b663462ce153f6466e3afd8d）上复核 D0 全部证据链——live Settings semantic gate、capture manifest（required 截图/evidence 无缺项、stale 隔离、diagnostics=0、视口无意外溢出）、markdown 链接与组合 worklist gate——全部成立后勾选 §10 唯一 Checkbox 并归档证据。
+depends_on: []
+fixed_constraints:
+  - 组合 gate 每次实时执行 Settings validator，不读取陈旧 report。
+  - 不以 PNG 数量、最大编号或目录文件数作为完成证据；一切枚举只从 images/capture-manifest.json 读取。
+  - Demo/截图不得读取或写入真实配置、密钥、工作区、网络或 OS 权限；证据不含 secret/raw reasoning。
+  - 已完成的旧 worklist packet（windows-reliability）已按原合同归档为 artifacts/ai-tasks/evidence/windows-reliability/M4-03.packet.yaml，不静默覆盖。
+decision_criteria:
+  - 勾选前必须 settings_validation.d0_semantic_proof=passed 且 manifest status=passed 且双次 --check exit 0 同 digest。
+
+inputs:
+  - docs/product-experience-redesign/tools/settings_capability_gate.py
+  - docs/product-experience-redesign/tools/worklist_gate.py
+  - docs/product-experience-redesign/tools/capture_states.py
+  - docs/product-experience-redesign/tools/check_markdown_links.py
+  - docs/product-experience-redesign/images/capture-manifest.json
+
+deliverables:
+  - 本轮 capture-manifest.json 与对应截图集（同 revision 复证）
+  - live source inventory/symbol resolution proof
+  - 更新后的 settings-capability-gate.json / worklist-gate.json / freeze.yaml digest
+  - artifacts/ai-tasks/evidence/product-experience-gap-closure/D0-01.yaml
+
+steps:
+  - id: D0-01.S1
+    status: completed
+    action: 只读核对 revision（82c8c5c）、干净工作区、dev⊆main、Node v24/Rust 工具链；确认 prototype.html SHA 与既有 manifest 一致。
+    expected_result: 环境与同源性成立
+  - id: D0-01.S2
+    status: completed
+    action: 归档旧 current.yaml 并创建本 TaskPacket。
+    expected_result: artifacts/ai-tasks/current.yaml 为本 worklist 的 D0-01 active 包
+  - id: D0-01.S3
+    status: completed
+    action: 运行 python tools/worklist_gate.py --update-freeze（内部实时执行 Settings validator）。
+    expected_result: freeze 更新且 d0_semantic_proof=passed
+  - id: D0-01.S4
+    status: completed
+    action: 运行 python tools/capture_states.py 于当前平台重新生成 manifest 与 227 张截图。
+    expected_result: manifest status=passed、diagnostics=0、stale 隔离
+  - id: D0-01.S5
+    status: completed
+    action: 运行 python tools/check_markdown_links.py 校验文档链接。
+    expected_result: 0 broken links
+  - id: D0-01.S6
+    status: completed
+    action: 读取 manifest 复核 A1 全部子条件后勾选 §10 D0-01 Checkbox，重跑 --update-freeze，再连续两次 --check（均须只读、exit 0、digest 相同）。
+    expected_result: D0-01 勾选生效且组合 gate 稳定通过
+
+acceptance_assertions:
+  - id: D0-01.A1
+    level: visual
+    command: python3 docs/product-experience-redesign/tools/capture_states.py
+    expected: manifest 的 prototype_sha256 与当前 HTML 一致；required screenshots/evidence 无缺项；diagnostics 全 0；声明视口无页面级意外溢出。
+    evidence_path: docs/product-experience-redesign/images/capture-manifest.json
+  - id: D0-01.A2
+    level: contract
+    command: python3 docs/product-experience-redesign/tools/worklist_gate.py --check
+    expected: §10 Checklist ID 与 §11 任务卡一一对应，无重复 Assertion ID；exit 0。
+    evidence_path: docs/product-experience-redesign/worklist-gate.json
+  - id: D0-01.A3
+    level: docs
+    command: python3 docs/product-experience-redesign/tools/check_markdown_links.py
+    expected: freeze digest 由工具计算、链接完整、旧计划需求均有替代 RequirementRef；exit 0。
+    evidence_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/D0-01.json
+  - id: D0-01.A6
+    level: contract
+    command: python3 docs/product-experience-redesign/tools/settings_capability_gate.py
+    expected: symbol_resolution_failures/unmapped/duplicate_mapping/secret_value_hits=0；source_snapshot_verified=true。
+    evidence_path: docs/product-experience-redesign/settings-capability-gate.json
+  - id: D0-01.A8
+    level: contract
+    command: python3 docs/product-experience-redesign/tools/worklist_gate.py --update-freeze
+    expected: source_inventory_proof.status=passed，三层 provenance counts 存在且 production_existing>0；检测到 D0 勾选而 proof 缺失时非 0。
+    evidence_path: docs/product-experience-redesign/worklist-gate.json
+
+completed_assertions: []
+completed_assertions: [D0-01.A1, D0-01.A2, D0-01.A3, D0-01.A6, D0-01.A8]
+remaining_assertions: []
+changed_paths:
+  - artifacts/ai-tasks/current.yaml
+decisions: []
+attempts: 1
+evidence: []
+last_verified_revision: null

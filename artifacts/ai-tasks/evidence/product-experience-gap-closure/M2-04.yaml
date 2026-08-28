@@ -1,0 +1,17 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M2-04
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/scripts/m2-04-theme-responsive.test.mjs（Playwright E2E：视口×主题×12页溢出矩阵/窗口bounds/状态保持/键盘导航）
+assertions: { M2-04.A1: passed, M2-04.A2: passed, M2-04.A3: passed, M2-04.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M2-04 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  wall_clock: ~40s（4 用例全真实浏览器执行）
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-04.json
+decisions:
+  - DM1: A2 窗口 bounds 以 window.outerWidth/outerHeight 前后相等断言；执行台/抽屉为应用内 grid/覆盖层，无任何窗口 API 调用（M2-02 静态扫描持续锁定）。
+  - DM2: A1 采用 scrollWidth-clientWidth ≤1px 的横向溢出判定，12 页×双主题在 960 最严视口逐页验证。

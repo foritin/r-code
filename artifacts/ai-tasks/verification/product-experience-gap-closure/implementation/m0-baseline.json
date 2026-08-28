@@ -1,0 +1,192 @@
+{
+  "schema_version": "product-experience-m0-baseline.v1",
+  "baseline_of_worklist": "product-experience-gap-closure",
+  "finished_at": "2026-08-27T12:46:33.781Z",
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "environment": {
+    "node": "v24.16.0",
+    "npm": "11.13.0",
+    "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "python": "Python 3.12.3",
+    "platform": "linux/x64",
+    "dirty_files": 250
+  },
+  "audit_issue_map": [
+    {
+      "id": "AUDIT-1",
+      "issue": "canonical default 与 Settings 页投影不一致（空白页提示连接服务并回退 Codex）",
+      "owner_task": "M2-03/M3-04"
+    },
+    {
+      "id": "AUDIT-2",
+      "issue": "子代理候选回执过期导致首次委派失败，readiness 错误绑定设置页生命周期",
+      "owner_task": "M3-03"
+    },
+    {
+      "id": "AUDIT-3",
+      "issue": "父 Run 终态后子代理/工具/计时器仍 running，缺少 Host 级联与退出 ACK",
+      "owner_task": "M3-01/M3-02/M4-04"
+    },
+    {
+      "id": "AUDIT-4",
+      "issue": "同工作区三文件三张审批卡，缺 canonical WorkspaceBinding 同风险聚合",
+      "owner_task": "M1-02/M4-04"
+    },
+    {
+      "id": "AUDIT-5",
+      "issue": "打开执行台改变并重定位顶层窗口，而非 WebView 内响应式布局",
+      "owner_task": "M2-04/M4-03"
+    },
+    {
+      "id": "AUDIT-6",
+      "issue": "发送/停止按钮过渡误触中止且正文滞留，发送/追加/停止未解耦",
+      "owner_task": "M2-03"
+    }
+  ],
+  "summary": {
+    "total": 10,
+    "executed": 9,
+    "passed": 3,
+    "failed": 6,
+    "external_pending": 1
+  },
+  "legs": [
+    {
+      "name": "docs:worklist-gate-check",
+      "category": "doc-consistency",
+      "command": "python3 docs/product-experience-redesign/tools/worklist_gate.py --check",
+      "classification": "implemented",
+      "exit_code": 0,
+      "timed_out": false,
+      "ok": true,
+      "duration_ms": 194,
+      "stdout_tail": "    \"mapped_count\": 111,\n    \"verified_count\": 0,\n    \"d0_semantic_proof\": \"passed\"\n  },\n  \"issues\": []\n}",
+      "stderr_tail": null,
+      "cached": true,
+      "cached_from_finished_at": "2026-08-27T12:46:14.261Z"
+    },
+    {
+      "name": "docs:markdown-links",
+      "category": "doc-consistency",
+      "command": "python3 docs/product-experience-redesign/tools/check_markdown_links.py",
+      "classification": "implemented",
+      "exit_code": 0,
+      "timed_out": false,
+      "ok": true,
+      "duration_ms": 38,
+      "stdout_tail": "{\n  \"schema_version\": \"markdown-link-check.v1\",\n  \"checked\": 276,\n  \"broken\": []\n}",
+      "stderr_tail": null,
+      "cached": true,
+      "cached_from_finished_at": "2026-08-27T12:46:14.261Z"
+    },
+    {
+      "name": "frontend:npm-test-batch-1",
+      "category": "frontend-core",
+      "command": "node --test scripts/activity-archive-ui.test.mjs scripts/companion-window-ui.test.mjs scripts/automation-contract.test.mjs scripts/codex-message-stream.test.mjs scripts/enhanced-review-ui.test.mjs scripts/knowledge-settings-ui.test.mjs scripts/memory-ui.test.mjs scripts/native-notification.test.mjs scripts/popover-viewport.test.mjs scripts/send-mode-switch.test.mjs scripts/task-status-view.test.mjs scripts/usage-label.test.mjs",
+      "classification": "implemented",
+      "exit_code": 1,
+      "timed_out": false,
+      "ok": false,
+      "duration_ms": 4200009,
+      "stdout_tail": "  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/usage-label.test.mjs:82:28) {\n    name: 'Error'\n  }",
+      "stderr_tail": null,
+      "reused_no_rerun": true,
+      "reuse_reason": "BASELINE_M0_REUSE 显式指定：冻结上一份(2026-08-27T12:46:14.261Z)记录"
+    },
+    {
+      "name": "frontend:npm-test-batch-2",
+      "category": "frontend-core",
+      "command": "node --test scripts/app-shell.test.mjs scripts/companion.test.mjs scripts/browser-contract.test.mjs scripts/codex-question-card.test.mjs scripts/execution-env-card.test.mjs scripts/layout-resize.test.mjs scripts/model-capabilities.test.mjs scripts/onboarding-campaign.test.mjs scripts/queue-reorder-ui.test.mjs scripts/session-run-summary.test.mjs scripts/tauri-dev-server.test.mjs scripts/user-error-contract.test.mjs",
+      "classification": "implemented",
+      "exit_code": 1,
+      "timed_out": false,
+      "ok": false,
+      "duration_ms": 4200009,
+      "stdout_tail": "  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/session-run-summary.test.mjs:148:28) {\n    name: 'Error'\n  }",
+      "stderr_tail": null,
+      "reused_no_rerun": true,
+      "reuse_reason": "BASELINE_M0_REUSE 显式指定：冻结上一份(2026-08-27T12:46:14.261Z)记录"
+    },
+    {
+      "name": "frontend:npm-test-batch-3",
+      "category": "frontend-core",
+      "command": "node --test scripts/codex-full-flow-visual.test.mjs scripts/long-content-performance.test.mjs scripts/codex-context-events.test.mjs scripts/codex-tool-output.test.mjs scripts/i18n-hardcoded.test.mjs scripts/mcp-agent-actions.test.mjs scripts/model-switcher.test.mjs scripts/plan-mode-ui.test.mjs scripts/room-file-activity.test.mjs scripts/subagent-provider-autoprobe.test.mjs scripts/terminal-layout.test.mjs",
+      "classification": "implemented",
+      "exit_code": 1,
+      "timed_out": false,
+      "ok": false,
+      "duration_ms": 4200009,
+      "stdout_tail": "  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/terminal-layout.test.mjs:130:28) {\n    name: 'Error'\n  }",
+      "stderr_tail": null,
+      "reused_no_rerun": true,
+      "reuse_reason": "BASELINE_M0_REUSE 显式指定：冻结上一份(2026-08-27T12:46:14.261Z)记录"
+    },
+    {
+      "name": "frontend:npm-test-batch-4",
+      "category": "frontend-core",
+      "command": "node --test scripts/codex-performance.test.mjs scripts/timeline-incremental-performance.test.mjs scripts/codex-degraded-visibility.test.mjs scripts/debug-detail-containment.test.mjs scripts/i18n.test.mjs scripts/mcp-management.test.mjs scripts/native-notification-routing.test.mjs scripts/plan-workbench.test.mjs scripts/run-guard-ui.test.mjs scripts/subagent-tool-lifecycle.test.mjs scripts/ui-readability.test.mjs",
+      "classification": "implemented",
+      "exit_code": null,
+      "timed_out": true,
+      "ok": false,
+      "duration_ms": 4200009,
+      "stdout_tail": "✖ m4_degraded_label maps all reasons and rejects junk (584.983495ms)\n✖ m4_run_row_wires_degraded_badge_into_the_run_row (0.704814ms)",
+      "stderr_tail": null,
+      "reused_no_rerun": true,
+      "reuse_reason": "BASELINE_M0_REUSE 显式指定：冻结上一份(2026-08-27T12:46:14.261Z)记录"
+    },
+    {
+      "name": "rust:cargo-test-workspace",
+      "category": "rust-core",
+      "command": "cargo test --workspace",
+      "classification": "implemented",
+      "exit_code": 101,
+      "timed_out": false,
+      "ok": false,
+      "duration_ms": 230572,
+      "stdout_tail": "\n\nfailures:\n    codex_app_server::tests::concurrent_prepare_and_first_acquire_share_one_initialization\n\ntest result: FAILED. 648 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 224.33s",
+      "stderr_tail": "     Running tests/user_error_contract.rs (target/debug/deps/user_error_contract-f251fdcdb3dd48fe)\n     Running unittests src/lib.rs (target/debug/deps/r_code_gateway-c7a883692056c800)\n     Running tests/command_corpus_runner.rs (target/debug/deps/command_corpus_runner-c0a56361db9fe02b)\n     Running tests/replay_eval_runner.rs (target/debug/deps/replay_eval_runner-339eefed79de9b0d)\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-f69e8194de8ca7e9)\nerror: test failed, to rerun pass `-p r-code-host --lib`",
+      "reused_no_rerun": true,
+      "reuse_reason": "BASELINE_M0_REUSE 显式指定：冻结上一份(2026-08-27T12:46:14.261Z)记录"
+    },
+    {
+      "name": "rich-interaction:through-M4",
+      "category": "regression-rerun",
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node scripts/verify-codex-interaction.mjs --through M4 --profile implementation",
+      "classification": "implemented",
+      "exit_code": 1,
+      "timed_out": false,
+      "ok": false,
+      "duration_ms": 383288,
+      "stdout_tail": "  FAILED M4-01.A3 (failed)\n  FAILED M4-01.A4 (failed)\n  FAILED M4-02.A1 (failed)\n  FAILED M4-02.A2 (failed)\n  FAILED M4-02.A3 (failed)\nreport: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M4.json",
+      "stderr_tail": null,
+      "reused_no_rerun": true,
+      "reuse_reason": "BASELINE_M0_REUSE 显式指定：冻结上一份(2026-08-27T12:46:14.261Z)记录"
+    },
+    {
+      "name": "windows-reliability:corpus-fast",
+      "category": "regression-rerun",
+      "command": "",
+      "classification": "external-pending",
+      "reason": "corpus 依赖 pwsh/Git Bash 方言与真实 gateway 执行路径，属 Windows 宿主项；本平台以 corpus-schema 保持实现面",
+      "exit_code": null,
+      "duration_ms": 0,
+      "stdout_tail": null,
+      "stderr_tail": null
+    },
+    {
+      "name": "windows-reliability:corpus-schema",
+      "category": "regression-rerun",
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node scripts/windows-reliability/corpus-schema.mjs",
+      "classification": "implemented-platform-neutral-fixture",
+      "exit_code": 0,
+      "timed_out": false,
+      "ok": true,
+      "duration_ms": 23,
+      "stdout_tail": "corpus schema OK: 44 条，各类数量 {\"dialect-chain\":7,\"env-prefix\":4,\"quoting\":6,\"encoding\":4,\"path\":8,\"pipe\":6,\"exit-code\":5,\"policy\":4}",
+      "stderr_tail": null,
+      "cached": true,
+      "cached_from_finished_at": "2026-08-27T12:46:14.261Z"
+    }
+  ]
+}

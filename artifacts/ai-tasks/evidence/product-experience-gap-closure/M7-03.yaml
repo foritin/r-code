@@ -1,0 +1,16 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M7-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m7-03-checks.mjs + wiring（A1..A3 三腿）
+assertions: { M7-03.A1: passed, M7-03.A2: passed, M7-03.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M7-03 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-03.json
+decisions:
+  - DM1: 工具 schema 严格= request.rs deny_unknown_fields（18 处）；raw eval/upload/download 不在 BrowserToolName 注册。
+  - DM2: 输出结果类型含 truncated/redacted 字段（先脱敏再截断，终态/错误不丢）。

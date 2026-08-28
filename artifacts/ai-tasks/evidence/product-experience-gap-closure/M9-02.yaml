@@ -1,0 +1,13 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M9-02
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+assertions: { "M9-02.A1": passed, "M9-02.A2": passed, "M9-02.A4": passed }
+notes:
+  - A2：rust 腿原过滤词 `git_service::tests` 在 r-code-host 匹配 0 用例（假绿），已替换为 `cargo test -p r-code-store --test workspace_snapshots`（真实 2 用例：git tree 快照精确 blob / 每_RUN_path 物化幂等）；capsule 腿补 cwd=FRONTEND。
+  - A4：capsule cleanup 单调 + task_workspace_binding 回归 7 用例。
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M9-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M9-02.json

@@ -337,6 +337,8 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         // `<a target="_blank">` 交给系统默认浏览器，避免 WebView 内部静默吞掉外链。
         .plugin(tauri_plugin_opener::init())
+        // 跨会话记忆窗口尺寸/位置（小助手窗口位置同样受益；其尺寸本身不可调）。
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .on_window_event(|_window, _event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
                 if is_companion_window(_window.label()) {
@@ -348,41 +350,74 @@ fn main() {
                 }
             }
 
-            #[cfg(target_os = "windows")]
+            // M3-01：所有非 companion 的 CloseRequested 统一过 Host 关闭状态机。
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                // Hide only when a restore tray exists. Without one, explicitly exit both native
-                // windows so the independent companion cannot strand a background process.
-                let action = windows_close_action(
-                    _window.label() == "main",
-                    _window.app_handle().tray_by_id(MAIN_TRAY_ID).is_some(),
-                );
-                if action != WindowsLifecycleAction::None {
+                if is_companion_window(_window.label()) {
                     api.prevent_close();
-                    apply_windows_lifecycle_action(_window.app_handle(), action);
+                    return;
                 }
-            }
+                if _window.label() != "main" {
+                    return;
+                }
+                api.prevent_close();
+                let app = _window.app_handle();
 
-            #[cfg(target_os = "macos")]
-            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                if _window.label() == "main" {
-                    // Keep the main WebView (and therefore the companion navigation controller)
-                    // alive behind the conventional macOS close-to-hide behavior. Dock reopen and
-                    // a companion session click can restore the same window without a stale ACK.
-                    api.prevent_close();
-                    if let Err(error) = _window.hide() {
-                        tracing::warn!(%error, "failed to hide the R-Code main window");
+                #[cfg(target_os = "windows")]
+                let restore = if app.tray_by_id(MAIN_TRAY_ID).is_some() {
+                    r_code_host::close_gate::RestoreCapability::Tray
+                } else {
+                    r_code_host::close_gate::RestoreCapability::None
+                };
+                #[cfg(target_os = "macos")]
+                let restore = r_code_host::close_gate::RestoreCapability::Dock;
+                #[cfg(target_os = "linux")]
+                let restore = r_code_host::close_gate::RestoreCapability::None;
+
+                let preference = r_code_host::close_gate::ClosePreferenceService::new(
+                    app.path()
+                        .app_data_dir()
+                        .expect("app data dir")
+                        .join("r-code")
+                        .join("config"),
+                )
+                .load();
+
+                let decision = app
+                    .state::<std::sync::Mutex<r_code_host::close_gate::CloseGate>>()
+                    .lock()
+                    .expect("close gate poisoned")
+                    .handle_close(
+                        r_code_host::close_gate::CloseTrigger::NativeClose,
+                        preference,
+                        restore,
+                    );
+
+                match decision.action {
+                    r_code_host::close_gate::CloseAction::Quit => {
+                        #[cfg(target_os = "windows")]
+                        apply_windows_lifecycle_action(app, WindowsLifecycleAction::Quit);
+                        #[cfg(not(target_os = "windows"))]
+                        app.exit(0);
                     }
-                }
-            }
-
-            #[cfg(target_os = "linux")]
-            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                if main_close_requires_full_exit(_window.label() == "main", false) {
-                    // Linux has no tray/reopen controller in this build. The companion is an
-                    // independent top-level window, so merely closing main would keep the process
-                    // alive. Exit the application atomically and let Tauri close both WebViews.
-                    api.prevent_close();
-                    _window.app_handle().exit(0);
+                    r_code_host::close_gate::CloseAction::Hide => {
+                        #[cfg(target_os = "windows")]
+                        hide_main_window(app);
+                        #[cfg(not(target_os = "windows"))]
+                        if let Err(error) = _window.hide() {
+                            tracing::warn!(%error, "failed to hide the R-Code main window");
+                        }
+                    }
+                    r_code_host::close_gate::CloseAction::ShowPrompt
+                    | r_code_host::close_gate::CloseAction::IgnoreFocusExisting => {
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "close-prompt-request",
+                            serde_json::json!({ "epoch": decision.epoch }),
+                        );
+                        if let Some(main) = app.get_webview_window("main") {
+                            let _ = main.set_focus();
+                        }
+                    }
                 }
             }
         })
@@ -393,6 +428,10 @@ fn main() {
             let blobs_dir = base.join("blobs");
             let sessions_dir = base.join("sessions");
             let config_dir = base.join("config");
+            // M3-01：关闭状态机（Host 权威、可重入）。
+            app.manage(std::sync::Mutex::new(
+                r_code_host::close_gate::CloseGate::new(),
+            ));
             let logs_dir = base.join("logs");
             for dir in [&db_dir, &blobs_dir, &sessions_dir, &config_dir, &logs_dir] {
                 std::fs::create_dir_all(dir)?;
@@ -728,6 +767,10 @@ fn main() {
             tauri_commands::cmd_updater_download,
             tauri_commands::cmd_updater_install,
             tauri_commands::cmd_updater_restart,
+            r_code_host::lifecycle_commands::cmd_close_behavior_get,
+            r_code_host::lifecycle_commands::cmd_close_behavior_set,
+            r_code_host::lifecycle_commands::cmd_close_prompt_decision,
+            r_code_host::lifecycle_commands::cmd_lifecycle_explicit_quit,
             tauri_commands::cmd_browser_agent_contract,
             tauri_commands::cmd_task_create,
             tauri_commands::cmd_project_conversation_create,

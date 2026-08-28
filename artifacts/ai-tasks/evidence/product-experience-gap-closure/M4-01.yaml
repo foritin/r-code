@@ -1,0 +1,18 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M4-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/src/lib/run-capsule.ts（detail_state 四态/终态级联单调/迟到帧诊断/serialize-replay/sanitize）
+  - scripts/m4-01-capsule.test.mjs（4 用例：矩阵/级联/重放/脱敏）
+  - scripts/product-experience/m4-01-checks.mjs + wiring
+assertions: { M4-01.A1: passed, M4-01.A2: passed, M4-03.A3: passed, M4-01.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M4-01 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-01.json
+decisions:
+  - DM1: 纯函数投影（§5.4 矩阵全组合唯一 detail_state）；user_* 优先于自动规则但 forced-visible 事件（approval/question/error/warning/final/attention）不受 fold 抑制。
+  - DM2: 终态级联单调——重复 terminate 幂等；迟到帧只增 rejectedLate 计数；计时器随终态封口（对应 §4.3 terminal ACK 语义的投影侧）。

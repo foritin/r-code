@@ -1,0 +1,30 @@
+{
+  "schema_version": "user-error-contract.v1",
+  "note": "Rust 与 TS 共享的错误契约 fixture：同一 payload 必须得到相同 code/args；unknown code 必须安全降级。",
+  "cases": [
+    {
+      "name": "provider_unavailable",
+      "payload": { "code": "provider.unavailable", "args": { "endpoint": "https://api.example.com" } }
+    },
+    {
+      "name": "updater_signature_invalid",
+      "payload": {
+        "code": "updater.signature_invalid",
+        "args": {},
+        "debug_detail": "signature verification returned exit status 17"
+      }
+    },
+    {
+      "name": "worktree_binding_invalid",
+      "payload": {
+        "code": "worktree.binding_invalid",
+        "args": { "task_id": "task-42" },
+        "debug_detail": "managed worktree is not a linked Git worktree"
+      }
+    },
+    {
+      "name": "unknown_code",
+      "payload": { "code": "future.module_unknown_error_xz", "args": { "attempted": 1 } }
+    }
+  ]
+}

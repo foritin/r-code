@@ -11,66 +11,6 @@
   --rc-serif: Georgia, "Songti SC", "STSong", serif;
 }
 
-:root[data-theme="studio-light"] {
-  --font-ui: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
-  --font-display: var(--rc-serif);
-  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  --bg-app: #fbf9f5;
-  --bg-panel: #fffdf9;
-  --bg-card: #ffffff;
-  --bg-chip: #f5efe7;
-  --bg-inset: #f7f2eb;
-  --bg-hover: #f8eee3;
-  --bg-active: #f3dfca;
-  --border: #e9dfd4;
-  --border-strong: #d8c9b8;
-  --fg: #2b241f;
-  --fg-muted: #6d6259;
-  --fg-faint: #91857b;
-  --accent: #ed6514;
-  --accent-2: #b94c13;
-  --accent-fg: #ffffff;
-  --warning: #c56d13;
-  --success: #178552;
-  --danger: #c94235;
-  --on-solid: #ffffff;
-  --shadow-card: none;
-  --shadow-popover: none;
-  --scrim: rgba(41, 32, 24, .28);
-  --fx-glass: var(--bg-card);
-  --fx-edge: var(--border);
-}
-
-:root[data-theme="obsidian"] {
-  --font-ui: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
-  --font-display: var(--rc-serif);
-  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  --bg-app: #151310;
-  --bg-panel: #1c1815;
-  --bg-card: #211d19;
-  --bg-chip: #2a251f;
-  --bg-inset: #12100e;
-  --bg-hover: #302922;
-  --bg-active: #3c3127;
-  --border: #393129;
-  --border-strong: #55483d;
-  --fg: #f5eee7;
-  --fg-muted: #bdb0a2;
-  --fg-faint: #8d8175;
-  --accent: #ff853a;
-  --accent-2: #ffab6d;
-  --accent-fg: #2a1609;
-  --warning: #f2a247;
-  --success: #63bf8b;
-  --danger: #ee7869;
-  --on-solid: #16110d;
-  --shadow-card: none;
-  --shadow-popover: none;
-  --scrim: rgba(0, 0, 0, .54);
-  --fx-glass: var(--bg-card);
-  --fx-edge: var(--border);
-}
-
 body { letter-spacing: .002em; }
 button, input, textarea, select { font-family: var(--font-ui); }
 
@@ -94,7 +34,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 }
 #app.app-shell.rail-is-collapsed { --rc-current-rail: var(--rc-rail-collapsed-w); }
 #app.app-shell .main { grid-area: main; min-width: 0; min-height: 0; background: var(--bg-app); overflow: hidden; }
-#app.app-shell .scene { position: absolute; inset: 0; min-width: 0; min-height: 0; background: var(--bg-app); }
+#app.app-shell .scene { position: absolute; inset: 0; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg-app); }
 
 .app-statusbar {
   grid-area: status;
@@ -182,8 +122,6 @@ button, input, textarea, select { font-family: var(--font-ui); }
 }
 .sidebar-create { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; }
 .sidebar-new { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 650; }
-:root[data-theme="obsidian"] .sidebar-new { color: #251408; }
-.sidebar-new:hover { filter: brightness(1.045); }
 .sidebar-collapse { display: grid; place-items: center; width: 34px; height: 38px; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-muted); }
 .sidebar-collapse:hover { color: var(--fg); border-color: var(--border-strong); background: var(--bg-hover); }
 .sidebar-nav { display: grid; gap: 2px; padding: 16px 0 13px; border-bottom: 1px solid var(--border); }
@@ -252,10 +190,6 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .rc-button:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-faint); background: var(--bg-hover); }
 .rc-button:disabled { opacity: .5; }
 .rc-button-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
-:root[data-theme="obsidian"] .rc-button-primary { color: #2a1609; }
-.rc-button-primary:hover:not(:disabled) { color: #fff; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 92%, #000); }
-:root[data-theme="obsidian"] .rc-button-primary:hover:not(:disabled) { color: #2a1609; }
-.rc-button-quiet { border-color: transparent; background: transparent; }
 .text-link { display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); font-size: 12px; }
 .text-link:hover { color: var(--accent); }
 
@@ -555,8 +489,6 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .scene-home .chat-composer-foot { border-top: 1px solid var(--border); background: transparent; }
 .scene-home .scope-pill, .scene-home .provider-pill { border: 0; background: transparent; color: var(--fg-muted); }
 .scene-home .send-button { min-width: 74px; min-height: 34px; padding: 0 14px; border-radius: 7px; background: var(--accent); color: #fff; white-space: nowrap; word-break: keep-all; }
-:root[data-theme="obsidian"] .scene-home .send-button { color: #2a1609; }
-
 #app.scene-room .scene-room { display: grid !important; grid-template-columns: var(--room-convo-width) 8px minmax(300px, 1fr); background: var(--bg-app); }
 #app.scene-room .convo, #app.scene-room .canvas { border: 0; border-radius: 0; background: var(--bg-card); }
 #app.scene-room .convo { border-right: 1px solid var(--border); }
@@ -653,8 +585,6 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .pane { border-radius: 9px; box-shadow: none; }
 .btn { border-radius: 7px; box-shadow: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); }
-:root[data-theme="obsidian"] .btn.primary, :root[data-theme="obsidian"] .btn.accent { color: #2a1609; }
-.input, .qopen .input { border-color: var(--border-strong); background: var(--bg-card); }
 
 /* Codex CLI 缺失时的全局门禁：固定命令、明确范围、一次确认。 */
 .codex-gate-backdrop {
@@ -917,3 +847,14 @@ button, input, textarea, select { font-family: var(--font-ui); }
   padding: 0 6px;
   font-size: 11px;
 }
+
+/* ---- M2-01 收敛迁移：以下为原主题作用域规则，自 HEAD 原样保留（与 tokens.css 无冲突）---- */
+:root[data-theme="obsidian"] .sidebar-new { color: #251408; }
+
+:root[data-theme="obsidian"] .rc-button-primary { color: #2a1609; }
+
+:root[data-theme="obsidian"] .rc-button-primary:hover:not(:disabled) { color: #2a1609; }
+
+:root[data-theme="obsidian"] .scene-home .send-button { color: #2a1609; }
+
+:root[data-theme="obsidian"] .btn.primary, :root[data-theme="obsidian"] .btn.accent { color: #2a1609; }

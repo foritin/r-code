@@ -1,0 +1,16 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M7-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/src/browser/asset_manifest.rs（versioned manifest：platform/arch 唯一解析、size/sha256/license/source 完整性、digest 稳定、SBOM 行；3 测试）
+  - scripts/product-experience/m7-01-checks.mjs + wiring（A1..A3）
+assertions: { M7-01.A1: passed, M7-01.A2: passed, M7-01.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M7-01 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-01.json
+decisions:
+  - DM1: 实现环境使用本地 fixture（内存字节/合成 manifest），真实下载面归 production profile。

@@ -1,0 +1,14 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M9-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+assertions: { "M9-01.A1": passed, "M9-01.A2": passed, "M9-01.A3": passed, "M9-01.A4": passed }
+notes:
+  - A1：locale-consistency + i18n-hardcoded 门禁；App.tsx 新增 ClosePromptDialog 曾致基线漂移，已重新生成基线后 0 命中。
+  - A2：docs/product-experience-redesign/tools/check_markdown_links.py（python3）全量 docs 链接 0 broken；修复执行器误用 node 跑 .py 与错误路径。
+  - A3/A4：m2-04-theme-responsive / m2-03-a4-pane-registry 套件（cwd=src-tauri/frontend）。
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M9-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M9-01.json

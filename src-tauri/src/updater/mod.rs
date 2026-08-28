@@ -23,7 +23,9 @@ pub use domain::{
 pub use tauri_backend::TauriUpdaterBackend;
 
 pub const UPDATER_STATE_EVENT: &str = "application-updater-state";
-const AUTO_CHECK_FAILURE_RETRY: Duration = Duration::from_secs(5 * 60);
+/// 更新端点尚未发布 release（404）属预期 external-pending 状态；
+/// 自动检查失败后低频重试即可，手动检查不受影响。
+const AUTO_CHECK_FAILURE_RETRY: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct ApplicationUpdaterState {

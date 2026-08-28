@@ -8,46 +8,6 @@
   --rc-content-gutter: clamp(22px, 3vw, 42px);
 }
 
-:root[data-theme="studio-light"] {
-  --font-display: var(--font-ui);
-  --bg-app: #fbfaf7;
-  --bg-sidebar: #f7f3ed;
-  --bg-panel: #fffefc;
-  --bg-card: #fffefc;
-  --bg-chip: #f2ebe3;
-  --bg-inset: #f8f4ef;
-  --bg-hover: #f5eee7;
-  --bg-active: #eee2d7;
-  --border: #e7ded4;
-  --border-strong: #d5c7b8;
-  --fg: #211e1b;
-  --fg-muted: #655d56;
-  --fg-faint: #8b8177;
-  --accent: #c74700;
-  --accent-2: #a63b00;
-  --accent-fg: #fff;
-}
-
-:root[data-theme="obsidian"] {
-  --font-display: var(--font-ui);
-  --bg-app: #151311;
-  --bg-sidebar: #1b1917;
-  --bg-panel: #181715;
-  --bg-card: #211f1c;
-  --bg-chip: #292622;
-  --bg-inset: #12110f;
-  --bg-hover: #292520;
-  --bg-active: #332d27;
-  --border: #302e2a;
-  --border-strong: #4b453e;
-  --fg: #f3ede6;
-  --fg-muted: #b9aea2;
-  --fg-faint: #857b71;
-  --accent: #ff8a3d;
-  --accent-2: #ffad75;
-  --accent-fg: #261308;
-}
-
 #app.app-shell {
   grid-template-rows: var(--rc-topbar-h) minmax(0, 1fr);
   grid-template-columns: var(--rc-current-rail) minmax(0, 1fr);

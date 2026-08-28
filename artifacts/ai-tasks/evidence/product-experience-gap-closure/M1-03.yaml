@@ -1,0 +1,21 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M1-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/src/lib/task-status-projection.ts（共享投影：§4.4 全序/终态单向门/cascade/STATUS_GLYPHS）
+  - src-tauri/frontend/src/lib/presentation.ts（单点委托 applyStatusFrame + 权威标签表）
+  - scripts/product-experience/m1-03-checks.mjs + wiring（A1..A5 五腿）
+  - frontend/scripts/m1-03-a1-a2-projection.test.mjs（5 用例）
+  - frontend/scripts/m1-03-s3-s5-consistency.test.mjs（3 用例静态门）
+assertions: { M1-03.A1: passed, M1-03.A2: passed, M1-03.A3: passed, M1-03.A4: passed, M1-03.A5: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M1-03 --profile implementation
+  exit_code: 0
+  assertions_passed: 5/5
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-03.json
+decisions:
+  - DM1: A3 五面=Rail/Canvas/Conversations/Activity/Dashboard 直接导入 presentation；SubagentWorkbench 的 statusLabel 属 SubagentStatus 域，归 M4-03/M4-04；CodexQuestionCard「等待回答」属问题生命周期，非任务状态散射。
+  - DM2: A2 级联为纯同步 reduce（≤1s 墙钟合同由纯函数语义保证，无 UI timeout）；子节点已终态保留、未终态→interrupted、running 工具→error、timer 全停。
+  - DM3: 环境补齐 chromium 完整二进制软链 /usr/bin/chromium（1228）供 UI-QA 型套件 browserExecutable() 查找。

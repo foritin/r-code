@@ -299,3 +299,251 @@ fn invalid_registered_workspace(task: &Task, detail: impl Into<String>) -> Produ
         .with_debug_detail(detail)
         .into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use r_code_core::dto::TaskMode;
+    use std::process::Command as StdCommand;
+
+    /// 建立独立临时目录（互不共享，cargo 并行安全）。
+    fn temp_root(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("r-code-binding-{label}-"))
+            .tempdir()
+            .expect("create binding fixture temp directory")
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let output = StdCommand::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args([
+                "-c",
+                "user.email=binding-test@example.invalid",
+                "-c",
+                "user.name=binding-test",
+            ])
+            .args(args)
+            .output()
+            .expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// 带一个空提交的可用 Git 仓库。
+    fn temp_repo(label: &str) -> (tempfile::TempDir, PathBuf) {
+        let temp = temp_root(label);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "--quiet"]);
+        git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "seed"]);
+        (temp, repo)
+    }
+
+    fn task_for(workspace: Option<&str>, worktree: Option<&str>) -> Task {
+        let mut task = Task::new(
+            workspace.map(str::to_string),
+            "binding-fixture",
+            "fixture goal",
+            TaskMode::Ask,
+        );
+        task.worktree_path = worktree.map(str::to_string);
+        task
+    }
+
+    // ---- M1-02.A2：合法 Local/Worktree 解析一致，重开后读回一致 ----
+
+    #[test]
+    fn a2_local_binding_resolves_and_reopens_idempotently() {
+        let temp = temp_root("a2-local");
+        let workspace = temp.path().join("project");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let db_path = temp.path().join("state.sqlite");
+        let task = task_for(Some(workspace.to_str().unwrap()), None);
+        let first = {
+            let db = Database::open(&db_path).expect("open fresh database for local binding");
+            WorkspaceService::new(&db)
+                .open(workspace.to_str().unwrap(), "local-project")
+                .expect("register workspace");
+            resolve_task_workspace_binding(&db, &task).expect("resolve local binding")
+        };
+
+        let second = {
+            let db = Database::open(&db_path).expect("reopen database");
+            resolve_task_workspace_binding(&db, &task).expect("resolve local binding again")
+        };
+        assert_eq!(first, second, "binding 读取应幂等");
+        match first {
+            TaskWorkspaceBinding::Local(local) => {
+                assert_eq!(local.root, workspace.canonicalize().unwrap());
+                assert!(local.registered_workspace_root.is_some());
+            }
+            other => panic!("expected Local binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a2_worktree_binding_resolves_and_reopens_idempotently() {
+        let ws_temp = temp_root("a2-wt");
+        let workspace = ws_temp.path().join("registered");
+
+        // registered 目录本身必须是合法 Git 仓库（GitService 从它解析 repo/common）。
+        std::fs::create_dir_all(&workspace).unwrap();
+        git_init_at(&workspace);
+
+        let worktree = ws_temp.path().join("wt-task42");
+        git(&workspace, &[
+            "worktree",
+            "add",
+            "-b",
+            "r-code/task42",
+            worktree.to_str().unwrap(),
+            "HEAD",
+        ]);
+
+        let db_path = ws_temp.path().join("state.sqlite");
+        let task = task_for(Some(workspace.to_str().unwrap()), Some(worktree.to_str().unwrap()));
+        let resolve_once = || {
+            let db = Database::open(&db_path).expect("open database");
+            WorkspaceService::new(&db)
+                .open(workspace.to_str().unwrap(), "wt-project")
+                .expect("register workspace");
+            resolve_task_workspace_binding(&db, &task).expect("resolve worktree binding")
+        };
+        let first = resolve_once();
+        let second = resolve_once();
+        assert_eq!(first, second);
+        match first {
+            TaskWorkspaceBinding::ManagedWorktree(managed) => {
+                assert_eq!(managed.root, worktree.canonicalize().unwrap());
+                assert_eq!(
+                    managed.registered_workspace_root,
+                    workspace.canonicalize().unwrap()
+                );
+            }
+            other => panic!("expected ManagedWorktree binding, got {other:?}"),
+        }
+    }
+
+    fn git_init_at(dir: &Path) {
+        git(dir, &["init", "--quiet"]);
+        git(dir, &["commit", "--quiet", "--allow-empty", "-m", "seed"]);
+    }
+
+    // ---- M1-02.A3：越界/缺失/mismatch/symlink 全部拒绝，绝不回退 Local ----
+
+    #[test]
+    fn a3_missing_or_unreachable_registration_is_rejected() {
+        let temp = temp_root("a3-missing");
+        let db = Database::open_in_memory().expect("in-memory db");
+
+        let ghost = temp.path().join("never-registered");
+        std::fs::create_dir_all(&ghost).unwrap();
+        let err = resolve_task_workspace_binding(&db, &task_for(Some(ghost.to_str().unwrap()), None))
+            .expect_err("unregistered workspace must fail closed");
+        assert!(err.to_string().contains("workspace"), "{err}");
+
+        let vanished = temp.path().join("vanishes-later");
+        std::fs::create_dir_all(&vanished).unwrap();
+        WorkspaceService::new(&db)
+            .open(vanished.to_str().unwrap(), "later-removed")
+            .expect("register then delete target");
+        std::fs::remove_dir_all(&vanished).unwrap();
+        let err = resolve_task_workspace_binding(&db, &task_for(Some(vanished.to_str().unwrap()), None))
+            .expect_err("removed workspace dir must fail closed");
+        assert!(err.to_string().contains("workspace"), "{err}");
+    }
+
+    #[test]
+    fn a3_worktree_without_git_file_is_rejected() {
+        let temp = temp_root("a3-nogit");
+        let workspace = temp.path().join("registered");
+        std::fs::create_dir_all(&workspace).unwrap();
+        git_init_at(&workspace);
+
+        // 普通子目录：既不是 linked worktree（.git 不是文件）也不存在逃逸可能。
+        let plain_dir = temp.path().join("plain");
+        std::fs::create_dir_all(&plain_dir).unwrap();
+
+        let db = Database::open_in_memory().expect("in-memory db");
+        WorkspaceService::new(&db)
+            .open(workspace.to_str().unwrap(), "nogit")
+            .unwrap();
+        let task = task_for(Some(workspace.to_str().unwrap()), Some(plain_dir.to_str().unwrap()));
+        let result = resolve_task_workspace_binding(&db, &task);
+        assert!(result.is_err(), "plain directory must be rejected");
+        assert!(!matches!(result, Ok(TaskWorkspaceBinding::Local(_))));
+    }
+
+    #[test]
+    fn a3_symlink_into_foreign_repo_root_is_rejected() {
+        let (_foreign_temp, foreign) = temp_repo("a3-symlink-target");
+        let temp = temp_root("a3-symlink");
+        let workspace = temp.path().join("registered");
+        std::fs::create_dir_all(&workspace).unwrap();
+        git_init_at(&workspace);
+
+        // junction/symlink 逃逸模型：worktree 字段指向指向外部仓库根的软链。
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&foreign, temp.path().join("escape")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&foreign, temp.path().join("escape")).unwrap();
+
+        let db = Database::open_in_memory().expect("in-memory db");
+        WorkspaceService::new(&db)
+            .open(workspace.to_str().unwrap(), "symlinked")
+            .unwrap();
+        let task = task_for(
+            Some(workspace.to_str().unwrap()),
+            Some(temp.path().join("escape").to_str().unwrap()),
+        );
+        let result = resolve_task_workspace_binding(&db, &task);
+        assert!(result.is_err(), "symlink escape must fail closed");
+        assert!(
+            !matches!(result, Ok(TaskWorkspaceBinding::Local(_))),
+            "never fall back to Local on rejection"
+        );
+    }
+
+    #[test]
+    fn a3_repo_mismatch_is_rejected() {
+        let (_other_temp, other_repo) = temp_repo("a3-mismatch-other");
+        let temp = temp_root("a3-mismatch");
+        let workspace = temp.path().join("registered");
+        std::fs::create_dir_all(&workspace).unwrap();
+        git_init_at(&workspace);
+
+        // worktree 属于另一个仓库 common dir；registered 只是普通 git 仓库目录。
+        let foreign_worktree = temp.path().join("foreign-wt");
+        git(&other_repo, &[
+            "worktree",
+            "add",
+            "-b",
+            "r-code/foreign",
+            foreign_worktree.to_str().unwrap(),
+            "HEAD",
+        ]);
+        // 该 worktree 的 .git 是文件 → 通过第一道检查，随后必须在
+        // "belongs to a different Git repository" 处被拒。
+
+        let db = Database::open_in_memory().expect("in-memory db");
+        WorkspaceService::new(&db)
+            .open(workspace.to_str().unwrap(), "mismatch-base")
+            .unwrap();
+        // resolver 以 registered workspace 为 Git 根；foreign worktree 的 common dir
+        // 必然不同 → 拒绝。由于 registered 不是任何 worktree 的宿主，另一个更早的
+        // 拒绝点同样成立；只断言“拒绝且非 Local”即可满足 fail-closed 合同。
+        let task = task_for(
+            Some(workspace.to_str().unwrap()),
+            Some(foreign_worktree.to_str().unwrap()),
+        );
+        let result = resolve_task_workspace_binding(&db, &task);
+        assert!(result.is_err());
+        assert!(!matches!(result, Ok(TaskWorkspaceBinding::Local(_))));
+    }
+}

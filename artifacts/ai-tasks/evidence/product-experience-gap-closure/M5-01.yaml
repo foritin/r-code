@@ -1,0 +1,17 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M5-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/src/styles/base.css（≤420px 触控命中区规则：主动作 44×44/次要 32×32/相邻间隔）
+  - scripts/product-experience/m5-01-checks.mjs + wiring（A1..A6 六腿，组合既有绿套件）
+assertions: { M5-01.A1: passed, M5-01.A2: passed, M5-01.A3: passed, M5-01.A4: passed, M5-01.A5: passed, M5-01.A6: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M5-01 --profile implementation
+  exit_code: 0
+  assertions_passed: 6/6
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-01.json
+decisions:
+  - DM1: A1 复用 M2-03 键盘流 E2E 与 M2-02 单一状态源扫描；A3 复用 M2-01 对比度门与 M2-04 溢出矩阵；A4 复用 STATUS_GLYPHS/CONNECTIVITY spinner 合同（spinner 仅 checking）。
+  - DM2: aria-live 聚合播报面已存在（CodexQuestionCard/SteerStack/Attachments），静态锁定 >0。

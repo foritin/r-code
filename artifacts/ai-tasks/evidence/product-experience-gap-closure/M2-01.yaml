@@ -1,0 +1,22 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M2-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/src/styles/tokens.css（升格 signature 皮肤为正身：obsidian/studio-light 权威值+真玻璃+surface 别名+双 fallback+signature 命名空间收编）
+  - src-tauri/frontend/src/styles/signature.css、r-code-ui.css（删除裸 :root 与主题劫持块；组件规则限缩 #app.r-code-signature / rc-* 命名空间）
+  - scripts/product-experience/m2-01-checks.mjs + wiring（A1..A3 + A4 扩展腿）
+assertions: { M2-01.A1: passed, M2-01.A2: passed, M2-01.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M2-01 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-01.json
+decisions:
+  - DM1: 线上真身甄别——App.tsx 恒挂 r-code-signature 类且 signature.css 后加载，故 signature 调色板即现状；收敛=把现状值升格进 tokens（obsidian #f4742b 暖黑橙、studio-light 平面暖白），而非回退 tokens 旧占位值，保证零视觉漂移方向正确。
+  - DM2: 允许例外——signature-* / rc-* / ob-* 命名空间变量与配套组件规则留在各自文件（非 canonical，不构成权威竞争）；A1 扫描仅锁定 canonical 名。
+  - DM3: !important 预算按"出现次数"冻结（base=2 含 reduced-motion 双写一行），只许下降；import manifest 冻结禁止新增后加载覆盖文件。
+  - DM4: 硬编码黑清零策略——标准卡/浮层→var(--shadow-*)；scrim→var(--scrim)；渐变淡出→transparent；方向性/特殊强度→color-mix(#000 n%, transparent)（非 rgba 字面量，可审计）。
+external_gates_remaining:
+  - A2 原型像素对照截图归 M5-02 视觉套件（本关卡以 tokens 实值 WCAG 计算先行锁定可读性下界）。

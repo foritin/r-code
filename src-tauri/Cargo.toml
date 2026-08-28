@@ -79,6 +79,8 @@ tauri-plugin-dialog = { workspace = true }
 tauri-plugin-notification = { workspace = true }
 notify-rust = { workspace = true }
 tauri-plugin-opener = "2"
+# 记忆主窗口尺寸/位置：Linux 首启默认 1440×900 在高分屏上偏小，用户调整一次后跨会话保持。
+tauri-plugin-window-state = "2"
 anyhow = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

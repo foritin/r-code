@@ -1,0 +1,17 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M2-02
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m2-02-checks.mjs + wiring（A1..A3 三腿）
+  - styles/r-code-ui.css `.scene` 补 overflow:hidden（横向溢出守卫）
+assertions: { M2-02.A1: passed, M2-02.A2: passed, M2-02.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M2-02 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-02.json
+decisions:
+  - DM1: A1 甄别——「第二套推断」只禁本地定义签名（function/const isTaskLive|legacyDisplayState|taskDisplayState）；导入共享 helper 与读取后端 display_state 比较属合法消费；TaskState 持久域与 VisualTaskState/SubagentStatus/问题卡/Memory 词汇重叠处按域放行。
+  - DM2: A2 白名单域=companion 精灵窗（独立 OS 窗口设计使然）与 MenuBar（原生菜单）；工作台/壳层/房间/场景域零窗口几何 API。

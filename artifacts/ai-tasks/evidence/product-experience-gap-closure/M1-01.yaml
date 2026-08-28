@@ -1,0 +1,45 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M1-01
+status: passed
+
+source:
+  document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#m1-01-完成结构化错误与双语基础合同
+
+revision:
+  git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b
+
+deliverables:
+  - scripts/product-experience/m1-01-checks.mjs（三段式断言执行器，已接线 wiring）
+changed_paths:
+  - artifacts/ai-tasks/current.yaml（任务包切换）
+  - docs/product-experience-redesign/r-code-experience-redesign-prd.md（§0 volatile 与 §10 M1-01 checkbox）
+
+assertions:
+  - id: M1-01.A1
+    passed: true
+    command: node scripts/product-experience/m1-01-checks.mjs --part a1
+    note: rust:user-error-fixture-contract PASS(159ms) + ts:user-error-fixture-contract PASS(235ms)
+  - id: M1-01.A2
+    passed: true
+    command: node scripts/product-experience/m1-01-checks.mjs --part a2
+    note: locale:key-placeholder-parity PASS(23ms) + locale:no-new-hardcoded-copy PASS(368ms)
+  - id: M1-01.A3
+    passed: true
+    command: node scripts/product-experience/m1-01-checks.mjs --part a3
+    note: security:debug-detail-containment PASS(67ms)
+
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M1-01 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  wall_clock: 0m00.9s
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-01.json
+
+decisions:
+  - id: DM1
+    note: 接管盘点发现 dirty dev 中本任务实施面已基本成型（UserFacingError fixture 双端解析、locale parity 与硬编码门禁均已在仓库内），按「packet 与代码不一致以代码为准」直接以官方验证器闭环；未新增产品改动。
+notes:
+  - 环境约定沿用 M0-02.yaml DM6（VERIFY_PRODUCT_EXPERIENCE_PYTHON / BASELINE_M0_REUSE）。

@@ -1,0 +1,18 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M3-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/src/provider_readiness.rs（ReadinessStore：FreshSkip TTL 30m 零请求/单飞/permit≤2/generation 失效零写入/零凭据字段；5 测试）
+  - scripts/product-experience/m3-03-checks.mjs + wiring（A1..A4）
+assertions: { M3-03.A1: passed, M3-03.A2: passed, M3-03.A3: passed, M3-03.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M3-03 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-03.json
+decisions:
+  - DM1: 首屏不等待——readiness 决策为锁外纯查表（FreshSkip/InFlight/Busy/Begin），联网仅 Begin 持 token 者执行。
+  - DM2: generation bump（startup opt-out/配置变化）使在途 token CAS 失效→迟到结果零 receipt/事件/success；手动测试独立路径不受影响。
+  - DM3: receipt store Debug 表示无 authorization/api_key 字段（a4 静态+运行断言）；evidence-hygiene 绿。

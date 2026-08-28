@@ -96,40 +96,37 @@
    ============================================================================ */
 :root[data-theme='obsidian'] {
   color-scheme: dark;
-  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
-  --font-display: 'Iowan Old Style', Georgia, serif;
-  --font-mono: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --font-ui: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --font-display: Bahnschrift, "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 
-  --bg-app: #16171b;
-  --bg-panel: #1c1e23;
-  --bg-card: #22252b;
-  --bg-chip: #292c33;
-  --bg-inset: #131417;
-  /* 交互面：取代散落各处手写的 hover 混色 */
-  --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg-app: #10110f;
+  --bg-sidebar: #1c1918;
+  --bg-panel: #151614;
+  --bg-card: #1b1c19;
+  --bg-chip: #25241f;
+  --bg-inset: #0b0c0a;
+  --bg-hover: #20211e;
+  --bg-active: #29261f;
+  --border: #2b2b27;
+  --border-strong: #4b463d;
+  --fg: #f1efe9;
+  --fg-muted: #a49f95;
+  --fg-faint: #817b72;
+  --accent: #f4742b;
+  --accent-2: #c49a61;
+  --accent-fg: #17100b;
+  --warning: #e5a15b;
+  --success: #69c798;
+  --danger: #df6b62;
+  --on-solid: #17100b;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 28px rgba(0, 0, 0, 0.17);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.34), 0 24px 70px rgba(0, 0, 0, 0.46);
+  --scrim: rgba(4, 4, 3, 0.62);
 
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-
-  --fg: #e4e6ea;
-  --fg-muted: #9ba0a8;
-  --fg-faint: #858b95;
-
-  --accent: #7aa2f7;
-  --accent-2: #9d7cd8;
-  --accent-fg: #10131c;
-  --warning: #cfa05c;
-  --success: #63b183;
-  --danger: #d97066;
-  --on-solid: #ffffff;
-
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.2);
-  --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.32), 0 18px 42px rgba(0, 0, 0, 0.45);
-  --scrim: rgba(0, 0, 0, 0.5);
-
-  --fx-glass: var(--bg-panel);
-  --fx-blur: 0px;
+  /* 真玻璃：只用于空间分层（floating/overlay）；正文与密集列表走不透明 fallback。 */
+  --fx-glass: color-mix(in srgb, var(--bg-panel) 76%, transparent);
+  --fx-blur: 18px;
   --fx-edge: var(--border);
 }
 
@@ -138,40 +135,119 @@
    ============================================================================ */
 :root[data-theme='studio-light'] {
   color-scheme: light;
-  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
-  --font-display: 'Iowan Old Style', Georgia, serif;
-  --font-mono: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --font-ui: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --font-display: Bahnschrift, "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 
-  --bg-app: #f3f3f1;
-  --bg-panel: #fafaf9;
+  /* day 材质独立定义：不复用暗色 wash/大投影；平面卡片（shadow: none）为原型定案。 */
+  --bg-app: #fbf9f5;
+  --bg-panel: #fffdf9;
   --bg-card: #ffffff;
-  --bg-chip: #ebebe8;
-  --bg-inset: #efefec;
-  --bg-hover: rgba(25, 25, 20, 0.045);
-  --bg-active: rgba(25, 25, 20, 0.085);
-
-  --border: #e0e0db;
-  --border-strong: #c9c9c2;
-
-  --fg: #24262c;
-  --fg-muted: #5e626b;
-  --fg-faint: #7c8089;
-
-  --accent: #3b6fd4;
-  --accent-2: #7a5fc0;
+  --bg-chip: #f5efe7;
+  --bg-inset: #f7f2eb;
+  --bg-hover: #f8eee3;
+  --bg-active: #f3dfca;
+  --border: #e9dfd4;
+  --border-strong: #d8c9b8;
+  --fg: #2b241f;
+  --fg-muted: #6d6259;
+  --fg-faint: #91857b;
+  --accent: #ed6514;
+  --accent-2: #b94c13;
   --accent-fg: #ffffff;
-  --warning: #9c6f22;
-  --success: #2e7d54;
-  --danger: #bf4643;
+  --warning: #c56d13;
+  --success: #178552;
+  --danger: #c94235;
   --on-solid: #ffffff;
 
-  --shadow-card: 0 1px 2px rgba(25, 25, 20, 0.06), 0 8px 24px rgba(25, 25, 20, 0.06);
-  --shadow-popover: 0 2px 8px rgba(25, 25, 20, 0.08), 0 18px 42px rgba(25, 25, 20, 0.16);
-  --scrim: rgba(25, 25, 20, 0.32);
+  --shadow-card: none;
+  --shadow-popover: none;
+  --scrim: rgba(41, 32, 24, 0.28);
 
-  --fx-glass: var(--bg-panel);
-  --fx-blur: 0px;
+  --fx-glass: color-mix(in srgb, var(--bg-card) 88%, transparent);
+  --fx-blur: 14px;
   --fx-edge: var(--border);
+}
+
+/* ============================================================================
+   Surface 语义别名（A4）：工作区/内容/下潜/卡片/悬浮/遮罩 —— 消费面只允许
+   使用这组语义名，不允许直取 rgba 黑或跨主题借用暗色 wash。
+   ============================================================================ */
+:root[data-theme='obsidian'],
+:root[data-theme='studio-light'] {
+  --surface-canvas: var(--bg-app);
+  --surface-content: var(--bg-panel);
+  --surface-sunken: var(--bg-inset);
+  --surface-card: var(--bg-card);
+  --surface-floating: var(--fx-glass);
+  --overlay-scrim: var(--scrim);
+  /* 正文/密集列表的不透明 fallback：backdrop-filter 不可用或透明度被系统降低时，
+     玻璃面板整体退化为实心 content 面，信息层级与边界不变。 */
+  --material-panel-fallback: var(--bg-panel);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  :root[data-theme='obsidian'],
+  :root[data-theme='studio-light'] {
+    --fx-glass: var(--material-panel-fallback);
+    --fx-blur: 0px;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme='obsidian'],
+  :root[data-theme='studio-light'] {
+    --fx-glass: var(--material-panel-fallback);
+    --fx-blur: 0px;
+  }
+}
+
+/* ============================================================================
+   Signature 皮肤命名空间（由 signature.css 升格：全局唯一权威定义点）。
+   组件规则仍留在 signature.css 的 #app.r-code-signature 作用域内。
+   ============================================================================ */
+:root {
+  --signature-workspace-radius: 28px;
+  --signature-sidebar: #1c1918;
+  --signature-sidebar-glow-hot: rgba(244, 116, 43, 0.06);
+  --signature-sidebar-glow-deep: rgba(176, 53, 34, 0.12);
+  --signature-sidebar-wash: rgba(244, 116, 43, 0.025);
+  --signature-corner-glow-hot: rgba(255, 139, 72, 0.18);
+  --signature-corner-glow-soft: rgba(216, 67, 33, 0.07);
+  --signature-send-bg: var(--accent);
+  --signature-send-bg-hover: #ff8642;
+  --signature-keyline: color-mix(in srgb, var(--accent) 34%, var(--border));
+  --signature-accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --signature-accent-faint: color-mix(in srgb, var(--accent) 7%, transparent);
+  --signature-divider: #32312c;
+  --signature-panel-edge: #37362f;
+  --signature-elevated: #171815;
+  --signature-control: #23231f;
+  --signature-chrome-fg: #aaa49b;
+  --signature-sidebar-muted: #aaa59c;
+  --signature-sidebar-section: #817b72;
+  --signature-sidebar-project: #d8d4cc;
+  --signature-composer-shadow: 0 -10px 34px rgba(0, 0, 0, 0.12), 0 10px 24px rgba(0, 0, 0, 0.16);
+}
+
+:root[data-theme='studio-light'] {
+  --signature-sidebar: #f5f0ea;
+  --signature-sidebar-glow-hot: rgba(191, 91, 73, 0.08);
+  --signature-sidebar-glow-deep: rgba(191, 91, 73, 0.11);
+  --signature-sidebar-wash: rgba(191, 91, 73, 0.035);
+  --signature-corner-glow-hot: rgba(210, 105, 75, 0.13);
+  --signature-corner-glow-soft: rgba(191, 91, 73, 0.055);
+  --signature-send-bg: #f47b37;
+  --signature-send-bg-hover: #ff8d4b;
+  --signature-divider: var(--border);
+  --signature-panel-edge: var(--border);
+  --signature-elevated: var(--bg-panel);
+  --signature-control: var(--bg-chip);
+  --signature-chrome-fg: var(--fg-muted);
+  --signature-sidebar-muted: var(--fg-muted);
+  --signature-sidebar-section: var(--fg-faint);
+  --signature-sidebar-project: var(--fg);
+  --signature-composer-shadow: 0 -8px 28px rgba(70, 45, 28, 0.045), 0 10px 28px rgba(70, 45, 28, 0.075);
 }
 
 /* ============================================================================

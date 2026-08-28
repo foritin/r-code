@@ -1,0 +1,33 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M2-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/src/lib/settings-pane-registry.json（12 页注册表，全 implemented 无孤儿）
+  - src-tauri/frontend/src/lib/settings-lifecycle.ts（R-SET-09 读取六态/草稿三态/CAS 三路恢复 reducer）
+  - src-tauri/frontend/src/components/settings/ 各 Section 迁移归位 + 12 页 Pane 全落地
+  - scripts/m2-03-checks.mjs 十三腿 + frontend/scripts/{a2-provider-snapshot,a3-keyboard,a4-pane-registry,a6-search-e2e,a10-lifecycle,a13-guidesheets}.test.mjs
+assertions:
+  - { id: M2-03.A1, passed: true }
+  - { id: M2-03.A2, passed: true }
+  - { id: M2-03.A3, passed: true }
+  - { id: M2-03.A4, passed: true }
+  - { id: M2-03.A5, passed: true }
+  - { id: M2-03.A6, passed: true }
+  - { id: M2-03.A7, passed: true }
+  - { id: M2-03.A8, passed: true }
+  - { id: M2-03.A9, passed: true }
+  - { id: M2-03.A10, passed: true }
+  - { id: M2-03.A11, passed: true }
+  - { id: M2-03.A12, passed: true }
+  - { id: M2-03.A13, passed: true }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M2-03 --profile implementation
+  exit_code: 0
+  assertions_passed: 13/13
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json
+decisions:
+  - DM1: A7 直接消费 settings-capability-baseline.json 的 127 项能力映射（preserve 103/add 14/migrate 8 全带 MIG 合同/demo 2 为 Browser planned_demo 不冒充生产）。
+  - DM2: A10 CAS reducer 为纯函数（R-SET-09 全语义），浏览器 E2E 经 ipc browser-mock 自动降级层跑真实 UI 流。
+  - DM3: settings_capability_gate 的 INV-* locator 漂移通过「重算 sha→update-report→update-freeze」正规流程清除；该流程已固化（M3-01.yaml DM4 同）。

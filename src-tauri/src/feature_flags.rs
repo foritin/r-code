@@ -10,6 +10,7 @@ const FEATURE_FLAGS_FILE: &str = "features.toml";
 pub enum ProductFeature {
     Browser,
     Automation,
+    Worktree,
 }
 
 impl ProductFeature {
@@ -17,6 +18,7 @@ impl ProductFeature {
         match self {
             Self::Browser => "browser",
             Self::Automation => "automation",
+            Self::Worktree => "worktree",
         }
     }
 
@@ -24,6 +26,7 @@ impl ProductFeature {
         match self {
             Self::Browser => "browser.feature_disabled",
             Self::Automation => "automation.feature_disabled",
+            Self::Worktree => "worktree.feature_disabled",
         }
     }
 }
@@ -34,6 +37,8 @@ pub struct ProductFeatureFlags {
     pub browser_enabled: bool,
     #[serde(default)]
     pub automation_enabled: bool,
+    #[serde(default)]
+    pub worktree_enabled: bool,
 }
 
 impl ProductFeatureFlags {
@@ -41,6 +46,7 @@ impl ProductFeatureFlags {
         match feature {
             ProductFeature::Browser => self.browser_enabled,
             ProductFeature::Automation => self.automation_enabled,
+            ProductFeature::Worktree => self.worktree_enabled,
         }
     }
 
@@ -113,6 +119,8 @@ mod tests {
         assert_eq!(flags, ProductFeatureFlags::default());
         assert!(!flags.is_enabled(ProductFeature::Browser));
         assert!(!flags.is_enabled(ProductFeature::Automation));
+        assert!(!flags.is_enabled(ProductFeature::Worktree));
+        assert!(!flags.worktree_enabled);
     }
 
     #[test]
@@ -122,12 +130,30 @@ mod tests {
         let expected = ProductFeatureFlags {
             browser_enabled: true,
             automation_enabled: false,
+            worktree_enabled: true,
         };
 
         service.save(expected).expect("save feature flags");
 
         assert_eq!(service.load().expect("reload feature flags"), expected);
+
+        let all_off = ProductFeatureFlags::default();
+        for feature in [
+            ProductFeature::Browser,
+            ProductFeature::Automation,
+            ProductFeature::Worktree,
+        ] {
+            assert_eq!(
+                all_off
+                    .require(feature)
+                    .expect_err("default keeps every feature disabled")
+                    .code,
+                format!("{}.feature_disabled", feature.key())
+            );
+        }
+
         assert!(expected.require(ProductFeature::Browser).is_ok());
+        assert!(expected.require(ProductFeature::Worktree).is_ok());
         assert_eq!(
             expected
                 .require(ProductFeature::Automation)
@@ -148,5 +174,19 @@ mod tests {
 
         assert!(flags.browser_enabled);
         assert!(!flags.automation_enabled);
+        assert!(!flags.worktree_enabled);
+    }
+
+    #[test]
+    fn disabled_error_codes_match_locale_reason_codes() {
+        // 与前端 feature-flags.ts 的 reasonCode 约定同源：errors.<code> 文案键。
+        for (feature, code) in [
+            (ProductFeature::Browser, "browser.feature_disabled"),
+            (ProductFeature::Automation, "automation.feature_disabled"),
+            (ProductFeature::Worktree, "worktree.feature_disabled"),
+        ] {
+            assert_eq!(feature.disabled_error_code(), code);
+            assert_eq!(feature.key(), code.split('.').next().unwrap());
+        }
     }
 }

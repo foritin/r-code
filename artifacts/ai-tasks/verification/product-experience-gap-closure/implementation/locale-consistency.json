@@ -1,0 +1,15 @@
+{
+  "schema_version": "locale-consistency.v1",
+  "locales": [
+    "zh-CN",
+    "en-US"
+  ],
+  "zh_keys": 149,
+  "en_keys": 149,
+  "missing_in_en": [],
+  "missing_in_zh": [],
+  "type_mismatches": [],
+  "placeholder_issues": [],
+  "fallback_key_errors_unknown_present": true,
+  "ok": true
+}

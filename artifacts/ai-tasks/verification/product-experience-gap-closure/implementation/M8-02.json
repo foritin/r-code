@@ -1,0 +1,76 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "M8-02",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "72293d2dab71dc4acb18752b61d679efd13bf7f485977ea4659ffd4626fa8b03",
+  "dirty_files": 302,
+  "finished_at": "2026-08-28T00:56:22.927Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "M8-02.A1",
+      "task_id": "M8-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-02-checks.mjs --part a1",
+      "duration_ms": 75,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS a11y:automation-keyboard (53ms)\n{\n  \"schema_version\": \"m8-02-checks.v1\",\n  \"part\": \"a1\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"a11y:automation-keyboard\",\n      \"command\": \"/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/automation-contract.test.mjs\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 53,\n      \"stdout_tail\": \"ℹ suites 0\\nℹ pass 4\\nℹ fail 0\\nℹ cancelled 0\\nℹ skipped 0\\nℹ todo 0\\nℹ duration_ms 34.369854\\n\",\n      \"stderr_tail\": \"\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M8-02.A2",
+      "task_id": "M8-02",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-02-checks.mjs --part a2",
+      "duration_ms": 4629,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS compat:session-run-summary (4608ms)\n{\n  \"schema_version\": \"m8-02-checks.v1\",\n  \"part\": \"a2\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"compat:session-run-summary\",\n      \"command\": \"/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/session-run-summary.test.mjs\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 4608,\n      \"stdout_tail\": \"ℹ suites 0\\nℹ pass 4\\nℹ fail 0\\nℹ cancelled 0\\nℹ skipped 0\\nℹ todo 0\\nℹ duration_ms 4586.310699\\n\",\n      \"stderr_tail\": \"\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M8-02.A3",
+      "task_id": "M8-02",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-02-checks.mjs --part a3",
+      "duration_ms": 2696,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS compat:run-guard-fail-fast (2674ms)\n{\n  \"schema_version\": \"m8-02-checks.v1\",\n  \"part\": \"a3\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"compat:run-guard-fail-fast\",\n      \"command\": \"/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/run-guard-ui.test.mjs\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 2674,\n      \"stdout_tail\": \"ℹ suites 0\\nℹ pass 2\\nℹ fail 0\\nℹ cancelled 0\\nℹ skipped 0\\nℹ todo 0\\nℹ duration_ms 2652.257188\\n\",\n      \"stderr_tail\": \"\"\n    }\n  ]\n}\n",
+      "stderr": null
+    }
+  ]
+}

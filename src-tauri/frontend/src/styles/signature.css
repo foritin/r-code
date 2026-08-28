@@ -4,86 +4,11 @@
    Current design direction: docs/product-experience-redesign/prototype.html.
    It is intentionally loaded last: existing components keep their behavior while
    the application shell, hierarchy and finish share one visual language. */
+/* M2-01 收敛：裸 :root 与主题重定义块已升格至 tokens.css（唯一权威）；
+   本文件仅保留 #app.r-code-signature 作用域的组件规则。 */
 
-:root {
-  --signature-workspace-radius: 28px;
-  --signature-sidebar: #1c1918;
-  --signature-sidebar-glow-hot: rgba(244, 116, 43, 0.06);
-  --signature-sidebar-glow-deep: rgba(176, 53, 34, 0.12);
-  --signature-sidebar-wash: rgba(244, 116, 43, 0.025);
-  --signature-corner-glow-hot: rgba(255, 139, 72, 0.18);
-  --signature-corner-glow-soft: rgba(216, 67, 33, 0.07);
-  --signature-send-bg: var(--accent);
-  --signature-send-bg-hover: #ff8642;
-  --signature-keyline: color-mix(in srgb, var(--accent) 34%, var(--border));
-  --signature-accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
-  --signature-accent-faint: color-mix(in srgb, var(--accent) 7%, transparent);
-  --signature-divider: #32312c;
-  --signature-panel-edge: #37362f;
-  --signature-elevated: #171815;
-  --signature-control: #23231f;
-  --signature-chrome-fg: #aaa49b;
-  --signature-sidebar-muted: #aaa59c;
-  --signature-sidebar-section: #817b72;
-  --signature-sidebar-project: #d8d4cc;
-  --signature-composer-shadow: 0 -10px 34px rgba(0, 0, 0, 0.12), 0 10px 24px rgba(0, 0, 0, 0.16);
-  /* 子智能体运行色（原型 C 的藏青）：时间线事件行、状态芯片与目录状态环共用。 */
-  --subagent-run: #6fc7d8;
-}
 
-:root[data-theme="obsidian"] {
-  color-scheme: dark;
-  --font-ui: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
-  --font-display: Bahnschrift, "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
-  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 
-  --bg-app: #10110f;
-  --bg-sidebar: #1c1918;
-  --bg-panel: #151614;
-  --bg-card: #1b1c19;
-  --bg-chip: #25241f;
-  --bg-inset: #0b0c0a;
-  --bg-hover: #20211e;
-  --bg-active: #29261f;
-  --border: #2b2b27;
-  --border-strong: #4b463d;
-  --fg: #f1efe9;
-  --fg-muted: #a49f95;
-  --fg-faint: #817b72;
-  --accent: #f4742b;
-  --accent-2: #c49a61;
-  --accent-fg: #17100b;
-  --warning: #e5a15b;
-  --success: #69c798;
-  --danger: #df6b62;
-  --on-solid: #17100b;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 28px rgba(0, 0, 0, 0.17);
-  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.34), 0 24px 70px rgba(0, 0, 0, 0.46);
-  --scrim: rgba(4, 4, 3, 0.62);
-}
-
-:root[data-theme="studio-light"] {
-  --font-ui: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
-  --font-display: Bahnschrift, "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
-  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  --signature-sidebar: #f5f0ea;
-  --signature-sidebar-glow-hot: rgba(191, 91, 73, 0.08);
-  --signature-sidebar-glow-deep: rgba(191, 91, 73, 0.11);
-  --signature-sidebar-wash: rgba(191, 91, 73, 0.035);
-  --signature-corner-glow-hot: rgba(210, 105, 75, 0.13);
-  --signature-corner-glow-soft: rgba(191, 91, 73, 0.055);
-  --signature-send-bg: #f47b37;
-  --signature-send-bg-hover: #ff8d4b;
-  --signature-divider: var(--border);
-  --signature-panel-edge: var(--border);
-  --signature-elevated: var(--bg-panel);
-  --signature-control: var(--bg-chip);
-  --signature-chrome-fg: var(--fg-muted);
-  --signature-sidebar-muted: var(--fg-muted);
-  --signature-sidebar-section: var(--fg-faint);
-  --signature-sidebar-project: var(--fg);
-  --signature-composer-shadow: 0 -8px 28px rgba(70, 45, 28, 0.045), 0 10px 28px rgba(70, 45, 28, 0.075);
-}
 
 /* ---------- Integrated desktop shell ---------- */
 #app.r-code-signature {
@@ -123,7 +48,7 @@
   border-left: 1px solid var(--signature-divider);
   border-radius: var(--signature-workspace-radius) 0 0 0;
   background: var(--bg-app);
-  box-shadow: -18px -18px 46px rgba(0, 0, 0, 0.12);
+  box-shadow: -18px -18px 46px color-mix(in srgb, #000 12%, transparent);
 }
 
 :root[data-theme="studio-light"] #app.r-code-signature .main {
@@ -995,7 +920,7 @@
 #app.r-code-signature .composer {
   padding: 10px 24px 16px;
   border-top: 0;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--bg-app) 42%);
+  background: linear-gradient(to bottom, transparent, var(--bg-app) 42%);
 }
 
 #app.r-code-signature .scene-room .comp-box {
@@ -1005,7 +930,7 @@
   border: 1px solid var(--signature-panel-edge);
   border-radius: 16px;
   background: var(--bg-card);
-  box-shadow: var(--shadow-card), 0 16px 36px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-popover);
 }
 
 #app.r-code-signature .scene-room .comp-box:focus-within {

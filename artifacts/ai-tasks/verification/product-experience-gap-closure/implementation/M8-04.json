@@ -1,0 +1,76 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "M8-04",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "72293d2dab71dc4acb18752b61d679efd13bf7f485977ea4659ffd4626fa8b03",
+  "dirty_files": 302,
+  "finished_at": "2026-08-28T00:56:24.290Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "M8-04.A1",
+      "task_id": "M8-04",
+      "level": "isolation",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-04-checks.mjs --part a1",
+      "duration_ms": 271,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS rust:worktree-atomic-creation (248ms)\n{\n  \"schema_version\": \"m8-04-checks.v1\",\n  \"part\": \"a1\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"rust:worktree-atomic-creation\",\n      \"command\": \"cargo test -p r-code-host --lib git_service::tests\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 248,\n      \"stdout_tail\": \"\\nrunning 0 tests\\n\\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 685 filtered out; finished in 0.00s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M8-04.A2",
+      "task_id": "M8-04",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-04-checks.mjs --part a2",
+      "duration_ms": 435,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS binding:fail-closed-no-local-fallback (414ms)\n{\n  \"schema_version\": \"m8-04-checks.v1\",\n  \"part\": \"a2\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"binding:fail-closed-no-local-fallback\",\n      \"command\": \"cargo test -p r-code-host --lib task_workspace_binding::tests::a3_\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 414,\n      \"stdout_tail\": \"test task_workspace_binding::tests::a3_missing_or_unreachable_registration_is_rejected ... ok\\ntest task_workspace_binding::tests::a3_worktree_without_git_file_is_rejected ... ok\\ntest task_workspace_binding::tests::a3_symlink_into_foreign_repo_root_is_rejected ... ok\\ntest task_workspace_binding::tests::a3_repo_mismatch_is_rejected ... ok\\n\\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 681 filtered out; finished in 0.21s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M8-04.A3",
+      "task_id": "M8-04",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-04-checks.mjs --part a3",
+      "duration_ms": 233,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS flags:worktree-gate-regression (213ms)\n{\n  \"schema_version\": \"m8-04-checks.v1\",\n  \"part\": \"a3\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"flags:worktree-gate-regression\",\n      \"command\": \"cargo test -p r-code-host --lib feature_flags::\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 213,\n      \"stdout_tail\": \"test feature_flags::tests::disabled_error_codes_match_locale_reason_codes ... ok\\ntest feature_flags::tests::defaults_keep_unfinished_features_disabled ... ok\\ntest feature_flags::tests::missing_fields_remain_disabled_for_forward_compatible_configs ... ok\\ntest feature_flags::tests::persisted_flags_round_trip ... ok\\n\\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 681 filtered out; finished in 0.00s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    }\n  ]\n}\n",
+      "stderr": null
+    }
+  ]
+}

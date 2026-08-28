@@ -20,6 +20,9 @@ import {
   settingsDeleteProvider,
   settingsGet,
   settingsSaveProvider,
+  closeBehaviorGet,
+  closeBehaviorSet,
+  lifecycleExplicitQuit,
   planningStatus,
   settingsSelectProvider,
   settingsSet,
@@ -88,11 +91,16 @@ const SETTINGS_PANES: Array<{
 }> = [
   { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
   { key: "agents", label: "Agent 编排", description: "选择主 Agent、管理 Codex 运行时、委派路由和质量复核。" },
+  { key: "subagents", label: "子代理配置", description: "管理候选来源、路由槽位、权重、Prompt 与连通测试。" },
   { key: "tools", label: "工具与连接", description: "管理内置工具、RTK 加速、MCP 服务、凭据和扩展市场。" },
   { key: "knowledge", label: "知识与指令", description: "管理公共与项目记忆、协作 Prompt 和可复用 Skills。" },
-  { key: "preferences", label: "外观与小助手", description: "选择界面主题，并管理桌面小助手的反馈方式。" },
+  { key: "permissions", label: "权限", description: "Codex 子代理权限五态的唯一编辑入口与当前生效值。" },
+  { key: "security", label: "隐私与安全", description: "密钥存储、脱敏与 CSP/sandbox 的只读强制状态。" },
+  { key: "appearance", label: "外观与语言", description: "选择界面主题、语言，并管理桌面小助手的反馈方式。" },
+  { key: "notifications", label: "通知", description: "OS 权限、类别开关与应用内测试；拒绝仅降级。" },
+  { key: "lifecycle", label: "启动与关闭", description: "关闭行为与启动检查合同（Host 状态机接入中）。" },
+  { key: "updates", label: "更新", description: "检查、下载、安装重启与稍后重启。" },
   { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
-  { key: "subagents", label: "子代理配置", description: "管理候选来源、路由槽位、权重、Prompt 与连通测试。" },
 ];
 
 const CATEGORY_LABELS: Record<ProviderCategory, string> = {
@@ -124,10 +132,10 @@ const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   { pane: "tools", blockId: "mcp-panel-block", title: "工具与连接（MCP）", keywords: ["mcp", "工具", "连接", "市场", "扩展", "rtk"] },
   { pane: "tools", blockId: "execution-env-block", title: "执行环境（Windows Shell）", keywords: ["shell", "bash", "git bash", "powershell", "执行环境", "命令", "路径", "回落", "方言"] },
   { pane: "knowledge", blockId: "knowledge-block", title: "知识与指令", keywords: ["记忆", "prompt", "提示词", "skills", "技能", "知识库", "指令"] },
-  { pane: "preferences", blockId: "language-block", title: "界面语言", keywords: ["语言", "language", "中文", "english", "locale"] },
-  { pane: "preferences", blockId: "native-notifications-block", title: "系统通知", keywords: ["通知", "系统通知", "桌面通知", "notification", "permission", "权限", "后台"] },
-  { pane: "preferences", blockId: "appearance-block", title: "界面主题", keywords: ["主题", "外观", "亮色", "暗色", "跟随系统"] },
-  { pane: "preferences", blockId: "companion-block", title: "桌面小助手", keywords: ["小助手", "悬浮", "提示音", "动效", "形态"] },
+  { pane: "appearance", blockId: "language-block", title: "界面语言", keywords: ["语言", "language", "中文", "english", "locale"] },
+  { pane: "notifications", blockId: "native-notifications-block", title: "系统通知", keywords: ["通知", "系统通知", "桌面通知", "notification", "permission", "权限", "后台"] },
+  { pane: "appearance", blockId: "appearance-block", title: "界面主题", keywords: ["主题", "外观", "亮色", "暗色", "跟随系统"] },
+  { pane: "appearance", blockId: "companion-block", title: "桌面小助手", keywords: ["小助手", "悬浮", "提示音", "动效", "形态"] },
   { pane: "diagnostics", blockId: "request-audit-block", title: "请求构成审计", keywords: ["审计", "请求信封", "旁路", "request audit"] },
   { pane: "diagnostics", blockId: "log-level-block", title: "日志记录", keywords: ["日志", "级别", "log", "debug", "info", "warn", "error"] },
   { pane: "diagnostics", blockId: "log-section", title: "诊断日志", keywords: ["日志", "诊断", "实时", "过滤"] },
@@ -635,7 +643,7 @@ export function SettingsScene() {
   );
 
   const settingsPanes = useMemo(() => SETTINGS_PANES.map((item) => (
-    item.key === "preferences"
+    item.key === "appearance"
       ? {
           ...item,
           label: t("settings.preferences.label"),
@@ -759,15 +767,31 @@ export function SettingsScene() {
               </div>
             )}
 
-            {activePane === "preferences" && (
+            {activePane === "appearance" && (
               <div className="settings-preferences">
                 <LanguageSettingsSection />
-                <NativeNotificationSettings />
-                <ApplicationUpdaterSettings />
                 <AppearanceSection />
                 <CompanionSection />
               </div>
             )}
+
+            {activePane === "notifications" && (
+              <div className="settings-preferences">
+                <NativeNotificationSettings />
+              </div>
+            )}
+
+            {activePane === "updates" && (
+              <div className="settings-preferences">
+                <ApplicationUpdaterSettings />
+              </div>
+            )}
+
+            {activePane === "permissions" && <CodexPermissionSection />}
+
+            {activePane === "security" && <SecuritySection />}
+
+            {activePane === "lifecycle" && <LifecycleSection />}
 
             {activePane === "tools" && (
               <div className="settings-sheet settings-tools-sheet">
@@ -3436,5 +3460,160 @@ function CodexIntegrationSection({
         </details>
       )}
     </section>
+  );
+}
+
+// ---------- M2-03：权限 / 安全 / 生命周期 ----------
+
+const CODEX_PERMISSION_LABELS: Record<string, string> = {
+  read_only: "仅查看",
+  request_approval: "请求批准",
+  auto_review: "替我审批",
+  full_access: "完全访问权限",
+  custom: "自定义（config.toml）",
+};
+
+/** Codex 子代理权限的唯一编辑面在「Agent 编排 → Codex 运行时」；
+ * 本页是权威视图：显示当前生效值并提供深链，避免出现第二个编辑器。 */
+function CodexPermissionSection() {
+  const setActivePane = useAppStore((state) => state.setSettingsPane);
+  const [mode, setMode] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    codexCliPreferences()
+      .then((prefs) => { if (alive) setMode(prefs.permission_mode ?? "read_only"); })
+      .catch((error) => { if (alive) setErr(errText(error)); });
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <div className="settings-sheet">
+      <section className="settings-block" id="permissions-codex-block">
+        <h3>Codex 子代理权限</h3>
+        {err && <div className="errbar" role="alert">{err}</div>}
+        <div className="field">
+          <label htmlFor="perm-current-mode">当前生效模式</label>
+          <input
+            id="perm-current-mode"
+            className="input"
+            value={mode ? (CODEX_PERMISSION_LABELS[mode] ?? mode) : "读取中…"}
+            readOnly
+            aria-readonly="true"
+          />
+          <small className="settings-hint">
+            五态（仅查看 / 请求批准 / 替我审批 / 完全访问 / 自定义）只有一个权威编辑入口：
+            「Agent 编排 → Codex 运行时 → 子代理权限」。custom 表示检测到非预设 config.toml。
+          </small>
+        </div>
+        <button
+          type="button"
+          className="btn primary"
+          onClick={() => {
+            setActivePane("agents");
+            setTimeout(() => document.getElementById("codex-permission-mode")?.focus(), 60);
+          }}
+        >
+          前往唯一编辑入口
+        </button>
+      </section>
+    </div>
+  );
+}
+
+/** 安全边界为只读强制状态：本页没有也不允许出现关闭安全边界的开关。 */
+function SecuritySection() {
+  const items = [
+    { title: "密钥存储", body: "Provider 凭据仅保存在系统钥匙串/受保护配置中，界面与支持包只显示脱敏摘要。" },
+    { title: "日志与支持包脱敏", body: "导出前强制清洗 API key、token、raw reasoning；该行为不可关闭。" },
+    { title: "CSP / sandbox", body: "WebView 内容安全策略与 Tauri sandbox 为编译期强制状态，仅允许预览。" },
+  ];
+  return (
+    <div className="settings-sheet">
+      <section className="settings-block" id="security-forced-block">
+        <h3>强制安全状态（只读）</h3>
+        {items.map((item) => (
+          <div className="field" key={item.title}>
+            <label>🔒 {item.title}</label>
+            <input className="input" value={`${item.title}：已强制启用`} readOnly aria-readonly="true" />
+            <small className="settings-hint">{item.body}</small>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+/** 启动与关闭：close ask/hide/quit 状态机由 M3-01 的 Host 关闭合同落地后接入；
+ * 在 Host 合同就绪前本页不提供任何伪控件。 */
+function LifecycleSection() {
+  const [behavior, setBehaviorState] = useState<string>("ask");
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    closeBehaviorGet()
+      .then((value) => { if (alive) { setBehaviorState(value); setLoaded(true); } })
+      .catch((error) => { if (alive) setErr(errText(error)); });
+    return () => { alive = false; };
+  }, []);
+
+  const setBehavior = async (value: string) => {
+    setErr(null);
+    try {
+      await closeBehaviorSet(value);
+      setBehaviorState(value);
+      pushToast({ kind: "success", title: "关闭行为已保存", timeout: 2_500 });
+    } catch (e) {
+      setErr(errText(e));
+    }
+  };
+
+  return (
+    <div className="settings-sheet">
+      <section className="settings-block" id="lifecycle-block">
+        <h3>启动与关闭</h3>
+        {err && <div className="errbar" role="alert">{err}</div>}
+        <div className="field">
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void setBehavior("ask")}
+              disabled={!loaded || behavior === "ask"}
+            >
+              重置为每次询问
+            </button>
+            <button
+              type="button"
+              className="btn danger"
+              onClick={() => { void import("../../lib/ipc").then((m) => m.lifecycleExplicitQuit()); }}
+            >
+              立即退出应用
+            </button>
+          </div>
+        </div>
+        <div className="field">
+          <label htmlFor="lifecycle-close-behavior">点击窗口关闭按钮时</label>
+          <select
+            id="lifecycle-close-behavior"
+            className="input"
+            value={behavior}
+            disabled={!loaded}
+            onChange={(e) => void setBehavior(e.target.value)}
+          >
+            <option value="ask">每次询问（推荐）</option>
+            <option value="hide">最小化到后台继续运行</option>
+            <option value="quit">直接退出</option>
+          </select>
+          <small className="settings-hint">
+            选择「每次询问」时，关闭窗口会弹出确认：后台运行 / 退出 / 取消；
+            退出前运行中的任务会收到统一收尾。选择为 Host 权威，立即生效。
+          </small>
+        </div>
+      </section>
+    </div>
   );
 }

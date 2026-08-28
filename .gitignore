@@ -42,3 +42,8 @@ Thumbs.db
 
 # Local autonomous-loop run configuration (may contain task or machine context)
 /loop.run.yaml
+
+# Generated verification/selftest caches (regenerable, machine-local)
+__pycache__/
+.tmp-selftest-reports/
+artifacts/ai-tasks/verification/product-experience-gap-closure/.pass-cache/

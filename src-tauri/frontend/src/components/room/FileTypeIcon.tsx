@@ -145,7 +145,7 @@ export function FileTypeIcon({ path, size = 15 }: { path: string; size?: number 
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
       <path d="M6 2.5h7.5L18 7v14.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1Z" fill={tone} />
-      <path d="M13.5 2.5V7H18Z" fill="rgba(0,0,0,0.28)" />
+      <path d="M13.5 2.5V7H18Z" fill="var(--scrim)" />
     </svg>
   );
 }

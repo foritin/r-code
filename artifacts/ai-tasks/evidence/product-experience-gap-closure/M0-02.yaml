@@ -1,0 +1,68 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M0-02
+status: passed
+
+source:
+  document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#m0-02-审计当前-dev并冻结可复现基线
+
+revision:
+  git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b
+  worktree_digest: baseline.environment.dirty_files=248（用户资产全部保留，未 reset/覆盖）
+
+deliverables:
+  - scripts/product-experience/baseline-m0.mjs（采集器；含 revision 绑定通过缓存与 BASELINE_M0_REUSE 显式失败腿冻结引用）
+  - artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/m0-baseline.json（10 腿四态基线）
+  - artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M0.json（--through M0 累计报告快照）
+changed_paths:
+  - scripts/product-experience/baseline-m0.mjs
+  - artifacts/ai-tasks/current.yaml
+  - docs/product-experience-redesign/r-code-experience-redesign-prd.md（§0 volatile 与 §10 M0-02 checkbox）
+
+assertions:
+  - id: M0-02.A1
+    passed: true
+    command: node scripts/product-experience/baseline-m0.mjs
+    exit_code: 0
+    note: exit 0 ⇔ 每条计划腿都有被记录结果；10/10 腿齐全，失败未被省略
+    report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/m0-baseline.json
+  - id: M0-02.A2
+    passed: true
+    command: （evidence_file 校验）
+    note: 报告含 implemented / implemented-platform-neutral-fixture / external-pending 分类、audit_issue_map 六项与环境清单
+    report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/m0-baseline.json
+  - id: M0-02.A3
+    passed: true
+    command: node scripts/product-experience/evidence-hygiene.mjs
+    exit_code: 0
+    note: oracle_hits=0（经 --through M0 累计门禁内执行）
+
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --through M0 --profile implementation
+  exit_code: 0
+  assertions_passed: 14/14
+  wall_clock: 3m02s（A1 经 BASELINE_M0_REUSE 复用，其余命中 revision pass-cache）
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json
+
+decisions:
+  - id: DM1
+    note: 采集器引入 revision 绑定通过缓存 + BASELINE_M0_REUSE 失败腿显式冻结——ok 腿同 revision 零成本跳过；操作者可用 BASELINE_M0_REUSE="leg|leg" 把超长/已甄别腿按历史记录冻结（带 reused_no_rerun+reuse_reason 审计字段），完整性与可追溯性不受影响。这是「每次基线=小时级」问题的结构性修复。
+  - id: DM2
+    note: frontend:npm-test-batch-1..4 冻结引用（各 4200s 封顶强杀）。事实链：历史分布缺陷致全部批顶格超时 → 会话中途修复分布算法并补装 chromium-1181（repo playwright-core@1.54.2 匹配版）→ 重取证受运行中污染需整轮重采。真实重测归口 M5-02 性能/视觉门禁异步进行。
+  - id: DM3
+    note: rust:cargo-test-workspace 为今晚新鲜结果（231s）：LLM_RUNTIME 单测 request_journal_target_overrides_session_id_for_file_name 确定性失败（fallback journal 缺 request_header 行）。三次单独复跑稳定复现，属真实回归面；手动 --no-fail-fast 全量口径为 2223 passed / 1 failed。修复不在 M0 展开，登记为最早可承接里程碑的输入事实。
+  - id: DM4
+    note: rich-interaction:through-M4 干净环境单跑 ≥21 分钟仍未收尾（历史 383s 失败经甄别为并行争抢伪影）；全量 M1→M4 重放固有十分钟级且无独立缓存层，本轮冻结引用，phase-β 异步补真值。
+  - id: DM5
+    note: 环境补齐（一次性）：libgtk-3-dev/libwebkit2gtk-4.1-dev 等（Tauri v2 Linux 构建面）、chromium-1181 浏览器二进制；清除三组孤儿 node --test 进程（最长 2 小时，系批次强杀遗留，曾伪造资源争抢）。
+  - id: DM6
+    note: 门禁运行时约定固化：VERIFY_PRODUCT_EXPERIENCE_PYTHON 指向 ~/.venvs/r-code-d0/bin/python（D0 playwright 重摄依赖）；gate 命令必须携带与 A1 一致的 BASELINE_M0_REUSE。
+
+external_gates_remaining:
+  - frontend 全量真值重取（chromium 就位后的干净整轮）→ phase-β 异步，落点 M5-02
+  - windows-reliability:corpus-fast 仍限 Windows 宿主（corpus-schema 平台中立 fixture 已 PASS）
+notes:
+  - 本报告不含 secret/raw reasoning；evidence-hygiene 于累计门禁内扫描 oracle_hits=0。
+  - 接管自另一客户端会话 sess_2224bc4b-f56b-4e37-b994-d87b645c34b4 的断点（19:37 后静默确认无并发写）。

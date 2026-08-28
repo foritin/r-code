@@ -1,0 +1,39 @@
+{
+  "schema_version": "product-experience-bootstrap.v1",
+  "profile": "implementation",
+  "platform": {
+    "os": "linux",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "ok": true,
+  "parts": [
+    {
+      "name": "frontend:release-quality-gate",
+      "command": "node --test scripts/release-quality-gate.test.mjs",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_ms": 60,
+      "stdout_tail": "ℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 39.458344\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "frontend:icon-assets",
+      "command": "node --test scripts/icon-assets.test.mjs",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_ms": 113,
+      "stdout_tail": "ℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 91.081298\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "rust:r-code-mcp-lib",
+      "command": "cargo test -p r-code-mcp --lib",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_ms": 183,
+      "stdout_tail": "test client::tests::initialize_is_bounded_when_a_stdio_peer_never_responds ... ok\ntest client::tests::default_abort_adapter_drops_a_non_cooperative_session_call ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n",
+      "stderr_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src/lib.rs (target/debug/deps/r_code_mcp-09b0d7d8c652c5e5)\n"
+    }
+  ]
+}

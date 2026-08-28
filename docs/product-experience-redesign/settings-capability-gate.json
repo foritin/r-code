@@ -1,6 +1,6 @@
 {
   "schema_version": "settings-capability-gate.v3",
-  "status": "passed",
+  "status": "failed",
   "mode": "update_report",
   "stage": "source_audit_and_design_traceability",
   "source_manifest": {
@@ -11,7 +11,7 @@
       "snapshot_policy": "Each production UTF-8 source file below is pinned by SHA-256 after CRLF/CR to LF normalization; the dirty-source baseline head must remain an ancestor of the checked revision, and any normalized content change requires a new read-only audit."
     },
     "manifest_count": 47,
-    "manifest_digest": "2f1af5daee3f898095e97dcf76f474ec91863a3eeeb9095415ee3db2f802e3e7",
+    "manifest_digest": "afba07e1d0533b09fe0ea34ccea62a94c3f443192c7821e5b5f526ef1b236a14",
     "resolved_source_count": 47,
     "declared_symbol_locator_count": 52,
     "stale_source_files": [],
@@ -51,8 +51,8 @@
     }
   },
   "settings_capabilities": {
-    "baseline_digest": "45d2ee0020e4f9ee859c02581fe4ed63424a263d3c1390333b23724c398dccc3",
-    "baseline_normative_digest": "4241a7a1feace7690352164461d46eb301ad2457cbfe580ac4f9eca0cd2ee01b",
+    "baseline_digest": "91db3cbe66640c874b016a66dce4ea2a69e375fa1da9db6972221bd2d7999b6f",
+    "baseline_normative_digest": "f36468c0efdcbe125dbe3b7a6f946e25a14f878565eaea15b99e652ffc0e9458",
     "inventory_digest": "8685f38612aa44e4ea23f10eb63b3ab0743d8df1f3d432cd73bfef8ec8ac4cdd",
     "production_inventory_digest": "41739784667aa0a2627403db63b6f6c372c82217926ba372f9af2fb59f2313cd",
     "inventory_count": 127,
@@ -123,8 +123,8 @@
     "unauthorized_retirements": []
   },
   "coverage_binding": {
-    "baseline_normative_digest": "4241a7a1feace7690352164461d46eb301ad2457cbfe580ac4f9eca0cd2ee01b",
-    "coverage_digest": "30efacd3beb0070ff912a6d2dc4ea0061a5854c08de33ba3f6c7548b4ddcf019"
+    "baseline_normative_digest": "f36468c0efdcbe125dbe3b7a6f946e25a14f878565eaea15b99e652ffc0e9458",
+    "coverage_digest": "3ca193f784ec2bd438249a9f081ce500cac420c54aab3430f25cea9c89c0de82"
   },
   "traceability": [
     {
@@ -4872,6 +4872,13 @@
       ]
     }
   ],
-  "issue_summary": {},
-  "issues": []
+  "issue_summary": {
+    "baseline_digest_missing_from_freeze": 1
+  },
+  "issues": [
+    {
+      "code": "baseline_digest_missing_from_freeze",
+      "message": "f36468c0efdcbe125dbe3b7a6f946e25a14f878565eaea15b99e652ffc0e9458"
+    }
+  ]
 }

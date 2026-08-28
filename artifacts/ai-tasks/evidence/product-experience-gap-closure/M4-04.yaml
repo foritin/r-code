@@ -1,0 +1,16 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M4-04
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m4-04-checks.mjs + wiring（A1..A4 四腿）
+assertions: { M4-04.A1: passed, M4-04.A2: passed, M4-04.A3: passed, M4-04.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M4-04 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-04.json
+decisions:
+  - DM1: A2 组合 subagent-provider-autoprobe（stale 刷新/单 child）+ subagent_providers receipt 缓存回归；A2 权限面用 permission 引擎 cargo 测试 + Permissions.tsx 聚合面静态检查。
+  - DM2: activity-archive-ui（Playwright UI）保持基线在册失败家族，归 M5-02 体验 E2E 修复批次，不在本任务伪绿。

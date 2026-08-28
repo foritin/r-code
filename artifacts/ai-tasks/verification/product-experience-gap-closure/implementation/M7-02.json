@@ -1,0 +1,93 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "M7-02",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "8186beceedcf5036c5e17d2092302a752ca04d10087874e0fda7a0cc0b7994ea",
+  "dirty_files": 299,
+  "finished_at": "2026-08-27T19:05:16.997Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "M7-02.A1",
+      "task_id": "M7-02",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a1",
+      "duration_ms": 503,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS rust:install-single-flight-and-corrupt-keeps-old (265ms)\nPASS rust:corrupt-staging-keeps-old (215ms)\n{\n  \"schema_version\": \"m7-02-checks.v1\",\n  \"part\": \"a1\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"rust:install-single-flight-and-corrupt-keeps-old\",\n      \"command\": \"cargo test -p r-code-host --lib installer::tests::concurrent_first_use\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 265,\n      \"stdout_tail\": \"\\nrunning 1 test\\ntest browser::installer::tests::concurrent_first_use_installs_once ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 678 filtered out; finished in 0.00s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    },\n    {\n      \"name\": \"rust:corrupt-staging-keeps-old\",\n      \"command\": \"cargo test -p r-code-host --lib installer::tests::corrupt_staging_keeps\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 215,\n      \"stdout_tail\": \"\\nrunning 1 test\\ntest browser::installer::tests::corrupt_staging_keeps_installed_version ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 678 filtered out; finished in 0.00s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M7-02.A2",
+      "task_id": "M7-02",
+      "level": "isolation",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a2",
+      "duration_ms": 235,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS rust:sessions-task-isolated (216ms)\n{\n  \"schema_version\": \"m7-02-checks.v1\",\n  \"part\": \"a2\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"rust:sessions-task-isolated\",\n      \"command\": \"cargo test -p r-code-host --lib installer::tests::sessions_are_task_isolated\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 216,\n      \"stdout_tail\": \"\\nrunning 1 test\\ntest browser::installer::tests::sessions_are_task_isolated ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 678 filtered out; finished in 0.00s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M7-02.A3",
+      "task_id": "M7-02",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a3",
+      "duration_ms": 237,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS rust:restart-restores-stopped (217ms)\n{\n  \"schema_version\": \"m7-02-checks.v1\",\n  \"part\": \"a3\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"rust:restart-restores-stopped\",\n      \"command\": \"cargo test -p r-code-host --lib installer::tests::restart_restores_as_stopped\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 217,\n      \"stdout_tail\": \"\\nrunning 1 test\\ntest browser::installer::tests::restart_restores_as_stopped_never_running ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 678 filtered out; finished in 0.00s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    }\n  ]\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "M7-02.A4",
+      "task_id": "M7-02",
+      "level": "cleanup",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a4",
+      "duration_ms": 238,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "PASS rust:ta[REDACTED] (217ms)\n{\n  \"schema_version\": \"m7-02-checks.v1\",\n  \"part\": \"a4\",\n  \"ok\": true,\n  \"results\": [\n    {\n      \"name\": \"rust:ta[REDACTED]\",\n      \"command\": \"cargo test -p r-code-host --lib installer::tests::task_delete_cleans\",\n      \"exit_code\": 0,\n      \"timed_out\": false,\n      \"duration_ms\": 217,\n      \"stdout_tail\": \"\\nrunning 1 test\\ntest browser::installer::tests::task_delete_cleans_only_its_own_sessions ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 678 filtered out; finished in 0.00s\\n\\n\",\n      \"stderr_tail\": \"    |                 ^^^^\\n    |\\n    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\\n\\nwarning: `r-code-host` (lib test) generated 1 warning (run `cargo fix --lib -p r-code-host --tests` to apply 1 suggestion)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\\n     Running unittests src/lib.rs (target/debug/deps/r_code_host-b53fec71a75cf961)\\n\"\n    }\n  ]\n}\n",
+      "stderr": null
+    }
+  ]
+}

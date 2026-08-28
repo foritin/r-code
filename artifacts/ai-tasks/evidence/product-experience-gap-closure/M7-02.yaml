@@ -1,0 +1,16 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M7-02
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/src/browser/installer.rs（InstallCoordinator 单飞锁/损坏保留旧版 + SessionRegistry 每 Task profile 隔离/重启 stopped/删除清理；5 测试）
+  - scripts/product-experience/m7-02-checks.mjs + wiring（A1..A4）
+assertions: { M7-02.A1: passed, M7-02.A2: passed, M7-02.A3: passed, M7-02.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M7-02 --profile implementation
+  exit_code: 0
+  assertions_passed: 4/4
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-02.json
+decisions:
+  - DM1: 进程上限常量 MAX_PROCESSES_PER_TASK=2（与 readiness permit 上限一致）。

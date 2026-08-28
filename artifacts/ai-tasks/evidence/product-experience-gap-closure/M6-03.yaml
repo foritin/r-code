@@ -1,0 +1,12 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M6-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m6-03-checks.mjs + wiring
+assertions: { "M6-03.A1": passed, "M6-03.A2": passed, "M6-03.A3": passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M6-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-03.json

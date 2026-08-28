@@ -1,0 +1,49 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M1-02
+status: passed
+
+source:
+  document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+  refs:
+    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#m1-02-完成-flags模块边界与-workspacebinding-基础
+
+revision:
+  git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b
+
+deliverables:
+  - src-tauri/src/feature_flags.rs（Worktree 第三位能力 + require 错误码矩阵 + 服务测试 ×4）
+  - src-tauri/src/task_workspace_binding.rs（a2/a3 fail-closed fixture 测试 ×6）
+  - src-tauri/frontend/scripts/m1-02-gating-parity.test.mjs（TS↔Rust↔模块层闸位三源一致性静态门）
+  - scripts/product-experience/m1-02-checks.mjs + wiring.mjs（断言接线）
+
+assertions:
+  - id: M1-02.A1
+    passed: true
+    command: node scripts/product-experience/m1-02-checks.mjs --part a1
+    note: 前端矩阵+门禁静态一致性 PASS；rust feature_flags:: 服务测试 4 passed（默认全关/round-trip/部分配置向前兼容/错误码-key 同源）。Browser 能力闸本就在模块层生效（browser/commands.rs 读 features.toml 后 require(Browser)；tool_gateway register_browser_agent_tools 注册面同样过闸），本次补齐 Worktree 第三位并加静态门防脱闸。
+  - id: M1-02.A2
+    passed: true
+    command: node scripts/product-experience/m1-02-checks.mjs --part a2
+    note: Local 与 ManagedWorktree 合法 fixture 解析一致；数据库重开后逐字段相等（含 worktree_path 持久化列回读）
+  - id: M1-02.A3
+    passed: true
+    command: node scripts/product-experience/m1-02-checks.mjs --part a3
+    note: 未注册/目录消失/空串/plain-dir（.git 非文件）/symlink 指向外部仓库根/跨仓库 common-dir mismatch 全部 Err 且断言非 Local fallback
+
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M1-02 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-02.json
+
+decisions:
+  - id: DM1
+    note: Automation 无独立 IPC 面、Worktree 创建尚无外部命令——按卡片决策空间「消费者迁移留 M6-02」；既有闸门位于模块层（browser contract 入口与工具注册面 require(Browser)），M1-02 补 Worktree 位并静态锁定闸位不脱闸。曾尝试把闸挪到 CommandState（pinned 文件），因 D0 settings-inventory 对 src-tauri/src/commands.rs 与 tauri_commands.rs 字节级 pin（stale_source_snapshot 阻断）而回退；后续任何触碰这两文件的任务必须走 M2-03 的 inventory 重摄流程。
+  - id: DM2
+    note: schema 迁移幂等的验证取径=持久化数据库两次 open 后 binding 逐字段相等；worktree_path 列 base schema 即存在，无需 additive DDL。
+  - id: DM3
+    note: 收尾回归=host lib 全量 656 passed / 0 failed（222s 热缓存），证明 flag 扩位与 fixture 测试零回归。
+external_gates_remaining: []
+notes:
+  - 门禁环境约定沿用 M0-02.yaml DM6。

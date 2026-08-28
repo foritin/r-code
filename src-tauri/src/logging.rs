@@ -56,8 +56,11 @@ fn persistent_writer() -> (
 }
 
 /// 初始化生产日志。默认级别 `info`，可通过 `RUST_LOG` 环境变量覆盖。
+/// `tauri_plugin_updater` 内部日志静音：更新端点未发布 release 属预期
+/// external-pending 状态，检查失败由 updater 域日志与「更新」设置页状态呈现。
 pub fn init() {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,tauri_plugin_updater=off"));
     let (writer, guard, warning) = persistent_writer();
 
     let console_layer = fmt::layer()
@@ -86,7 +89,8 @@ pub fn init() {
 
 /// 初始化开发日志（人类可读控制台 + 同一份持久化诊断日志）。
 pub fn init_dev() {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"));
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("debug,tauri_plugin_updater=off"));
     let (writer, guard, warning) = persistent_writer();
     let console_layer = fmt::layer()
         .with_target(true)

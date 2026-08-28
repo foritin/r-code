@@ -1508,3 +1508,14 @@ export async function codexSubmitUserInput(
   });
   return outcome === "delivered" ? "delivered" : "rejected";
 }
+
+// ---- M3-01 关闭状态机 ----
+export const CLOSE_PROMPT_REQUEST_EVENT = "close-prompt-request";
+export const closeBehaviorGet = () => ipc<string>("cmd_close_behavior_get");
+export const closeBehaviorSet = (behavior: string) =>
+  ipc<void>("cmd_close_behavior_set", { behavior });
+export const closePromptDecision = (epoch: number, decision: string, remember: boolean) =>
+  ipc<boolean>("cmd_close_prompt_decision", { epoch, decision, remember });
+
+export const lifecycleExplicitQuit = () =>
+  ipc<boolean>("cmd_lifecycle_explicit_quit");

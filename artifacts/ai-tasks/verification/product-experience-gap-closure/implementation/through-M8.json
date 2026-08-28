@@ -1,0 +1,2502 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "through-M8",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "2098776f41c64557e8b174e47e70bf62e692236c28c7ba28e3e47ce4616551c9",
+  "dirty_files": 303,
+  "finished_at": "2026-08-28T04:56:41.299Z",
+  "registry_digest": "3fcfd373e6d5e8ef6b3e41e6de6061f255d4f5a712d154fb7ee1909a3911ee30",
+  "failures": [],
+  "summary": {
+    "total": 155,
+    "passed": 155,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "D0-01.A1",
+      "task_id": "D0-01",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/capture_states.py",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A2",
+      "task_id": "D0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/worklist_gate.py --check",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A3",
+      "task_id": "D0-01",
+      "level": "docs",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/check_markdown_links.py",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A4",
+      "task_id": "D0-01",
+      "level": "component",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/settings_capability_gate.py --check",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/D0-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A5",
+      "task_id": "D0-01",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/capture_states.py",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/D0-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A6",
+      "task_id": "D0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/settings_capability_gate.py --update-report",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A7",
+      "task_id": "D0-01",
+      "level": "docs",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/settings_capability_gate.py --check",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/D0-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A8",
+      "task_id": "D0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/worklist_gate.py --update-freeze",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-01.A1",
+      "task_id": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test /root/project/r-code/scripts/verify-product-experience.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-01.A2",
+      "task_id": "M0-01",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/bootstrap-suite.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-01.A3",
+      "task_id": "M0-01",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/evidence-hygiene.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-02.A1",
+      "task_id": "M0-02",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/baseline-m0.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-02.A2",
+      "task_id": "M0-02",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "四态分类/audit map/环境清单",
+      "outcome": "passed",
+      "ok": true,
+      "evidence_path": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/m0-baseline.json",
+      "detail": "9995 bytes"
+    },
+    {
+      "assertion_id": "M0-02.A3",
+      "task_id": "M0-02",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/evidence-hygiene.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-01.A1",
+      "task_id": "M1-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-01-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-01.A2",
+      "task_id": "M1-01",
+      "level": "i18n",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-01-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-01.A3",
+      "task_id": "M1-01",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-01-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-02.A1",
+      "task_id": "M1-02",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-02.A2",
+      "task_id": "M1-02",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-02.A3",
+      "task_id": "M1-02",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-03.A1",
+      "task_id": "M1-03",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-03.A2",
+      "task_id": "M1-03",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-03.A3",
+      "task_id": "M1-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-03.A4",
+      "task_id": "M1-03",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-03-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-03.A5",
+      "task_id": "M1-03",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-03-checks.mjs --part a5",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-04.A1",
+      "task_id": "M1-04",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-04-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-04.A2",
+      "task_id": "M1-04",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-04-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-04.A3",
+      "task_id": "M1-04",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-04-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-05.A1",
+      "task_id": "M1-05",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-05-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-05.A2",
+      "task_id": "M1-05",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-05-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M1-05.A3",
+      "task_id": "M1-05",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m1-05-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-01.A1",
+      "task_id": "M2-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-01-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-01.A2",
+      "task_id": "M2-01",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-01-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-01.A3",
+      "task_id": "M2-01",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-01-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-01.A4",
+      "task_id": "M2-01",
+      "level": "visual/static",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-01-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-02.A1",
+      "task_id": "M2-02",
+      "level": "component",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-02.A2",
+      "task_id": "M2-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-02.A3",
+      "task_id": "M2-02",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A1",
+      "task_id": "M2-03",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A2",
+      "task_id": "M2-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A3",
+      "task_id": "M2-03",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A4",
+      "task_id": "M2-03",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A5",
+      "task_id": "M2-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a5",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A6",
+      "task_id": "M2-03",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a6",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A7",
+      "task_id": "M2-03",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a7",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A8",
+      "task_id": "M2-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a8",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A9",
+      "task_id": "M2-03",
+      "level": "contract/migration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a9",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A10",
+      "task_id": "M2-03",
+      "level": "reliability/E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a10",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A11",
+      "task_id": "M2-03",
+      "level": "contract/integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a11",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A12",
+      "task_id": "M2-03",
+      "level": "security/E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a12",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-03.A13",
+      "task_id": "M2-03",
+      "level": "accessibility/E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m2-03-checks.mjs --part a13",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-04.A1",
+      "task_id": "M2-04",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/src-tauri/frontend/scripts/m2-04-theme-responsive.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-04.A2",
+      "task_id": "M2-04",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/src-tauri/frontend/scripts/m2-04-theme-responsive.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-04.A3",
+      "task_id": "M2-04",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/src-tauri/frontend/scripts/m2-04-theme-responsive.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M2-04.A4",
+      "task_id": "M2-04",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/src-tauri/frontend/scripts/m2-04-theme-responsive.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M2-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-01.A1",
+      "task_id": "M3-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-01-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-01.A2",
+      "task_id": "M3-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-01-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-01.A3",
+      "task_id": "M3-01",
+      "level": "migration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-01-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-01.A4",
+      "task_id": "M3-01",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-01-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-02.A1",
+      "task_id": "M3-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-02.A2",
+      "task_id": "M3-02",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-02.A3",
+      "task_id": "M3-02",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-02.A4",
+      "task_id": "M3-02",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-02-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-03.A1",
+      "task_id": "M3-03",
+      "level": "performance",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-03.A2",
+      "task_id": "M3-03",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-03.A3",
+      "task_id": "M3-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-03.A4",
+      "task_id": "M3-03",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-03-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-04.A1",
+      "task_id": "M3-04",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-04.A2",
+      "task_id": "M3-04",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-04.A3",
+      "task_id": "M3-04",
+      "level": "visual/accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M3-04.A4",
+      "task_id": "M3-04",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m3-04-checks.mjs --part A4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M3-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-01.A1",
+      "task_id": "M4-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-01-capsule.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-01.A2",
+      "task_id": "M4-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-01-capsule.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-01.A3",
+      "task_id": "M4-01",
+      "level": "replay",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-01-capsule.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-01.A4",
+      "task_id": "M4-01",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-01-capsule.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-02.A1",
+      "task_id": "M4-02",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-02.A2",
+      "task_id": "M4-02",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-02.A3",
+      "task_id": "M4-02",
+      "level": "replay",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-02.A4",
+      "task_id": "M4-02",
+      "level": "performance",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-02-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-03.A1",
+      "task_id": "M4-03",
+      "level": "component",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-03.A2",
+      "task_id": "M4-03",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-03.A3",
+      "task_id": "M4-03",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-04.A1",
+      "task_id": "M4-04",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-04-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-04.A2",
+      "task_id": "M4-04",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-04-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-04.A3",
+      "task_id": "M4-04",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-04-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-04.A4",
+      "task_id": "M4-04",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-04-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-05.A1",
+      "task_id": "M4-05",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-05-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-05.A2",
+      "task_id": "M4-05",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-05-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M4-05.A3",
+      "task_id": "M4-05",
+      "level": "replay",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m4-05-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-01.A1",
+      "task_id": "M5-01",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-01-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-01.A2",
+      "task_id": "M5-01",
+      "level": "IME",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-01-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-01.A3",
+      "task_id": "M5-01",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-01-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-01.A4",
+      "task_id": "M5-01",
+      "level": "motion",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-01-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-01.A5",
+      "task_id": "M5-01",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-01-checks.mjs --part a5",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-01.A6",
+      "task_id": "M5-01",
+      "level": "touch/accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-01-checks.mjs --part a6",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A1",
+      "task_id": "M5-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A2",
+      "task_id": "M5-02",
+      "level": "performance",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A3",
+      "task_id": "M5-02",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A5",
+      "task_id": "M5-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A6",
+      "task_id": "M5-02",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a5",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A7",
+      "task_id": "M5-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a6",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A8",
+      "task_id": "M5-02",
+      "level": "integration/E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-02-checks.mjs --part a7",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A9",
+      "task_id": "M5-02",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-03-workbench-ia.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A10",
+      "task_id": "M5-02",
+      "level": "E2E/reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m2-03-a10-lifecycle.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-02.A11",
+      "task_id": "M5-02",
+      "level": "integration/security/accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test scripts/m4-01-capsule.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-03.A1",
+      "task_id": "M5-03",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-03.A2",
+      "task_id": "M5-03",
+      "level": "migration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-03.A3",
+      "task_id": "M5-03",
+      "level": "release",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-03.A4",
+      "task_id": "M5-03",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-03-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-03.A5",
+      "task_id": "M5-03",
+      "level": "migration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-03-checks.mjs --part a5",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M5-03.A6",
+      "task_id": "M5-03",
+      "level": "retirement",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m5-03-checks.mjs --part a6",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-01.A1",
+      "task_id": "M6-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-01-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-01.A2",
+      "task_id": "M6-01",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-01-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-01.A3",
+      "task_id": "M6-01",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-01-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-02.A1",
+      "task_id": "M6-02",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-02.A2",
+      "task_id": "M6-02",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-02.A3",
+      "task_id": "M6-02",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-03.A1",
+      "task_id": "M6-03",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-03.A2",
+      "task_id": "M6-03",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-03.A3",
+      "task_id": "M6-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-04.A1",
+      "task_id": "M6-04",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-04-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M6-04.A3",
+      "task_id": "M6-04",
+      "level": "visual/accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m6-04-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-01.A1",
+      "task_id": "M7-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-01-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-01.A2",
+      "task_id": "M7-01",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-01-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-01.A3",
+      "task_id": "M7-01",
+      "level": "reproducibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-01-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-02.A1",
+      "task_id": "M7-02",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-02.A2",
+      "task_id": "M7-02",
+      "level": "isolation",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-02.A3",
+      "task_id": "M7-02",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-02.A4",
+      "task_id": "M7-02",
+      "level": "cleanup",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-02-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-03.A1",
+      "task_id": "M7-03",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-03.A2",
+      "task_id": "M7-03",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-03.A3",
+      "task_id": "M7-03",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-04.A1",
+      "task_id": "M7-04",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-04-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-04.A2",
+      "task_id": "M7-04",
+      "level": "permission",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-04-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-04.A3",
+      "task_id": "M7-04",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-04-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-04.A4",
+      "task_id": "M7-04",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-03-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-05.A1",
+      "task_id": "M7-05",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-05-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-05.A3",
+      "task_id": "M7-05",
+      "level": "cleanup",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-05-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M7-05.A4",
+      "task_id": "M7-05",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m7-05-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-01.A1",
+      "task_id": "M8-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-01-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-01.A2",
+      "task_id": "M8-01",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-01-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-01.A3",
+      "task_id": "M8-01",
+      "level": "migration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-01-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-01.A4",
+      "task_id": "M8-01",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-01-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-01.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-02.A1",
+      "task_id": "M8-02",
+      "level": "E2E",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-02-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-02.A2",
+      "task_id": "M8-02",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-02-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-02.A3",
+      "task_id": "M8-02",
+      "level": "reliability",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-02-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-02.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-03.A1",
+      "task_id": "M8-03",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-03-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-03.A3",
+      "task_id": "M8-03",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-03-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-03.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-04.A1",
+      "task_id": "M8-04",
+      "level": "isolation",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-04-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-04.A2",
+      "task_id": "M8-04",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-04-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-04.A3",
+      "task_id": "M8-04",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-04-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-04.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-05.A1",
+      "task_id": "M8-05",
+      "level": "recovery",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-05-checks.mjs --part a1",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-05.A2",
+      "task_id": "M8-05",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-05-checks.mjs --part a2",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-05.A3",
+      "task_id": "M8-05",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-05-checks.mjs --part a3",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M8-05.A4",
+      "task_id": "M8-05",
+      "level": "notification",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/m8-05-checks.mjs --part a4",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M8-05.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    }
+  ]
+}

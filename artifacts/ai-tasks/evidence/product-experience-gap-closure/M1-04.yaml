@@ -1,0 +1,17 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M1-04
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/src/updater/*（既有 9 相状态机+minisign 签名校验+持久化+tauri 后端，本任务验收并接线）
+  - scripts/product-experience/m1-04-checks.mjs + wiring（A1..A3 三腿）
+assertions: { M1-04.A1: passed, M1-04.A2: passed, M1-04.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M1-04 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M1-04.json
+decisions:
+  - DM1: implementation 仅 fixture（域测试自建临时目录/假 payload），无生产端点调用。
+  - DM2: restart 合同=cmd_updater_restart→state.restart() 单点；updater_restart 语义交 M3 统一退出清理消费（静态合同锁定）。

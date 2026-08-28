@@ -1,0 +1,17 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M4-03
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - src-tauri/frontend/src/lib/workbench-ia.ts（三 tab IA/自动聚焦优先级/用户手动保持/容器无关）
+  - scripts/product-experience/m4-03-checks.mjs + wiring（A1..A3）
+assertions: { M4-03.A1: passed, M4-03.A2: passed, M4-03.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M4-03 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-03.json
+decisions:
+  - DM1: 自动聚焦 Attention > active child > changes ready > overview；用户手动 tab 在 Run 生命周期内保持。
+  - DM2: 窗口 bounds 哨兵（main.rs close-prompt-request 存在性 + 执行台零几何 API）复用 M2-02 静态扫描。

@@ -1,0 +1,15 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M7-05
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m7-05-checks.mjs + wiring（a1/a3/a4 三腿）
+assertions: { M7-05.A1: passed, M7-05.A3: passed, M7-05.A4: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M7-05 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M7-05.json
+decisions:
+  - DM1: grant 撤销/过期语义由 scope.rs revoked_at 字段与 installer 删除清理锁定；redirect 后旧 grant 不沿用由 navigation guard 的 origin 重检覆盖（M7-04 a2）。

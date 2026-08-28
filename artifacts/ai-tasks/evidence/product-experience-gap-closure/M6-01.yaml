@@ -1,0 +1,15 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M6-01
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m6-01-checks.mjs + wiring（A1..A3 三腿）
+assertions: { M6-01.A1: passed, M6-01.A2: passed, M6-01.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M6-01 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M6-01.json
+decisions:
+  - DM1: 原子创建合同由 git_service 既有测试覆盖（校验→创建→验证→持久化链）；binding 消费面由 M1-02 fail-closed fixture 锁定。

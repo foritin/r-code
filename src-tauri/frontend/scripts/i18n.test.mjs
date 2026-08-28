@@ -165,13 +165,13 @@ async function localeSnapshot(page, includeStored = true) {
   }, includeStored);
 }
 
-test("a fresh profile follows the browser language and persists the decision", async () => {
+test("a fresh profile defaults to zh-CN regardless of browser language", async () => {
   const english = await openIsolatedPage({ browserLocale: "en-GB" });
   assert.deepEqual(await localeSnapshot(english.page), {
-    appLocale: "en-US",
-    htmlLang: "en-US",
+    appLocale: "zh-CN",
+    htmlLang: "zh-CN",
     htmlDir: "ltr",
-    stored: "en-US",
+    stored: "zh-CN",
   });
   await english.context.close();
 
@@ -191,7 +191,7 @@ test("a fresh profile follows the browser language and persists the decision", a
   });
   assert.deepEqual(languageMapping, {
     preferredChinese: "zh-CN",
-    unsupportedLanguage: "en-US",
+    unsupportedLanguage: "zh-CN",
   });
   await chinese.context.close();
 });
@@ -215,6 +215,7 @@ test("a valid saved locale wins over the browser language", async () => {
     browserLocale: "zh-CN",
     storage: {
       "r-code.locale": "en-US",
+      "r-code.locale-source": "explicit",
       "r-code.theme.mode": "system",
     },
   });
@@ -227,14 +228,31 @@ test("a valid saved locale wins over the browser language", async () => {
   await context.close();
 });
 
+test("a locale persisted by the old follow-OS policy resets to zh-CN once", async () => {
+  const { context, page } = await openIsolatedPage({
+    browserLocale: "en-US",
+    storage: { "r-code.locale": "en-US" },
+  });
+  assert.deepEqual(await localeSnapshot(page), {
+    appLocale: "zh-CN",
+    htmlLang: "zh-CN",
+    htmlDir: "ltr",
+    stored: "zh-CN",
+  });
+  const source = await page.evaluate((key) => window.localStorage.getItem(key), "r-code.locale-source");
+  assert.equal(source, "auto");
+  await context.close();
+});
+
 test("locale storage read and write failures preserve an in-memory language", async () => {
   const readFailure = await openIsolatedPage({
     browserLocale: "en-US",
     failLocaleRead: true,
   });
+  // 读取失败时无法拿到保存偏好：按默认语言策略落在 zh-CN，且不落盘。
   assert.deepEqual(await localeSnapshot(readFailure.page, false), {
-    appLocale: "en-US",
-    htmlLang: "en-US",
+    appLocale: "zh-CN",
+    htmlLang: "zh-CN",
     htmlDir: "ltr",
     stored: null,
   });
@@ -245,14 +263,14 @@ test("locale storage read and write failures preserve an in-memory language", as
     failLocaleWrite: true,
   });
   assert.deepEqual(await localeSnapshot(writeFailure.page), {
-    appLocale: "en-US",
-    htmlLang: "en-US",
+    appLocale: "zh-CN",
+    htmlLang: "zh-CN",
     htmlDir: "ltr",
     stored: null,
   });
   const switched = await writeFailure.page.evaluate(async () => {
     const locale = await import("/src/i18n/index.ts");
-    await locale.setAppLocale("zh-CN");
+    await locale.setAppLocale("en-US");
     return {
       appLocale: locale.getAppLocale(),
       htmlLang: document.documentElement.lang,
@@ -260,15 +278,18 @@ test("locale storage read and write failures preserve an in-memory language", as
     };
   });
   assert.deepEqual(switched, {
-    appLocale: "zh-CN",
-    htmlLang: "zh-CN",
+    appLocale: "en-US",
+    htmlLang: "en-US",
     stored: null,
   });
   await writeFailure.context.close();
 });
 
 test("the Settings language control switches React text, html lang, and persistence immediately", async () => {
-  const { context, page } = await openIsolatedPage({ browserLocale: "en-US" });
+  const { context, page } = await openIsolatedPage({
+    browserLocale: "en-US",
+    storage: { "r-code.locale": "en-US", "r-code.locale-source": "explicit" },
+  });
 
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");

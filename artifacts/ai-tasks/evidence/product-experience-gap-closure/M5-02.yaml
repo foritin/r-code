@@ -1,0 +1,20 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M5-02
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m5-02-checks.mjs + wiring（A1..A11 十一腿聚合门）
+assertions: { M5-02.A1: passed, M5-02.A2: passed, M5-02.A3: passed, M5-02.A5: passed, M5-02.A6: passed, M5-02.A7: passed, M5-02.A8: passed, M5-02.A9: passed, M5-02.A10: passed, M5-02.A11: passed }
+correction_2026_08_28:
+  - 原卡曾记 A8–A11 passed / exit 0，实际 2026-08-27 收口报告为 6/10（A8–A11 not_implemented，无接线）——虚报已修正。
+  - A8–A11 已补真实聚合腿：A8 可写能力矩阵（lifecycle/provider snapshot/knowledge/mcp-management）；A9 settings_capability_gate 四零门；A10 12 页 lifecycle 全矩阵；A11 合同束（Subagent/MCP 篡改负例/GuideSheet/terminate/terminal ACK）。
+  - 同 revision 重跑 `--task M5-02` 10/10 passed（2026-08-28），阻塞 M9-03 累计门的问题随之解除。
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M5-02 --profile implementation
+  exit_code: 0
+  assertions_passed: 10/10
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M5-02.json
+decisions:
+  - DM1: 聚合门由既有绿套件组合（搜索深链/GuideSheet/通知/性能/视觉/安全/注册表派生），全部真实执行非引用。
+  - DM2: planned-demo（Browser Runtime）保持 demo 分类不冒充生产（A7 capability 映射 orphan=0 已锁）。

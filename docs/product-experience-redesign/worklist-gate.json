@@ -12,10 +12,10 @@
     "assertions": 176
   },
   "digests": {
-    "normative": "c25ed78be4a2ae421a2ae2206117eec43db3f52b713e29c7b79f77fef687d1f3",
+    "normative": "6d6b5305290647a2432d7be672404092091006994a07f345ee743ab672d68c0b",
     "prd_normative": "180e6a2e752d5a1b1e465b22685639da795d22897960bebe93b2e2ec6177eb6e",
-    "settings_capability_baseline": "4241a7a1feace7690352164461d46eb301ad2457cbfe580ac4f9eca0cd2ee01b",
-    "worklist": "68b8d22d857794baacada8f35afb64c28c849632fb3eab8cd8446e417eb821c4"
+    "settings_capability_baseline": "f36468c0efdcbe125dbe3b7a6f946e25a14f878565eaea15b99e652ffc0e9458",
+    "worklist": "a454fa4495192f430c00e1796b0630936be3e082ef5868212421b78d45d66f1d"
   },
   "settings_validation": {
     "executed_live": true,
@@ -23,7 +23,7 @@
     "validator_digest": "0bb74b37f2a21538a4aacfa0defdc4bcf60ac3a63537b051133f61fbd24c4029",
     "report_schema": "settings-capability-gate.v3",
     "report_status": "passed",
-    "report_digest": "247bc17207ff09110be293eaef3f934a1fa20393af6184d1d8cf76b355b9e796",
+    "report_digest": "2d4f1a0176d9294f170f73d7c8191f662fc91e30e47e0921d6e3de160fa0aa53",
     "baseline_count": 111,
     "mapped_count": 111,
     "verified_count": 0,

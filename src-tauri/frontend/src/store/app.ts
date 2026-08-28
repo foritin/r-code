@@ -56,12 +56,14 @@ export interface TaskFileReferenceRequest {
   requestId: number;
   path: string;
 }
-export type SettingsPane = "providers" | "agents" | "tools" | "knowledge" | "preferences" | "diagnostics" | "subagents";
-export type LegacySettingsPane = "codex";
+export type SettingsPane = "providers" | "agents" | "tools" | "knowledge" | "appearance" | "notifications" | "updates" | "permissions" | "security" | "lifecycle" | "diagnostics" | "subagents";
+export type LegacySettingsPane = "codex" | "preferences";
 
 /** 兼容旧深链/调用方；Codex 运行时归入 Agent 编排，不再是顶级设置模块。 */
 export function normalizeSettingsPane(pane: SettingsPane | LegacySettingsPane): SettingsPane {
-  return pane === "codex" ? "agents" : pane;
+  return pane === "codex" ? "agents"
+    : pane === "preferences" ? "appearance"  // M2-03 迁移别名：preferences 升格为 appearance
+    : pane;
 }
 export type KnowledgeTab = "memory" | "prompts" | "skills";
 

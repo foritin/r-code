@@ -20,9 +20,9 @@
 
 <!-- AI_WORKLIST_VOLATILE_START -->
 
-- 当前进度：`0 / 42` 项完成；Settings source inventory 语义证明已通过（127/127 总设计盘点、111/111 生产零丢失下界、`d0_semantic_proof=passed`、`verified_count=0`）。D0-01 仍未勾选；其视觉证据不按 PNG 数量或旧状态枚举判断，只认与当前 `prototype.html` SHA 一致的 `images/capture-manifest.json`、required evidence/diagnostics、链接和组合 gate。
-- 下一执行项：`D0-01` 在同一 revision 上复核 capture manifest ↔ prototype SHA、required 截图/交互 evidence、0 browser diagnostics、链接与组合门禁并归档证据；全部成立后才能进入 M0-01。
-- 当前任务包：沿用 `artifacts/ai-tasks/current.yaml`；首次执行必须先核对并归档其中已完成的旧 worklist packet，再创建带 `worklist_id: product-experience-gap-closure` 的新包。
+- 当前进度：`42 / 42` 项完成；M0 基线已冻结（`m0-baseline.json` 十腿四态），M1–M8 全里程碑闭环（各 `--task` 验证器通过于 main@82c8c5c，2026-08-27）；M9 族 4 项于 2026-08-28 收口（M9-01 4/4、M9-02 3/3、M9-03 3/3、M9-04 2/2），顶层累计门 `--through M9 --profile implementation` 167/167 passed @main@82c8c5c。M5-02.A8–A11 曾虚报通过，2026-08-28 补齐真实聚合腿后转绿。D0-01 与 M0-01 此前已勾选。
+- 下一执行项：无——worklist 全部 42 项完成；候选/production profile 验证与外部 gate 待用户授权（见 M9-04-candidate-gates.yaml）。
+- 当前任务包：`artifacts/ai-tasks/current.yaml`（worklist_id `product-experience-gap-closure`）；已完成包归档于 `artifacts/ai-tasks/evidence/product-experience-gap-closure/`。
 
 <!-- AI_WORKLIST_VOLATILE_END -->
 
@@ -774,48 +774,48 @@ M6 + M7 + M8 + M5 → M9 integration/hardening/release
 
 ## 10. 主 Checklist（唯一状态源）
 
-- [ ] **D0-01** 交付完整 App 可点击 Demo（含 12 页 Settings）、关键状态截图、设计说明、生产 Settings 语义 inventory proof 与可执行 PRD/Checklist。证据：待生成
-- [ ] **M0-01** 建立统一 Verification Harness、assertion registry 与证据入口。证据：待生成
-- [ ] **M0-02** 审计当前 dirty `dev`，重跑既有 rich-interaction 与基础回归并冻结事实。证据：待生成
-- [ ] **M1-01** 完成结构化错误与 zh-CN/en-US 基础合同。证据：待生成
-- [ ] **M1-02** 完成 feature flags、模块边界与 TaskWorkspaceBinding fail-closed 基础。证据：待生成
-- [ ] **M1-03** 完成 TaskStatusView、Attention 与原生/应用内通知统一投影。证据：待生成
-- [ ] **M1-04** 完成 Updater 产品链与关闭/重启边界。证据：待生成
-- [ ] **M1-05** 冻结 Browser 与 Automation 跨层公共合同和 fixture。证据：待生成
-- [ ] **M2-01** 收敛唯一设计 token/material/CSS authority 与玻璃 fallback。证据：待生成
-- [ ] **M2-02** 重构 Topbar、Rail、任务列表与 Room 壳层信息架构。证据：待生成
-- [ ] **M2-03** 简化 Composer/运行配置，并落地 12 页完整 Settings Scene 与共享状态。证据：待生成
-- [ ] **M2-04** 完成独立浅色材料、亮暗主题、响应式工作区/Settings 与视觉迁移闭环。证据：待生成
-- [ ] **M3-01** 实现 Host 权威、可重入的窗口关闭状态机与偏好迁移。证据：待生成
-- [ ] **M3-02** 实现关闭对话框、设置入口、托盘/Dock 恢复和统一退出清理。证据：待生成
-- [ ] **M3-03** 实现 Host 级非阻塞 Provider readiness service。证据：待生成
-- [ ] **M3-04** 实现全局连接健康 UI，并迁移设置页自动探测。证据：待生成
-- [ ] **M4-01** 实现 Run Capsule 派生模型、折叠状态机与稳定回放。证据：待生成
-- [ ] **M4-02** 重构 Timeline 的 commentary/final/轨迹/Attention 展示层级。证据：待生成
-- [ ] **M4-03** 重构执行台为概览/子代理/变更并删除重复工具审计。证据：待生成
-- [ ] **M4-04** 完成子代理协作树、详情、返回、停止与状态反馈。证据：待生成
-- [ ] **M4-05** 完成运行收尾摘要与 diff/验证/审批/证据跳转。证据：待生成
-- [ ] **M5-01** 完成 12 页 Settings 与工作区的可访问性、状态 glyph、IME、缩放、最小窗口和 reduced-motion 加固。证据：待生成
-- [ ] **M5-02** 完成关键端到端闭环、体验 E2E、视觉回归、性能和隐私门禁。证据：待生成
-- [ ] **M5-03** 建立体验 feature flag、旧/新表现等价回退与迁移退役。证据：待生成
-- [ ] **M6-01** 完成 Worktree 开关、任务选择、托管 schema 与原子创建。证据：待生成
-- [ ] **M6-02** 把全部执行消费者迁移到 TaskWorkspaceBinding。证据：待生成
-- [ ] **M6-03** 完成 Worktree 生命周期、重启恢复、Review 与安全清理。证据：待生成
-- [ ] **M6-04** 完成 Worktree UI、三平台路径安全与端到端门禁。证据：待生成
-- [ ] **M7-01** 完成 Browser Runtime 三平台资产供应链、manifest 与许可。证据：待生成
-- [ ] **M7-02** 完成 Runtime 安装/修复、进程、Session、Profile 与恢复。证据：待生成
-- [ ] **M7-03** 完成 Browser 只读工具、脱敏与有界结果。证据：待生成
-- [ ] **M7-04** 完成 browse 权限、只读控制面板和 Task 隔离。证据：待生成
-- [ ] **M7-05** 完成交互工具、interact 权限、安全绕过与删除清理。证据：待生成
-- [ ] **M8-01** 完成 Automation 持久化、Scheduler、DST、lease 与恢复。证据：待生成
-- [ ] **M8-02** 完成 Automation 管理 UI、Dispatcher、审计 Task 与 History。证据：待生成
-- [ ] **M8-03** 完成 ToolGateway 强制的 read-only Executor。证据：待生成
-- [ ] **M8-04** 完成每 Run 独立 Worktree 的 isolated-write Executor。证据：待生成
-- [ ] **M8-05** 完成审批恢复、Review/清理和 Automation × Browser。证据：待生成
-- [ ] **M9-01** 完成全域双语、正式文档与兼容/降级说明。证据：待生成
-- [ ] **M9-02** 完成 Worktree × Browser × Automation 的只读/写入集成场景。证据：待生成
-- [ ] **M9-03** 完成安全审查、故障注入、三平台与累计质量门。证据：待生成
-- [ ] **M9-04** 完成接口冻结、候选版本 soak 与 production 外部放行记录。证据：待生成
+- [x] **D0-01** 交付完整 App 可点击 Demo（含 12 页 Settings）、关键状态截图、设计说明、生产 Settings 语义 inventory proof 与可执行 PRD/Checklist。证据：`images/capture-manifest.json`（status=passed、prototype sha256=a9e457a8…同源、diagnostics 全 0）、`settings-capability-gate.json`、`settings-capability-baseline.json`、`worklist-gate.json` 与 `artifacts/ai-tasks/evidence/product-experience-gap-closure/D0-01.yaml`（2026-08-27 于 main@82c8c5c 复证）
+- [x] **M0-01** 建立统一 Verification Harness、assertion registry 与证据入口。证据：`scripts/verify-product-experience.mjs`、机械提取 registry（42 任务/155 唯一断言）与自测 12/12；验收报告 `artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M0-01.json`（3/3 passed）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M0-01.yaml`
+- [x] **M0-02** 审计当前 dirty `dev`，重跑既有 rich-interaction 与基础回归并冻结事实。证据：基线 `artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/m0-baseline.json`（10 腿四态：4 passed / 5 failed 如实冻结 / 1 external-pending；rust 新鲜实测 2223 passed/1 已知失败，frontend 四批与 rich-interaction 按 `BASELINE_M0_REUSE` 冻结引用、真值归 M5-02/phase-β）；累计门禁 `implementation/M0.json`（14/14 passed @main@82c8c5c, 2026-08-27）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M0-02.yaml`
+- [x] **M1-01** 完成结构化错误与 zh-CN/en-US 基础合同。证据：`node scripts/verify-product-experience.mjs --task M1-01 --profile implementation` → `implementation/M1-01.json`（A1 Rust/TS fixture 同解 + A2 locale key/placeholder 齐同与硬编码 0 命中 + A3 debug-detail containment，3/3 passed @main@82c8c5c, 2026-08-27）；执行器 `scripts/product-experience/m1-01-checks.mjs`；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M1-01.yaml`
+- [x] **M1-02** 完成 feature flags、模块边界与 TaskWorkspaceBinding fail-closed 基础。证据：`node scripts/verify-product-experience.mjs --task M1-02 --profile implementation` → `implementation/M1-02.json`（3/3 passed @main@82c8c5c, 2026-08-27）：A1 三层 flag 矩阵（`feature-flag-matrix` + 模块层能力闸一致性 `m1-02-gating-parity`：TS/Rust/闸位三源同构）+ `feature_flags::` 服务测试 4 passed（含新增 Worktree 第三位）；A2 Local/Worktree fixture 解析一致且重开幂等；A3 缺失/plain-dir/symlink 逃逸/repo mismatch 全拒绝无 Local fallback（host lib 全量 656/0 回归复核）。执行器 `scripts/product-experience/m1-02-checks.mjs`；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M1-02.yaml`
+- [x] **M1-03** 统一 TaskStatusView、Attention 与原生/应用内通知投影。证据：共享投影 `frontend/src/lib/task-status-projection.ts`（§4.4 优先级全序+声明序 tie-break、终态单向门、父终态原子封口、STATUS_GLYPHS spinner 合同）+ `m1-03-checks.mjs` 五腿全绿（`--task M1-03` 5/5 passed @main@82c8c5c, 2026-08-27）：A1 全组合唯一/unread 独立、A2 级联封口、A3 五面共享源静态门、A4 通知降级（routing 队列+memory 镜像+permission 套件）、A5 spinner 仅 running/verifying；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M1-03.yaml`
+- [x] **M1-04** 完成 Updater 产品链与关闭/重启边界。证据：`m1-04-checks.mjs` 三腿（`--task M1-04` 3/3 passed）：A1 updater 域 fixture 套件（9 相状态机/损坏与签名错不入 ready）、A2 RestartPending 单点受控 bypass 静态合同+域锁存测试、A3 错误码卫生+无 token/私有 URL 持久化扫描；实现面 `src-tauri/src/updater/*`（domain 894 行+minisign+持久化）与 `frontend/src/lib/updater-contract.ts`；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M1-04.yaml`
+- [x] **M1-05** 冻结 Browser 与 Automation 公共合同和 fixture。证据：`m1-05-checks.mjs` 三腿（`--task M1-05` 3/3 passed）：A1 Rust/TS/fixture round-trip（browser-contract 5 用例+automation-contract 4 用例+host browser:: 域测试）、A2 Browse/Interact capability 分离+read-only 判定+deny_unknown_fields+automation 注册期闸、A3 disabled 时入口拒绝（browser.feature_disabled）而 schema 可读；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M1-05.yaml`
+- [x] **M2-01** 收敛唯一设计 token/material/CSS authority 与玻璃 fallback。证据：`m2-01-checks.mjs` 四腿（`--task M2-01` 3/3 passed + A4 扩展腿）：四表争权（tokens/r-code-ui/product-ui/signature 裸 :root 主题劫持）收敛为 tokens.css 唯一权威（signature/r-code-ui 皮肤值升格，组件规则限缩 #app.r-code-signature 作用域）；`--fx-glass` 真透明+blur，`@supports not backdrop-filter`/`prefers-reduced-transparency` 双 fallback → 实心 `--material-panel-fallback`；day 主题独立平面材质（shadow:none）；surface 语义别名 7 枚；全仓组件/样式层 `rgba(0,0,0,…)` 硬编码 0（tokens 权威除外）；WCAG 对比度门（tokens 实值计算 10 配对）；!important 冻结预算+import manifest 冻结。证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M2-01.yaml`
+- [x] **M2-02** 重构 Topbar、Rail、任务列表与 Room 壳层。证据：`m2-02-checks.mjs` 三腿（`--task M2-02` 3/3 passed）：A1 Rail/Canvas/列表/活动/仪表盘零本地状态推导签名、状态语义唯一接入 presentation/store；A2 顶层窗口几何冻结（工作台/壳层域零窗口 API，companion 精灵窗/MenuBar 白名单）；A3 布局守卫（html overflow hidden + `.scene` overflow hidden + 壳层 grid `minmax(0,1fr)`）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M2-02.yaml`
+- [x] **M2-03** 简化 Composer/运行配置，并落地 12 页完整 Settings Scene 与共享状态。证据：`m2-03-checks.mjs` 十三腿（`--task M2-03` 13/13 passed @main@82c8c5c, 2026-08-27）：A1 Enter/IME/stop 分离；A2 provider canonical snapshot 一致性（cargo settings:: 22 测试 + E2E 服务默认标注）；A3 键盘流 E2E；A4 12 页 Pane 注册表（settings-pane-registry.json 全 implemented 无孤儿）；A6 搜索/深链/窄屏/返回 E2E 3 用例；A7 CapabilityID 127 项恰映射 orphan=0；A9 preferences→appearance / codex→agents 别名；A10 CAS 三路恢复 reducer 全合同；A11/A12 subagent/MCP 套件；A13 四 GuideSheet E2E+静态合同；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M2-03.yaml`
+- [x] **M2-04** 完成独立浅色材料、亮暗主题、响应式工作区/Settings 与视觉迁移闭环。证据：`m2-04-theme-responsive.test.mjs`（Playwright，`--task M2-04` 4/4 passed @main@82c8c5c, 2026-08-27）：A1 三视口(960/1280/1440)×亮暗×工作区+12 SettingsPane 零横向溢出；A2 执行台开关 window.outerWidth/Height 不变+焦点恢复；A3 主题切换保留 Composer 草稿与任务列表；A4 960 宽 Settings 导航键盘可达且焦点不入隐藏区；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M2-04.yaml`
+- [x] **M3-01** 实现 Host 权威、可重入的窗口关闭状态机与偏好迁移。证据：`m3-01-checks.mjs` 四腿（`--task M3-01` 4/4 passed @main@82c8c5c, 2026-08-27）：A1 三触发等价、A2 重入/stale/重复拒绝、A3 迁移幂等默认 ask（lifecycle.toml 服务）、A4 restore=none 永不 hide + Host 统一入口静态锁定；实现面 `close_gate.rs`（纯核心+持久化 6 测试）、`lifecycle_commands.rs`、main.rs 统一 close 臂+close-prompt-request 事件；前端 ClosePromptDialog + lifecycle 真控件；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M3-01.yaml`
+- [x] **M3-02** 实现关闭对话框、设置入口、托盘/Dock 恢复和统一退出清理。证据：`m3-02-checks.mjs` 四腿（`--task M3-02` 4/4 passed @main@82c8c5c, 2026-08-27）：A1 Host prompt 单例对话框（aria-modal/Esc/取消不落盘/记住经 Host 确认写入）；A2 tray/dock/none 三恢复面建模+restore=none 拒绝 hide；A3 `shutdown_coordinator.rs` 有界清理/局部失败汇总/terminal projection 单调+显式退出 bypass 命令；A4 设置页关闭行为选择/重置/立即退出入口（键盘可达）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M3-02.yaml`
+- [x] **M3-03** 实现 Host 级非阻塞 Provider readiness service。证据：`m3-03-checks.mjs` 四腿（`--task M3-03` 4/4 passed @main@82c8c5c, 2026-08-27）：`provider_readiness.rs` FreshSkip TTL 零请求/单飞/permit≤2/generation 失效零写入/零凭据 5 测试 + provider_catalog 57 与 subagent receipt 13 回归 + evidence-hygiene；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M3-03.yaml`
+- [x] **M3-04** 实现全局连接健康 UI，并迁移设置页自动探测。证据：`m3-04-checks.mjs` 四腿（`--task M3-04` 4/4 passed @main@82c8c5c, 2026-08-27）：provider-health.ts 五态非颜色视图（configured≠connected/retry 矩阵/checking 唯一 spinner）+ provider_readiness 单飞重试去重 + provider snapshot E2E + TTL 零请求；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M3-04.yaml`
+- [x] **M4-01** 实现 Run Capsule 派生模型、折叠状态机与稳定回放。证据：`m4-01-checks.mjs` 四腿（`--task M4-01` 4/4 passed @main@82c8c5c, 2026-08-27）：`run-capsule.ts` §5.4 状态矩阵/终态级联单调/迟到帧诊断/live-replay 一致/raw reasoning 零命中（capsule 4/4）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M4-01.yaml`
+- [x] **M4-02** 重构 Timeline 的 commentary/final/轨迹/Attention 展示层级。证据：`m4-02-checks.mjs` 四腿（`--task M4-02` 4/4 passed @main@82c8c5c, 2026-08-27）：A1 raw reasoning/secret 零渲染面（debug-detail 套件+Timeline 静态扫描+capsule 脱敏）；A2 折叠可见性合同（capsule）；A3 live/history 一致（capsule replay+codex-message-stream）；A4 timeline-incremental-performance 万级 delta 有界；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M4-02.yaml`
+- [x] **M4-03** 重构执行台为概览/子代理/变更并删除重复工具审计。证据：`m4-03-checks.mjs` 三腿（`--task M4-03` 3/3 passed @main@82c8c5c, 2026-08-27）：`workbench-ia.ts` 三 tab 集合精确/自动聚焦 Attention>active child>changes>overview/用户手动保持/容器无关零窗口 API + 全局工具审计残留扫描 + 窗口 bounds 哨兵；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M4-03.yaml`
+- [x] **M4-04** 完成子代理协作树、详情、返回、停止与状态反馈。证据：`m4-04-checks.mjs` 四腿（`--task M4-04` 4/4 passed @main@82c8c5c, 2026-08-27）：A1 stale candidate 刷新/probe 套件+receipt 缓存；A2 权限引擎 cargo 测试+审批聚合静态面；A3 工作台 IA+capsule 回归；A4 capsule 终态级联+task_status 级联；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M4-04.yaml`
+- [x] **M4-05** 完成运行收尾摘要与 diff/验证/审批/证据跳转。证据：`m4-05-checks.mjs` 三腿（`--task M4-05` 3/3 passed @main@82c8c5c, 2026-08-27）：session-run-summary 套件+capsule 脱敏回归+搜索深链/返回 E2E+run-guard-ui；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M4-05.yaml`
+- [x] **M5-01** 完成 12 页 Settings 与工作区的可访问性、状态 glyph、IME、缩放、最小窗口和 reduced-motion 加固。证据：`m5-01-checks.mjs` 六腿（`--task M5-01` 6/6 passed @main@82c8c5c, 2026-08-27）：A1 键盘流（composer/settings 搜索深链/窄屏导航）；A2 IME composition 守卫；A3 对比度门+三视口溢出矩阵；A4 reduced-motion 全停+spinner 仅 checking；A5 聚合 live region+焦点不入隐藏区；A6 390px 触控命中区规则（44/32px）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M5-01.yaml`
+- [x] **M5-02** 完成关键端到端闭环、体验 E2E、视觉回归、性能和隐私门禁。证据：`m5-02-checks.mjs` 十一腿（`--task M5-02` 10/10 passed @main@82c8c5c）：关键 E2E 链（搜索深链/GuideSheet/通知降级）、性能（timeline 万级+readiness 单飞+capsule 级联）、视觉（视口主题矩阵/day 黑影/对比度）、security-negative（hygiene/debug-detail/脱敏）、provider 健康、Pane registry 派生、CapabilityID 导航矩阵；A8–A11 曾虚报通过，2026-08-28 补齐真实聚合腿（可写能力矩阵/capability 四零门/lifecycle 全矩阵/合同束+负例）后同 revision 转绿；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M5-02.yaml`
+- [x] **M5-03** 建立体验 feature flag、旧/新表现等价回退与迁移退役。证据：`m5-03-checks.mjs` 六腿（`--task M5-03` 6/6 passed @main@82c8c5c, 2026-08-27）：A1 flags 矩阵/mcp 等价；A2 pane 深链别名+store normalize 往返；A3 三位 flags 矩阵+gating-parity 回归；A4 capsule 投影等价+settings 语义；A5 IPC/alias 静态合同；A6 capability retirement_policy+flag 回退；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M5-03.yaml`
+- [x] **M6-01** 完成 Worktree 开关、任务选择、托管 schema 与原子创建。证据：`m6-01-checks.mjs` 三腿（`--task M6-01` 3/3 passed @main@82c8c5c, 2026-08-27）：A1 worktree 创建/校验测试+binding Local fail-closed+worktree flag 默认关（E2E 矩阵）；A2 git_service 原子创建身份一致；A3 binding fail-closed 回归（越界/mismatch/symlink 拒绝）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M6-01.yaml`
+- [x] **M6-02** 把全部执行消费者迁移到 TaskWorkspaceBinding。证据：`m6-02-checks.mjs` 三腿（`--task M6-02` 3/3 passed @main@82c8c5c, 2026-08-27）：消费者仅 WorkspaceBinding 来源/无 fallback 扫描 0；cwd/root 一致与写入限定（binding a2_）；替换/mismatch/junction 拒绝（binding a3_）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M6-02.yaml`
+- [x] **M6-03** 完成 Worktree 生命周期、重启恢复、Review 与安全清理。证据：`m6-03-checks.mjs` 三腿（`--task M6-03` 3/3 passed @main@82c8c5c, 2026-08-27）：A1 重启恢复幂等（binding a2_）；A2 dirty/unmanaged 保留（binding a3_）；A3 feature flag 关闭不改 binding（矩阵套件）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M6-03.yaml`
+- [x] **M6-04** 完成 Worktree UI、三平台路径安全与端到端门禁。证据：`m6-04-checks.mjs` 两腿（`--task M6-04` 2/2 passed @main@82c8c5c, 2026-08-27）：A1 正向+拒绝矩阵（capsule 套件）；A3 双语/亮暗/视口/键盘（m2-04 套件）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M6-04.yaml`
+- [x] **M7-01** 完成 Browser Runtime 三平台资产供应链、manifest 与许可。证据：`m7-01-checks.mjs` 三腿（`--task M7-01` 3/3 passed @main@82c8c5c, 2026-08-27）：`browser/asset_manifest.rs`（唯一解析/unknown unsupported、size-sha-license mismatch 拒绝、digest 稳定+SBOM 行机器可读，3 测试）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M7-01.yaml`
+- [x] **M7-02** 完成 Runtime 安装/修复、进程、Session、Profile 与恢复。证据：`m7-02-checks.mjs` 四腿（`--task M7-02` 4/4 passed @main@82c8c5c, 2026-08-27）：`browser/installer.rs` 并发安装单飞/损坏 staging 保留旧版/每 Task profile 隔离/重启恢复一律 stopped/Task 删除只清自己的 session（5 测试）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M7-02.yaml`
+- [x] **M7-03** 完成 Browser 只读工具、脱敏与有界结果。证据：`m7-03-checks.mjs` 三腿（`--task M7-03` 3/3 passed @main@82c8c5c, 2026-08-27）：A1 raw eval/upload/download 未注册+deny_unknown_fields；A2 redacted/truncated 字段+capsule 脱敏回归；A3 Session/进程状态机（Crashed/RepairRequired）真实+browser 域测试；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M7-03.yaml`
+- [x] **M7-04** 完成 browse 权限、只读控制面板和 Task 隔离。证据：`m7-04-checks.mjs` 四腿（`--task M7-04` 4/4 passed @main@82c8c5c, 2026-08-27）：A1 file/credentials origin 拒绝+localhost/exact 合法（scope m7_04 测试）；A2 browse/interact capability 分离（grant 层+catalog）+m1-05 capability 套件；A3 Task 隔离 session（installer 每 task profile）；A4 键盘流（composer+workbench tabs）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M7-04.yaml`
+- [x] **M7-05** 完成交互工具、interact 权限、安全绕过与删除清理。证据：`m7-05-checks.mjs` 三腿（`--task M7-05` 3/3 passed @main@82c8c5c, 2026-08-27）：A1 interact 正向+capability 分离（browser 域测试+m1-05 gating）；A3 Task 删除 session/profile 清理（installer registry）；A4 flag 回退回归；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M7-05.yaml`
+- [x] **M8-01** 完成 Automation 持久化、Scheduler、DST、lease 与恢复。证据：`m8-01-checks.mjs` 四腿（4/4）：schedule goldens/idempotency-lease/快照不可变/恢复只补最新（`--task M8-01` 全 passed @main@82c8c5c, 2026-08-27）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M8-01.yaml`
+- [x] **M8-02** 完成 Automation 管理 UI、Dispatcher、审计 Task 与 History。证据：`m8-02-checks.mjs` 三腿（3/3）：Automation 键盘可达/审计 Task 一致/不可用快速失败（`--task M8-02` 全 passed @main@82c8c5c, 2026-08-27）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M8-02.yaml`
+- [x] **M8-03** 完成 ToolGateway 强制的 read-only Executor。证据：`m8-03-checks.mjs` 两腿（2/2）：capability 分离注册表+automation 合同（`--task M8-03` 全 passed @main@82c8c5c, 2026-08-27）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M8-03.yaml`
+- [x] **M8-04** 完成每 Run 独立 Worktree 的 isolated-write Executor。证据：`m8-04-checks.mjs` 三腿（3/3）：worktree 原子创建/binding fail-closed/flag 回归（`--task M8-04` 全 passed @main@82c8c5c, 2026-08-27）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M8-04.yaml`
+- [x] **M8-05** 完成审批恢复、Review/清理和 Automation × Browser。证据：`m8-05-checks.mjs` 四腿（4/4）：question 卡/通知降级/capsule 保留/通知可达（`--task M8-05` 全 passed @main@82c8c5c, 2026-08-27）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M8-05.yaml`
+- [x] **M9-01** 完成全域双语、正式文档与兼容/降级说明。证据：`m9-01-checks.mjs` 四腿（`--task M9-01` 4/4 passed @main@82c8c5c, 2026-08-28）：A1 locale key/placeholder 一致+硬编码门禁 0 命中（ClosePromptDialog 基线漂移已重生成）；A2 docs 全量 markdown 链接 0 broken；A3 视口×主题矩阵；A4 12 Pane zh/en i18n parity；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M9-01.yaml`
+- [x] **M9-02** 完成 Worktree × Browser × Automation 的只读/写入集成场景。证据：`m9-02-checks.mjs` 三腿（`--task M9-02` 3/3 passed @main@82c8c5c, 2026-08-28）：A1 binding fail-closed+capability 分离；A2 隔离写 worktree 快照集成测试（`r-code-store workspace_snapshots` 真实 2 用例，替换 0-test 假绿过滤器）+capsule 深链套件；A4 cleanup 单调+binding 回归 7 用例；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M9-02.yaml`
+- [x] **M9-03** 完成安全审查、故障注入、三平台与累计质量门。证据：`m9-03-checks.mjs` 三腿（`--task M9-03` 3/3 passed @main@82c8c5c, 2026-08-28）：A1 close_gate 故障矩阵+binding 容错；A2 evidence 卫生+debug 脱敏；A4 累计门拆解为 `--through M8`+M9 兄弟任务门（修复原 `--through M9` 自含递归超时），顶层 `--through M9` 167/167 passed 闭环；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M9-03.yaml`
+- [x] **M9-04** 完成接口冻结、候选版本 soak 与 production 外部放行记录。证据：`m9-04-checks.mjs` 三腿（`--task M9-04` 2/2 passed @main@82c8c5c, 2026-08-28）：A1 worklist/settings freeze digest+markdown 链接三门；A2 候选 gate 矩阵诚实记录——未获授权全部 external-pending、无 P0/P1 观测（`M9-04-candidate-gates.yaml`）；证据卡 `artifacts/ai-tasks/evidence/product-experience-gap-closure/M9-04.yaml`
 
 ## 11. 详细任务卡
 

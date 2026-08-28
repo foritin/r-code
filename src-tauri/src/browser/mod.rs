@@ -4,6 +4,8 @@
 //! machine. It freezes the cross-layer shapes and the single ToolGateway registration boundary
 //! consumed by both native R-Code runs and Codex App Server dynamic tools.
 
+pub mod asset_manifest;
+pub mod installer;
 mod commands;
 mod events;
 mod runtime;

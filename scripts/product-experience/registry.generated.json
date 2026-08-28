@@ -1,0 +1,1591 @@
+{
+  "schema_version": "product-experience-registry.v1",
+  "source_document": "docs/product-experience-redesign/r-code-experience-redesign-prd.md",
+  "source_sha256": "fff9b9cf54b3409dc740ec09daeff494e3112dc9393ad988909052df5c6cbd10",
+  "task_count": 42,
+  "assertion_count": 167,
+  "baseline_done": [
+    "D0-01",
+    "M0-01",
+    "M0-02",
+    "M1-01",
+    "M1-02",
+    "M1-03",
+    "M1-04",
+    "M1-05",
+    "M2-01",
+    "M2-02"
+  ],
+  "tasks": {
+    "D0-01": {
+      "title": "交付完整 App Demo、设计说明与冻结实施合同",
+      "milestone": "D0",
+      "requirement_refs": [
+        "R-DES-01",
+        "R-VIS-01",
+        "R-SET-01",
+        "R-SET-02",
+        "R-SET-03",
+        "R-SET-05",
+        "R-SET-06",
+        "R-SET-07",
+        "R-SET-08",
+        "R-ACC-02",
+        "§5",
+        "§8"
+      ],
+      "depends_on": [],
+      "assertions": [
+        {
+          "id": "D0-01.A1",
+          "level": "visual",
+          "summary": "完整 App 主链和关键状态均可从 HTML 到达；capture manifest 的 `prototype_sha256` 与当前 HTML 一致，required `screenshots/evidence` 无缺项、stale 文件不计入本轮、browser diagnostics 全 0，manifest 声明视口无页面级意外溢出。"
+        },
+        {
+          "id": "D0-01.A2",
+          "level": "contract",
+          "summary": "§10 的 Checklist ID 与 §11 任务卡一一对应，无重复 Assertion ID。"
+        },
+        {
+          "id": "D0-01.A3",
+          "level": "docs",
+          "summary": "freeze digest 由工具计算、gate 无 blocking/major issue，旧计划需求均有替代 RequirementRef。"
+        },
+        {
+          "id": "D0-01.A4",
+          "level": "component",
+          "summary": "Settings registry 恰有 12 个唯一页，导航/搜索可达；混合页面的 planned 卡保留卡片级来源标签，所有可见控件有状态变化或明确 Demo 反馈。"
+        },
+        {
+          "id": "D0-01.A5",
+          "level": "accessibility",
+          "summary": "仅 running/checking 使用中性 spinner；等待/终态为静态 glyph + 文字，reduced-motion、键盘、返回与焦点恢复断言通过。"
+        },
+        {
+          "id": "D0-01.A6",
+          "level": "contract",
+          "summary": "source inventory proof 绑定当前 revision；baseline 中每个 Settings UI/config/IPC/storage 发现项恰映射到一个唯一 CapabilityID，或有带源码证据的允许排除；`symbol_resolution_failures=0`、`unmapped=0`、`duplicate_mapping=0`、`secret_value_hits=0`。"
+        },
+        {
+          "id": "D0-01.A7",
+          "level": "docs",
+          "summary": "每个 `production_existing` 具有解析成功的 source symbol/authority、state/failure contract、合法 disposition、正式目标、RequirementRef、TaskID 和 required AssertionID；无 orphan、无 planned-demo 替代、无未授权 retirement；baseline digest 已进入 freeze。"
+        },
+        {
+          "id": "D0-01.A8",
+          "level": "contract",
+          "summary": "live Settings report 的 `source_inventory_proof.status=passed`、`source_snapshot_verified=true`、`inventory_items>0`、`symbol_resolution_failures/unmapped/duplicate_mapping/orphan_capabilities/empty_provenance=0`，三层 provenance count 均存在且 `production_existing>0`；组合 gate 检测到 D0 勾选而 proof 缺失/失败时必须非 0。"
+        }
+      ]
+    },
+    "M0-01": {
+      "title": "建立统一 Verification Harness 与证据入口",
+      "milestone": "M0",
+      "requirement_refs": [
+        "R-DES-01",
+        "R-REL-01",
+        "R-SEC-01",
+        "§7",
+        "§8"
+      ],
+      "depends_on": [
+        "D0-01"
+      ],
+      "assertions": [
+        {
+          "id": "M0-01.A1",
+          "level": "contract",
+          "summary": "未知任务、依赖环、缺失 required assertion 和失败子命令均非 0，并报告准确 ID。"
+        },
+        {
+          "id": "M0-01.A2",
+          "level": "integration",
+          "summary": "Harness 能编排至少一项 Rust 与一项前端测试并输出 schema 合法 JSON。"
+        },
+        {
+          "id": "M0-01.A3",
+          "level": "security",
+          "summary": "报告与 packet fixture 中 secret/raw reasoning oracle 为 0 命中。"
+        }
+      ]
+    },
+    "M0-02": {
+      "title": "审计当前 dev 并冻结可复现基线",
+      "milestone": "M0",
+      "requirement_refs": [
+        "R-DES-01",
+        "R-REL-01",
+        "R-RELSE-01",
+        "§3",
+        "§8"
+      ],
+      "depends_on": [
+        "M0-01"
+      ],
+      "assertions": [
+        {
+          "id": "M0-02.A1",
+          "level": "regression",
+          "summary": "所有执行过的基线命令、退出码和 revision 可追溯，失败未被省略。"
+        },
+        {
+          "id": "M0-02.A2",
+          "level": "contract",
+          "summary": "报告明确区分 implemented、partial、contract-only、external-pending。"
+        },
+        {
+          "id": "M0-02.A3",
+          "level": "security",
+          "summary": "运行证据不含 API key、完整 prompt/response、raw reasoning 或用户私有配置。"
+        }
+      ]
+    },
+    "M1-01": {
+      "title": "完成结构化错误与双语基础合同",
+      "milestone": "M1",
+      "requirement_refs": [
+        "R-ERR-01",
+        "R-I18N-01",
+        "R-SEC-01"
+      ],
+      "depends_on": [
+        "M0-02"
+      ],
+      "assertions": [
+        {
+          "id": "M1-01.A1",
+          "level": "contract",
+          "summary": "Rust/TS 对同一 error fixture 得到相同 code/args，unknown 不崩溃。"
+        },
+        {
+          "id": "M1-01.A2",
+          "level": "i18n",
+          "summary": "zh-CN/en-US key 和 placeholder 集完全一致，新增硬编码命中为 0。"
+        },
+        {
+          "id": "M1-01.A3",
+          "level": "security",
+          "summary": "普通 DOM、log 与通知中 `debug_detail`/secret oracle 为 0 命中。"
+        }
+      ]
+    },
+    "M1-02": {
+      "title": "完成 flags、模块边界与 WorkspaceBinding 基础",
+      "milestone": "M1",
+      "requirement_refs": [
+        "R-FLAG-01",
+        "R-BIND-01",
+        "R-WT-01",
+        "R-SEC-01"
+      ],
+      "depends_on": [
+        "M0-02"
+      ],
+      "assertions": [
+        {
+          "id": "M1-02.A1",
+          "level": "security",
+          "summary": "disabled Browser/Automation/Worktree 的 UI 不可见且直接 IPC/dispatcher 调用被拒绝。"
+        },
+        {
+          "id": "M1-02.A2",
+          "level": "contract",
+          "summary": "合法 Local/Worktree fixture 解析一致，schema 迁移幂等可回读。"
+        },
+        {
+          "id": "M1-02.A3",
+          "level": "security",
+          "summary": "缺失、越界、repo mismatch、junction/symlink 逃逸全部拒绝且无 Local fallback。"
+        }
+      ]
+    },
+    "M1-03": {
+      "title": "统一 TaskStatus、Attention 与通知投影",
+      "milestone": "M1",
+      "requirement_refs": [
+        "R-STATUS-01",
+        "R-NOTIF-01",
+        "R-RUN-01",
+        "R-REL-01",
+        "R-SET-05",
+        "§4.5",
+        "§4.5.1"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02"
+      ],
+      "assertions": [
+        {
+          "id": "M1-03.A1",
+          "level": "contract",
+          "summary": "状态优先级表的全组合输出唯一且 unread 不改变真实 Attention。"
+        },
+        {
+          "id": "M1-03.A2",
+          "level": "reliability",
+          "summary": "父任一终态后 1 秒内所有 child/tool/timer 终结，迟到帧不能复活。"
+        },
+        {
+          "id": "M1-03.A3",
+          "level": "integration",
+          "summary": "Rail/Room/Workbench/notification 对同一 fixture 状态与文案一致。"
+        },
+        {
+          "id": "M1-03.A4",
+          "level": "regression",
+          "summary": "通知拒绝或 OS adapter 失败时任务继续且应用内反馈存在。"
+        },
+        {
+          "id": "M1-03.A5",
+          "level": "accessibility",
+          "summary": "全状态 fixture 中只有 running/checking 含中性 spinner；queued/waiting/approval/completed/failed/cancelled/skipped 为不同静态 glyph + 文案，Agent identity accent 不改变状态含义。"
+        }
+      ]
+    },
+    "M1-04": {
+      "title": "完成 Updater 产品链与重启边界",
+      "milestone": "M1",
+      "requirement_refs": [
+        "R-UPD-01",
+        "R-CLOSE-03",
+        "R-ERR-01",
+        "R-RELSE-01"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02"
+      ],
+      "assertions": [
+        {
+          "id": "M1-04.A1",
+          "level": "contract",
+          "summary": "fixture 驱动的状态迁移确定，损坏/签名错永不进入 ready/restart。"
+        },
+        {
+          "id": "M1-04.A2",
+          "level": "integration",
+          "summary": "稍后重启保留应用可用；restart 仅触发一次受控 bypass，不弹普通关闭问询。"
+        },
+        {
+          "id": "M1-04.A3",
+          "level": "security",
+          "summary": "证据不保存更新 token/私有 URL 参数，旧可执行文件在失败时保持可启动。"
+        }
+      ]
+    },
+    "M1-05": {
+      "title": "冻结 Browser 与 Automation 公共合同",
+      "milestone": "M1",
+      "requirement_refs": [
+        "R-BR-01 至 R-BR-04",
+        "R-AUTO-01 至 R-AUTO-05",
+        "R-FLAG-01",
+        "§4.7",
+        "§4.8"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02"
+      ],
+      "assertions": [
+        {
+          "id": "M1-05.A1",
+          "level": "contract",
+          "summary": "Rust/TS/fixture schema round-trip 一致且 unknown future 字段安全降级。"
+        },
+        {
+          "id": "M1-05.A2",
+          "level": "security",
+          "summary": "browse/interact、read-only/isolated-write 权限不能互相提升。"
+        },
+        {
+          "id": "M1-05.A3",
+          "level": "regression",
+          "summary": "feature disabled 时 schema 可读取但入口和执行仍被拒绝。"
+        }
+      ]
+    },
+    "M2-01": {
+      "title": "收敛唯一 token、material 与 CSS authority",
+      "milestone": "M2",
+      "requirement_refs": [
+        "R-VIS-01",
+        "R-SET-05",
+        "R-ACC-01",
+        "R-ROLL-01",
+        "§4.5.1"
+      ],
+      "depends_on": [
+        "M1-01"
+      ],
+      "assertions": [
+        {
+          "id": "M2-01.A1",
+          "level": "contract",
+          "summary": "关键语义 token 只有一个定义源，禁止列表中的最终 override 为 0。"
+        },
+        {
+          "id": "M2-01.A2",
+          "level": "visual",
+          "summary": "亮暗主题材质层级与原型一致，正文/焦点对比满足 §7。"
+        },
+        {
+          "id": "M2-01.A3",
+          "level": "regression",
+          "summary": "关闭透明或 blur 不可用时信息层级、边界和正文仍可读。"
+        },
+        {
+          "id": "M2-01.A4",
+          "level": "visual/static",
+          "summary": "day theme 的工作区、Settings、Composer、popover、dialog 与 drawer 均消费主题 token；组件样式中用于 canvas/card/shadow 的硬编码 `rgba(0,0,0,…)` 命中为 0，浅色 computed-style 无黑色大投影。"
+        }
+      ]
+    },
+    "M2-02": {
+      "title": "重构 Topbar、Rail、任务列表与 Room 壳层",
+      "milestone": "M2",
+      "requirement_refs": [
+        "R-SHELL-01",
+        "R-WB-01",
+        "R-WB-02",
+        "R-STATUS-01"
+      ],
+      "depends_on": [
+        "M2-01",
+        "M1-03"
+      ],
+      "assertions": [
+        {
+          "id": "M2-02.A1",
+          "level": "component",
+          "summary": "Rail/Room 对同一 TaskStatus fixture 显示一致且无第二套状态推断。"
+        },
+        {
+          "id": "M2-02.A2",
+          "level": "E2E",
+          "summary": "开关执行台前后顶层窗口 bounds 完全相同，960×640 以内改为抽屉。"
+        },
+        {
+          "id": "M2-02.A3",
+          "level": "visual",
+          "summary": "目标视口无横向溢出，主内容、导航、执行台层级与原型一致。"
+        }
+      ]
+    },
+    "M2-03": {
+      "title": "简化 Composer、运行配置与 Settings IA",
+      "milestone": "M2",
+      "requirement_refs": [
+        "R-COMP-01",
+        "R-COMP-02",
+        "R-PROV-05",
+        "R-SET-01",
+        "R-SET-02",
+        "R-SET-04",
+        "R-SET-07",
+        "R-SET-08",
+        "R-SET-09",
+        "R-MCP-01",
+        "R-SUB-03",
+        "R-GUIDE-01",
+        "R-TOOL-01",
+        "R-ACC-01",
+        "§4.5.1",
+        "§4.5.2",
+        "§5.7"
+      ],
+      "depends_on": [
+        "M2-01",
+        "M1-03"
+      ],
+      "assertions": [
+        {
+          "id": "M2-03.A1",
+          "level": "reliability",
+          "summary": "running/transition/IME 组合下 Enter 与 Send 均不能触发 stop，stop 只响应独立动作一次。"
+        },
+        {
+          "id": "M2-03.A2",
+          "level": "integration",
+          "summary": "Provider mini、空白页、Composer、Settings、health 与主 Agent 默认模型对同一 snapshot revision 显示同一 provider/model；default 仅 Host ACK 后更新，Host reject 后旧 default/profile/reference digest 不变，默认或持久槽位引用删除均被拒绝且不闪回 Codex。"
+        },
+        {
+          "id": "M2-03.A3",
+          "level": "accessibility",
+          "summary": "仅键盘可完成发送、打开配置、排队/steer 和停止确认，焦点顺序稳定。"
+        },
+        {
+          "id": "M2-03.A4",
+          "level": "contract",
+          "summary": "registry 恰含 §5.7 的 12 个唯一 Pane；导航、搜索、标题、locale、provenance、flag 和 selector 均从 registry 派生，无孤儿/重复页面。"
+        },
+        {
+          "id": "M2-03.A5",
+          "level": "integration",
+          "summary": "Settings 与 Shell 对 Provider、close preference、theme/language、notification、updater fixture 的值、生效范围和安全错误一致；失败写入不改变旧持久值。"
+        },
+        {
+          "id": "M2-03.A6",
+          "level": "E2E",
+          "summary": "搜索命中跨页 block、无结果、窄屏导航、返回工作区和焦点恢复通过；planned feature disabled 时入口隐藏且直接调用被拒绝。"
+        },
+        {
+          "id": "M2-03.A7",
+          "level": "contract",
+          "summary": "baseline 中每个 CapabilityID 恰映射到一个正式产品 target 或完整 merge contract；`orphan_source=0`、`orphan_target=0`、`planned_demo_substitution=0`。"
+        },
+        {
+          "id": "M2-03.A8",
+          "level": "integration",
+          "summary": "每个 baseline fixture 从新 Settings 读取与提交后，默认值、允许值、作用域、apply mode、持久化结果、Host 副作用、权限和错误语义与基线一致；失败不改变旧持久值。"
+        },
+        {
+          "id": "M2-03.A9",
+          "level": "contract/migration",
+          "summary": "所有改名的 route、deep-link、config key、enum 或 IPC 均有 alias/migration ID、unknown-field、downgrade、rollback 策略和 required assertion；任一缺失即非 0。"
+        },
+        {
+          "id": "M2-03.A10",
+          "level": "reliability/E2E",
+          "summary": "12 页共用 Settings lifecycle；load/refresh/retry 覆盖无 snapshot 与 last-good；保存失败保留 persisted snapshot + dirty draft，离开需 discard；Host CAS conflict 同时保留 local/fresh digest，分别执行 discard local、reapply onto latest、field merge preview 后都返回新 base revision，refresh/retry 不静默覆盖。"
+        },
+        {
+          "id": "M2-03.A11",
+          "level": "contract/integration",
+          "summary": "Provider 仅持久化 §4.5.2 字段且 `activate` 不落字段，name/preset 不可改、max_tokens 边界和两类 cache 独立；图片 direct-original、explicit-OCR、confirmed-helper 与 reject-batch fixture 精确路由，helper 不完整/unknown/text-only/失败时整批不发送且不降级 OCR；Codex permission 五态只有一个 authority，cancel 携带 operation/process/generation 并仅在 terminate ACK 后 cancelled，超时 cancel_failed、stale generation 零写回；每个 SubagentSlot 的 Prompt 独立 round-trip；Shell path 保存后下一次工具调用立即命中新 override。"
+        },
+        {
+          "id": "M2-03.A12",
+          "level": "security/E2E",
+          "summary": "existing MCP `server_id` 在 UI/提交/重载中稳定只读，篡改被 Host 拒绝，改名只经 create-new+explicit remove-old且 credential 不推断迁移；配置先保存 disabled，启用只消费 Host exact preview 对应的一次性 token，独立 alertdialog 的 cancel/expire/config-change 均拒绝且焦点恢复，编辑/测试 token 消费数为 0，状态只使用生产 enum。"
+        },
+        {
+          "id": "M2-03.A13",
+          "level": "accessibility/E2E",
+          "summary": "Provider/Plan/Subagent/Image 四个 GuideSheet 可分别从卡片和搜索深链进入；每个 focus trap、Escape/backdrop、trigger focus restore 通过，入口/内容/anchor 数均恰为 4。"
+        }
+      ]
+    },
+    "M2-04": {
+      "title": "完成主题、响应式执行台与视觉迁移",
+      "milestone": "M2",
+      "requirement_refs": [
+        "R-VIS-01",
+        "R-WB-02",
+        "R-SET-01",
+        "R-SET-06",
+        "R-ACC-01",
+        "R-ROLL-01"
+      ],
+      "depends_on": [
+        "M2-02",
+        "M2-03"
+      ],
+      "assertions": [
+        {
+          "id": "M2-04.A1",
+          "level": "visual",
+          "summary": "工作区与全部 12 个 SettingsPane 在亮暗 × 960×640/1280×800/1440×900 无遮挡、截断或意外横向滚动；day computed-style 满足浅色材料门。"
+        },
+        {
+          "id": "M2-04.A2",
+          "level": "E2E",
+          "summary": "执行台开关不改变 OS window bounds，抽屉关闭后焦点回到触发器。"
+        },
+        {
+          "id": "M2-04.A3",
+          "level": "regression",
+          "summary": "主题/布局切换不改变任务、Run、Provider 或 Composer 状态。"
+        },
+        {
+          "id": "M2-04.A4",
+          "level": "accessibility",
+          "summary": "窄屏 Settings 导航打开/选择/关闭、搜索跳转和返回工作区均可键盘完成，焦点不进入 hidden/inert 区域。"
+        }
+      ]
+    },
+    "M3-01": {
+      "title": "实现 Host 权威的关闭状态机与偏好迁移",
+      "milestone": "M3",
+      "requirement_refs": [
+        "R-CLOSE-01",
+        "R-CLOSE-02",
+        "R-CLOSE-03",
+        "§4.1",
+        "§5.2"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02"
+      ],
+      "assertions": [
+        {
+          "id": "M3-01.A1",
+          "level": "contract",
+          "summary": "titlebar/Alt+F4/native 的等价 fixture 产生同一 CloseIntent 与状态序列。"
+        },
+        {
+          "id": "M3-01.A2",
+          "level": "reliability",
+          "summary": "并发/重复 close 只有一个 intent/dialog；stale decision 和重复提交被拒绝。"
+        },
+        {
+          "id": "M3-01.A3",
+          "level": "migration",
+          "summary": "旧/缺失/未知偏好迁移幂等，默认安全为 ask。"
+        },
+        {
+          "id": "M3-01.A4",
+          "level": "security",
+          "summary": "restore=none 时 hide 永不执行，窗口保持可达。"
+        }
+      ]
+    },
+    "M3-02": {
+      "title": "实现关闭对话框、恢复入口与统一退出清理",
+      "milestone": "M3",
+      "requirement_refs": [
+        "R-CLOSE-02",
+        "R-CLOSE-03",
+        "R-UPD-01",
+        "R-ACC-01"
+      ],
+      "depends_on": [
+        "M3-01",
+        "M2-04",
+        "M1-04"
+      ],
+      "assertions": [
+        {
+          "id": "M3-02.A1",
+          "level": "E2E",
+          "summary": "三种普通 close 入口均出现单例对话框，cancel 不写偏好，remember 跨重启生效。"
+        },
+        {
+          "id": "M3-02.A2",
+          "level": "integration",
+          "summary": "tray/dock 恢复可达；恢复能力消失时 hide 被拒绝且窗口仍可见。"
+        },
+        {
+          "id": "M3-02.A3",
+          "level": "reliability",
+          "summary": "quit/restart 在 Host ACK 前不销毁恢复面；ACK 后主 Run/child/tool/timer 全部 terminal、spinner=0，局部失败有脱敏有界诊断且不留不可达窗口进程；新进程 reload 不恢复旧 running。"
+        },
+        {
+          "id": "M3-02.A4",
+          "level": "accessibility",
+          "summary": "仅键盘/读屏完成选择、勾选、取消，焦点回触发器且 active-run 后果可感知。"
+        }
+      ]
+    },
+    "M3-03": {
+      "title": "实现 Host 级非阻塞 Provider readiness service",
+      "milestone": "M3",
+      "requirement_refs": [
+        "R-PROV-01",
+        "R-PROV-02",
+        "R-PROV-04",
+        "R-SUB-02",
+        "§4.2"
+      ],
+      "depends_on": [
+        "M1-01",
+        "M1-02"
+      ],
+      "assertions": [
+        {
+          "id": "M3-03.A1",
+          "level": "performance",
+          "summary": "Shell first paint/交互不等待网络；fresh receipt 启动请求数为 0，stale 请求并发峰值≤2。"
+        },
+        {
+          "id": "M3-03.A2",
+          "level": "reliability",
+          "summary": "并发相同 probe 单飞；fingerprint 改变或 startup opt-out 递增 generation 后，排队任务被取消、在途迟到结果零 receipt/event/success 写入，手动测试仍能独立完成。"
+        },
+        {
+          "id": "M3-03.A3",
+          "level": "integration",
+          "summary": "过期候选池在委派前自动刷新；optional 失败可降级，required 失败给可恢复 Attention 且无假 child。"
+        },
+        {
+          "id": "M3-03.A4",
+          "level": "security",
+          "summary": "请求/事件/log/证据无 key、完整正文或 Authorization，失败不改变 provider/model/endpoint。"
+        }
+      ]
+    },
+    "M3-04": {
+      "title": "实现全局连接健康 UI 并迁移设置页探测",
+      "milestone": "M3",
+      "requirement_refs": [
+        "R-PROV-03",
+        "R-PROV-05",
+        "R-COMP-01",
+        "R-I18N-01"
+      ],
+      "depends_on": [
+        "M3-03",
+        "M2-03",
+        "M2-04"
+      ],
+      "assertions": [
+        {
+          "id": "M3-04.A1",
+          "level": "integration",
+          "summary": "全部消费面在每个 fixture 上 snapshot revision/provider/model/connectivity 一致且无首屏错误闪烁；Host reject 后旧 default/profile/reference digest 不变，默认/持久槽位引用删除拒绝。"
+        },
+        {
+          "id": "M3-04.A2",
+          "level": "E2E",
+          "summary": "probe 失败时 Shell/Composer 仍可操作，手动重试去重并更新相对时间。"
+        },
+        {
+          "id": "M3-04.A3",
+          "level": "visual/accessibility",
+          "summary": "状态不只依赖颜色，键盘/读屏可查看原因、费用说明和重试。"
+        },
+        {
+          "id": "M3-04.A4",
+          "level": "regression",
+          "summary": "设置页进入/离开不额外触发网络，TTL 内请求数保持 0。"
+        }
+      ]
+    },
+    "M4-01": {
+      "title": "实现 Run Capsule 派生模型、折叠与稳定回放",
+      "milestone": "M4",
+      "requirement_refs": [
+        "R-TRACE-01",
+        "R-TRACE-02",
+        "R-RUN-01",
+        "R-REL-01",
+        "§4.3",
+        "§5.4"
+      ],
+      "depends_on": [
+        "M1-03",
+        "M0-02"
+      ],
+      "assertions": [
+        {
+          "id": "M4-01.A1",
+          "level": "contract",
+          "summary": "§5.4 全状态矩阵得到唯一 detail_state，Attention/final 始终可发现。"
+        },
+        {
+          "id": "M4-01.A2",
+          "level": "reliability",
+          "summary": "父终态后 Capsule/child/tool 在 1 秒内停止计时并持久化单调 terminal revision；Host ACK 后 spinner=0，迟到帧与应用重启均不复活旧 running。"
+        },
+        {
+          "id": "M4-01.A3",
+          "level": "replay",
+          "summary": "live 序列化后重建的阶段、计数、Attention、终态与可见顺序一致。"
+        },
+        {
+          "id": "M4-01.A4",
+          "level": "security",
+          "summary": "latest update 与摘要中 raw reasoning/secret oracle 为 0 命中。"
+        }
+      ]
+    },
+    "M4-02": {
+      "title": "重构 Timeline 的 commentary、final、轨迹与 Attention",
+      "milestone": "M4",
+      "requirement_refs": [
+        "R-FEED-01",
+        "R-FEED-02",
+        "R-TRACE-01",
+        "R-TRACE-02",
+        "R-SEC-01"
+      ],
+      "depends_on": [
+        "M4-01",
+        "M2-04"
+      ],
+      "assertions": [
+        {
+          "id": "M4-02.A1",
+          "level": "security",
+          "summary": "raw reasoning、secret 和未脱敏工具输出在普通 DOM/截图/持久化 oracle 为 0 命中。"
+        },
+        {
+          "id": "M4-02.A2",
+          "level": "visual",
+          "summary": "长任务默认首屏以公开进度和交付为主，普通工具折叠；失败/审批/提问/final 无需展开即可发现。"
+        },
+        {
+          "id": "M4-02.A3",
+          "level": "replay",
+          "summary": "展开后事件顺序、终态与安全摘要在 live/history 一致。"
+        },
+        {
+          "id": "M4-02.A4",
+          "level": "performance",
+          "summary": "10,000 delta 不生成 10,000 DOM 节点，可见刷新≤10Hz且 final 完整。"
+        }
+      ]
+    },
+    "M4-03": {
+      "title": "重构执行台为概览、子代理、变更",
+      "milestone": "M4",
+      "requirement_refs": [
+        "R-WB-01",
+        "R-WB-02",
+        "R-SHELL-01",
+        "R-STATUS-01"
+      ],
+      "depends_on": [
+        "M4-01",
+        "M2-04"
+      ],
+      "assertions": [
+        {
+          "id": "M4-03.A1",
+          "level": "component",
+          "summary": "一级 tab 集合精确为 overview/subagents/changes，无重复全局工具审计。"
+        },
+        {
+          "id": "M4-03.A2",
+          "level": "E2E",
+          "summary": "存在 active child/Attention 时一次操作到达聚焦视图，返回不丢主任务上下文。"
+        },
+        {
+          "id": "M4-03.A3",
+          "level": "regression",
+          "summary": "开关/切 tab/抽屉前后 OS window bounds 不变且 Run 状态不变。"
+        }
+      ]
+    },
+    "M4-04": {
+      "title": "完成子代理树、候选自愈、聚合审批与停止",
+      "milestone": "M4",
+      "requirement_refs": [
+        "R-SUB-01",
+        "R-SUB-02",
+        "R-PERM-01",
+        "R-RUN-01",
+        "§4.5"
+      ],
+      "depends_on": [
+        "M4-01",
+        "M4-03",
+        "M3-03"
+      ],
+      "assertions": [
+        {
+          "id": "M4-04.A1",
+          "level": "integration",
+          "summary": "stale candidate 成功刷新后只创建一个 child；失败时无假 running，optional/required 行为符合合同。"
+        },
+        {
+          "id": "M4-04.A2",
+          "level": "security",
+          "summary": "三个同根 read 合并为一张卡；越界/read→write/network/mutation 无法借 grant 通过。"
+        },
+        {
+          "id": "M4-04.A3",
+          "level": "E2E",
+          "summary": "列表→child detail→transcript→back 保留主任务；停止精确作用于选择范围。"
+        },
+        {
+          "id": "M4-04.A4",
+          "level": "reliability",
+          "summary": "父失败/取消后所有 child/tool/approval ≤1 秒终结且计时停止；terminal ACK 后 spinner=0，reload/restart 不出现父 terminal、child/tool running 的组合。"
+        }
+      ]
+    },
+    "M4-05": {
+      "title": "完成收尾摘要与证据跳转",
+      "milestone": "M4",
+      "requirement_refs": [
+        "R-SUM-01",
+        "R-FEED-01",
+        "R-TRACE-02",
+        "R-WB-01"
+      ],
+      "depends_on": [
+        "M4-02",
+        "M4-03",
+        "M4-04"
+      ],
+      "assertions": [
+        {
+          "id": "M4-05.A1",
+          "level": "contract",
+          "summary": "四种终态的摘要字段完整且 never-tested/failed 不显示“已验证”。"
+        },
+        {
+          "id": "M4-05.A2",
+          "level": "E2E",
+          "summary": "每个可用 deep link 到达正确文件/报告/卡片/child，并可返回主任务。"
+        },
+        {
+          "id": "M4-05.A3",
+          "level": "replay",
+          "summary": "reload 后摘要与实时一致，不重复工具列表或暴露 raw reasoning。"
+        }
+      ]
+    },
+    "M5-01": {
+      "title": "完成可访问性、IME、缩放与 reduced-motion 加固",
+      "milestone": "M5",
+      "requirement_refs": [
+        "R-ACC-01",
+        "R-ACC-02",
+        "R-COMP-02",
+        "R-WB-02",
+        "R-I18N-01",
+        "R-SET-05",
+        "R-SET-06",
+        "R-GUIDE-01",
+        "R-MCP-01",
+        "R-SET-09"
+      ],
+      "depends_on": [
+        "M3-02",
+        "M3-04",
+        "M4-05",
+        "M2-04"
+      ],
+      "assertions": [
+        {
+          "id": "M5-01.A1",
+          "level": "accessibility",
+          "summary": "仅键盘/读屏完成 Settings 搜索/12 页导航/返回，以及发送、关闭选择、健康重试、展开轨迹、审批与停止。"
+        },
+        {
+          "id": "M5-01.A2",
+          "level": "IME",
+          "summary": "composition 期间 Enter 不发送/停止，提交后的文本不丢字或重复。"
+        },
+        {
+          "id": "M5-01.A3",
+          "level": "visual",
+          "summary": "目标主题/视口/100–200% 下对比达标且无横向溢出、遮挡、乱码。"
+        },
+        {
+          "id": "M5-01.A4",
+          "level": "motion",
+          "summary": "常规模式仅 running/checking 有中性 spinner，queued/waiting/approval/terminal 静止；reduced-motion 下 spinner 停止旋转并保留静态缺口环与文字。"
+        },
+        {
+          "id": "M5-01.A5",
+          "level": "accessibility",
+          "summary": "12 页 Settings 在 200% 缩放和 960×640 下无焦点丢失、hidden/inert 穿透或只能指针完成的操作；异步状态由一个聚合 live region 播报，不重复播报。"
+        },
+        {
+          "id": "M5-01.A6",
+          "level": "touch/accessibility",
+          "summary": "390px 下主要动作/图标按钮命中区 ≥44×44 CSS px、紧凑次要控件 ≥32×32 且相邻目标不重叠；四 GuideSheet、MCP alertdialog、dirty discard 与 conflict recovery 无 hover-only 或精确像素路径。"
+        }
+      ]
+    },
+    "M5-02": {
+      "title": "完成体验 E2E、视觉、性能与隐私门禁",
+      "milestone": "M5",
+      "requirement_refs": [
+        "R-REL-01",
+        "R-SEC-01",
+        "R-ACC-01",
+        "R-ACC-02",
+        "R-SET-01",
+        "R-SET-02",
+        "R-SET-03",
+        "R-SET-04",
+        "R-SET-05",
+        "R-SET-06",
+        "R-SET-07",
+        "R-SET-08",
+        "R-SET-09",
+        "R-MCP-01",
+        "R-SUB-03",
+        "R-GUIDE-01",
+        "R-TOOL-01",
+        "§5.7",
+        "§5.8",
+        "§7",
+        "§8"
+      ],
+      "depends_on": [
+        "M5-01"
+      ],
+      "assertions": [
+        {
+          "id": "M5-02.A1",
+          "level": "E2E",
+          "summary": "主链和失败/取消/恢复链全部通过，关键深链与返回上下文正确。"
+        },
+        {
+          "id": "M5-02.A2",
+          "level": "performance",
+          "summary": "§7 的 p95、10k delta、≤10Hz、级联≤1秒及窗口 bounds 指标齐全并通过。"
+        },
+        {
+          "id": "M5-02.A3",
+          "level": "visual",
+          "summary": "工作区与 12 页 Settings 的亮暗/目标视口/100–200% 差异仅在批准 baseline 内，无意外遮挡/溢出；day material 黑影扫描通过。"
+        },
+        {
+          "id": "M5-02.A5",
+          "level": "E2E",
+          "summary": "§5.8 全部闭环的正向、失败/降级与返回焦点全部通过；planned-demo 始终标注且在产品 feature-disabled profile 中前端隐藏、直接调用拒绝。"
+        },
+        {
+          "id": "M5-02.A6",
+          "level": "contract",
+          "summary": "12 Pane registry 与实际路由、搜索、locale、provenance 和 assertion registry 一一对应；缺任一 Pane/关键状态/视口即非 0。"
+        },
+        {
+          "id": "M5-02.A7",
+          "level": "E2E",
+          "summary": "正式产品 SettingsScene 从真实导航入口逐个到达全部 baseline CapabilityID；每个字段/状态可读、每个动作触发真实 UI→IPC→Host→adapter 链，执行数与 required capability 数完全一致。"
+        },
+        {
+          "id": "M5-02.A8",
+          "level": "integration/E2E",
+          "summary": "每个可写能力至少覆盖保存成功、Host/adapter 拒绝后保持旧值、应用进程重启后恢复；Provider default 仅 ACK 后更新且 reject/delete-reference 后 default/profile/reference digest 不变；每个动作/只读状态覆盖 success 与适用的 loading/error/disabled/permission。"
+        },
+        {
+          "id": "M5-02.A9",
+          "level": "regression",
+          "summary": "capability coverage 满足 `missing=0`、`unexecuted=0`、`unexpected_noop=0`、`prototype_only_evidence=0`；缺任一 CapabilityID 的 required 证据即 Harness 非 0。"
+        },
+        {
+          "id": "M5-02.A10",
+          "level": "E2E/reliability",
+          "summary": "12 页统一 Settings lifecycle 的无 snapshot/last-good load failure、retry success/failure、save reject、dirty leave 与 Host CAS conflict 全矩阵通过；persisted/local/fresh digest 分离，discard local、reapply onto latest、field merge preview 三路各返回新 base revision且无静默覆盖。"
+        },
+        {
+          "id": "M5-02.A11",
+          "level": "integration/security/accessibility",
+          "summary": "Provider canonical snapshot/startup opt-out、无损图片路由、Codex terminate ACK、Subagent/Shell 真实 authority、MCP stable `server_id` + 独立 enable approval、退出 terminal ACK 和四 GuideSheet 全通过；旧 generation 写回、helper fallback OCR/部分发送、乐观 cancelled、MCP ID 篡改或 credential 推断迁移、虚构字段/第二权限 authority/client launch plan/global Prompt 替代/next-session Shell/单 Guide 替代/重启恢复旧 running 的负例全部非 0。"
+        }
+      ]
+    },
+    "M5-03": {
+      "title": "建立体验 flag、等价回退与旧路径退役",
+      "milestone": "M5",
+      "requirement_refs": [
+        "R-ROLL-01",
+        "R-FLAG-01",
+        "R-REL-01",
+        "R-REL-02",
+        "R-RELSE-01",
+        "R-SET-02",
+        "R-SET-04",
+        "R-SET-07",
+        "R-SET-08",
+        "R-SET-09"
+      ],
+      "depends_on": [
+        "M5-02"
+      ],
+      "assertions": [
+        {
+          "id": "M5-03.A1",
+          "level": "regression",
+          "summary": "old/new 对同一 fixture 的底层状态、权限决定和持久化 digest 相同。"
+        },
+        {
+          "id": "M5-03.A2",
+          "level": "migration",
+          "summary": "新→旧→新重启不丢 preference/task/run/provider 数据且 migration 幂等。"
+        },
+        {
+          "id": "M5-03.A3",
+          "level": "release",
+          "summary": "新体验异常时一个受控 flag 可回退，Browser/Automation/Worktree feature guard 不受影响。"
+        },
+        {
+          "id": "M5-03.A4",
+          "level": "regression",
+          "summary": "old/new 对每个 CapabilityID 的可见性、可达性、当前值、默认值、允许值、写入结果、Host 副作用、权限决定和错误语义相同；合法 merge 按 contract 比较，差异为空。"
+        },
+        {
+          "id": "M5-03.A5",
+          "level": "migration",
+          "summary": "所有旧 route/deep-link/config key/enum/IPC fixture 完成 old→new→old→new 往返；迁移重复执行结果一致，unknown fields 不丢失，故障注入后旧值可读且 rollback 成功。"
+        },
+        {
+          "id": "M5-03.A6",
+          "level": "retirement",
+          "summary": "旧路径删除前 `orphan_capabilities=0`、`live_legacy_consumers=0`、`unauthorized_retirements=0`，体验 flag 能在不迁移或改写底层数据的情况下恢复旧表现。"
+        }
+      ]
+    },
+    "M6-01": {
+      "title": "完成 Worktree 开关、任务选择、schema 与原子创建",
+      "milestone": "M6",
+      "requirement_refs": [
+        "R-WT-01",
+        "R-WT-02",
+        "R-BIND-01",
+        "§4.6"
+      ],
+      "depends_on": [
+        "M1-02",
+        "M1-05"
+      ],
+      "assertions": [
+        {
+          "id": "M6-01.A1",
+          "level": "contract",
+          "summary": "非 Git/disabled 只能 Local；合法 Git fixture 的 schema round-trip 与迁移幂等。"
+        },
+        {
+          "id": "M6-01.A2",
+          "level": "integration",
+          "summary": "原子创建成功后 repo/branch/base_oid/path/managed identity 全部一致。"
+        },
+        {
+          "id": "M6-01.A3",
+          "level": "security",
+          "summary": "任一故障注入不改变原项目 hash；不确定、dirty 或有新 commit 的目标永不自动删除。"
+        }
+      ]
+    },
+    "M6-02": {
+      "title": "迁移全部执行消费者到 WorkspaceBinding",
+      "milestone": "M6",
+      "requirement_refs": [
+        "R-WT-03",
+        "R-BIND-01",
+        "R-BR-04",
+        "R-AUTO-03"
+      ],
+      "depends_on": [
+        "M6-01"
+      ],
+      "assertions": [
+        {
+          "id": "M6-02.A1",
+          "level": "contract",
+          "summary": "consumer inventory 中每项只有 WorkspaceBinding 来源，禁止 fallback 模式扫描为 0。"
+        },
+        {
+          "id": "M6-02.A2",
+          "level": "integration",
+          "summary": "Local/Worktree 下所有消费者 cwd/root 一致且写入仅发生绑定目录。"
+        },
+        {
+          "id": "M6-02.A3",
+          "level": "security",
+          "summary": "运行前替换目录、repo mismatch、junction/symlink 逃逸均拒绝，原项目 hash 不变。"
+        }
+      ]
+    },
+    "M6-03": {
+      "title": "完成 Worktree 生命周期、恢复、Review 与安全清理",
+      "milestone": "M6",
+      "requirement_refs": [
+        "R-WT-02",
+        "R-WT-04",
+        "R-STATUS-01",
+        "R-REL-01"
+      ],
+      "depends_on": [
+        "M6-02"
+      ],
+      "assertions": [
+        {
+          "id": "M6-03.A1",
+          "level": "recovery",
+          "summary": "重启后合法 Worktree 恢复同一 binding；missing/mismatch 不回退且产生 Attention。"
+        },
+        {
+          "id": "M6-03.A2",
+          "level": "security",
+          "summary": "dirty/new commit/unmanaged/identity uncertain 的目录全部保留，clean/no-commit 才允许受控清理。"
+        },
+        {
+          "id": "M6-03.A3",
+          "level": "integration",
+          "summary": "归档停止运行但保留工作区，Review 可跳转 diff/commit，关闭 flag 不改变旧任务 binding。"
+        }
+      ]
+    },
+    "M6-04": {
+      "title": "完成 Worktree UI、三平台路径安全与 E2E",
+      "milestone": "M6",
+      "requirement_refs": [
+        "R-WT-01 至 R-WT-04",
+        "R-ACC-01",
+        "R-I18N-01"
+      ],
+      "depends_on": [
+        "M6-03",
+        "M5-01"
+      ],
+      "assertions": [
+        {
+          "id": "M6-04.A1",
+          "level": "E2E",
+          "summary": "正向创建/执行/Review/归档和所有拒绝/恢复路径通过，原项目 hash 不变。"
+        },
+        {
+          "id": "M6-04.A3",
+          "level": "visual/accessibility",
+          "summary": "双语、亮暗、目标视口和键盘完成关键流程，无危险默认动作。"
+        }
+      ]
+    },
+    "M7-01": {
+      "title": "完成 Browser Runtime 资产供应链、manifest 与许可",
+      "milestone": "M7",
+      "requirement_refs": [
+        "R-BR-01",
+        "R-FLAG-01",
+        "R-SEC-01",
+        "§4.7"
+      ],
+      "depends_on": [
+        "M1-05",
+        "M1-02"
+      ],
+      "assertions": [
+        {
+          "id": "M7-01.A1",
+          "level": "contract",
+          "summary": "每个支持 platform/arch 唯一解析到完整 manifest，unknown 明确 unsupported。"
+        },
+        {
+          "id": "M7-01.A2",
+          "level": "security",
+          "summary": "任一 size/hash/schema/license mismatch 均拒绝安装/执行。"
+        },
+        {
+          "id": "M7-01.A3",
+          "level": "reproducibility",
+          "summary": "同 manifest 在重复验证中 digest 稳定，SBOM/来源可机器读取。"
+        }
+      ]
+    },
+    "M7-02": {
+      "title": "完成 Runtime 安装/修复、进程、Session 与恢复",
+      "milestone": "M7",
+      "requirement_refs": [
+        "R-BR-01",
+        "R-BR-02",
+        "R-BIND-01",
+        "R-REL-01"
+      ],
+      "depends_on": [
+        "M7-01",
+        "M6-02"
+      ],
+      "assertions": [
+        {
+          "id": "M7-02.A1",
+          "level": "reliability",
+          "summary": "并发首次使用只安装一次；故障点后 current 指向完整可验证版本。"
+        },
+        {
+          "id": "M7-02.A2",
+          "level": "isolation",
+          "summary": "不同 Task 的 profile/session/process 不共享 cookie/storage/active tab。"
+        },
+        {
+          "id": "M7-02.A3",
+          "level": "recovery",
+          "summary": "应用重启不自动拉起浏览器，旧 Session 显示 crashed/stopped 且可显式恢复。"
+        },
+        {
+          "id": "M7-02.A4",
+          "level": "cleanup",
+          "summary": "删除 Task 后 profile/截图/进程树清理，无 orphan；不确定路径拒绝删除。"
+        }
+      ]
+    },
+    "M7-03": {
+      "title": "完成 Browser 只读工具、脱敏与有界结果",
+      "milestone": "M7",
+      "requirement_refs": [
+        "R-BR-03",
+        "R-BR-04",
+        "R-SEC-01"
+      ],
+      "depends_on": [
+        "M7-02"
+      ],
+      "assertions": [
+        {
+          "id": "M7-03.A1",
+          "level": "contract",
+          "summary": "全部只读工具正/负 fixture 返回确定 schema，raw eval/upload/download 未注册。"
+        },
+        {
+          "id": "M7-03.A2",
+          "level": "security",
+          "summary": "cookie/token/authorization/secret 在工具结果/log/evidence oracle 为 0 命中。"
+        },
+        {
+          "id": "M7-03.A3",
+          "level": "reliability",
+          "summary": "超时/超大/崩溃结果有界且 Session 进入真实状态，后续合法调用可恢复或明确拒绝。"
+        }
+      ]
+    },
+    "M7-04": {
+      "title": "完成 browse 权限、只读控制面板与 Task 隔离",
+      "milestone": "M7",
+      "requirement_refs": [
+        "R-BR-02",
+        "R-BR-04",
+        "R-PERM-01",
+        "R-WB-01"
+      ],
+      "depends_on": [
+        "M7-03",
+        "M1-03"
+      ],
+      "assertions": [
+        {
+          "id": "M7-04.A1",
+          "level": "security",
+          "summary": "file 逃逸与未授权外部 origin 在所有导航转移点被拒绝，wildcard 不可创建。"
+        },
+        {
+          "id": "M7-04.A2",
+          "level": "permission",
+          "summary": "browse grant 不能调用 click/type 等 interact 工具，read-only Automation 亦然。"
+        },
+        {
+          "id": "M7-04.A3",
+          "level": "E2E",
+          "summary": "不同 Task 的 tabs/profile/grants/control panel 严格隔离，状态与实际 browser 一致。"
+        },
+        {
+          "id": "M7-04.A4",
+          "level": "accessibility",
+          "summary": "仅键盘可查看/切换/关闭 tab、授权/撤销并理解错误。"
+        }
+      ]
+    },
+    "M7-05": {
+      "title": "完成交互工具、interact 权限、安全绕过与删除清理",
+      "milestone": "M7",
+      "requirement_refs": [
+        "R-BR-03",
+        "R-BR-04",
+        "R-SEC-01",
+        "R-AUTO-05"
+      ],
+      "depends_on": [
+        "M7-04"
+      ],
+      "assertions": [
+        {
+          "id": "M7-05.A1",
+          "level": "contract",
+          "summary": "允许的 interact 工具正向可用，wait 白名单/30 秒上限生效，禁用工具未注册。"
+        },
+        {
+          "id": "M7-05.A3",
+          "level": "cleanup",
+          "summary": "Task 删除后托管资源为 0、非托管/不确定路径不被删除、无 orphan process。"
+        },
+        {
+          "id": "M7-05.A4",
+          "level": "regression",
+          "summary": "撤销/过期 grant 立即拒绝新动作，既有页面仍可安全关闭和诊断。"
+        }
+      ]
+    },
+    "M8-01": {
+      "title": "完成 Automation 持久化、Scheduler、DST、lease 与恢复",
+      "milestone": "M8",
+      "requirement_refs": [
+        "R-AUTO-01",
+        "R-STATUS-01",
+        "R-ERR-01",
+        "§4.8"
+      ],
+      "depends_on": [
+        "M1-05",
+        "M1-03"
+      ],
+      "assertions": [
+        {
+          "id": "M8-01.A1",
+          "level": "contract",
+          "summary": "schedule/timezone/DST 金集输出精确，重复墙钟仅第一次、缺失墙钟在首个有效时刻。"
+        },
+        {
+          "id": "M8-01.A2",
+          "level": "reliability",
+          "summary": "相同 idempotency key 只产生一个 Run，lease 竞争/过期恢复无重叠执行。"
+        },
+        {
+          "id": "M8-01.A3",
+          "level": "migration",
+          "summary": "旧/空 DB migration 幂等可回读，definition snapshot 在后续编辑后不变。"
+        },
+        {
+          "id": "M8-01.A4",
+          "level": "recovery",
+          "summary": "重启只补最新遗漏，其余以 skipped 聚合且 missed_count 正确。"
+        }
+      ]
+    },
+    "M8-02": {
+      "title": "完成 Automation 管理 UI、Dispatcher、审计 Task 与 History",
+      "milestone": "M8",
+      "requirement_refs": [
+        "R-AUTO-02",
+        "R-STATUS-01",
+        "R-I18N-01",
+        "R-NOTIF-01"
+      ],
+      "depends_on": [
+        "M8-01",
+        "M2-04"
+      ],
+      "assertions": [
+        {
+          "id": "M8-02.A1",
+          "level": "E2E",
+          "summary": "仅键盘完成 CRUD、预览、Run now、暂停/恢复/取消和 History 跳转。"
+        },
+        {
+          "id": "M8-02.A2",
+          "level": "integration",
+          "summary": "每个执行 Run 恰有一个审计 Task 与 immutable snapshot，状态在列表/History/Task 一致。"
+        },
+        {
+          "id": "M8-02.A3",
+          "level": "reliability",
+          "summary": "Provider/model/branch 不可用确定失败并通知，未创建错误执行且无 fallback。"
+        }
+      ]
+    },
+    "M8-03": {
+      "title": "完成 ToolGateway 强制的 read-only Executor",
+      "milestone": "M8",
+      "requirement_refs": [
+        "R-AUTO-03",
+        "R-BR-04",
+        "R-BIND-01",
+        "R-SEC-01"
+      ],
+      "depends_on": [
+        "M8-01",
+        "M6-02"
+      ],
+      "assertions": [
+        {
+          "id": "M8-03.A1",
+          "level": "contract",
+          "summary": "read-only 注册表中 mutating/shell/interact/unknown 工具数为 0。"
+        },
+        {
+          "id": "M8-03.A3",
+          "level": "integration",
+          "summary": "允许的 workspace read 与已授权 browse 正常工作且审计记录准确。"
+        }
+      ]
+    },
+    "M8-04": {
+      "title": "完成每 Run 独立 Worktree 的 isolated-write Executor",
+      "milestone": "M8",
+      "requirement_refs": [
+        "R-AUTO-04",
+        "R-WT-01 至 R-WT-04",
+        "R-BIND-01"
+      ],
+      "depends_on": [
+        "M8-01",
+        "M6-03"
+      ],
+      "assertions": [
+        {
+          "id": "M8-04.A1",
+          "level": "isolation",
+          "summary": "两个 Run 使用不同 managed path/branch，原项目与彼此 worktree digest 隔离。"
+        },
+        {
+          "id": "M8-04.A2",
+          "level": "security",
+          "summary": "binding 创建/验证失败时 Agent/工具启动次数为 0，无 Local fallback。"
+        },
+        {
+          "id": "M8-04.A3",
+          "level": "recovery",
+          "summary": "关闭 flag 自动暂停且不改既有 Run binding；显式恢复后新 Run 使用新 Worktree。"
+        }
+      ]
+    },
+    "M8-05": {
+      "title": "完成审批恢复、Review/清理与 Automation × Browser",
+      "milestone": "M8",
+      "requirement_refs": [
+        "R-AUTO-05",
+        "R-BR-04",
+        "R-WT-04",
+        "R-PERM-01",
+        "R-NOTIF-01"
+      ],
+      "depends_on": [
+        "M8-02",
+        "M8-03",
+        "M8-04",
+        "M7-05"
+      ],
+      "assertions": [
+        {
+          "id": "M8-05.A1",
+          "level": "recovery",
+          "summary": "重启后合法审批可恢复，stale/过期不可提交，任意超时都不会自动批准。"
+        },
+        {
+          "id": "M8-05.A2",
+          "level": "security",
+          "summary": "read-only 永远没有 interact；isolated-write 仍需 exact-origin grant，后台无隐式授权。"
+        },
+        {
+          "id": "M8-05.A3",
+          "level": "integration",
+          "summary": "有 diff/commit 进入 Review 并可跳转；无变化仅在 managed/clean/no-commit 时清理。"
+        },
+        {
+          "id": "M8-05.A4",
+          "level": "notification",
+          "summary": "后台关键事件通知可达或安全降级，拒绝权限不改变 Run 终态。"
+        }
+      ]
+    },
+    "M9-01": {
+      "title": "完成全域双语、正式文档与兼容/降级说明",
+      "milestone": "M9",
+      "requirement_refs": [
+        "R-I18N-01",
+        "R-ERR-01",
+        "R-ROLL-01",
+        "R-RELSE-01",
+        "R-SET-01",
+        "R-SET-02"
+      ],
+      "depends_on": [
+        "M5-03",
+        "M6-04",
+        "M7-05",
+        "M8-05"
+      ],
+      "assertions": [
+        {
+          "id": "M9-01.A1",
+          "level": "i18n",
+          "summary": "全域 zh-CN/en-US key/placeholder 一致，硬编码门禁命中为 0。"
+        },
+        {
+          "id": "M9-01.A2",
+          "level": "docs",
+          "summary": "所有当前文档/脚本/源码链接可解析，历史 evidence 内容 digest 不变且旧→新映射可查。"
+        },
+        {
+          "id": "M9-01.A3",
+          "level": "visual",
+          "summary": "双语、亮暗、目标视口无溢出/乱码/不可读截断，原生 surface 文案一致。"
+        },
+        {
+          "id": "M9-01.A4",
+          "level": "contract",
+          "summary": "12 Pane 的 title/description/search/provenance key 在 zh-CN/en-US 一一对应；planned/new/existing 的用户文案不把 Demo 冒充实现状态。"
+        }
+      ]
+    },
+    "M9-02": {
+      "title": "完成 Worktree × Browser × Automation 集成场景",
+      "milestone": "M9",
+      "requirement_refs": [
+        "R-BIND-01",
+        "R-WT-03",
+        "R-BR-04",
+        "R-AUTO-03",
+        "R-AUTO-04"
+      ],
+      "depends_on": [
+        "M6-04",
+        "M7-05",
+        "M8-05"
+      ],
+      "assertions": [
+        {
+          "id": "M9-02.A1",
+          "level": "E2E",
+          "summary": "只读场景完成且文件/DB/外部 mutation 为 0，browse 不获得 interact。"
+        },
+        {
+          "id": "M9-02.A2",
+          "level": "E2E",
+          "summary": "隔离写场景的所有写入仅在本 Run Worktree，Review/verification 深链正确。"
+        },
+        {
+          "id": "M9-02.A4",
+          "level": "cleanup",
+          "summary": "取消/删除/完成后资源按合同清理或保留，原项目 digest 不变且无 orphan。"
+        }
+      ]
+    },
+    "M9-03": {
+      "title": "完成安全审查、故障注入、三平台与累计质量门",
+      "milestone": "M9",
+      "requirement_refs": [
+        "R-SEC-01",
+        "R-REL-01",
+        "R-ACC-01",
+        "R-RELSE-01",
+        "§7"
+      ],
+      "depends_on": [
+        "M9-01",
+        "M9-02"
+      ],
+      "assertions": [
+        {
+          "id": "M9-03.A1",
+          "level": "reliability",
+          "summary": "故障矩阵所有终态确定、可恢复且无假成功/假运行/orphan。"
+        },
+        {
+          "id": "M9-03.A2",
+          "level": "security",
+          "summary": "敏感 oracle、权限绕过、原项目越界写和危险自动清理均为 0。"
+        },
+        {
+          "id": "M9-03.A4",
+          "level": "regression",
+          "summary": "`--through M9 --profile implementation` 同 revision required 全绿且 P0/P1=0。"
+        }
+      ]
+    },
+    "M9-04": {
+      "title": "完成接口冻结、候选 soak 与 production 外部放行记录",
+      "milestone": "M9",
+      "requirement_refs": [
+        "R-RELSE-01",
+        "R-UPD-01",
+        "R-PROV-04",
+        "§8.2",
+        "§14"
+      ],
+      "depends_on": [
+        "M9-03"
+      ],
+      "assertions": [
+        {
+          "id": "M9-04.A1",
+          "level": "contract",
+          "summary": "API/schema/migration/locale/manifest freeze digest 稳定且无未解释 drift。"
+        },
+        {
+          "id": "M9-04.A2",
+          "level": "candidate",
+          "summary": "获授权的候选 smoke/soak 无 P0/P1，升级/回滚保持用户数据和旧版本可恢复。"
+        }
+      ]
+    }
+  }
+}

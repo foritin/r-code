@@ -1,0 +1,15 @@
+schema_version: ai-task-evidence.v1
+project_id: product-experience-gap-closure
+task_id: M4-05
+status: passed
+revision: { git_revision: 82c8c5c6f04b0f646f694e9929017eb527432e2b }
+deliverables:
+  - scripts/product-experience/m4-05-checks.mjs + wiring（A1..A3 三腿）
+assertions: { M4-05.A1: passed, M4-05.A2: passed, M4-05.A3: passed }
+cumulative_verification:
+  command: node scripts/verify-product-experience.mjs --task M4-05 --profile implementation
+  exit_code: 0
+  assertions_passed: 3/3
+  report_path: artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/M4-05.json
+decisions:
+  - DM1: A1/A3 由 session-run-summary 套件（终态字段完整/reload 一致）+ capsule 脱敏回归覆盖；A2 深链/返回由 m2-03-a6 E2E + run-guard-ui 覆盖。

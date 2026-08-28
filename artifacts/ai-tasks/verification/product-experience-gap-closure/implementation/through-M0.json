@@ -1,0 +1,238 @@
+{
+  "schema_version": "product-experience-verification.v1",
+  "requested_target": "through-M0",
+  "profile": "implementation",
+  "ok": true,
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+  "worktree_digest": "1c4dcf9b98395b067df573bb24f78efa8657ca8e75f012f5f0fcb76c3cf5ea9c",
+  "dirty_files": 250,
+  "finished_at": "2026-08-27T12:50:05.926Z",
+  "registry_digest": "51d7646672c9486b5c8c6b0272d4c890f4b7b05d066dd70715315cfd132f3f11",
+  "failures": [],
+  "summary": {
+    "total": 14,
+    "passed": 14,
+    "failed": 0,
+    "not_implemented": 0
+  },
+  "results": [
+    {
+      "assertion_id": "D0-01.A1",
+      "task_id": "D0-01",
+      "level": "visual",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "同 revision 重摄全部状态并刷新 capture-manifest（diagnostics 必须全 0）",
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.venvs/r-code-d0/bin/python /root/project/r-code/docs/product-experience-redesign/tools/capture_states.py",
+      "duration_ms": 182547,
+      "exit_code": 0,
+      "timed_out": false,
+      "stdout": "{\n  \"status\": \"passed\",\n  \"artifact\": \"/root/project/r-code/docs/product-experience-redesign/prototype.html\",\n  \"prototype_sha256\": \"a9e457a8e84bff96838762d923a36c0cdeb52440b663462ce153f6466e3afd8d\",\n  \"viewports\": [\n    {\n      \"width\": 1600,\n      \"height\": 960\n    },\n    {\n      \"width\": 1280,\n      \"height\": 800\n    },\n    {\n      \"width\": 1024,\n      \"height\": 768\n    },\n    {\n      \"width\": 960,\n      \"height\": 640\n    },\n    {\n      \"width\": 740,\n      \"height\": 800\n    },\n    {\n      \"width\": 390,\n      \"height\": 844\n    }\n  ],\n  \"evidence\": {\n    \"provider_startup\": {\n      \"checking\": 2,\n      \"queued\": 1,\n      \"startup_opt_out_no_false_success\": \"passed\",\n      \"manual_when_auto_off\": \"passed\"\n    },\n    \"run_semantics\": {\n      \"running_spinner\": \"passed\",\n      \"colored_session_dots\": 0,\n      \"terminal_static_mark\": \"passed\"\n    },\n    \"tasks\": {\n      \"new_task\": \"created\",\n      \"draft_isolation\": \"passed\",\n      \"filters\": 3\n    },\n    \"selectors_and_project\": {\n      \"selectors\": [\n        \"agent\",\n        \"model\",\n        \"policy\"\n      ],\n      \"project\": \"added\"\n    },\n    \"subagents_and_diff\": {\n      \"created\": 1,\n      \"stopped\": 1,\n      \"diff_review\": \"passed\"\n    },\n    \"provider_recovery\": {\n      \"flow\": \"401 -> providers -> credential -> save -> recovered\"\n    },\n    \"window_lifecycle\": {\n      \"remembered_tray_bypass\": \"passed\",\n      \"tray_restore\": \"passed\",\n      \"public_preference_reset\": \"passed\",\n      \"exit_terminal\": \"passed\",\n      \"exit_cancel_cascade\": \"passed\",\n      \"restart_snapshot\": \"non_running\"\n    },\n    \"settings_navigation\": {\n      \"mouse_pages\": 12,\n      \"keyboard_pages\": 12,\n      \"ocr_deeplink\": \"passed\"\n    },\n    \"settings_states\": {\n      \"subagent_slots\": [\n        \"invalid\",\n        \"saved\"\n      ],\n      \"browser\": [\n        \"installing\",\n        \"ready\",\n        \"revoked\"\n      ],\n      \"permissions\": \"approved\",\n      \"notifications\": [\n        \"checking\",\n        \"granted\"\n      ],\n      \"updates\": [\n        \"checking\",\n        \"available\",\n        \"downloading\",\n        \"downloaded\",\n        \"install_and_restart:installing\",\n        \"install_and_restart:up_to_date:0.8.1\",\n        \"install_later:installing\",\n        \"install_later:restart_pending:0.8.0-dev\",\n        \"restart_now:up_to_date:0.8.1\"\n      ],\n      \"diagnostics\": [\n        \"self-check\",\n        \"support-preview\"\n      ]\n    },\n    \"settings_capability_depth\": {\n      \"provider\": [\n        \"catalog\",\n        \"validation\",\n        \"unsaved\",\n        \"model-orphan\"\n      ],\n      \"agent\": [\n        \"guardrails\",\n        \"codex-preferences\"\n      ],\n      \"subagents\": [\n        \"prompt\",\n        \"revision\"\n      ],\n      \"mcp\": [\n        \"launch-plan\",\n        \"ready\",\n        \"cancelled\"\n      ],\n      \"knowledge\": [\n        \"memory\",\n        \"prompt\",\n        \"skills\"\n      ],\n      \"companion\": \"complete\",\n      \"support_bundle\": \"export-path\"\n    },\n    \"light_theme\": {\n      \"light_pages\": 4,\n      \"black_wash_guard\": true,\n      \"material_tokens\": {\n        \"--panel\": \"rgba(248, 251, 253, .72)\",\n        \"--panel-strong\": \"rgba(252, 253, 254, .93)\",\n        \"--surface-content\": \"rgba(255, 255, 255, .9)\",\n        \"--surface-sunken\": \"rgba(226, 233, 238, .64)\",\n        \"--canvas-wash\": \"rgba(31, 45, 56, .018)\",\n        \"--scrim\": \"rgba(29, 43, 55, .3)\"\n      }\n    },\n    \"responsive\": {\n      \"viewports\": [\n        \"1600x960\",\n        \"1280x800\",\n        \"1024x768\",\n        \"960x640\",\n        \"740x800\",\n        \"390x844\"\n      ]\n    },\n    \"scale_and_motion\": {\n      \"scale\": \"800x480@2x\",\n      \"reduced_motion\": {\n        \"spinner\": \"none\",\n        \"dock\": \"1e-05s\"\n      }\n    },\n    \"completeness_pages\": {\n      \"settings_responsive\": [\n        \"740x800\",\n        \"390x844\"\n      ],\n      \"light_provider_editor\": \"passed\"\n    },\n    \"keyboard\": {\n      \"modal\": \"passed\",\n      \"tree\": \"passed\",\n      \"tabs\": \"passed\",\n      \"composer\": [\n        \"Enter\",\n        \"Alt+Enter\",\n        \"Shift+Enter\"\n      ]\n    },\n    \"settings_load\": {\n      \"states\": [\n        \"loading\",\n        \"failed-last-good\",\n        \"failed-empty\",\n        \"save-rejected\",\n        \"revision-conflict\",\n        \"ready\"\n      ],\n      \"last_good_readonly\": true,\n      \"no_snapshot_no_defaults\": true,\n      \"save_rejected_recovery\": [\n        \"retry\",\n        \"discard\"\n      ],\n      \"revision_conflict_recovery\": [\n        \"discard\",\n        \"reapply\",\n        \"merge\"\n      ],\n      \"banner_dismiss_preserved_state\": true,\n      \"all_panels_inert_during_failure\": true,\n      \"failed_keyboard_isolation\": [\n        \"Tab\",\n        \"Shift+Tab\"\n      ],\n      \"retry_focus_restored\": true\n    },\n    \"provider_and_codex_depth\": {\n      \"provider_vendor_targets\": 2,\n      \"provider_default_reject_rollback\": \"deepseek\",\n      \"provider_canonical_default\": \"ark\",\n      \"provider_previous_default_deleted\": \"deepseek\",\n      \"image_historical_value\": \"provider_deleted\",\n      \"codex_catalog\": [\n        \"login_required\",\n        \"ready\"\n      ],\n      \"codex_cancel\": \"host_process_terminate_ack\",\n      \"codex_effort_cleanup\": \"ultra -> model default\"\n    },\n    \"subagent_rtk_mcp_depth\": {\n      \"subagent\": {\n        \"initial_availability\": \"trust_required\",\n        \"initial_health\": \"untested\",\n        \"final_availability\": \"ready\",\n        \"final_health\": \"connected\"\n      },\n      \"availability_states\": [\n        \"ready\",\n        \"needs_configuration\",\n        \"not_installed\",\n        \"login_required\",\n        \"trust_required\",\n        \"unsupported\"\n      ],\n      \"health_states\": [\n        \"untested\",\n        \"checking\",\n        \"connected\",\n        \"stale\",\n        \"failed\"\n      ],\n      \"rtk\": [\n        \"not_installed\",\n        \"installing\",\n        \"managed_ready\",\n        \"blocked\"\n      ],\n      \"mcp\": {\n        \"config\": [\n          \"stdio\",\n          \"http\",\n          \"tested\",\n          \"saved_disabled\",\n          \"existing_id_immutable\"\n        ],\n        \"credential_partial_failure\": true,\n        \"independent_enable_approval\": true,\n        \"registry\": [\n          \"cursor_append\",\n          \"stale_cache\",\n          \"error_cache\"\n        ]\n      }\n    },\n    \"memory_skills_companion_depth\": {\n      \"memory_jobs\": [\n        \"queued\",\n        \"running\",\n        \"succeeded\",\n        \"failed\",\n        \"interrupted\",\n        \"cancelled\"\n      ],\n      \"memory_poll\": [\n        \"error_keep_last_good\",\n        \"live_recovered\"\n      ],\n      \"memory_conflict\": [\n        \"proposal\",\n        \"reapply\"\n      ],\n      \"skills_single_enabled\": [\n        false,\n        true\n      ],\n      \"companion\": {\n        \"defaults\": {\n          \"enabled\": true,\n          \"mode\": \"full\",\n          \"sound\": false,\n          \"motion\": \"system\"\n        },\n        \"left_click\": \"task_panel\",\n        \"right_click_items\": 1,\n        \"create_failure_rollback\": true\n      }\n    },\n    \"latest_production_contracts\": {\n      \"provider_sync\": [\n        \"success\",\n        \"failure_backoff\",\n        \"race_ignored\"\n      ],\n      \"image_routing\": [\n        \"direct\",\n        \"explicit_ocr\",\n        \"unknown_explicit_ocr\",\n        \"unknown_complete_vision_helper\",\n        \"vision_failure_no_ocr\"\n      ],\n      \"orchestration\": [\n        \"ready\",\n        \"provider_unavailable\",\n        \"customer_off\",\n        \"emergency_off\",\n        \"task_declined\"\n      ],\n      \"codex_setup\": [\n        \"install_cli\",\n        \"login\",\n        \"check\",\n        \"configure\",\n        \"ready\",\n        \"upgrade_failed\"\n      ],\n      \"codex_custom\": \"historical_readonly_only\",\n      \"locale_visible_cjk\": {\n        \"zh_cn\": 378,\n        \"en_us\": 0,\n        \"zh_cn_restored\": 378\n      },\n      \"locale_dom_contract\": {\n        \"initial_en_us\": {\n          \"cjk_count\": 0,\n          \"missing_count\": 0,\n          \"cjk_samples\": [],\n          \"missing_samples\": []\n        },\n        \"dynamic_en_us\": {\n          \"cjk_count\": 0,\n          \"missing_count\": 0,\n          \"cjk_samples\": [],\n          \"missing_samples\": []\n        },\n        \"dynamic_en_us_attributes\": {\n          \"theme_toggle\": \"Switch to dark theme\",\n          \"maximize_window\": \"Restore window size\"\n        },\n        \"dynamic_zh_cn_restored\": {\n          \"theme_toggle\": \"切换到深色主题\",\n          \"maximize_window\": \"还原窗口\"\n        },\n        \"zh_cn_missing_marker_count\": 0\n      },\n      \"shell\": [\n        \"ready_actual_program\",\n        \"error_old_snapshot\"\n      ],\n      \"skill_validation\": [\n        \"double_hyphen\",\n        \"empty_description\",\n        \"empty_instructions\",\n        \"scope_duplicate\"\n      ],\n      \"knowledge_project_removal\": \"global_reread\",\n      \"companion\": [\n        \"legacy_to_v2\",\n        \"stale_ignored\"\n      ]\n    },\n    \"mcp_approval\": {\n      \"dialog_role\": \"alertdialog\",\n      \"approval\": [\n        \"cancel\",\n        \"ready\",\n        \"error\",\n        \"retry\",\n        \"confirm\"\n      ],\n      \"runtime\": [\n        \"starting\",\n        \"running\"\n      ],\n      \"dismissal_guards\": [\n        \"cancel\",\n        \"escape\",\n        \"backdrop\"\n      ],\n      \"hidden_confirm_inert\": true\n    },\n    \"subagent_prompts\": {\n      \"receipt_add_remove_reload\": true,\n      \"per_slot_isolation\": true,\n      \"whole_pool_reload\": true,\n      \"revision_conflict_local_visible\": true,\n      \"revision_conflict_recovery\": [\n        \"discard\",\n        \"reapply\",\n        \"merge\"\n      ]\n    },\n    \"guide_sheets\": {\n      \"provider\": [\n        \"focus-trap\",\n        \"escape\",\n        \"backdrop\",\n        \"action\",\n        \"trigger-focus-restore\"\n      ],\n      \"image\": [\n        \"focus-trap\",\n        \"escape\",\n        \"backdrop\",\n        \"action\",\n        \"trigger-focus-restore\"\n      ],\n      \"plan\": [\n        \"focus-trap\",\n        \"escape\",\n        \"backdrop\",\n        \"action\",\n        \"trigger-focus-restore\"\n      ],\n      \"subagent\": [\n        \"focus-trap\",\n        \"escape\",\n        \"backdrop\",\n        \"action\",\n        \"trigger-focus-restore\"\n      ]\n    },\n    \"shell_save_detect\": {\n      \"save_status_copy_persisted\": true,\n      \"detect_reusable_after_save\": true,\n      \"second_detect_receipt\": \"ready · dialect=pwsh · program=C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\"\n    },\n    \"explicit_save_back_warnings\": {\n      \"domains\": [\n        \"image\",\n        \"guardrails\",\n        \"permission\",\n        \"shell\",\n        \"providerSync\",\n        \"projectPermission\",\n        \"notificationRouting\",\n        \"diagnosticPolicy\"\n      ],\n      \"domain_count\": 8,\n      \"shared_alertdialog\": true,\n      \"continue_preserves\": true,\n      \"discard_restores\": true,\n      \"save_clears_dirty\": true,\n      \"companion_sound_is_immediate\": true,\n      \"companion_sound_dirty_back\": false\n    },\n    \"knowledge_scope\": {\n      \"scopes\": [\n        \"project-r-code\",\n        \"project-falib\",\n        \"global\"\n      ],\n      \"draft_isolation\": true,\n      \"scope_reload_isolated\": true,\n      \"inherited_rows_read_only\": true,\n      \"prompt_modes\": {\n        \"project-r-code_initial\": \"append\",\n        \"project-falib_initial\": \"override\",\n        \"global_control\": \"hidden\",\n        \"save_reload\": true,\n        \"remove_undo_preserved\": true,\n        \"manual_return_cleared_dirty\": true\n      }\n    },\n    \"mobile_touch_targets\": {\n      \"viewport\": \"390x844\",\n      \"panels\": 12,\n      \"targets_measured\": 430,\n      \"minimum_width\": 44,\n      \"minimum_height\": 44,\n      \"threshold\": \"44x44\",\n      \"expanded_details\": true,\n      \"knowledge_tabs\": [\n        \"memory\",\n        \"prompt\",\n        \"skills\"\n      ],\n      \"modal\": \"capability-map\"\n    }\n  },\n  \"generated_screenshots\": 227,\n  \"screenshots\": [\n    \"01-launch-provider-checking-dark.png\",\n    \"02-launch-provider-recovered-dark.png\",\n    \"02a-startup-opt-out-no-false-success-dark.png\",\n    \"03-provider-manual-check-with-auto-off-dark.png\",\n    \"04-provider-manual-check-recovered-dark.png\",\n    \"05-workspace-running-dark.png\",\n    \"06-run-expanded-dark.png\",\n    \"07-run-tools-dark.png\",\n    \"08-terminal-state-without-spinner-dark.png\",\n    \"09-new-task-empty-dark.png\",\n    \"10-new-ta[REDACTED].png\",\n    \"11-ta[REDACTED].png\",\n    \"12-filter-running-dark.png\",\n    \"13-filter-attention-dark.png\",\n    \"14-filter-history-dark.png\",\n    \"15-selector-agent-dark.png\",\n    \"16-selector-model-dark.png\",\n    \"17-selector-policy-dark.png\",\n    \"18-project-add-dialog-dark.png\",\n    \"19-project-added-dark.png\",\n    \"20-subagent-tree-dark.png\",\n    \"21-subagent-created-detail-dark.png\",\n    \"22-subagent-stopped-detail-dark.png\",\n    \"23-subagent-stopped-tree-dark.png\",\n    \"24-changes-list-dark.png\",\n    \"25-diff-open-dark.png\",\n    \"26-diff-reviewed-dark.png\",\n    \"27-provider-401-dark.png\",\n    \"28-provider-credential-edit-dark.png\",\n    \"29-provider-credential-testing-dark.png\",\n    \"30-provider-credential-tested-dark.png\",\n    \"31-provider-recovered-after-save-dark.png\",\n    \"32-close-choice-dark.png\",\n    \"33-tray-hidden-dark.png\",\n    \"34-tray-restored-dark.png\",\n    \"34a-close-remembered-tray-bypass-dark.png\",\n    \"35-exit-terminal-without-spinner-dark.png\",\n    \"36-settings-01-providers-dark.png\",\n    \"37-settings-02-agents-dark.png\",\n    \"38-settings-03-subagents-dark.png\",\n    \"39-settings-04-tools-dark.png\",\n    \"40-settings-05-knowledge-dark.png\",\n    \"41-settings-06-permissions-dark.png\",\n    \"42-settings-07-security-dark.png\",\n    \"43-settings-08-appearance-dark.png\",\n    \"44-settings-09-notifications-dark.png\",\n    \"45-settings-10-lifecycle-dark.png\",\n    \"46-settings-11-updates-dark.png\",\n    \"47-settings-12-diagnostics-dark.png\",\n    \"48-settings-search-ocr-dark.png\",\n    \"49-settings-search-ocr-deeplink-dark.png\",\n    \"50-subagent-slots-invalid-dark.png\",\n    \"51-subagent-slots-saved-dark.png\",\n    \"52-browser-planning-installing-dark.png\",\n    \"53-browser-planning-ready-dark.png\",\n    \"54-permissions-approved-dark.png\",\n    \"55-notification-permission-checking-dark.png\",\n    \"56-notification-permission-granted-dark.png\",\n    \"57-update-checking-dark.png\",\n    \"58-update-available-dark.png\",\n    \"59-update-downloading-dark.png\",\n    \"60-update-downloaded-dark.png\",\n    \"61-update-install-and-restart-up-to-date-dark.png\",\n    \"61b-update-install-later-restart-pending-dark.png\",\n    \"61c-update-install-later-up-to-date-dark.png\",\n    \"62-diagnostics-self-check-and-support-dark.png\",\n    \"83-settings-capability-map-dark.png\",\n    \"84-provider-preset-catalog-dark.png\",\n    \"85-provider-validation-blocked-dark.png\",\n    \"86-provider-unsaved-confirm-dark.png\",\n    \"87-image-provider-missing-dark.png\",\n    \"88-agent-run-guardrails-dark.png\",\n    \"89-codex-runtime-preferences-dark.png\",\n    \"90-subagent-prompt-and-revision-dark.png\",\n    \"91-mcp-approval-requesting-dark.png\",\n    \"92-mcp-launch-ready-dark.png\",\n    \"93-knowledge-memory-review-dark.png\",\n    \"94-knowledge-prompt-append-override-dark.png\",\n    \"95-knowledge-skills-inheritance-dark.png\",\n    \"96-skill-editor-dark.png\",\n    \"97-codex-permission-scope-dark.png\",\n    \"98-companion-complete-settings-dark.png\",\n    \"99-support-bundle-export-path-dark.png\",\n    \"63-settings-appearance-light.png\",\n    \"64-settings-providers-light.png\",\n    \"65-workspace-light.png\",\n    \"66-diff-light.png\",\n    \"67-responsive-1600x960-dark.png\",\n    \"68-responsive-1280x800-dark.png\",\n    \"69-responsive-1024x768-dark.png\",\n    \"73-responsive-1024-dock-open-dark.png\",\n    \"70-responsive-960x640-dark.png\",\n    \"71-responsive-740x800-dark.png\",\n    \"74-responsive-740-ta[REDACTED].png\",\n    \"72-responsive-390x844-dark.png\",\n    \"75-responsive-390-ta[REDACTED].png\",\n    \"76-scale-200-workspace-dark.png\",\n    \"77-scale-200-settings-dark.png\",\n    \"78-scale-200-provider-popover-dark.png\",\n    \"79-reduced-motion-running-state-dark.png\",\n    \"80-settings-responsive-740-dark.png\",\n    \"81-settings-responsive-390-dark.png\",\n    \"82-provider-editor-light.png\",\n    \"100-settings-load-loading-inert-dark.png\",\n    \"101-settings-load-failed-retry-dark.png\",\n    \"101a-settings-load-last-good-readonly-dark.png\",\n    \"102-settings-load-retry-ready-dark.png\",\n    \"102a-settings-load-failed-empty-no-defaults-dark.png\",\n    \"102b-settings-save-rejected-draft-retained-dark.png\",\n    \"102c-settings-revision-conflict-three-paths-dark.png\",\n    \"132-provider-vendor-targets-dark.png\",\n    \"132a-provider-default-reject-rollback-dark.png\",\n    \"132b-provider-canonical-default-ark-dark.png\",\n    \"132b1-provider-referenced-delete-blocked-dark.png\",\n    \"132c-provider-previous-default-deleted-dark.png\",\n    \"133-image-historical-provider-value-dark.png\",\n    \"133a-codex-login-cancel-terminate-ack-dark.png\",\n    \"134-codex-catalog-login-required-dark.png\",\n    \"135-codex-catalog-ready-dark.png\",\n    \"136-codex-effort-incompatible-cleanup-dark.png\",\n    \"128-subagent-trust-required-health-untested-dark.png\",\n    \"129-subagent-ready-health-untested-dark.png\",\n    \"130-subagent-ready-health-checking-dark.png\",\n    \"131-subagent-ready-health-connected-dark.png\",\n    \"131a-subagent-ready-health-stale-dark.png\",\n    \"131b-subagent-ready-health-failed-dark.png\",\n    \"137-subagent-availability-needs_configuration-dark.png\",\n    \"138-subagent-availability-not_installed-dark.png\",\n    \"139-subagent-availability-login_required-dark.png\",\n    \"140-subagent-availability-trust_required-dark.png\",\n    \"141-subagent-availability-unsupported-dark.png\",\n    \"142-rtk-not-installed-dark.png\",\n    \"143-rtk-managed-installing-dark.png\",\n    \"144-rtk-managed-ready-v045-dark.png\",\n    \"145-rtk-security-blocked-rollback-dark.png\",\n    \"146-mcp-stdio-config-editor-dark.png\",\n    \"147-mcp-http-config-testing-dark.png\",\n    \"148-mcp-http-config-tested-dark.png\",\n    \"149-mcp-saved-disabled-before-approval-dark.png\",\n    \"149a-mcp-existing-id-immutable-dark.png\",\n    \"150-mcp-credential-partial-failure-dark.png\",\n    \"151-mcp-independent-enable-approval-dark.png\",\n    \"152-mcp-running-after-independent-approval-dark.png\",\n    \"153-mcp-registry-cursor-append-dark.png\",\n    \"154-mcp-registry-stale-cache-dark.png\",\n    \"155-mcp-registry-error-with-cache-dark.png\",\n    \"156-memory-job-queued-dark.png\",\n    \"157-memory-job-running-dark.png\",\n    \"158-memory-job-succeeded-dark.png\",\n    \"159-memory-job-failed-dark.png\",\n    \"160-memory-job-interrupted-dark.png\",\n    \"161-memory-job-cancelled-dark.png\",\n    \"162-memory-poll-error-last-good-dark.png\",\n    \"163-memory-conflict-proposal-dark.png\",\n    \"164-memory-conflict-reapplied-dark.png\",\n    \"165-skill-single-enabled-off-dark.png\",\n    \"166-skill-single-enabled-on-dark.png\",\n    \"167-companion-production-defaults-dark.png\",\n    \"168-companion-left-click-task-panel-dark.png\",\n    \"169-companion-right-click-single-menu-dark.png\",\n    \"170-companion-create-checking-dark.png\",\n    \"171-companion-create-failure-rollback-dark.png\",\n    \"172-provider-sync-checking-last-good-dark.png\",\n    \"173-provider-sync-success-shared-catalog-dark.png\",\n    \"174-provider-sync-failure-backoff-dark.png\",\n    \"175-provider-sync-race-stale-pending-dark.png\",\n    \"176-provider-sync-race-old-result-ignored-dark.png\",\n    \"177-image-route-direct-multimodal-dark.png\",\n    \"178-image-route-explicit-ocr-dark.png\",\n    \"178a-image-route-unknown-explicit-ocr-dark.png\",\n    \"178b-image-route-unknown-vision-helper-dark.png\",\n    \"179-image-vision-failure-no-auto-ocr-dark.png\",\n    \"180-image-vision-failure-explicit-ocr-retry-dark.png\",\n    \"181-codex-setup-auto-check-dark.png\",\n    \"182-codex-setup-ready-dark.png\",\n    \"183-orchestration-ready-dark.png\",\n    \"184-orchestration-provider_unavailable-dark.png\",\n    \"185-orchestration-customer_off-dark.png\",\n    \"186-orchestration-emergency_off-dark.png\",\n    \"187-orchestration-task_declined-dark.png\",\n    \"188-codex-setup-six-state-contract-dark.png\",\n    \"189-codex-historical-custom-readonly-dark.png\",\n    \"190-interface-language-en-us-zero-visible-cjk-dark.png\",\n    \"190b-interface-language-en-us-dynamic-aria-light.png\",\n    \"191-interface-language-zh-cn-restored-dark.png\",\n    \"192-shell-ready-actual-program-dark.png\",\n    \"193-shell-error-old-snapshot-dark.png\",\n    \"194-skill-reject-double-hyphen-dark.png\",\n    \"195-skill-reject-empty-description-dark.png\",\n    \"196-skill-reject-empty-instructions-dark.png\",\n    \"197-skill-reject-scope-duplicate-dark.png\",\n    \"198-knowledge-project-removal-global-fallback-dark.png\",\n    \"199-companion-legacy-to-v2-migration-dark.png\",\n    \"200-companion-stale-revision-ignored-dark.png\",\n    \"103-mcp-approval-requesting-dark.png\",\n    \"104-mcp-approval-ready-dark.png\",\n    \"105-mcp-approval-host-error-dark.png\",\n    \"106-mcp-approval-retrying-dark.png\",\n    \"107-mcp-starting-dark.png\",\n    \"108-mcp-running-dark.png\",\n    \"108a-subagent-receipt-and-add-dark.png\",\n    \"108b-subagent-remove-and-pool-reload-dark.png\",\n    \"109-subagent-per-slot-drafts-isolated-dark.png\",\n    \"110-subagent-whole-pool-reloaded-dark.png\",\n    \"111-subagent-revision-conflict-local-visible-dark.png\",\n    \"111a-subagent-conflict-discard-host-dark.png\",\n    \"112-subagent-conflict-reapplied-dark.png\",\n    \"112a-subagent-conflict-merged-dark.png\",\n    \"113-guide-provider-dark.png\",\n    \"114-guide-image-dark.png\",\n    \"115-guide-plan-dark.png\",\n    \"116-guide-subagent-dark.png\",\n    \"117-shell-saved-status-copy-dark.png\",\n    \"118-shell-redetected-after-save-dark.png\",\n    \"119-dirty-back-warning-image-dark.png\",\n    \"120-dirty-back-warning-guardrails-dark.png\",\n    \"121-dirty-back-warning-permission-dark.png\",\n    \"122-dirty-back-warning-shell-dark.png\",\n    \"123-dirty-back-warning-providerSync-dark.png\",\n    \"124-dirty-back-warning-projectPermission-dark.png\",\n    \"125-dirty-back-warning-notificationRouting-dark.png\",\n    \"126-dirty-back-warning-diagnosticPolicy-dark.png\",\n    \"124-knowledge-global-scope-dark.png\",\n    \"125-knowledge-project-scope-isolated-dark.png\",\n    \"125b-knowledge-mode-lifecycle-dark.png\",\n    \"126a-settings-coverage-modal-390-dark.png\",\n    \"126-settings-touch-targets-390-dark.png\"\n  ],\n  \"deleted_orphan_pngs\": [],\n  \"diagnostics\": {\n    \"console_warning\": 0,\n    \"console_error\": 0,\n    \"pageerror\": 0,\n    \"requestfailed\": 0\n  }\n}\n",
+      "stderr": null
+    },
+    {
+      "assertion_id": "D0-01.A2",
+      "task_id": "D0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "组合 worklist gate 只读模式",
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/worklist_gate.py --check",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A3",
+      "task_id": "D0-01",
+      "level": "docs",
+      "profiles": [
+        "implementation"
+      ],
+      "note": null,
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/check_markdown_links.py",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A4",
+      "task_id": "D0-01",
+      "level": "component",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "12 页 Settings 导航/搜索可达性由 manifest 的 required states 与 status=passed 钉住；正式 UI→IPC 断言在 M2-03/M5-02",
+      "outcome": "passed",
+      "ok": true,
+      "evidence_path": "docs/product-experience-redesign/images/capture-manifest.json",
+      "detail": "22086 bytes"
+    },
+    {
+      "assertion_id": "D0-01.A5",
+      "task_id": "D0-01",
+      "level": "accessibility",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "spinner 静态化、reduced-motion、键盘返回/焦点恢复状态均在截图集内且 diagnostics 全 0",
+      "outcome": "passed",
+      "ok": true,
+      "evidence_path": "docs/product-experience-redesign/images/capture-manifest.json",
+      "detail": "22086 bytes"
+    },
+    {
+      "assertion_id": "D0-01.A6",
+      "task_id": "D0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "live source inventory / symbol resolution / provenance proof（刷新独立人类可读 report）",
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/settings_capability_gate.py --update-report",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "D0-01.A7",
+      "task_id": "D0-01",
+      "level": "docs",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "逐 CapabilityID 的 disposition/provenance/RequirementRef 审计结果由该报告固化",
+      "outcome": "passed",
+      "ok": true,
+      "evidence_path": "docs/product-experience-redesign/settings-capability-gate.json",
+      "detail": "120419 bytes"
+    },
+    {
+      "assertion_id": "D0-01.A8",
+      "task_id": "D0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "内部实时执行 settings validator；更新 freeze digest",
+      "outcome": "passed",
+      "ok": true,
+      "command": "python3 /root/project/r-code/docs/product-experience-redesign/tools/worklist_gate.py --update-freeze",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-01.A1",
+      "task_id": "M0-01",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "自测：未知任务/依赖环/缺失 required 断言/失败子命令均非 0 且报准确 ID",
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node --test /root/project/r-code/scripts/verify-product-experience.test.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-01.A2",
+      "task_id": "M0-01",
+      "level": "integration",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "编排 ≥1 Rust 契约测试（cargo test -p r-code-mcp）与 ≥1 前端测试子集并输出 schema 合法 JSON",
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/bootstrap-suite.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-01.A3",
+      "task_id": "M0-01",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "报告与 packet fixture 中 secret/raw reasoning oracle 为 0 命中",
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/evidence-hygiene.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-02.A1",
+      "task_id": "M0-02",
+      "level": "regression",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "exit 0 ⇔ 每条计划腿都有被记录的结果（失败如实入库不省略）；四态区分见 m0-baseline.json",
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/baseline-m0.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    },
+    {
+      "assertion_id": "M0-02.A2",
+      "task_id": "M0-02",
+      "level": "contract",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "报告须含 implemented（含平台中立 fixture）/external-pending 四态分类、audit_issue_map 与环境清单",
+      "outcome": "passed",
+      "ok": true,
+      "evidence_path": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/m0-baseline.json",
+      "detail": "9995 bytes"
+    },
+    {
+      "assertion_id": "M0-02.A3",
+      "task_id": "M0-02",
+      "level": "security",
+      "profiles": [
+        "implementation"
+      ],
+      "note": "基线证据不含 API key / 完整 prompt / raw reasoning",
+      "outcome": "passed",
+      "ok": true,
+      "command": "/root/.nvm/versions/node/v24.16.0/bin/node /root/project/r-code/scripts/product-experience/evidence-hygiene.mjs",
+      "cached": true,
+      "cached_from_report": "artifacts/ai-tasks/verification/product-experience-gap-closure/implementation/through-M0.json",
+      "duration_ms": 0,
+      "exit_code": 0
+    }
+  ]
+}
