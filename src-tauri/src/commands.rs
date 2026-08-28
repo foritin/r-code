@@ -23714,7 +23714,7 @@ async fn observe_codex_app_server_event(
             } => {
                 // 宿主侧有界累计（头尾保留 + 截断标记）；增量同时下发前端
                 // 原位追加，终态由 ToolResult 权威覆盖。
-                let _ = projection.accumulate_tool_output(&item_id, &safe_delta);
+                projection.accumulate_tool_output(&item_id, &safe_delta);
                 emit_codex_frontend_event(
                     observer,
                     event_sink,

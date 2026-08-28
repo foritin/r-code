@@ -1548,7 +1548,7 @@ fn m2_01_a3_output_buffer_is_bounded_and_terminal_survives() {
     // 超大输出：头尾保留 + 截断标记，终态不受影响。
     let chunk = "x".repeat(10_000);
     for _ in 0..40 {
-        let _ = projection.accumulate_tool_output("big", &chunk);
+        projection.accumulate_tool_output("big", &chunk);
     }
     let rendered = projection
         .take_tool_output("big", None)
@@ -1566,17 +1566,41 @@ fn m2_01_a3_output_buffer_is_bounded_and_terminal_survives() {
     assert!(rendered.ends_with("xxxx"), "tail preserved");
 
     // 权威输出优先于缓冲；终态事件不因截断丢失。
-    let _ = projection.accumulate_tool_output("auth", "partial...");
+    projection.accumulate_tool_output("auth", "partial...");
     let final_output = projection.take_tool_output("auth", Some("权威全文".to_string()));
     assert_eq!(final_output.as_deref(), Some("权威全文"));
 
     // 高频小增量：逐帧有界，缓冲持续可用。
     let mut projection2 = run_projection();
     for index in 0..1_000 {
-        let _ = projection2.accumulate_tool_output("fast", &format!("line-{index}\n"));
+        projection2.accumulate_tool_output("fast", &format!("line-{index}\n"));
     }
     let rendered = projection2.take_tool_output("fast", None).unwrap();
     assert!(rendered.contains("line-0\n"), "early output retained");
+}
+
+/// 性能钉子（F-perf-01 回归守卫）：2MB 流式输出穿缓冲必须保持线性成本。
+/// 旧的逐字符 `chars().count()` 实现在这里是 O(n²)（65536²/2 ≈ 2×10⁹ 次字符
+/// 解码起步），分钟级；增量计数 + 一次 drain 的实现应为毫秒级。
+#[test]
+fn m2_01_a3_output_buffer_streams_megabytes_without_quadratic_cost() {
+    let mut projection = run_projection();
+    let chunk = "y".repeat(8_192);
+    let started = std::time::Instant::now();
+    for _ in 0..256 {
+        projection.accumulate_tool_output("mega", &chunk);
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "2MB streamed through the bounded buffer took {elapsed:?} (per-char quadratic regression?)"
+    );
+    let rendered = projection
+        .take_tool_output("mega", None)
+        .expect("buffered output survives");
+    assert!(rendered.contains("已截断"), "truncation marker visible");
+    assert!(rendered.starts_with(&chunk[..64]), "head preserved");
+    assert!(rendered.ends_with("yyyy"), "tail preserved");
 }
 
 #[test]

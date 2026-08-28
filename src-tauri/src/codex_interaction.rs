@@ -726,10 +726,15 @@ fn known(phase: CodexAssistantPhase) -> bool {
 
 /// 单个工具项的输出累计缓冲：总量超限时保留头尾并插入截断标记，
 /// 进程内存有界且截断对用户可见（§6 内存/边界 + M2-01.A3）。
+///
+/// head_chars/tail_chars 是增量维护的字符计数：head/tail 内容变化后同步更新，
+/// push 全程 O(delta)——不允许出现按字符重扫全缓冲的 O(n²) 推进（F-perf-01）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct CodexToolOutputBuffer {
     head: String,
     tail: String,
+    head_chars: usize,
+    tail_chars: usize,
     head_full: bool,
     dropped_chars: usize,
 }
@@ -739,23 +744,47 @@ impl CodexToolOutputBuffer {
     const TAIL_CHARS: usize = 65_536;
 
     fn push(&mut self, delta: &str) {
-        for ch in delta.chars() {
-            if !self.head_full {
-                if self.head.chars().count() >= Self::HEAD_CHARS {
-                    self.head_full = true;
-                } else {
-                    self.head.push(ch);
-                    continue;
+        if !self.head_full {
+            let remaining = Self::HEAD_CHARS - self.head_chars;
+            // 只迭代被收入 head 的字符，取第 remaining 个字符的字节边界。
+            let head_end = delta
+                .char_indices()
+                .nth(remaining)
+                .map(|(index, _)| index)
+                .unwrap_or(delta.len());
+            self.head.push_str(&delta[..head_end]);
+            self.head_chars += self.head[..].chars().count();
+            if self.head_chars >= Self::HEAD_CHARS {
+                self.head_full = true;
+            }
+            if head_end == delta.len() {
+                return;
+            }
+            self.push_tail(&delta[head_end..]);
+        } else {
+            self.push_tail(delta);
+        }
+    }
+
+    /// 追加进尾部；超限时一次 drain 掉最旧的溢出字符（UTF-8 边界安全），
+    /// 而不是逐字符重建整个 ~64KB 尾部。
+    fn push_tail(&mut self, chunk: &str) {
+        self.tail.push_str(chunk);
+        self.tail_chars += chunk.chars().count();
+        if self.tail_chars > Self::TAIL_CHARS {
+            let overflow = self.tail_chars - Self::TAIL_CHARS;
+            self.dropped_chars += overflow;
+            self.tail_chars = Self::TAIL_CHARS;
+            let mut drain_to = self.tail.len();
+            let mut seen = 0usize;
+            for (index, _) in self.tail.char_indices() {
+                if seen == overflow {
+                    drain_to = index;
+                    break;
                 }
+                seen += 1;
             }
-            self.tail.push(ch);
-            if self.tail.chars().count() > Self::TAIL_CHARS {
-                let overflow = self.tail.chars().count() - Self::TAIL_CHARS;
-                self.dropped_chars += overflow;
-                // 丢弃最旧的尾部字符，保留最近 TAIL_CHARS 个。
-                let keep: String = self.tail.chars().skip(overflow).collect();
-                self.tail = keep;
-            }
+            self.tail.drain(..drain_to);
         }
     }
 
@@ -797,11 +826,12 @@ impl CodexRunProjection {
         }
     }
 
-    /// 累计一条工具输出增量（有界）；返回累计后的可见文本。
-    pub fn accumulate_tool_output(&mut self, item_id: &str, delta: &str) -> String {
+    /// 累计一条工具输出增量（有界）。不返回渲染文本：调用方逐 delta 调用，
+    /// 每次 render 都是 O(总长) 的全量拼接，可见文本由终态 take_tool_output
+    /// / 权威输出一次性给出（F-perf-10）。
+    pub fn accumulate_tool_output(&mut self, item_id: &str, delta: &str) {
         let buffer = self.tool_outputs.entry(item_id.to_string()).or_default();
         buffer.push(delta);
-        buffer.render()
     }
 
     /// 工具终态时取回累计输出：优先使用 item 自带的权威聚合输出，
