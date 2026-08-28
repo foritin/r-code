@@ -72,7 +72,7 @@ tasks:
 
   - id: FX-04
     title: 后台任务监督 + panic 终态收敛 + 锁中毒降级（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-robust-06, F-robust-07, F-corr-02, F-corr-03, F-corr-04, F-corr-09]
     root_cause: fire-and-forget spawn 把 panic 当不可达；锁中毒视为不可达；无统一监督/降级策略
@@ -89,7 +89,7 @@ tasks:
 
   - id: FX-05
     title: 事件管线批处理/去重/借用化（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-perf-03, F-perf-04, F-perf-10, F-perf-15]
     root_cause: sink 单事件闭包签名 + 幂等防御无状态化 + 双出口 clone；批频率限制了但没减少消息条数/序列化次数
@@ -151,7 +151,7 @@ tasks:
 
   - id: FX-09
     title: 死代码清除（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-maint-03, F-maint-07]
     root_cause: codex 旧实现被新路径替代后未删（零引用/传递性死/仅测试用簇）；pub fn 不触发 dead_code lint 而潜伏
