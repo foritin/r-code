@@ -353,24 +353,17 @@ fn reasoning_governor_kind(
     inference: &InferenceOptions,
 ) -> Option<ReasoningGovernorKind> {
     let provider = provider_name.trim().to_ascii_lowercase();
+    // 别名表唯一源在 r_code_core::provider_identity（F-maint-02）。
+    let governed = r_code_core::provider_identity::is_deepseek_provider_name(&provider)
+        || r_code_core::provider_identity::is_ark_provider_name(&provider)
+        || r_code_core::provider_identity::is_kimi_coding_provider_name(&provider);
     if inference.reasoning_effort.is_some()
         || !matches!(inference.thinking.as_deref(), None | Some("adaptive"))
-        || !matches!(
-            provider.as_str(),
-            "deepseek"
-                | "deepseek_responses"
-                | "deepseek_anthropic"
-                | "ark_coding"
-                | "ark_agent"
-                | "kimi_coding"
-        )
+        || !governed
     {
         return None;
     }
-    if matches!(
-        provider.as_str(),
-        "deepseek" | "deepseek_responses" | "deepseek_anthropic"
-    ) {
+    if r_code_core::provider_identity::is_deepseek_provider_name(&provider) {
         return match model.trim().to_ascii_lowercase().as_str() {
             "deepseek-v4-flash" => Some(ReasoningGovernorKind::DeepSeekV4(DeepSeekV4Kind::Flash)),
             "deepseek-v4-pro" => Some(ReasoningGovernorKind::DeepSeekV4(DeepSeekV4Kind::Pro)),
@@ -6308,10 +6301,7 @@ fn disable_hosted_web_tools(hosted_tools: &mut Vec<HostedToolSpec>) {
 }
 
 fn is_deepseek_native_provider(provider_name: &str) -> bool {
-    matches!(
-        provider_name.trim().to_ascii_lowercase().as_str(),
-        "deepseek" | "deepseek_responses" | "deepseek_anthropic"
-    )
+    r_code_core::provider_identity::is_deepseek_provider_name(provider_name)
 }
 
 /// Decide whether a failed DeepSeek request may be replayed once with local web tools. This is

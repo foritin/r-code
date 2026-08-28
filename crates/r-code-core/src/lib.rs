@@ -20,6 +20,7 @@ pub mod plan;
 pub mod plan_entry;
 pub mod process;
 pub mod progress_contract;
+pub mod provider_identity;
 pub mod secret;
 pub mod security;
 pub mod state;
