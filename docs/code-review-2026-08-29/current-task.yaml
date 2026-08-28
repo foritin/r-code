@@ -1,0 +1,13 @@
+# 唯一恢复锚点。每完成一个可验证子步更新。
+phase: G->B         # 阶段A done；fix-plan 已生成，进入阶段B
+current_task: FX-00
+current_task_status: pending
+blocked: []
+last_completed: [RV-01..RV-09, 阶段A->B汇总]
+next_action: 提交 review 文档(docs commit) -> FX-00 用户WIP保全提交 -> FX-01 起逐任务修复
+notes: >
+  基线测试后台运行中：evidence/baseline-cargo-test.log、baseline-frontend-test.log。
+  修复顺序：FX-00 -> FX-01(blocking) -> FX-02(blocking) -> FX-03(blocking) -> FX-09 ->
+  FX-04 -> FX-05 -> FX-06 -> FX-07 -> FX-08 -> FX-10 -> FX-11 -> FX-12 -> FX-13 ->
+  FX-14 -> FX-15 -> FX-16 -> FX-17 -> FX-18 -> FX-19 -> FX-20。
+  提交纪律：修复 fix(review): <id> <一句话>；docs 单独 docs(review)。

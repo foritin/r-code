@@ -1,0 +1,110 @@
+# 冻结时间: 2026-08-29 阶段0完成后。此后只允许更新 status/evidence 字段。
+plan: review-plan-2026-08-29
+branch: feat/code-review-2026-08-29
+tasks:
+  - id: RV-01
+    dimension: baseline
+    status: done
+    depends_on: []
+    steps:
+      - 扫描 workspace 成员与内部依赖边，构建 crate 依赖图并检查循环
+      - 统计 LOC（Rust 产品/vendor/前端）、入口点、测试布局、CI workflow 清单
+      - 归档阶段0 git status 快照到 evidence
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/01-baseline-2026-08-29.md && grep -q '依赖图' docs/code-review-2026-08-29/findings/01-baseline-2026-08-29.md"
+    evidence: docs/code-review-2026-08-29/evidence/RV-01-phase0.md
+
+  - id: RV-02
+    dimension: architecture
+    status: done
+    depends_on: [RV-01]
+    steps:
+      - 识别上帝模块（超长文件/函数）、职责越权、分层违规
+      - 检查 src-tauri/src 内部模块间循环依赖与越层调用
+      - 评估 crate 边界与实际代码组织的一致性
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/02-architecture-2026-08-29.md && [ $(grep -c '^| F-arch' docs/code-review-2026-08-29/findings/02-architecture-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-02-*.md
+
+  - id: RV-03
+    dimension: correctness
+    status: done
+    depends_on: [RV-01]
+    steps:
+      - 统计并逐类审查 unwrap/expect/panic 分布（区分测试/入口/库代码）
+      - 审查错误传播策略一致性（anyhow vs thiserror vs String）
+      - 审查并发正确性：std Mutex 跨 await、锁粒度、 poison 处理
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/03-correctness-2026-08-29.md && [ $(grep -c '^| F-corr' docs/code-review-2026-08-29/findings/03-correctness-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-03-*.md
+
+  - id: RV-04
+    dimension: security
+    status: done
+    depends_on: [RV-01]
+    steps:
+      - Tauri command 输入校验、路径穿越、命令注入面
+      - 凭据（API key）存储、内存与日志泄漏审查
+      - 前端 XSS 面（dangerouslySetInnerHTML 等）、IPC 权限配置
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/04-security-2026-08-29.md && [ $(grep -c '^| F-sec' docs/code-review-2026-08-29/findings/04-security-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-04-*.md
+
+  - id: RV-05
+    dimension: robustness
+    status: done
+    depends_on: [RV-01]
+    steps:
+      - 网络调用超时/重试/降级覆盖面（reqwest 默认无超时问题）
+      - 子进程生命周期：退出回收、孤儿进程、Windows 语义
+      - 外部失败后的状态一致性（provider 降级链、DB 事务）
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/05-robustness-2026-08-29.md && [ $(grep -c '^| F-robust' docs/code-review-2026-08-29/findings/05-robustness-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-05-*.md
+
+  - id: RV-06
+    dimension: performance
+    status: done
+    depends_on: [RV-01]
+    steps:
+      - 热路径无谓 clone、serde_json::Value 往返开销
+      - 锁竞争：大临界区、读写锁使用、事件流热路径
+      - 前端：列表渲染、未 memo 的大组件、频繁 JSON.parse
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/06-performance-2026-08-29.md && [ $(grep -c '^| F-perf' docs/code-review-2026-08-29/findings/06-performance-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-06-*.md
+
+  - id: RV-07
+    dimension: maintainability
+    status: done
+    depends_on: [RV-01, RV-02]
+    steps:
+      - 重复实现（同功能多份代码）、死代码、超长函数
+      - 命名一致性、模块内聚；scripts/ 与根目录遗留物清点
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/07-maintainability-2026-08-29.md && [ $(grep -c '^| F-maint' docs/code-review-2026-08-29/findings/07-maintainability-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-07-*.md
+
+  - id: RV-08
+    dimension: tests-ci
+    status: done
+    depends_on: [RV-01]
+    steps:
+      - critical 路径（权限门、命令执行、存储迁移）有无断言
+      - CI matrix 与平台差异覆盖（Windows/macOS/linux cfg 门控）
+      - 测试可靠性：忽略/跳过的测试、flaky 处置
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/08-tests-ci-2026-08-29.md && [ $(grep -c '^| F-test' docs/code-review-2026-08-29/findings/08-tests-ci-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-08-*.md
+
+  - id: RV-09
+    dimension: observability-config-docs
+    status: done
+    depends_on: [RV-01]
+    steps:
+      - 日志级别策略、tracing 初始化、敏感信息脱敏
+      - 配置管理：settings 持久化、默认值漂移
+      - 文档与代码漂移（AGENTS/README/docs 与实际不符处）
+    acceptance:
+      - "test -f docs/code-review-2026-08-29/findings/09-observability-config-docs-2026-08-29.md && [ $(grep -c '^| F-obs' docs/code-review-2026-08-29/findings/09-observability-config-docs-2026-08-29.md) -ge 3 ]"
+    evidence: docs/code-review-2026-08-29/evidence/RV-09-*.md

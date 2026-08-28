@@ -1,0 +1,343 @@
+# fix-plan-2026-08-29 — 阶段A->B 汇总门禁产出
+# 合并原则：根因相同的 findings 归并为一个修复任务；修复消除根因类别而非症状点。
+# 状态只允许 pending -> in_progress -> done 流转；evidence 归档到 evidence/ 下。
+
+branch: feat/code-review-2026-08-29
+baseline_tests:
+  cargo: docs/code-review-2026-08-29/evidence/baseline-cargo-test.log
+  frontend: docs/code-review-2026-08-29/evidence/baseline-frontend-test.log
+
+tasks:
+  - id: FX-00
+    title: 用户 WIP 资产保全提交
+    status: pending
+    depends_on: []
+    findings: []            # 流程前置，非修复
+    steps:
+      - 将本次任务开始前的全部未提交改动（24 modified + 14 untracked，清单见 evidence/phase0-git-status.txt）以单独 wip: 提交入库
+      - 目的：使后续修复提交可干净 diff；不 reset/覆盖/回滚/删除任何内容
+    acceptance:
+      - "git status --porcelain 输出中不再有 stage 前遗留（review 文档除外）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-00-wip-commit.txt
+
+  - id: FX-01
+    title: 统一进程树终止原语并补齐 codex wrapper 路径（blocking）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-robust-01, F-robust-02, F-robust-03, F-maint-01]
+    root_cause: Windows 树杀知识三处独立实现（commands.rs terminate_codex_child / gateway tools_command / store verification），新进程路径各自写单 kill，无共享原语强制复用
+    steps:
+      - r-code-core 新增 process 模块：kill_tree(pid)（Windows taskkill /PID x /T /F；Unix 进程组语义）+ 单测
+      - codex_app_server.rs / codex_mcp.rs shutdown 路径接 kill_tree（修 F-robust-01/02）
+      - commands.rs 一次性 codex/npm CLI 超时路径改 take+drain+wait+select+kill_tree（修 F-robust-03，参照 tools_command 模板）
+      - 三处旧实现替换为共享原语（修 F-maint-01 分叉）
+      - 补测试：shutdown 后无 cmd wrapper 残留（Windows 集成测试）、超时分支杀树
+    acceptance:
+      - "cargo test -p r-code-core -p r-code-gateway -p r-code-store --all-features -- --test-threads=1"
+      - "rg -n 'taskkill' --type rust 全仓命中收敛到 r-code-core 单一实现内（计数<=该实现内部出现次数）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-01-*.md
+
+  - id: FX-02
+    title: Codex 工具输出缓冲去 O(n²)（blocking）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-perf-01, F-perf-10]
+    root_cause: 缓冲内存有界设计正确但用逐字符推进实现，计数与截断都是 O(len)/字符；测试只验证语义未验证耗时
+    steps:
+      - CodexToolOutputBuffer 增量维护 head/tail 字符计数；溢出用字节级 drain 一次截断（UTF-8 边界安全）
+      - accumulate_tool_output 去掉每次调用即全量 render 丢弃的模式（render 按需）
+      - 新增性能钉子测试（宽时间上限 + 语义保持既有 "big" 用例）
+    acceptance:
+      - "cargo test -p r-code-host --lib codex_interaction -- --test-threads=1"
+      - "新增测试证明 1MB 输出 push 在宽松时限内完成且 head/tail 语义不变"
+    evidence: docs/code-review-2026-08-29/evidence/FX-02-*.md
+
+  - id: FX-03
+    title: provider 请求管线深拷贝削减 + 子代理浓缩超时（blocking）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-perf-02, F-perf-11, F-perf-16, F-robust-05]
+    root_cause: 请求构造所有权链按值传递；锁内做 O(历史) 深拷；journal 指纹双物化；vendor stream(complete) 接口吃所有权导致重试整份克隆（vendor 接口演进部分记遗留）
+    steps:
+      - sessions 全局锁内只做浅快照（Arc/引用收集），深拷移出锁外（F-perf-11）
+      - dispatch_ref_messages 改为迭代器探测 attachment 引用、需要时才物化（F-perf-02 部分）
+      - journal fingerprint 去 to_value->to_vec 双物化，改流式/拼接哈希（F-perf-16）
+      - agent_loop attempt 循环：首轮 move、重试才从冻结请求克隆（F-perf-02 部分）
+      - prepare_subagent_report 的 complete() 套 120s timeout，超时走既有 fallback_subagent_report（F-robust-05）
+      - 行为钉子：llm_runtime_tests 既有全量回归
+    acceptance:
+      - "cargo test -p r-code-agent-worker --all-features -- --test-threads=1"
+      - "rg 确认 dispatch_ref 无条件 clone / 锁内 messages.clone() 模式清零"
+    evidence: docs/code-review-2026-08-29/evidence/FX-03-*.md
+
+  - id: FX-04
+    title: 后台任务监督 + panic 终态收敛 + 锁中毒降级（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-robust-06, F-robust-07, F-corr-02, F-corr-03, F-corr-04, F-corr-09]
+    root_cause: fire-and-forget spawn 把 panic 当不可达；锁中毒视为不可达；无统一监督/降级策略
+    steps:
+      - drain loop 包 AssertUnwindSafe catch_unwind + finally 终态收敛（mark_run_aborted/Interrupted/bridge.active=None）
+      - llm_runtime 运行主路径 13 处 lock().expect("poisoned") 改 poison 降级（into_inner 恢复 + warn 日志，可重建状态允许重建）
+      - log_buffer 全局 BUFFER 与 host 侧 agent_event_sink/locale 等 lock().unwrap 家族同策略
+      - 宿主 fire-and-forget spawn 统一 supervised helper（JoinError 记日志）
+      - 测试：drain loop panic 注入 -> run 收敛终态；poison 注入 -> 后续调用不 panic
+    acceptance:
+      - "cargo test -p r-code-host -p r-code-agent-worker --all-features -- --test-threads=1（含新增测试）"
+      - "rg -n 'expect\\(\".*poisoned\"\\)' --type rust 生产代码清零（llm_runtime 13 处 -> 0）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-04-*.md
+
+  - id: FX-05
+    title: 事件管线批处理/去重/借用化（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-perf-03, F-perf-04, F-perf-10, F-perf-15]
+    root_cause: sink 单事件闭包签名 + 幂等防御无状态化 + 双出口 clone；批频率限制了但没减少消息条数/序列化次数
+    steps:
+      - ensure_session_log 会话粒度记忆化（HashSet 挂 drain 状态）
+      - sink 增批接口：drain 循环合并同 task 连续 Message{delta} 为一条（文本拼接）；Envelope 借用直发去中间 Value
+      - emit_codex_* 双出口 event.clone() -> 借用/Arc
+      - codex params value.get("params").cloned() -> 借用读取
+      - 测试：批合并语义（顺序/完整性）、既有 codex 流测试回归
+    acceptance:
+      - "cargo test -p r-code-host --all-features -- --test-threads=1（含新增）"
+      - "rg 确认 persist_runtime_event 每事件 .exists() 模式清零"
+    evidence: docs/code-review-2026-08-29/evidence/FX-05-*.md
+
+  - id: FX-06
+    title: 工具目录缓存 + 工具输入序列化削减（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-perf-06, F-perf-08]
+    root_cause: 每轮全量重建目录（无版本失效缓存）；审计/权限检查各自全量序列化同一 Value
+    steps:
+      - tool_specs() 按注册表版本缓存 Arc（MCP 目录变更时失效）
+      - to_string(&tools) 仅取长度的调用点改增量维护或移除依赖
+      - gateway input Value 深拷 3 次/序列化 2-3 次 -> 权限检查传摘要、审计单次序列化、末次 move
+      - 测试：目录缓存失效语义 + 既有 gateway 回归
+    acceptance:
+      - "cargo test -p r-code-gateway -p r-code-agent-worker --all-features -- --test-threads=1"
+    evidence: docs/code-review-2026-08-29/evidence/FX-06-*.md
+
+  - id: FX-07
+    title: 宿主模块环解除 + provider 辅助函数落地（major）
+    status: pending
+    depends_on: [FX-09]
+    findings: [F-arch-03, F-arch-06, F-arch-07]
+    root_cause: provider 辅助函数被困上帝模块，plan_entry_commands/memory_runtime/mcp_server 反向依赖 commands.rs 形成文件级环；文档声明与实际依赖漂移
+    steps:
+      - 抽 build_provider_config 等 provider 辅助函数到新叶子模块（provider_support.rs），破 commands <-> plan_entry_commands/memory_runtime 环
+      - 确认/解除 mcp_server.rs -> commands 依赖
+      - 修正 lib.rs「不依赖 tauri」失真声明（F-arch-06）
+      - 验收：模块引用图无环（自研 rg use crate:: 检查脚本）
+    acceptance:
+      - "cargo test -p r-code-host --all-features -- --test-threads=1"
+      - "plan_entry_commands.rs / memory_runtime.rs / mcp_server.rs 中 use crate::commands 计数 = 0"
+    evidence: docs/code-review-2026-08-29/evidence/FX-07-*.md
+
+  - id: FX-08
+    title: host 层生产裸 SQL 收敛到 r-code-store（major）
+    status: pending
+    depends_on: [FX-09]
+    findings: [F-arch-02]
+    root_cause: host 层直接对 store 所属表写裸 SQL（约 20 处），与 repositories 形成同表双写路径，schema 变更必炸一处
+    steps:
+      - 逐点把 commands.rs / plan_review_tools.rs / recovery.rs 的生产 SQL 迁移为 r-code-store repository 方法（语义保持，测试钉住）
+      - 迁移顺序：读点 -> 写点 -> 事务点
+    acceptance:
+      - "cargo test --workspace --all-features -- --test-threads=1"
+      - "rg -n '(SELECT|INSERT INTO|UPDATE |DELETE FROM)' src-tauri/src --type rust 生产代码命中 = 0（注释/测试除外）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-08-*.md
+
+  - id: FX-09
+    title: 死代码清除（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-maint-03, F-maint-07]
+    root_cause: codex 旧实现被新路径替代后未删（零引用/传递性死/仅测试用簇）；pub fn 不触发 dead_code lint 而潜伏
+    steps:
+      - 按 RV-07 evidence 清单删除零引用/传递性死代码簇（commands.rs codex 旧实现 ~1800 行 + 21 个零引用 pub fn）
+      - 每删一批跑 cargo check + 相关测试验证零引用结论
+    acceptance:
+      - "cargo test --workspace --all-features -- --test-threads=1"
+      - "清单内符号 rg 全仓引用计数 = 0（删除后验证）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-09-*.md
+
+  - id: FX-10
+    title: provider 身份判定统一（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-maint-02]
+    root_cause: 厂商身份判定三份实现、两种口径（provider_kind vs 名字清单）
+    steps:
+      - 收敛为单一判定函数（放 r-code-core 或 agent-worker 公共位），三处调用方替换
+      - 单测覆盖 DeepSeek 等边界
+    acceptance:
+      - "cargo test -p r-code-core -p r-code-agent-worker --all-features -- --test-threads=1"
+      - "rg 名字清单判定模式收敛到单实现"
+    evidence: docs/code-review-2026-08-29/evidence/FX-10-*.md
+
+  - id: FX-11
+    title: IPC 结构化错误契约（major）
+    status: pending
+    depends_on: [FX-07]
+    findings: [F-corr-07]
+    root_cause: IPC 边界无结构化错误类型，ProductError 链在 Result<_, String> 拍平，前端只能启发式恢复
+    steps:
+      - 定义 CommandError（kind/code + message + source 链，impl Serialize + From<ProductError> + From<String> 兼容）
+      - tauri command 签名迁移到 Result<T, CommandError>（薄包装层集中迁移 + commands.rs 内层返回值）
+      - 前端 ipc.ts 错误规范化识别结构化对象（string 回退兼容）
+      - 测试：错误链往返（后端 ProductError -> 前端收到 kind+根因文本）
+    acceptance:
+      - "cargo test -p r-code-host --all-features -- --test-threads=1 && node --test（ipc 相关前端测试）"
+      - "新增测试断言前端可拿到结构化错误对象；既有错误提示文案不回退"
+    evidence: docs/code-review-2026-08-29/evidence/FX-11-*.md
+
+  - id: FX-12
+    title: 配置原子写 + 版本字段（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-obs-05, F-obs-06, F-obs-08]
+    root_cause: 主配置用裸 fs::write 非原子（同仓已有原子写范式未复用）；无版本字段，schema 演进靠 serde default 静默吞
+    steps:
+      - settings.rs / feature_flags.rs 改原子写（tempfile + rename 复用既有范式）
+      - config.toml 增加 schema_version（读兼容无版本=1）+ 拒绝未来版本的错误路径
+      - 测试：写失败原文件完整、版本往返、未来版本拒绝
+    acceptance:
+      - "cargo test -p r-code-host --lib settings -- --test-threads=1（含新增）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-12-*.md
+
+  - id: FX-13
+    title: 日志大小上限 + 水合 tail 化 + 控制台脱敏（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-obs-01, F-obs-02, F-sec-01]
+    root_cause: 按日滚动无字节上限（RUST_LOG=trace 可写满磁盘）；启动水合全量解析；脱敏只挂 BufferLayer 未覆盖控制台 fmt
+    steps:
+      - 单日日志文件超限后停写文件（保内存 buffer，warn 一次）
+      - 水合改 tail 读（末尾 N 字节）
+      - 控制台 fmt 层套同一 redaction
+      - 测试：超限行为、tail 水合只取尾部、控制台输出已脱敏
+    acceptance:
+      - "cargo test -p r-code-host --lib logging -- --test-threads=1（含新增）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-13-*.md
+
+  - id: FX-14
+    title: provider 指标计数器（major）
+    status: pending
+    depends_on: [FX-03]
+    findings: [F-obs-04]
+    root_cause: 无指标面：调用/失败/重试/延迟只能翻日志
+    steps:
+      - 轻量 AtomicU64 计数 + 延迟环形采样挂在 runtime provider 调用链
+      - 经既有自检/diagnostic command 暴露结构化 JSON
+      - 测试：计数准确性（成功/失败/重试路径）
+    acceptance:
+      - "cargo test -p r-code-agent-worker --all-features -- --test-threads=1（含新增）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-14-*.md
+
+  - id: FX-15
+    title: 前端 Room 轮询降频（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-perf-07]
+    root_cause: 常驻轮询矩阵无空闲/可见性降级，空闲任务也全速轮询（含 2s git 子进程与近乎 2s 全量 JSONL 重读）
+    steps:
+      - 无 running 任务的房间降频（事件驱动唤醒：收到相关事件立即刷一次再回慢档）
+      - git 状态仅在对应面板可见时轮询
+      - sessionMessages 改游标增量（后端已有 subagent 游标先例则复用）
+    acceptance:
+      - "node --test src-tauri/frontend/scripts（Room/poll 相关测试全绿 + 新增降频语义测试）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-15-*.md
+
+  - id: FX-16
+    title: Markdown 流式增量解析（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-perf-09]
+    root_cause: text 每 ~100ms 变化即全文重解析 + 全部 Block 重渲染，memo 在变化流上必然失效
+    steps:
+      - 按块切分（双换行），已完成块解析结果按内容 memo；流式期只重解析末块
+      - 渲染输出与现状一致性用既有测试钉住
+    acceptance:
+      - "node --test（markdown 相关前端测试绿）+ 新增：流式追加时重解析块数断言"
+    evidence: docs/code-review-2026-08-29/evidence/FX-16-*.md
+
+  - id: FX-17
+    title: 前端时间格式化统一（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-maint-04]
+    root_cause: 7 个格式化函数两套体系并存，调用方随手选
+    steps:
+      - format.ts 收敛单一实现，i18n 入口调用它；35 处硬编码中文调用点迁移
+      - 既有 i18n/format 测试回归
+    acceptance:
+      - "node --test（format/i18n 相关测试绿）"
+      - "rg 重复实现计数收敛"
+    evidence: docs/code-review-2026-08-29/evidence/FX-17-*.md
+
+  - id: FX-18
+    title: CI 门禁与文档修复（major）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-test-01, F-test-03, F-test-04, F-test-06, F-test-10, F-obs-10, F-obs-11, F-maint-10]
+    root_cause: meta 自测不在 CI（fixture 腐烂无人发现）；flaky 探测与门禁执行模式漂移；CORPUS_RUN 静默 skip 掩盖 0 执行；文档进度与 gate 事实矛盾；AGENTS.md 工具名漂移；.gitignore 漏 .reasonix/
+    steps:
+      - ci.yml 补跑全部 scripts meta 测试；修复 verify-product-experience M9-04 fixture 腐烂
+      - flaky-tests.yml 对齐 --test-threads=1 + 加 ubuntu 腿
+      - command_corpus_runner.rs CORPUS_RUN skip 改记 ignored（不冒充 passed）
+      - docs/readme.md 进度更正为 gate 事实；AGENTS.md 工具名对齐实际；.gitignore 补 .reasonix/
+      - 已知失败处置记录写入本 review 目录 KNOWN-FAILURES.md
+    acceptance:
+      - "node --test scripts/*.test.mjs 全绿"
+      - "yaml 可解析 + 本地验证 meta 测试通过"
+    evidence: docs/code-review-2026-08-29/evidence/FX-18-*.md
+
+  - id: FX-19
+    title: MCP 会话驱逐 + PTY 退出收束（minor）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-robust-10, F-robust-08]
+    steps:
+      - r-code-mcp call 失败（非取消）主动 close_slot_session 一次
+      - main.rs RunEvent::Exit 追加 terminal_manager 有界 kill_all
+    acceptance:
+      - "cargo test -p r-code-mcp -p r-code-host --all-features -- --test-threads=1（含新增驱逐测试）"
+    evidence: docs/code-review-2026-08-29/evidence/FX-19-*.md
+
+  - id: FX-20
+    title: 小安全加固（minor）
+    status: pending
+    depends_on: [FX-00]
+    findings: [F-sec-03, F-sec-08, F-obs-07]
+    steps:
+      - settings load_with_workspace 的 base_url 覆盖加显式 opt-in 守卫（防未来接线踩坑）
+      - NSIS /BRANDED_PROGRESS= 截断目标限 $TEMP
+      - security_config production() 死副本删除（CSP 单源化）
+    acceptance:
+      - "cargo test -p r-code-host --lib -- --test-threads=1 相关测试绿"
+    evidence: docs/code-review-2026-08-29/evidence/FX-20-*.md
+
+# 明确遗留（不修，最终报告列明理由）
+deferred:
+  vendor_submodule_required:   # 改动需推送 foritin/agent-contracts（外部仓库），超出本分支授权
+    - F-robust-04              # anthropic SSE watchdog（vendor agent-llm）
+    - F-robust-09              # 退避抖动（vendor agent-llm）
+    - F-corr-05                # dialect 双表手工同步（vendor<->host）
+    - F-corr-08                # IPC u32 截断（vendor agent-ipc）
+    - F-perf-05                # SessionStore 单事件 append（vendor agent-store）
+    - F-perf-02.vendor_part    # CompletionRequest 借用/Arc 接口演进
+  campaign_scale:              # 需要专项 campaign，本次只交付切片或机制
+    - F-arch-01/04/05          # 上帝模块完整拆分（FX-07/08 为首批切片）
+    - F-maint-05               # 39 个超长函数
+    - F-obs-12                 # i18n 3557 条硬编码提取（基线锁机制已在，防增量）
+    - F-test-02                # unwrap lint 门禁（需先清 159 处生产 unwrap；锁中毒类别已由 FX-04 消除）
+    - F-corr-10                # store 43 个 async fn 同步 IO spawn_blocking 化
+    - F-test-07                # 22 个 regex 断言型前端测试改行为断言
+  minor_not_fixed:
+    - F-sec-02/04/05/06        # 桌面应用威胁模型内的小面
+    - F-perf-12/13/14, F-perf-15(部分并入FX-05)
+    - F-maint-06/08/09/11, F-maint-10(除 .gitignore 补漏)
+    - F-test-05/08/09
+    - F-obs-03(锁串行化部分，redact/dev 级部分并入 FX-13), F-obs-09

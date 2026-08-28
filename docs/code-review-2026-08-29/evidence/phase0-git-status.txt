@@ -1,0 +1,38 @@
+ M crates/r-code-agent-worker/src/llm_runtime.rs
+ M crates/r-code-agent-worker/src/llm_runtime_tests.rs
+ M docs/product-experience-redesign/r-code-experience-redesign-freeze.yaml
+ M docs/product-experience-redesign/settings-capability-baseline.json
+ M docs/product-experience-redesign/settings-capability-coverage.md
+ M docs/product-experience-redesign/settings-capability-gate.json
+ M docs/product-experience-redesign/worklist-gate.json
+ M src-tauri/frontend/scripts/app-shell.test.mjs
+ M src-tauri/frontend/scripts/i18n-hardcoded-baseline.json
+ M src-tauri/frontend/scripts/m2-03-a13-guidesheets.test.mjs
+ M src-tauri/frontend/scripts/m2-03-a2-provider-snapshot.test.mjs
+ M src-tauri/frontend/scripts/onboarding-campaign.test.mjs
+ M src-tauri/frontend/src/components/room/Canvas.tsx
+ M src-tauri/frontend/src/components/room/SubagentIdentity.tsx
+ M src-tauri/frontend/src/components/room/audit.ts
+ M src-tauri/frontend/src/components/scenes/SettingsScene.tsx
+ M src-tauri/frontend/src/lib/format.ts
+ M src-tauri/frontend/src/styles/components.css
+ M src-tauri/frontend/src/styles/scenes/misc.css
+ M src-tauri/frontend/src/styles/scenes/room.css
+ M src-tauri/frontend/src/styles/signature.css
+ M src-tauri/gen/schemas/desktop-schema.json
+ M src-tauri/gen/schemas/windows-schema.json
+ M src-tauri/src/commands.rs
+?? docs/code-review-2026-08-29/
+?? docs/product-experience-redesign/design-runs-panel-v2-context.png
+?? docs/product-experience-redesign/design-runs-panel-v2-states.png
+?? docs/product-experience-redesign/design-settings-model-services.png
+?? docs/product-experience-redesign/prototype-v2.html
+?? docs/product-experience-redesign/runs-panel-v2-actual-audit-open.png
+?? docs/product-experience-redesign/runs-panel-v2-actual-permission.png
+?? docs/product-experience-redesign/runs-panel-v2-actual-queue.png
+?? docs/product-experience-redesign/runs-panel-v2.html
+?? docs/product-experience-redesign/settings-providers-v2.html
+?? docs/product-experience-redesign/tools/capture-runs-panel-v2.mjs
+?? docs/product-experience-redesign/tools/render-runs-panel-v2.mjs
+?? src-tauri/frontend/scripts/runs-panel-v2.test.mjs
+?? src-tauri/frontend/src/components/ui/Drawer.tsx
