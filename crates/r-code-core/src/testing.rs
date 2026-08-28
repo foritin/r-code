@@ -66,11 +66,6 @@ impl TestFixture {
     pub fn db_path(&self) -> &std::path::Path {
         &self.db_path
     }
-
-    /// 获取 blobs 目录路径。
-    pub fn blobs_dir_path(&self) -> &std::path::Path {
-        &self.blobs_dir
-    }
 }
 
 impl Default for TestFixture {
@@ -90,21 +85,6 @@ pub fn create_large_tree_fixture(root: &std::path::Path, count: usize) {
         std::fs::create_dir_all(&dir).expect("failed to create dir");
         let file_path = dir.join(format!("file_{}.txt", i));
         std::fs::write(&file_path, format!("content {}\n", i)).expect("failed to write file");
-    }
-}
-
-/// 创建一个大型文本文件 fixture（用于性能测试）。
-///
-/// 生成约 `size_bytes` 大小的文本文件。
-/// [doc-18 M11-03]
-pub fn create_large_text_fixture(path: &std::path::Path, size_bytes: usize) {
-    use std::io::Write;
-    std::fs::create_dir_all(path.parent().unwrap()).expect("failed to create parent");
-    let mut file = std::fs::File::create(path).expect("failed to create file");
-    let line = b"this is a test line for large file fixture\n";
-    let lines = size_bytes / line.len();
-    for _ in 0..lines {
-        file.write_all(line).expect("failed to write line");
     }
 }
 

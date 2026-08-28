@@ -21,7 +21,7 @@
 
 use std::path::PathBuf;
 
-use agent_contract::{ContentBlock, Message, Role, SessionEvent, SessionMeta};
+use agent_contract::{ContentBlock, Message, Role, SessionEvent};
 use r_code_core::error::ProductError;
 use serde::{Deserialize, Serialize};
 
@@ -454,15 +454,6 @@ impl ReplayService {
                 None
             },
         }
-    }
-}
-
-/// 从 SessionMeta 构造 ReplayEntry（用于会话起始标记）。
-#[allow(dead_code)]
-fn meta_to_summary(meta: &SessionMeta) -> String {
-    match &meta.title {
-        Some(title) => format!("Session: {title}"),
-        None => format!("Session started (model: {})", meta.model),
     }
 }
 

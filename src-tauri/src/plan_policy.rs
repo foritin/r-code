@@ -13,8 +13,8 @@
 use std::fmt;
 
 use r_code_core::plan_entry::{
-    PlanCatalogProfile, PlanComplexitySignal, PlanContextProfile, PlanEntryDecisionSource,
-    ProviderRouteSnapshot, ResolvedPlanRuntimeProfile,
+    PlanCatalogProfile, PlanComplexitySignal, PlanContextProfile, ProviderRouteSnapshot,
+    ResolvedPlanRuntimeProfile,
 };
 use serde::{Deserialize, Serialize};
 
@@ -318,16 +318,6 @@ pub fn sanitize_reason_for_audit(reason: &str) -> String {
     trimmed.chars().take(1000).collect()
 }
 
-/// 决定来源与安静原因的映射（decline 事务写入用）。
-pub fn quiet_reason_for(source: PlanEntryDecisionSource) -> Option<&'static str> {
-    match source {
-        PlanEntryDecisionSource::Continue => Some("continue"),
-        PlanEntryDecisionSource::Close => Some("close"),
-        PlanEntryDecisionSource::Escape => Some("escape"),
-        PlanEntryDecisionSource::Accept => None,
-    }
-}
-
 /// 宿主内存中的「建议武装」登记：run 启动时按资格解析结果武装，propose 工具
 /// 执行时据此复核（目录缺席时历史诱导调用也要 fail closed）。进程内存态即可
 /// ——持久权威在 plan_entry_offers 的唯一约束与 branch 预算。
@@ -349,13 +339,6 @@ impl PlanSuggestionGate {
             .lock()
             .expect("plan suggestion gate poisoned")
             .insert(run_id.to_string(), suggestion);
-    }
-
-    pub fn disarm(&self, run_id: &str) {
-        self.armed
-            .lock()
-            .expect("plan suggestion gate poisoned")
-            .remove(run_id);
     }
 
     pub fn armed(&self, run_id: &str) -> Option<ArmedPlanSuggestion> {

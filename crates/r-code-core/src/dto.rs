@@ -781,11 +781,6 @@ impl PermissionRequest {
         self.target = target.map(Into::into);
         self
     }
-
-    /// 是否已决定
-    pub fn is_decided(&self) -> bool {
-        self.decision != PermissionDecision::Pending
-    }
 }
 
 /// 权限决定。
@@ -1464,20 +1459,7 @@ pub enum GuardTripReason {
     TestFailStreak,
 }
 
-impl GuardTripReason {
-    /// 面向用户的中文标签，用于活动提示与审查卡片。
-    pub fn label_zh(self) -> &'static str {
-        match self {
-            Self::ToolRoundsExceeded => "工具轮数超出预算",
-            Self::WallClockExceeded => "运行时长超出预算",
-            Self::ReasoningBudgetExceeded => "思考量超出预算",
-            Self::SameErrorLimit => "同一错误连续出现",
-            Self::NoProgress => "持续调用但无进展",
-            Self::DiffDivergence => "变更范围持续发散",
-            Self::TestFailStreak => "测试连续失败",
-        }
-    }
-}
+impl GuardTripReason {}
 
 /// Agent 事件 —— Worker -> Main 的事件流。
 ///

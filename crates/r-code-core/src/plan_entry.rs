@@ -118,11 +118,7 @@ stable_string_enum!(PlanEntryDecisionSource {
     Escape => "escape",
 });
 
-impl PlanEntryDecisionSource {
-    pub fn is_decline(self) -> bool {
-        matches!(self, Self::Continue | Self::Close | Self::Escape)
-    }
-}
+impl PlanEntryDecisionSource {}
 
 /// 建议决定的 durable 续接子状态（docs §12.4 的 at-least-once 合同）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

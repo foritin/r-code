@@ -612,17 +612,6 @@ impl<'a> AttachmentStore<'a> {
         .map_err(db_err)?;
         Ok(())
     }
-    /// 任务删除前：列出其全部 blob hash（含重复计数），供事务后按引用数递减。
-    pub fn list_hashes_for_task(&self, task_id: &str) -> Result<Vec<String>, ProductError> {
-        let conn = self.db.conn()?;
-        let mut statement = conn
-            .prepare("SELECT blob_hash FROM attachments WHERE task_id = ?1")
-            .map_err(db_err)?;
-        let rows = statement
-            .query_map(params![task_id], |row| row.get::<_, String>(0))
-            .map_err(db_err)?;
-        Ok(rows.filter_map(|row| row.ok()).collect())
-    }
 }
 
 #[cfg(test)]

@@ -36,6 +36,7 @@ fn ping() -> bool {
 /// An independent companion keeps the event loop alive, so closing main must exit the full app
 /// whenever the platform has no remaining restore surface (Dock reopen or a working tray icon).
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
+#[cfg(test)]
 fn main_close_requires_full_exit(is_main_window: bool, restore_available: bool) -> bool {
     is_main_window && !restore_available
 }
@@ -59,6 +60,7 @@ enum WindowsLifecycleAction {
 }
 
 #[cfg(target_os = "windows")]
+#[cfg(test)]
 fn windows_close_action(is_main_window: bool, tray_available: bool) -> WindowsLifecycleAction {
     if !is_main_window {
         return WindowsLifecycleAction::None;

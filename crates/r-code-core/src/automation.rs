@@ -94,10 +94,6 @@ impl ScheduleSpec {
     pub const fn is_once(&self) -> bool {
         matches!(self, Self::Once { .. })
     }
-
-    pub const fn uses_utc_interval(&self) -> bool {
-        matches!(self, Self::Hourly { .. })
-    }
 }
 
 /// User-authored Automation configuration. Edits only affect runs created after the edit.

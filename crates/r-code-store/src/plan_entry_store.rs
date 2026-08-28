@@ -656,51 +656,6 @@ impl PlanEntryStore {
         Ok(superseded)
     }
 
-    /// 产品 TTL / 任务归档 / branch 删除路径的过期清理（无副作用，续接 Agent）。
-    pub fn expire_pending_offer(
-        &self,
-        offer_id: &str,
-        reason: &str,
-    ) -> Result<Option<PlanEntryOffer>, ProductError> {
-        let now = Utc::now().to_rfc3339();
-        let mut conn = self.db.conn()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db_err)?;
-        let Some(offer) = load_offer(&tx, offer_id)? else {
-            return Ok(None);
-        };
-        if offer.state != PlanEntryOfferState::Pending {
-            tx.commit().map_err(db_err)?;
-            return Ok(Some(offer));
-        }
-        let queue_id = superseded_queue_id(&offer.id);
-        tx.execute(
-            "INSERT OR IGNORE INTO queued_messages \
-             (id, task_id, branch_id, message, state, priority, created_at, updated_at, request_key) \
-             VALUES (?1, ?2, ?3, ?4, 'queued', 1000000, ?5, ?5, ?6)",
-            params![
-                queue_id,
-                offer.task_id,
-                offer.branch_id,
-                PLAN_ENTRY_SUPERSEDED_CONTINUATION,
-                now,
-                offer.request_key,
-            ],
-        )
-        .map_err(db_err)?;
-        tx.execute(
-            "UPDATE plan_entry_offers SET state = 'expired', error = ?1, revision = revision + 1, \
-             updated_at = ?2 WHERE id = ?3 AND state = 'pending'",
-            params![reason, now, offer.id],
-        )
-        .map_err(db_err)?;
-        let expired =
-            load_offer(&tx, &offer.id)?.ok_or_else(|| invalid("offer vanished after expire"))?;
-        tx.commit().map_err(db_err)?;
-        Ok(Some(expired))
-    }
-
     /// 续接 claim（queued|failed -> dispatching）。已 claim/dispatched 返回 None，
     /// 防止双派发（与 PlanStore continuation 相同合同）。
     pub fn claim_continuation(

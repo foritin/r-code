@@ -19,8 +19,8 @@ use r_code_store::{Database, PlanEntryStore, PlanStore, SessionBranchRepository,
 use serde::Deserialize;
 
 use crate::plan_policy::{
-    customer_copy_template, provider_route_snapshot, sanitize_reason_for_audit,
-    ArmedPlanSuggestion, PlanSuggestionGate, PROVIDER_PROFILE_VERSION,
+    customer_copy_template, provider_route_snapshot, sanitize_reason_for_audit, PlanSuggestionGate,
+    PROVIDER_PROFILE_VERSION,
 };
 
 fn invalid(message: impl Into<String>) -> ProductError {
@@ -365,11 +365,7 @@ impl Tool for ProposePlanModeTool {
 }
 
 /// 预留：宿主武装登记的只读探针（诊断与测试用）。
-impl ProposePlanModeTool {
-    pub fn gate_armed(&self, run_id: &str) -> Option<ArmedPlanSuggestion> {
-        self.gate.armed(run_id)
-    }
-}
+impl ProposePlanModeTool {}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

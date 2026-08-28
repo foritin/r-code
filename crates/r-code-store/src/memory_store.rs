@@ -881,65 +881,6 @@ impl<'a> MemoryStore<'a> {
         Ok(job_id)
     }
 
-    pub fn enqueue_manual(
-        &self,
-        task_id: &str,
-        branch_id: &str,
-    ) -> Result<Option<String>, ProductError> {
-        let conn = self.db.conn()?;
-        let tx =
-            Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).map_err(db_err)?;
-        let settings = query_settings(&tx)?;
-        if !settings.enabled {
-            return Err(memory_err("memory review is disabled"));
-        }
-        if tx
-            .query_row(
-                "SELECT 1 FROM memory_review_jobs WHERE task_id = ?1 AND branch_id = ?2 \
-                 AND status IN ('queued', 'running', 'failed', 'interrupted')",
-                params![task_id, branch_id],
-                |_| Ok(()),
-            )
-            .optional()
-            .map_err(db_err)?
-            .is_some()
-        {
-            return Err(memory_err(
-                "this conversation already has an unresolved memory review",
-            ));
-        }
-        let boundary: Option<(i64, String, Option<String>, Option<i64>)> = tx
-            .query_row(
-                "SELECT sequence, run_id, source_workspace_id, workspace_memory_generation \
-                 FROM memory_review_turns WHERE task_id = ?1 AND branch_id = ?2 \
-                   AND user_text IS NOT NULL AND assistant_text IS NOT NULL \
-                   AND length(trim(user_text)) > 0 AND length(trim(assistant_text)) > 0 \
-                 ORDER BY sequence DESC LIMIT 1",
-                params![task_id, branch_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(db_err)?;
-        let Some((boundary, run_id, workspace_id, workspace_generation)) = boundary else {
-            tx.commit().map_err(db_err)?;
-            return Ok(None);
-        };
-        let id = insert_manual_review_job_tx(
-            &tx,
-            &settings,
-            ManualReviewSelection {
-                boundary,
-                run_id,
-                task_id: task_id.to_string(),
-                branch_id: branch_id.to_string(),
-                workspace_id,
-                workspace_generation,
-            },
-        )?;
-        tx.commit().map_err(db_err)?;
-        Ok(Some(id))
-    }
-
     /// Atomically chooses and queues the newest reviewable conversation in one explicit scope.
     /// Project callers provide both the workspace id and canonical path; pure-chat callers provide
     /// neither. Empty/scrubbed turns and branches with unresolved jobs cannot shadow older history.

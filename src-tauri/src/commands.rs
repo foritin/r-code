@@ -22181,7 +22181,8 @@ fn reject_codex_request_at_in_flight_limit(
 }
 
 /// 读泵产出的 stdout 事件。`TooLong` 表示单行超过 `CODEX_APP_SERVER_MAX_LINE_BYTES`
-/// （在分配上限内被拒绝，而不是先分配完整行再检查——见 `read_bounded_line`）。
+/// （在分配上限内被拒绝，而不是先分配完整行再检查——同 codex_app_server 的
+/// 有界行读取语义）。
 #[cfg(test)]
 #[allow(dead_code)]
 enum CodexLineEvent {
@@ -22299,26 +22300,6 @@ fn codex_app_server_command(
     Ok(command)
 }
 
-#[allow(dead_code)]
-async fn write_codex_app_server_value(
-    stdin: &mut tokio::process::ChildStdin,
-    value: &serde_json::Value,
-) -> Result<(), ()> {
-    let mut payload = serde_json::to_vec(value).map_err(|_| ())?;
-    payload.push(b'\n');
-    stdin.write_all(&payload).await.map_err(|_| ())?;
-    stdin.flush().await.map_err(|_| ())
-}
-
-#[allow(dead_code)]
-async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
-    reader: &mut R,
-    max_bytes: usize,
-) -> std::io::Result<Option<String>> {
-    let mut buf = Vec::new();
-    read_bounded_line_into(reader, &mut buf, max_bytes).await
-}
-
 /// `select!` 安全版本（M6）：部分行数据保留在调用方持有的 `buf` 中——future
 /// 被 drop（select 另一分支先 ready）时已 consume 的字节不丢失，下次调用继续。
 /// L4：非法 UTF-8 帧返回 `InvalidData` 硬错误（对端协议损坏，fail-closed），
@@ -22371,119 +22352,6 @@ async fn read_bounded_line_into<R: tokio::io::AsyncBufRead + Unpin>(
         buf.extend_from_slice(chunk);
         reader.consume(chunk_len);
     }
-}
-
-#[allow(dead_code)]
-async fn wait_for_codex_app_server_response(
-    lines: &mut tokio::io::BufReader<tokio::process::ChildStdout>,
-    stdin: &mut tokio::process::ChildStdin,
-    expected_id: u64,
-    startup_timeout: Duration,
-) -> Result<serde_json::Value, CodexExecFailure> {
-    // Soft watchdog: only recognized App Server protocol traffic refreshes the deadline. Unknown
-    // JSON notifications cannot keep a broken process alive forever, while a slow but genuinely
-    // progressing native-Windows startup is allowed to finish.
-    let mut deadline = tokio::time::Instant::now() + startup_timeout;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let next = timeout(
-            remaining,
-            read_bounded_line(lines, CODEX_APP_SERVER_MAX_LINE_BYTES),
-        )
-        .await
-        .map_err(|_| CodexExecFailure::ApprovalBridge)?
-        .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        let Some(line) = next else {
-            return Err(CodexExecFailure::ApprovalBridge);
-        };
-        let value: serde_json::Value =
-            serde_json::from_str(line.trim()).map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        if codex_app_server_startup_progress(&value) {
-            deadline = tokio::time::Instant::now() + startup_timeout;
-        }
-        if value.get("id").and_then(serde_json::Value::as_u64) != Some(expected_id) {
-            // L1：初始化期间也可能收到带 id 的反向请求（如 requestUserInput）。
-            // 与主循环同样按 F5 处理——立即返回 JSON-RPC error，而不是静默
-            // 丢弃让对端回调一直挂到 startup deadline。无 id 的通知仍可忽略。
-            if value.get("method").is_some() {
-                if let Some(request_id) = value.get("id") {
-                    let method = value
-                        .get("method")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown");
-                    write_codex_app_server_value(
-                        stdin,
-                        &serde_json::json!({
-                            "id": request_id,
-                            "error": {
-                                "code": -32601,
-                                "message": format!("R-Code 宿主不支持该请求：{method}"),
-                            }
-                        }),
-                    )
-                    .await
-                    .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-                }
-            }
-            continue;
-        }
-        if value.get("error").is_some() {
-            return Err(CodexExecFailure::ApprovalBridge);
-        }
-        return value
-            .get("result")
-            .cloned()
-            .ok_or(CodexExecFailure::ApprovalBridge);
-    }
-}
-
-#[allow(dead_code)]
-fn codex_app_server_startup_progress(value: &serde_json::Value) -> bool {
-    let Some(method) = value.get("method").and_then(serde_json::Value::as_str) else {
-        return false;
-    };
-    matches!(
-        method,
-        "initialized"
-            | "thread/started"
-            | "thread/status/changed"
-            | "turn/started"
-            | "turn/completed"
-            | "turn/plan/updated"
-            | "item/started"
-            | "item/completed"
-            | "item/agentMessage/delta"
-            | "item/reasoning/summaryTextDelta"
-            | "item/commandExecution/requestApproval"
-            | "item/fileChange/requestApproval"
-            | "item/permissions/requestApproval"
-            | "item/tool/call"
-            | "requestUserInput"
-    )
-}
-
-#[allow(dead_code)]
-fn codex_app_server_thread_id(result: &serde_json::Value) -> Option<String> {
-    result
-        .pointer("/thread/id")
-        .or_else(|| result.get("threadId"))
-        .or_else(|| result.get("id"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| bounded_text(value, 160))
-}
-
-#[allow(dead_code)]
-fn codex_app_server_turn_id(result: &serde_json::Value) -> Option<String> {
-    result
-        .pointer("/turn/id")
-        .or_else(|| result.get("turnId"))
-        .or_else(|| result.get("id"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| bounded_text(value, 160))
 }
 
 /// 解析 App Server 的 steer 响应（F12）。只有响应帧（无 `method` 字段）参与
@@ -24064,7 +23932,7 @@ fn codex_app_server_starts_tool(value: &serde_json::Value) -> bool {
 
 /// 用 App Server 执行一轮 Codex 子代理。只在 `请求批准` 预设下使用；其他预设
 /// 继续走轻量的 `codex exec --json` 路径。
-#[allow(dead_code)]
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 async fn run_codex_app_server_process(
     workspace: &Path,

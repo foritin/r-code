@@ -49,10 +49,6 @@ impl InstallCoordinator {
         }
     }
 
-    pub fn mark_current_corrupt(&self) {
-        self.inner.lock().expect("install lock").current_corrupt = true;
-    }
-
     pub fn installed_version(&self) -> Option<String> {
         self.inner
             .lock()

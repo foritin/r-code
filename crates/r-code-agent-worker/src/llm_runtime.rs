@@ -2116,12 +2116,6 @@ impl LlmAgentRuntime {
         self
     }
 
-    /// Attach the desktop host's dispatcher for enabled external child-agent backends.
-    pub fn with_external_agent_runner(mut self, runner: Arc<dyn ExternalAgentRunner>) -> Self {
-        self.external_agent_runner = Some(runner);
-        self
-    }
-
     /// Replace the candidate source observed by future root runs without rebuilding the primary
     /// provider runtime or mutating sessions and already-active roots.
     ///

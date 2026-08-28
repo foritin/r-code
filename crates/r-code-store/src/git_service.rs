@@ -293,63 +293,6 @@ impl GitService {
         }
     }
 
-    /// Add an intent-to-add index entry so an untracked text file can be partially staged.
-    pub fn intent_to_add(&self, path: &str) -> Result<(), ProductError> {
-        self.run_git(&["add", "-N", "--", path])?;
-        Ok(())
-    }
-
-    /// Return the current index-to-worktree patch for one path.
-    pub fn worktree_patch(&self, path: &str) -> Result<String, ProductError> {
-        self.run_git(&[
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--unified=0",
-            "--",
-            path,
-        ])
-    }
-
-    /// Apply a patch to the real index without changing the worktree.
-    pub fn apply_cached_patch(&self, patch: &[u8]) -> Result<(), ProductError> {
-        self.run_git_with_stdin(
-            &[
-                "apply",
-                "--cached",
-                "--unidiff-zero",
-                "--whitespace=nowarn",
-                "-",
-            ],
-            patch,
-        )?;
-        Ok(())
-    }
-
-    /// Whether a path currently has staged content relative to HEAD.
-    pub fn has_staged_change(&self, path: &str) -> Result<bool, ProductError> {
-        Ok(!self.git_exit_success(&["diff", "--cached", "--quiet", "--", path])?)
-    }
-
-    /// Whether a tracked or intent-to-add path differs between index and worktree.
-    pub fn has_worktree_change(&self, path: &str) -> Result<bool, ProductError> {
-        Ok(!self.git_exit_success(&["diff", "--quiet", "--", path])?)
-    }
-
-    /// Whether a path has unresolved index stages.
-    pub fn has_conflict(&self, path: &str) -> Result<bool, ProductError> {
-        Ok(!self
-            .run_git_bytes(&["ls-files", "--unmerged", "-z", "--", path])?
-            .is_empty())
-    }
-
-    /// Whether a path has any entry in the index (including intent-to-add).
-    pub fn is_indexed(&self, path: &str) -> Result<bool, ProductError> {
-        Ok(!self
-            .run_git_bytes(&["ls-files", "--stage", "-z", "--", path])?
-            .is_empty())
-    }
-
     /// 取消暂存文件。
     ///
     /// 若 HEAD 存在，使用 `git reset HEAD -- <path>`；
@@ -651,42 +594,6 @@ impl GitService {
             .map_err(|e| ProductError::GitError(format!("failed to execute git: {e}")))?;
         check_git_success(args, &output)?;
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
-
-    fn git_exit_success(&self, args: &[&str]) -> Result<bool, ProductError> {
-        let output = self
-            .git_command(args)
-            .output()
-            .map_err(|e| ProductError::GitError(format!("failed to execute git: {e}")))?;
-        match output.status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            _ => {
-                check_git_success(args, &output)?;
-                Ok(true)
-            }
-        }
-    }
-
-    fn run_git_with_stdin(&self, args: &[&str], input: &[u8]) -> Result<(), ProductError> {
-        let mut command = self.git_command(args);
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command
-            .spawn()
-            .map_err(|e| ProductError::GitError(format!("failed to execute git: {e}")))?;
-        child
-            .stdin
-            .take()
-            .ok_or_else(|| ProductError::GitError("git stdin was not available".into()))?
-            .write_all(input)
-            .map_err(|e| ProductError::GitError(format!("failed to write git stdin: {e}")))?;
-        let output = child
-            .wait_with_output()
-            .map_err(|e| ProductError::GitError(format!("failed to wait for git: {e}")))?;
-        check_git_success(args, &output)
     }
 }
 
