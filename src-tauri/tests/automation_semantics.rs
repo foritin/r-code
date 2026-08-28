@@ -33,6 +33,7 @@ fn automation_is_server_side_disabled_by_default() {
     require_feature_enabled(ProductFeatureFlags {
         browser_enabled: false,
         automation_enabled: true,
+        worktree_enabled: false,
     })
     .expect("the Automation gate should open only when explicitly enabled");
 }

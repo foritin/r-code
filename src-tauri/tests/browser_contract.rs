@@ -435,6 +435,7 @@ fn enabled_native_and_codex_agents_project_the_same_gateway_contract() {
     let flags = ProductFeatureFlags {
         browser_enabled: true,
         automation_enabled: false,
+        worktree_enabled: false,
     };
     let config_dir = tempfile::tempdir().expect("create temporary feature config directory");
     FeatureFlagService::new(config_dir.path().to_path_buf())
