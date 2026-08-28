@@ -301,6 +301,10 @@ impl McpSupervisor {
             Err(McpClientError::Cancelled) => Err(McpClientError::Cancelled.into()),
             Err(error) => {
                 tracing::warn!(server_id, tool_name, %error, "MCP tool call failed");
+                // 半死会话驱逐（F-robust-10）：对端僵死但 EOF 未传导到 rmcp 状态时
+                // is_closed 恒 false，后续调用会持续复用死连接；失败即关会话，
+                // 让下一次调用走 ensure_session 重连。
+                let _ = self.close_slot_session(&slot).await;
                 self.publish_status(
                     server_id,
                     McpServerState::Error,

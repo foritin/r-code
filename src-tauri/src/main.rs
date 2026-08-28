@@ -1005,10 +1005,18 @@ fn main() {
                 let state = app_handle.state::<CommandState>();
                 let manager = state.mcp_manager.clone();
                 let codex_app_server = state.codex_app_server.clone();
+                // 终端 PTY 同批收束（F-robust-08）：不依赖“进程退出会带走
+                // ConPTY 附着进程”的 OS 行为，显式树内 kill+收尸。
+                let terminal_manager = state.terminal_manager.clone();
                 let outcome = tauri::async_runtime::block_on(async move {
                     tokio::time::timeout(std::time::Duration::from_secs(2), async move {
-                        let (mcp_result, ()) =
-                            tokio::join!(manager.shutdown(), codex_app_server.shutdown());
+                        let (mcp_result, (), ()) = tokio::join!(
+                            manager.shutdown(),
+                            codex_app_server.shutdown(),
+                            async {
+                                terminal_manager.kill_all().await;
+                            }
+                        );
                         mcp_result
                     })
                     .await

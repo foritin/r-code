@@ -504,6 +504,18 @@ impl TerminalManager {
     }
 
     /// 终止一个终端。
+    /// 有界终止全部终端（应用退出路径，F-robust-08）。ConPTY 句柄随进程关闭
+    /// 通常会令附着进程退出，但那是 OS 行为而非合同保证；显式 kill+收尸，
+    /// 消灭 shell 内仍在运行的孙进程（如 cargo build）。
+    pub async fn kill_all(&self) {
+        let ids: Vec<TerminalId> = self.terminals.lock().await.keys().cloned().collect();
+        for id in ids {
+            if let Err(error) = self.kill(&id).await {
+                tracing::warn!(terminal_id = %id, %error, "terminal kill_all: kill failed");
+            }
+        }
+    }
+
     pub async fn kill(&self, id: &str) -> Result<(), ProductError> {
         let mut terminals = self.terminals.lock().await;
         let mut handle = terminals
