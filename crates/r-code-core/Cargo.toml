@@ -26,6 +26,8 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# 进程树终止原语（process::kill_tree）需要 process/time；全部下游 crate 已依赖 tokio
+tokio = { workspace = true }
 
 # 安全：平台凭据存储与日志脱敏 [doc-07 §5, §6]
 regex = "1"
@@ -45,10 +47,13 @@ windows-registry = "0.6.1"
 # Linux 等平台保持现有系统凭据后端选择；macOS 明确不链接 keyring/Keychain。
 keyring = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# 进程组信号（process::kill_tree 的 Unix 树杀）与 macOS 凭据文件实现共用。
+libc = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS 使用应用数据目录中的 ChaCha20-Poly1305 加密凭据文件，不访问 Keychain。
 base64 = { workspace = true }
-libc = { workspace = true }
 ring = { workspace = true }
 tempfile = { workspace = true }
 zeroize = { workspace = true }

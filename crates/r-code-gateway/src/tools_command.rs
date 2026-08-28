@@ -41,7 +41,7 @@ use std::os::unix::process::CommandExt as _;
 use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
-use r_code_core::process::hide_background_console;
+use r_code_core::process::{hide_background_console, kill_tree};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -673,37 +673,6 @@ async fn execute_bash(
 fn apply_bash_tier_env(cmd: &mut Command) {
     cmd.env("MSYS_NO_PATHCONV", "1");
     cmd.env("LANG", "C.UTF-8");
-}
-
-/// 结束子进程及其后代。
-///
-/// Windows 上 `child.kill()` 只结束解释器本身，`cargo`/`node` 等孙进程会留下来
-/// 继续占用端口和文件锁；必须用 `taskkill /T` 杀整棵树。
-async fn kill_tree(child: &mut tokio::process::Child) {
-    #[cfg(windows)]
-    {
-        if let Some(pid) = child.id() {
-            let mut terminate_tree = Command::new("taskkill");
-            terminate_tree.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            hide_background_console(terminate_tree.as_std_mut());
-            let killed = terminate_tree.output().await;
-            if killed.is_ok_and(|output| output.status.success()) {
-                return;
-            }
-        }
-    }
-    #[cfg(unix)]
-    {
-        if let Some(pid) = child.id() {
-            // SAFETY: the child is spawned into a fresh process group whose id equals its pid.
-            // Passing the negative group id to kill(2) targets only that command tree.
-            let killed = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-            if killed == 0 {
-                return;
-            }
-        }
-    }
-    let _ = child.kill().await;
 }
 
 /// 渲染给模型看的执行结果。

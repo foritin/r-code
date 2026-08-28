@@ -16,7 +16,7 @@ use std::process::Stdio;
 use chrono::{DateTime, Utc};
 use r_code_core::dto::{VerificationRecord, VerificationStatus};
 use r_code_core::error::ProductError;
-use r_code_core::process::hide_background_console;
+use r_code_core::process::{hide_background_console, kill_tree};
 use rusqlite::params;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -332,7 +332,6 @@ async fn execute_command(
         })
     });
     #[cfg(windows)]
-    let pid = child.id();
     let timeout_dur = std::time::Duration::from_secs(config.timeout_secs);
     let (exit_code, status, timeout_message) =
         match tokio::time::timeout(timeout_dur, child.wait()).await {
@@ -351,17 +350,9 @@ async fn execute_command(
                 Some(format!("command wait failed: {e}")),
             ),
             Err(_) => {
-                #[cfg(windows)]
-                if let Some(pid) = pid {
-                    let mut terminate_tree = Command::new("taskkill");
-                    terminate_tree.args(["/PID", &pid.to_string(), "/T", "/F"]);
-                    hide_background_console(terminate_tree.as_std_mut());
-                    let _ = terminate_tree.output().await;
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = child.kill().await;
-                }
+                // 超时回收整棵后代树（r-code-core::process::kill_tree 唯一实现），
+                // 而不是只杀直接子进程留下 cargo/node 孤儿。
+                kill_tree(&mut child).await;
                 let _ = child.wait().await;
                 (
                     None,

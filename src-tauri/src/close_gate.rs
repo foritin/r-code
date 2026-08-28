@@ -121,14 +121,12 @@ impl CloseGate {
                 focus_existing: false,
                 epoch: self.epoch,
             },
-            ClosePreference::Hide if restore != RestoreCapability::None => {
-                CloseDecision {
-                    action: CloseAction::Hide,
-                    preference,
-                    focus_existing: false,
-                    epoch: self.epoch,
-                }
-            }
+            ClosePreference::Hide if restore != RestoreCapability::None => CloseDecision {
+                action: CloseAction::Hide,
+                preference,
+                focus_existing: false,
+                epoch: self.epoch,
+            },
             // Ask，以及「想 hide 但没有恢复面」的降级：都必须问人，且保持窗口可达。
             ClosePreference::Ask | ClosePreference::Hide => {
                 if self.prompting {
@@ -207,8 +205,16 @@ mod tests {
     #[test]
     fn a2_stale_and_duplicate_decisions_are_rejected() {
         let mut gate = CloseGate::new();
-        let d1 = gate.handle_close(CloseTrigger::Titlebar, ClosePreference::Ask, RestoreCapability::Dock);
-        let d2 = gate.handle_close(CloseTrigger::AltF4, ClosePreference::Ask, RestoreCapability::Dock);
+        let d1 = gate.handle_close(
+            CloseTrigger::Titlebar,
+            ClosePreference::Ask,
+            RestoreCapability::Dock,
+        );
+        let d2 = gate.handle_close(
+            CloseTrigger::AltF4,
+            ClosePreference::Ask,
+            RestoreCapability::Dock,
+        );
         assert_eq!(d1.epoch, d2.epoch, "同一 prompt 会话 epoch 不变");
         // 迟到的旧 epoch 决定
         assert_eq!(
@@ -216,7 +222,10 @@ mod tests {
             Err(CloseDecisionError::Stale)
         );
         // 同 epoch 第一次有效
-        assert_eq!(gate.resolve(d2.epoch, PromptDecision::Quit), Ok(Some(CloseAction::Quit)));
+        assert_eq!(
+            gate.resolve(d2.epoch, PromptDecision::Quit),
+            Ok(Some(CloseAction::Quit))
+        );
         // 同 epoch 重复提交
         assert_eq!(
             gate.resolve(d2.epoch, PromptDecision::Hide),
@@ -252,12 +261,21 @@ mod tests {
             RestoreCapability::None,
         );
         assert_ne!(decision.action, CloseAction::Hide);
-        assert_eq!(decision.action, CloseAction::ShowPrompt, "无恢复面时降级为询问，窗口保持可达");
+        assert_eq!(
+            decision.action,
+            CloseAction::ShowPrompt,
+            "无恢复面时降级为询问，窗口保持可达"
+        );
 
         // 有恢复面时 hide 直接执行。
-        for restore in [RestoreCapability::Tray, RestoreCapability::Dock, RestoreCapability::Companion] {
+        for restore in [
+            RestoreCapability::Tray,
+            RestoreCapability::Dock,
+            RestoreCapability::Companion,
+        ] {
             let mut gate = CloseGate::new();
-            let decision = gate.handle_close(CloseTrigger::Titlebar, ClosePreference::Hide, restore);
+            let decision =
+                gate.handle_close(CloseTrigger::Titlebar, ClosePreference::Hide, restore);
             assert_eq!(decision.action, CloseAction::Hide);
         }
     }
@@ -265,11 +283,19 @@ mod tests {
     #[test]
     fn quit_and_cancel_paths() {
         let mut gate = CloseGate::new();
-        let decision = gate.handle_close(CloseTrigger::Titlebar, ClosePreference::Quit, RestoreCapability::None);
+        let decision = gate.handle_close(
+            CloseTrigger::Titlebar,
+            ClosePreference::Quit,
+            RestoreCapability::None,
+        );
         assert_eq!(decision.action, CloseAction::Quit, "quit 偏好不需要恢复面");
 
         let mut gate = CloseGate::new();
-        let d = gate.handle_close(CloseTrigger::Titlebar, ClosePreference::Ask, RestoreCapability::Dock);
+        let d = gate.handle_close(
+            CloseTrigger::Titlebar,
+            ClosePreference::Ask,
+            RestoreCapability::Dock,
+        );
         assert_eq!(gate.resolve(d.epoch, PromptDecision::Cancel), Ok(None));
         assert!(!gate.is_prompting());
     }
@@ -277,7 +303,7 @@ mod tests {
 
 // ---- 持久化（lifecycle.toml，FeatureFlagService 同款模式）----
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const LIFECYCLE_FILE: &str = "lifecycle.toml";
 

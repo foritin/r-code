@@ -78,7 +78,7 @@ use r_code_core::plan::{
     PlanReviewDecision, PlanState, PlanView, UpdatePlanItemInput,
 };
 use r_code_core::plan_entry::OriginRequestKind;
-use r_code_core::process::hide_background_console;
+use r_code_core::process::{hide_background_console, kill_tree};
 use r_code_core::progress_contract::{PUBLIC_PROGRESS_CONTRACT, SUBAGENT_REPORTING_CONTRACT};
 use r_code_core::secret::redact_text;
 use r_code_core::security::{PathGuard, WorkspaceFileAccess};
@@ -16061,7 +16061,11 @@ async fn build_runtime_subagent_candidate_pool(
             || slot.source != health.source
             || slot.model != health.model
         {
-            tracing::warn!(revision, slot_id, "dropped inconsistent subagent candidate slot");
+            tracing::warn!(
+                revision,
+                slot_id,
+                "dropped inconsistent subagent candidate slot"
+            );
             dropped.push(format!("{slot_id}（快照不一致）"));
             continue;
         }
@@ -16150,11 +16154,7 @@ async fn build_runtime_subagent_candidate_pool(
         let reason = if dropped.is_empty() {
             "候选池当前不可用".to_string()
         } else {
-            format!(
-                "{} 个槽位全部不可用（{}）",
-                total_slots,
-                dropped.join("、")
-            )
+            format!("{} 个槽位全部不可用（{}）", total_slots, dropped.join("、"))
         };
         tracing::warn!(
             revision,
@@ -17051,11 +17051,7 @@ async fn run_codex_cli_at_with_timeout(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     hide_background_console(command.as_std_mut());
-    match timeout(deadline, command.output()).await {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(CodexCommandError::Launch(error.kind())),
-        Err(_) => Err(CodexCommandError::Timeout),
-    }
+    run_cli_output_with_deadline(command, deadline).await
 }
 
 /// 构造 npm 命令。调用方只能传入本模块声明的固定参数；WebView 不能提供包名、
@@ -17092,10 +17088,100 @@ async fn run_npm_at(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     hide_background_console(command.as_std_mut());
-    match timeout(deadline, command.output()).await {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(CodexCommandError::Launch(error.kind())),
-        Err(_) => Err(CodexCommandError::Timeout),
+    run_cli_output_with_deadline(command, deadline).await
+}
+
+/// 一次性 CLI 的有界执行：不用 `output()`——超时 drop future 后 Child 随之 drop，
+/// kill_on_drop 只杀 cmd.exe wrapper，npm 安装拉起的 node 后代会泄漏；改为
+/// 保住 Child 句柄 + 并发 drain，超时走 kill_tree 树杀整棵后代树后收尸
+///（r-code-core 唯一树杀实现，F-robust-03）。
+async fn run_cli_output_with_deadline(
+    mut command: TokioCommand,
+    deadline: Duration,
+) -> Result<std::process::Output, CodexCommandError> {
+    let mut child = command
+        .spawn()
+        .map_err(|error| CodexCommandError::Launch(error.kind()))?;
+    let stdout_task = child.stdout.take().map(drain_pipe_to_vec);
+    let stderr_task = child.stderr.take().map(drain_pipe_to_vec);
+    let status = match timeout(deadline, child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => return Err(CodexCommandError::Launch(error.kind())),
+        Err(_) => {
+            kill_tree(&mut child).await;
+            let _ = child.wait().await;
+            return Err(CodexCommandError::Timeout);
+        }
+    };
+    let stdout = match stdout_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let stderr = match stderr_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// 把子进程的一路管道读尽为 Vec<u8>（EOF/错误都正常收尾，防写满死锁）。
+fn drain_pipe_to_vec<R>(mut pipe: R) -> tokio::task::JoinHandle<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+
+        let mut buffer = Vec::new();
+        let _ = pipe.read_to_end(&mut buffer).await;
+        buffer
+    })
+}
+
+#[cfg(test)]
+mod cli_deadline_tests {
+    use super::*;
+
+    /// 超时分支必须保住 Child 句柄并树杀后及时返回（F-robust-03 钉子）：
+    /// 旧实现 drop `output()` future 后只剩 kill_on_drop 单杀 wrapper。
+    #[tokio::test]
+    async fn one_shot_cli_timeout_kills_the_tree_and_returns_promptly() {
+        let mut command = if cfg!(windows) {
+            let mut command = TokioCommand::new("cmd.exe");
+            command.args([
+                "/D",
+                "/S",
+                "/C",
+                "ping",
+                "-n",
+                "60",
+                "-w",
+                "1000",
+                "127.0.0.1",
+            ]);
+            command
+        } else {
+            let mut command = TokioCommand::new("sh");
+            command.arg("-c").arg("sleep 30");
+            command
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        hide_background_console(command.as_std_mut());
+        let started = std::time::Instant::now();
+        let result = run_cli_output_with_deadline(command, Duration::from_secs(1)).await;
+        assert!(matches!(result, Err(CodexCommandError::Timeout)));
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "timeout branch must reap the tree promptly; took {:?}",
+            started.elapsed()
+        );
     }
 }
 
@@ -20734,32 +20820,6 @@ async fn emit_codex_rcode_child_event(
     }
 }
 
-/// 终止 Codex 的整棵进程树。
-///
-/// Windows 通过 `taskkill /T` 回收 `.cmd` wrapper 与 Node 后代；Unix/macOS 在启动时
-/// 已为 Codex 建立独立进程组，这里向该组发送 SIGKILL。最后再杀直接子进程作为兜底。
-async fn terminate_codex_child(child: &mut tokio::process::Child) {
-    #[cfg(windows)]
-    if let Some(pid) = child.id() {
-        let pid = pid.to_string();
-        let mut terminate_tree = TokioCommand::new("taskkill");
-        terminate_tree
-            .args(["/PID", pid.as_str(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        hide_background_console(terminate_tree.as_std_mut());
-        let _ = timeout(Duration::from_secs(5), terminate_tree.status()).await;
-    }
-    #[cfg(unix)]
-    if let Some(process_group) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
-        // SAFETY: process_group 来自刚由本进程启动、且通过 process_group(0) 隔离的
-        // Codex 子进程。负 PID 只命中这一进程组；返回值仅用于 best-effort 清理。
-        let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
-    }
-    let _ = child.kill().await;
-}
-
 /// Await a background pump for a short grace period, then abort and reap it. Dropping a Tokio
 /// JoinHandle after `timeout` would detach the task, which can retain pipes and buffers past the
 /// owning Codex run.
@@ -20970,7 +21030,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
     };
 
     let Some(stdout) = child.stdout.take() else {
-        terminate_codex_child(&mut child).await;
+        kill_tree(&mut child).await;
         return CodexExecCompletion {
             failure: Some(CodexExecFailure::Stream),
             ..Default::default()
@@ -20984,7 +21044,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
         })
     });
     let Some(mut stdin) = child.stdin.take() else {
-        terminate_codex_child(&mut child).await;
+        kill_tree(&mut child).await;
         if let Some(stderr_task) = stderr_task {
             let _ = timeout(Duration::from_secs(2), stderr_task).await;
         }
@@ -20994,7 +21054,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
         };
     };
     if stdin.write_all(prompt.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
-        terminate_codex_child(&mut child).await;
+        kill_tree(&mut child).await;
         if let Some(stderr_task) = stderr_task {
             let _ = timeout(Duration::from_secs(2), stderr_task).await;
         }
@@ -21037,7 +21097,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
         tokio::select! {
             _ = cancellation.cancelled() => {
                 cancelled = true;
-                terminate_codex_child(&mut child).await;
+                kill_tree(&mut child).await;
                 break;
             }
             _ = &mut idle_timer => {
@@ -21053,7 +21113,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                         )),
                     },
                 ).await;
-                terminate_codex_child(&mut child).await;
+                kill_tree(&mut child).await;
                 break;
             }
             hard_timeout = &mut deadline_timer => {
@@ -21069,7 +21129,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                         )),
                     },
                 ).await;
-                terminate_codex_child(&mut child).await;
+                kill_tree(&mut child).await;
                 break;
             }
             next = read_bounded_line_into(&mut stdout, &mut line_buf, CODEX_APP_SERVER_MAX_LINE_BYTES) => match next {
@@ -21125,7 +21185,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                                             )),
                                         },
                                     ).await;
-                                    terminate_codex_child(&mut child).await;
+                                    kill_tree(&mut child).await;
                                     break;
                                 }
                                 tool_calls = tool_calls.saturating_add(1);
@@ -21198,7 +21258,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                         .unwrap_or("agent-tool");
                     tracing::warn!(run_id, kind = ?error.kind(), "Codex exec JSONL stream failed");
                     failure = Some(CodexExecFailure::Stream);
-                    terminate_codex_child(&mut child).await;
+                    kill_tree(&mut child).await;
                     break;
                 }
             }
@@ -21222,7 +21282,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
             status = child.wait() => status,
             _ = cancellation.cancelled() => {
                 cancelled = true;
-                terminate_codex_child(&mut child).await;
+                kill_tree(&mut child).await;
                 child.wait().await
             }
             _ = &mut idle_timer => {
@@ -21238,7 +21298,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                         )),
                     },
                 ).await;
-                terminate_codex_child(&mut child).await;
+                kill_tree(&mut child).await;
                 child.wait().await
             }
             hard_timeout = &mut deadline_timer => {
@@ -21254,7 +21314,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                         )),
                     },
                 ).await;
-                terminate_codex_child(&mut child).await;
+                kill_tree(&mut child).await;
                 child.wait().await
             }
         }

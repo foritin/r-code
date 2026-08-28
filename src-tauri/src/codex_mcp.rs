@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use r_code_core::process::hide_background_console;
+use r_code_core::process::{hide_background_console, kill_tree};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -393,7 +393,9 @@ impl CodexMcpConnection {
     }
 
     async fn shutdown(mut self) {
-        let _ = self.child.kill().await;
+        // 与 codex_app_server 同型：cmd.exe wrapper 之下的 node 后代必须树杀
+        // 回收，单 kill 只结束 wrapper（F-robust-02）。
+        kill_tree(&mut self.child).await;
         let _ = self.child.wait().await;
         if let Some(drain) = self.stderr_drain.take() {
             let _ = drain.await;
@@ -443,6 +445,13 @@ fn codex_mcp_server_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // 独立进程组：kill_tree 的 Unix 树杀向负组 id 发 SIGKILL 回收整组。
+        command.as_std_mut().process_group(0);
+    }
     crate::rtk::configure_codex_child(&mut command);
     hide_background_console(command.as_std_mut());
     Ok(command)

@@ -9,7 +9,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use r_code_core::process::hide_background_console;
+use r_code_core::process::{hide_background_console, kill_tree};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -597,7 +597,9 @@ impl CodexAppServerTransport {
 
     pub(crate) async fn shutdown(mut self) {
         self.writer.take();
-        let _ = self.child.kill().await;
+        // Windows 下 app-server 经 cmd.exe wrapper 启动（npm shim）：单 kill 只杀
+        // wrapper，codex node 进程及 MCP/shell 后代成孤儿持锁存活，必须树杀。
+        kill_tree(&mut self.child).await;
         let _ = self.child.wait().await;
         join_bounded(self.writer_task.take()).await;
         join_bounded(self.reader_task.take()).await;
