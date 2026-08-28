@@ -43,6 +43,7 @@ pub mod plan_tools;
 pub mod provider_catalog;
 pub mod provider_models;
 pub mod provider_readiness;
+pub mod provider_support;
 pub mod recovery;
 pub mod replay;
 pub mod rtk;

@@ -124,9 +124,12 @@ impl PlanningRuntimeState {
         Ok(ProviderRouteContext {
             provider_kind: provider.provider_kind.clone().unwrap_or_default(),
             model: provider.model.clone(),
-            wire_protocol: crate::commands::resolve_effective_protocol(&provider_name, provider)
-                .as_str()
-                .to_string(),
+            wire_protocol: crate::provider_support::resolve_effective_protocol(
+                &provider_name,
+                provider,
+            )
+            .as_str()
+            .to_string(),
             provider_name: provider_name.clone(),
             endpoint_class: EndpointClass::classify(&provider.base_url),
         })
@@ -432,7 +435,7 @@ pub async fn planning_status(
             .provider_kind
             .as_deref()
             .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("deepseek"))
-            && crate::commands::provider_readiness_error(name, provider).is_none()
+            && crate::provider_support::provider_readiness_error(name, provider).is_none()
     });
     let customer_surface =
         customer_planning_surface(deepseek_configured, &planning.release_control);

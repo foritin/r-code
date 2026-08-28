@@ -10,7 +10,7 @@ use agent_contract::{CompletionRequest, InferenceOptions, Message};
 use r_code_core::MemoryReviewOutput;
 use r_code_store::{Database, MemoryReviewClaim, MemoryStore};
 
-use crate::commands::{build_provider_config, provider_readiness_error};
+use crate::provider_support::{build_provider_config, provider_readiness_error};
 use crate::settings::SettingsService;
 
 const REVIEW_MAX_TOKENS: u32 = 2_048;
