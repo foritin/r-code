@@ -1,0 +1,49 @@
+ src-tauri/frontend/src/lib/format.ts               |   16 +
+ src-tauri/frontend/src/styles/components.css       |   53 +
+ src-tauri/frontend/src/styles/scenes/misc.css      |  127 +-
+ src-tauri/frontend/src/styles/scenes/room.css      |  199 ++-
+ src-tauri/frontend/src/styles/signature.css        |   11 +-
+ src-tauri/gen/schemas/windows-schema.json          |   42 +
+ src-tauri/src/commands.rs                          |  201 ++-
+ 36 files changed, 5039 insertions(+), 531 deletions(-)
+---
+
+    wip: 保纳 code-review 任务前用户未提交工作区改动（资产保全，不含任何 review 修改）
+
+ crates/r-code-agent-worker/src/llm_runtime.rs      |  174 ++-
+ .../r-code-agent-worker/src/llm_runtime_tests.rs   |  134 +-
+ .../design-runs-panel-v2-context.png               |  Bin 0 -> 974103 bytes
+ .../design-runs-panel-v2-states.png                |  Bin 0 -> 835697 bytes
+ .../design-settings-model-services.png             |  Bin 0 -> 463803 bytes
+ docs/product-experience-redesign/prototype-v2.html | 1370 ++++++++++++++++++++
+ .../r-code-experience-redesign-freeze.yaml         |    6 +-
+ .../runs-panel-v2-actual-audit-open.png            |  Bin 0 -> 281467 bytes
+ .../runs-panel-v2-actual-permission.png            |  Bin 0 -> 227798 bytes
+ .../runs-panel-v2-actual-queue.png                 |  Bin 0 -> 315151 bytes
+ .../product-experience-redesign/runs-panel-v2.html |  819 ++++++++++++
+ .../settings-capability-baseline.json              |   12 +-
+ .../settings-capability-coverage.md                |    2 +-
+ .../settings-capability-gate.json                  |   23 +-
+ .../settings-providers-v2.html                     |  822 ++++++++++++
+ .../tools/capture-runs-panel-v2.mjs                |  111 ++
+ .../tools/render-runs-panel-v2.mjs                 |   64 +
+ .../product-experience-redesign/worklist-gate.json |    6 +-
+ src-tauri/frontend/scripts/app-shell.test.mjs      |   13 +-
+ .../frontend/scripts/i18n-hardcoded-baseline.json  |   12 +-
+ .../scripts/m2-03-a13-guidesheets.test.mjs         |   43 +-
+ .../scripts/m2-03-a2-provider-snapshot.test.mjs    |   49 +-
+ .../frontend/scripts/onboarding-campaign.test.mjs  |   23 +-
+ src-tauri/frontend/scripts/runs-panel-v2.test.mjs  |  197 +++
+ src-tauri/frontend/src/components/room/Canvas.tsx  |  398 ++++--
+ .../src/components/room/SubagentIdentity.tsx       |   10 +-
+ src-tauri/frontend/src/components/room/audit.ts    |   72 +
+ .../src/components/scenes/SettingsScene.tsx        |  461 +++++--
+ src-tauri/frontend/src/components/ui/Drawer.tsx    |  100 ++
+ src-tauri/frontend/src/lib/format.ts               |   16 +
+ src-tauri/frontend/src/styles/components.css       |   53 +
+ src-tauri/frontend/src/styles/scenes/misc.css      |  127 +-
+ src-tauri/frontend/src/styles/scenes/room.css      |  199 ++-
+ src-tauri/frontend/src/styles/signature.css        |   11 +-
+ src-tauri/gen/schemas/windows-schema.json          |   42 +
+ src-tauri/src/commands.rs                          |  201 ++-
+ 36 files changed, 5039 insertions(+), 531 deletions(-)

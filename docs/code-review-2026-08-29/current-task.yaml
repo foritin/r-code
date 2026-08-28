@@ -1,13 +1,16 @@
 # 唯一恢复锚点。每完成一个可验证子步更新。
-phase: G->B         # 阶段A done；fix-plan 已生成，进入阶段B
-current_task: FX-00
-current_task_status: pending
+phase: B
+current_task: FX-09
+current_task_status: in_progress
 blocked: []
-last_completed: [RV-01..RV-09, 阶段A->B汇总]
-next_action: 提交 review 文档(docs commit) -> FX-00 用户WIP保全提交 -> FX-01 起逐任务修复
+last_completed: [FX-00, 基线修复, FX-18(9868f51), style(2f2dfe3), FX-01(d1a2320), FX-02(140f7d5), FX-03(9006092)]
+next_action: >
+  FX-09 死代码清除（读 evidence/RV-07-maintainability.md 的清单）->
+  FX-04 drain panic+锁中毒 -> FX-05 事件管线 -> FX-06 工具目录 ->
+  FX-07 破环 -> FX-08 SQL收敛 -> FX-10 -> FX-11 -> FX-12 -> FX-13 -> FX-14 ->
+  FX-15 -> FX-16 -> FX-17 -> FX-19 -> FX-20 -> final-report
 notes: >
-  基线测试后台运行中：evidence/baseline-cargo-test.log、baseline-frontend-test.log。
-  修复顺序：FX-00 -> FX-01(blocking) -> FX-02(blocking) -> FX-03(blocking) -> FX-09 ->
-  FX-04 -> FX-05 -> FX-06 -> FX-07 -> FX-08 -> FX-10 -> FX-11 -> FX-12 -> FX-13 ->
-  FX-14 -> FX-15 -> FX-16 -> FX-17 -> FX-18 -> FX-19 -> FX-20。
-  提交纪律：修复 fix(review): <id> <一句话>；docs 单独 docs(review)。
+  3/4 blocking 已修（F-robust-01/02/03 树杀、F-perf-01 缓冲、F-perf-02/F-robust-05 拷贝+超时）。
+  测试基线：cargo 1661/1(环境性,已修)、前端 249/304(既有,见 KNOWN-FAILURES.md)。
+  agent-worker FX-03 后 299/299 绿。main.rs 两个 never-used warning 留给 FX-09 判定。
+  FX-03 遗留说明：vendor CompletionRequest 按值接口与 sessions 全局锁粒度未动（记 final-report 遗留）。

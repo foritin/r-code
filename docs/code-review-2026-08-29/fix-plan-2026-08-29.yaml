@@ -10,7 +10,7 @@ baseline_tests:
 tasks:
   - id: FX-00
     title: 用户 WIP 资产保全提交
-    status: pending
+    status: done
     depends_on: []
     findings: []            # 流程前置，非修复
     steps:
@@ -22,7 +22,7 @@ tasks:
 
   - id: FX-01
     title: 统一进程树终止原语并补齐 codex wrapper 路径（blocking）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-robust-01, F-robust-02, F-robust-03, F-maint-01]
     root_cause: Windows 树杀知识三处独立实现（commands.rs terminate_codex_child / gateway tools_command / store verification），新进程路径各自写单 kill，无共享原语强制复用
@@ -39,7 +39,7 @@ tasks:
 
   - id: FX-02
     title: Codex 工具输出缓冲去 O(n²)（blocking）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-perf-01, F-perf-10]
     root_cause: 缓冲内存有界设计正确但用逐字符推进实现，计数与截断都是 O(len)/字符；测试只验证语义未验证耗时
@@ -54,7 +54,7 @@ tasks:
 
   - id: FX-03
     title: provider 请求管线深拷贝削减 + 子代理浓缩超时（blocking）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-perf-02, F-perf-11, F-perf-16, F-robust-05]
     root_cause: 请求构造所有权链按值传递；锁内做 O(历史) 深拷；journal 指纹双物化；vendor stream(complete) 接口吃所有权导致重试整份克隆（vendor 接口演进部分记遗留）
@@ -279,7 +279,7 @@ tasks:
 
   - id: FX-18
     title: CI 门禁与文档修复（major）
-    status: pending
+    status: done
     depends_on: [FX-00]
     findings: [F-test-01, F-test-03, F-test-04, F-test-06, F-test-10, F-obs-10, F-obs-11, F-maint-10]
     root_cause: meta 自测不在 CI（fixture 腐烂无人发现）；flaky 探测与门禁执行模式漂移；CORPUS_RUN 静默 skip 掩盖 0 执行；文档进度与 gate 事实矛盾；AGENTS.md 工具名漂移；.gitignore 漏 .reasonix/
