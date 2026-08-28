@@ -8,23 +8,28 @@ export const EXTERNAL_SUBAGENT_COLORS = ["#8a7bd1", "#6f8fc7", "#9b72b0"] as con
 
 type SubagentAvatarSize = "xs" | "sm" | "md";
 
+/** 状态环：run=运行中（accent 脉冲）/ ok=完成 / warn=未完成或无产出。 */
+export type SubagentAvatarStatus = "run" | "ok" | "warn";
+
 interface SubagentAvatarProps {
   index?: number;
   identity?: string;
   runtimeKind?: AgentRun["runtime_kind"];
   size?: SubagentAvatarSize;
+  status?: SubagentAvatarStatus;
   className?: string;
 }
 
 /**
- * 统一的子智能体身份标记。执行器决定图形、色系和轮廓；稳定身份只在同一套
- * 执行器色板内区分不同实例。
+ * 统一的子智能体身份标记。执行器决定图形与色系；轮廓统一为 signature 不对称
+ * 圆角方块，稳定身份只在同一套执行器色板内区分不同实例。status 提供状态环。
  */
 export function SubagentAvatar({
   index = 0,
   identity,
   runtimeKind = "native",
   size = "md",
+  status,
   className = "",
 }: SubagentAvatarProps) {
   const runtimeFamily = runtimeKind === "native"
@@ -43,6 +48,7 @@ export function SubagentAvatar({
     <span
       className={`subagent-avatar runtime-${runtimeFamily} size-${size}${className ? ` ${className}` : ""}`}
       data-runtime-family={runtimeFamily}
+      data-status={status}
       style={{ "--subagent-color": color } as CSSProperties}
       aria-hidden="true"
     >

@@ -19,6 +19,7 @@ import {
   gitPushTask,
   gitStageAccepted,
   gitSuggestCommitMessage,
+  permissionApprove,
   rollbackTask,
   rollbackTaskToCheckpoint,
   reviewAcceptAll,
@@ -46,11 +47,13 @@ import {
 import { guardTripLabel } from "./model";
 import { taskDisplayState, taskStateLabel } from "../../lib/presentation";
 import type {
+  AgentRun,
   ChangeDiff,
   ChangeDiffLine,
   FileChange,
   GitDeliveryStatus,
   GuardTripReason,
+  PermissionDecision,
   ProjectAccessMode,
   ReviewGitStatus,
   SessionMessage,
@@ -74,12 +77,22 @@ import {
   clockTime,
   displayPath,
   elapsedMinutes,
+  elapsedSince,
   modeLabel,
   modeShortLabel,
+  permissionAttribution,
+  permissionRiskLabel,
+  relativeAgo,
 } from "../../lib/format";
-import { buildAuditFeed } from "./audit";
+import {
+  activityBuckets,
+  buildAuditFeed,
+  buildKeyEvents,
+  isRoutineAuditRow,
+  summarizeToolComposition,
+} from "./audit";
 import type { ActivityTraceState } from "./activity";
-import { SubagentAvatar } from "./SubagentIdentity";
+import { SubagentAvatar, type SubagentAvatarStatus } from "./SubagentIdentity";
 import {
   mergeSubagents,
   SubagentSessionTabs,
@@ -575,8 +588,12 @@ export function Canvas({
 
 // ---------- Summary ----------
 
-/** 审计流一次展示的最大条数；再多就该去时间线或 Review 页翻。 */
-const AUDIT_LIMIT = 12;
+/** 原始审计流展开的条数上限；关键事件与构成统计从同一份 feed/消息流派生。 */
+const AUDIT_FEED_LIMIT = 40;
+/** 关键事件时间线最多展示的拐点数。 */
+const KEY_EVENT_LIMIT = 7;
+/** 编队卡片直出的子代理数，超出折叠为「其余 N 个」。 */
+const SQUAD_LIMIT = 4;
 
 function SummaryPanel({
   detail,
@@ -598,8 +615,18 @@ function SummaryPanel({
   onShowSubagents: () => void;
 }) {
   const setTab = useAppStore((s) => s.setCanvasTab);
+  const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [permBusyId, setPermBusyId] = useState<string | null>(null);
+  const [permError, setPermError] = useState<string | null>(null);
   const taskId = detail?.task.id ?? null;
+  // 运行中 1s 一跳刷新 LIVE 耗时；空闲时 30s 足够维持相对时间（「3 分钟前」）不失真。
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), running ? 1_000 : 30_000);
+    return () => window.clearInterval(timer);
+  }, [running]);
   // 审计流的工具明细来自会话 JSONL（tool_call/tool_result 才有工具名、输入、输出），
   // task_events 只提供时间锚点。RoomScene 已经 2s 刷新 detail，事件/变更/验证数量一变
   // 就说明有新动作落盘，据此重取即可，不再叠加一层定时轮询。
@@ -626,7 +653,7 @@ function SummaryPanel({
     };
   }, [taskId, auditStamp]);
 
-  const audit = useMemo(
+  const feed = useMemo(
     () =>
       detail
         ? buildAuditFeed(
@@ -638,29 +665,29 @@ function SummaryPanel({
               permissions: detail.permissions,
               runs: detail.runs,
             },
-            AUDIT_LIMIT
+            AUDIT_FEED_LIMIT
           )
         : [],
     [detail, messages]
   );
+  const composition = useMemo(() => summarizeToolComposition(messages), [messages]);
+  const keyEvents = useMemo(() => buildKeyEvents(feed, KEY_EVENT_LIMIT), [feed]);
+  const routineCount = useMemo(() => feed.filter(isRoutineAuditRow).length, [feed]);
+  const spark = useMemo(() => activityBuckets(detail?.events ?? []), [detail]);
+  const failedOps = useMemo(() => feed.filter((row) => row.state === "fail").length, [feed]);
 
   if (!detail) return <div className="empty">加载中…</div>;
   const { task, runs, changes, permissions, verifications, queued_messages: queuedMessages } = detail;
-  const pending = permissions.filter((p) => p.decision === "pending").length;
+  const pendingList = permissions.filter((p) => p.decision === "pending");
+  const pending = pendingList.length;
   const passed = verifications.filter((v) => v.status === "passed").length;
+  const verifying = verifications.some((v) => v.status === "running");
   const queued = queuedMessages.filter((message) => message.state === "queued" || message.state === "dispatching").length;
   const activeMainRun = runs.find((run) => run.agent_kind === "main" && run.ended_at == null);
   const subagentRuns = runs.filter((run) => run.agent_kind === "subagent");
-  const activeSubagents = activity.subagents.length > 0
-    ? activity.subagents.filter((child) => child.status === "queued" || child.status === "running" || child.status === "waiting_permission").length
-    : subagentRuns.filter((run) => run.ended_at == null).length;
-  const completedSubagents = activity.subagents.length > 0
-    ? activity.subagents.filter((child) => child.status === "completed").length
-    : subagentRuns.filter((run) => run.ended_at != null && run.review_state !== "failed" && run.review_state !== "aborted").length;
-  const subagentCount = Math.max(activity.subagents.length, subagentRuns.length);
-  const subagentAvatars = activity.subagents.length > 0
-    ? activity.subagents.map((child) => ({ identity: child.id, runtimeKind: child.runtimeKind }))
-    : subagentRuns.map((run) => ({ identity: run.id, runtimeKind: run.runtime_kind }));
+  const squad = buildSquad(subagentRuns, activity, running, now);
+  const activeSquad = squad.filter((item) => item.live).length;
+  const inconclusiveSquad = squad.filter((item) => !item.live && item.ring === "warn").length;
   const title = task.title.trim() || task.goal.trim() || "未命名会话";
   const hasDistinctGoal = Boolean(task.goal_active && task.goal.trim() && task.goal.trim() !== title);
   const workspaceLabel = workspaceName ?? (workspacePath ? "已附加文件夹" : "用户路径");
@@ -672,6 +699,19 @@ function SummaryPanel({
     workspaceAttached && workspaceAccessMode ? projectAccessModeLabel(workspaceAccessMode) : null;
   const policyLabel = `${modeShortLabel(task.mode)} · ${accessLabel ?? "默认工作区"}`;
   const policyTitle = `${modeLabel(task.mode)}\n项目权限：${accessLabel ?? "用户路径（默认工作区）· 写操作需批准"}`;
+
+  const decidePermission = async (id: string, decision: Exclude<PermissionDecision, "pending">) => {
+    setPermBusyId(id);
+    setPermError(null);
+    try {
+      await permissionApprove(id, decision);
+      await refreshDetail(task.id);
+    } catch (error) {
+      setPermError(String(error));
+    } finally {
+      setPermBusyId(null);
+    }
+  };
 
   return (
     <div className="sum-wrap">
@@ -694,72 +734,184 @@ function SummaryPanel({
           {policyLabel}
         </span>
       </div>
-      {subagentCount > 0 && (
-        <button type="button" className="sum-subagents-button" onClick={onShowSubagents} aria-label="打开子智能体列表">
-          <span className="sum-subagent-stack" aria-hidden="true">
-            {Array.from({ length: Math.min(3, subagentCount) }, (_, index) => {
-              const avatar = subagentAvatars[index];
-              return (
-                <SubagentAvatar
-                  index={index}
-                  identity={avatar?.identity}
-                  runtimeKind={avatar?.runtimeKind}
-                  size="sm"
-                  key={avatar?.identity ?? index}
-                />
-              );
-            })}
-          </span>
-          <span className="sum-subagent-copy">
-            <strong>
-              {activeSubagents > 0 ? `${activeSubagents} 运行中` : "没有运行中的子智能体"}
-              {completedSubagents > 0 ? ` · ${completedSubagents} 已完成` : ""}
-            </strong>
-            <small>查看各自的运行过程</small>
-          </span>
-          <IconChevronRight width={14} height={14} />
-        </button>
-      )}
-      {running && (
-        <div className="sum-live">
-          <div className="sum-live-head">
-            <span><i /> 当前运行</span>
-            <strong>{activity.label}</strong>
+
+      {running && activeMainRun && (
+        <div className="sum-live-card">
+          <div className="sum-live-top">
+            <span className="sum-live-dot" />
+            <span className="sum-live-tag">LIVE · 当前运行</span>
+            <span className="sum-live-elapsed">{elapsedSince(activeMainRun.started_at, now)}</span>
+          </div>
+          <div className="sum-live-action">{activity.label}</div>
+          <div className="sum-live-bar" aria-hidden="true"><i /></div>
+          <div className="sum-live-sub">
+            已读取 {composition.read} 个文件 · {composition.command} 条命令 · {composition.write + composition.edit} 次写入
+            {queued > 0 ? ` · 队列 ${queued}` : ""}
           </div>
         </div>
       )}
-      {/* 产出摘要使用一条平面事实栏，不再把每个数字包成独立卡片。 */}
-      <div className="sum-facts">
-        <button className="sum-cell action" onClick={() => setTab("changes")}>
-          <div className="k">变更文件</div>
-          <div className="v">{changes.length}</div>
-        </button>
-        <button className="sum-cell action" onClick={() => setTab("review")}>
-          <div className="k">验证</div>
-          <div className="v">
-            {verifications.length === 0 ? "未运行" : `${passed}/${verifications.length} 通过`}
+
+      {pending > 0 && (
+        <div className="sum-perm">
+          <div className="sum-perm-top">
+            <b>待批权限 · {pending}</b>
+            <span className="sum-perm-risk">{permissionRiskLabel(pendingList[0].risk_level)}</span>
           </div>
-        </button>
-        <button className="sum-cell action" onClick={() => setTab("review")}>
-          <div className="k">待批权限</div>
-          <div className={"v" + (pending > 0 ? " warn" : "")}>{pending}</div>
-        </button>
-        {queued > 0 && (
-          <div className="sum-cell">
-            <div className="k">队列</div>
-            <div className="v warn">{queued}</div>
+          <div className="sum-perm-cmd" title={pendingList[0].input_summary}>
+            {pendingList[0].input_summary.trim() || pendingList[0].tool_name}
           </div>
-        )}
+          <div className="sum-perm-why">
+            {permissionAttribution(pendingList[0], runs).label} · {pendingList[0].tool_name}
+            {pending > 1 ? ` · 其余 ${pending - 1} 项在「验证与决策」` : ""}
+          </div>
+          <div className="sum-perm-actions">
+            <button type="button" className="deny" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "deny")}>
+              拒绝
+            </button>
+            <button type="button" className="ghost" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "allow_always")}>
+              总是允许
+            </button>
+            <button type="button" className="approve" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "allow")}>
+              允许一次
+            </button>
+          </div>
+          {permError && <div className="sum-perm-error">批复失败：{permError}</div>}
+        </div>
+      )}
+
+      <div className="zone-head">运行简报</div>
+      <div className="sum-brief">
+        <div className="sum-brief-outcomes">
+          <button type="button" className="sum-oc" onClick={() => setTab("changes")} title="查看变更文件">
+            <div className="sum-oc-v">{changes.length}</div>
+            <div className="sum-oc-k">变更文件</div>
+          </button>
+          <button type="button" className="sum-oc" onClick={() => setTab("review")} title="查看验证记录">
+            <div className={"sum-oc-v" + (verifications.length === 0 ? " dim" : passed === verifications.length ? " ok" : " bad")}>
+              {verifications.length === 0 ? "未运行" : `${passed}/${verifications.length}`}
+            </div>
+            <div className="sum-oc-k">验证{verifying ? " · 进行中" : ""}</div>
+          </button>
+          <button type="button" className="sum-oc" onClick={() => setTab("review")} title="查看待批权限">
+            <div className={"sum-oc-v" + (pending > 0 ? " warn" : "")}>{pending}</div>
+            <div className="sum-oc-k">待批权限</div>
+          </button>
+          <button type="button" className="sum-oc" onClick={() => setAuditOpen(true)} title="展开原始审计流查看失败详情">
+            <div className={"sum-oc-v" + (failedOps > 0 ? " bad" : " ok")}>{failedOps}</div>
+            <div className="sum-oc-k">失败操作</div>
+          </button>
+          {queued > 0 && !running && (
+            <div className="sum-oc static">
+              <div className="sum-oc-v warn">{queued}</div>
+              <div className="sum-oc-k">队列</div>
+            </div>
+          )}
+        </div>
+        <div className="sum-brief-activity">
+          {composition.total > 0 && (
+            <div
+              className="sum-bar"
+              role="img"
+              aria-label={`操作构成：读取 ${composition.read}，命令 ${composition.command}，检索 ${composition.search}，写入 ${composition.write + composition.edit}${composition.other > 0 ? `，其他 ${composition.other}` : ""}`}
+            >
+              {composition.read > 0 && <span className="b-read" style={{ width: `${(composition.read / composition.total) * 100}%` }} />}
+              {composition.command > 0 && <span className="b-cmd" style={{ width: `${(composition.command / composition.total) * 100}%` }} />}
+              {composition.search > 0 && <span className="b-search" style={{ width: `${(composition.search / composition.total) * 100}%` }} />}
+              {composition.write + composition.edit > 0 && <span className="b-write" style={{ width: `${((composition.write + composition.edit) / composition.total) * 100}%` }} />}
+              {composition.other > 0 && <span className="b-other" style={{ width: `${(composition.other / composition.total) * 100}%` }} />}
+            </div>
+          )}
+          <div className="sum-legend">
+            <span><i className="d-read" />读取 {composition.read}</span>
+            <span><i className="d-cmd" />命令 {composition.command}</span>
+            <span><i className="d-search" />检索 {composition.search}</span>
+            <span><i className="d-write" />写入 {composition.write + composition.edit}</span>
+            <span className="sum-legend-total">
+              {spark.length > 0 && (
+                <span className="sum-spark" aria-hidden="true">
+                  {spark.map((value, index) => (
+                    <s key={index} className={value >= 0.85 ? "hot" : ""} style={{ height: `${Math.max(18, Math.round(value * 100))}%` }} />
+                  ))}
+                </span>
+              )}
+              {composition.total} 次操作{running ? " · 进行中" : ""}
+            </span>
+          </div>
+        </div>
       </div>
+
+      {squad.length > 0 && (
+        <>
+          <div className="zone-head">
+            子代理编队
+            <span className={"zone-hint" + (inconclusiveSquad > 0 ? " warn" : "")}>
+              {squad.length} 个
+              {activeSquad > 0 ? ` · ${activeSquad} 运行中` : ""}
+              {inconclusiveSquad > 0 ? ` · ${inconclusiveSquad} 个无结果摘要` : ""}
+            </span>
+          </div>
+          <div className="sum-squad">
+            {squad.slice(0, SQUAD_LIMIT).map((item, index) => (
+              <button type="button" key={item.id} className="sum-sq" onClick={onShowSubagents} title="打开子智能体列表查看运行过程">
+                <SubagentAvatar index={index} identity={item.id} runtimeKind={item.runtimeKind} size="sm" status={item.ring} />
+                <span className="sum-sq-main">
+                  <span className="sum-sq-top"><b>{item.label}</b><em>{item.meta}</em></span>
+                  <span className={`sum-sq-sub ${item.tone}`}>{item.outcome}</span>
+                </span>
+                <IconChevronRight width={13} height={13} />
+              </button>
+            ))}
+            {squad.length > SQUAD_LIMIT && (
+              <button type="button" className="sum-sq-more" onClick={onShowSubagents}>
+                其余 {squad.length - SQUAD_LIMIT} 个子代理 →
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
       <div className="zone-head">
-        运行审计
-        <span className="zone-hint">工具 · 目标 · 结果</span>
+        关键事件
+        <span className="zone-hint">
+          {routineCount > 0 ? `${routineCount} 次常规读取/检索已折叠` : "命令 · 验证 · 权限 · 子代理"}
+        </span>
       </div>
-      {audit.length === 0 ? (
-        <div className="sum-empty">会话尚未产生可审计的动作。</div>
+      {keyEvents.length === 0 ? (
+        <div className="sum-empty">
+          {feed.length === 0 ? "会话尚未产生可审计的动作。" : "暂无关键事件，只有常规读取/检索。"}
+        </div>
       ) : (
+        <div className="sum-tl">
+          {keyEvents.map((row) => (
+            <div className={`sum-tl-row is-${row.state}`} key={row.id} title={row.title}>
+              <span className="sum-tl-dot" />
+              <div className="sum-tl-main">
+                <div className="sum-tl-top">
+                  <span className="sum-tl-kind">{row.tag}</span>
+                  <b className={row.kind === "tool" || row.kind === "verify" ? "" : "plain"}>{row.text}</b>
+                  <em>{row.atIso ? relativeAgo(row.atIso, now) : ""}</em>
+                </div>
+                {row.result && <div className="sum-tl-sub">{row.result}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {feed.length > 0 && (
+        <button
+          type="button"
+          className="sum-audit-toggle"
+          aria-expanded={auditOpen}
+          onClick={() => setAuditOpen((open) => !open)}
+        >
+          <span className="tri">{auditOpen ? "▾" : "▸"}</span> 原始审计流
+          <em>读取 {composition.read} · 检索 {composition.search} · 共 {feed.length} 条</em>
+        </button>
+      )}
+      {auditOpen && (
         <div className="audit-list">
-          {audit.map((row) => (
+          {feed.map((row) => (
             <div
               className={`audit-row kind-${row.kind} state-${row.state}`}
               key={row.id}
@@ -775,6 +927,106 @@ function SummaryPanel({
       )}
     </div>
   );
+}
+
+interface SquadItem {
+  id: string;
+  label: string;
+  runtimeKind: AgentRun["runtime_kind"];
+  ring: SubagentAvatarStatus;
+  /** 行右元信息：已完成为耗时，运行中为已进行时长。 */
+  meta: string;
+  outcome: string;
+  tone: "ok" | "warn" | "live";
+  live: boolean;
+  startedAtMs: number;
+}
+
+/**
+ * 子代理编队 —— 以持久化的 AgentRun 为准（有 summary/review_state/耗时），
+ * 用 activity 快照补充运行中的实时状态与当前动作。运行中置顶，其余按开始时间倒序。
+ */
+function buildSquad(
+  runs: readonly AgentRun[],
+  activity: ActivityTraceState,
+  mainRunning: boolean,
+  now: number,
+): SquadItem[] {
+  const liveById = new Map(activity.subagents.map((child) => [child.id, child]));
+  const items: SquadItem[] = runs.map((run) => {
+    const label = run.agent_label?.trim() || "只读调查";
+    const live = liveById.get(run.id);
+    const startedAtMs = Date.parse(run.started_at);
+    const liveStatus = live && live.status !== "completed" && live.status !== "failed" && live.status !== "cancelled"
+      ? live.status
+      : null;
+    if (run.ended_at == null && (mainRunning || liveStatus != null)) {
+      return {
+        id: run.id,
+        label,
+        runtimeKind: run.runtime_kind,
+        ring: "run",
+        meta: Number.isNaN(startedAtMs) ? "" : elapsedSince(run.started_at, now),
+        outcome: liveStatus === "queued"
+          ? "排队中"
+          : liveStatus === "waiting_permission"
+            ? "等待权限批准"
+            : live?.detail ?? "运行中",
+        tone: "live",
+        live: true,
+        startedAtMs,
+      };
+    }
+    const endedMs = run.ended_at != null ? Date.parse(run.ended_at) : Number.NaN;
+    const duration = !Number.isNaN(startedAtMs) && !Number.isNaN(endedMs)
+      ? elapsedSince(run.started_at, endedMs)
+      : "";
+    if (run.review_state === "failed" || run.review_state === "aborted" || run.review_state === "rolled_back") {
+      return {
+        id: run.id,
+        label,
+        runtimeKind: run.runtime_kind,
+        ring: "warn",
+        meta: duration,
+        outcome: run.review_state === "failed" ? "✗ 执行失败" : "✗ 已中止",
+        tone: "warn",
+        live: false,
+        startedAtMs,
+      };
+    }
+    if (run.ended_at == null) {
+      return {
+        id: run.id,
+        label,
+        runtimeKind: run.runtime_kind,
+        ring: "warn",
+        meta: duration,
+        outcome: "已中断 · 未收到完成回传",
+        tone: "warn",
+        live: false,
+        startedAtMs,
+      };
+    }
+    const summary = run.summary?.trim() ?? "";
+    return {
+      id: run.id,
+      label,
+      runtimeKind: run.runtime_kind,
+      ring: summary ? "ok" : "warn",
+      meta: duration,
+      outcome: summary ? `✓ ${cutSquadSummary(summary)}` : "已完成 · 无结果摘要",
+      tone: summary ? "ok" : "warn",
+      live: false,
+      startedAtMs,
+    };
+  });
+  items.sort((a, b) => Number(b.live) - Number(a.live) || b.startedAtMs - a.startedAtMs);
+  return items;
+}
+
+function cutSquadSummary(value: string): string {
+  const text = value.replace(/\s+/g, " ");
+  return text.length > 40 ? `${text.slice(0, 39)}…` : text;
 }
 
 function statusChipClass(detail: TaskDetail): string {

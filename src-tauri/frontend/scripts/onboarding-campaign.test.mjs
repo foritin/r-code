@@ -332,17 +332,23 @@ test("an empty provider form applies the complete first preset and keeps the pri
   });
 
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.locator("#set-preset").waitFor({ state: "visible" });
+  // 编辑面收进抽屉后，空配置下需显式打开「新建服务」抽屉。
+  await page.getByRole("button", { name: "新建服务", exact: true }).click();
+  await page.locator(".provider-preset-grid").waitFor({ state: "visible" });
+  // 目录异步加载完成后，首个预预设（OpenAI）自动选中。
+  await page.waitForFunction(
+    () => document.querySelector(".provider-preset.selected .provider-preset-label")?.textContent === "OpenAI",
+  );
 
   const form = await page.evaluate(() => ({
-    preset: document.querySelector("#set-preset")?.value,
+    preset: document.querySelector(".provider-preset.selected .provider-preset-label")?.textContent ?? null,
     profile: document.querySelector("#set-profile-name")?.value,
     baseUrl: document.querySelector("#set-base-url")?.value,
     protocol: document.querySelector("#set-protocol")?.value,
     model: document.querySelector("#set-model")?.value,
   }));
   assert.deepEqual(form, {
-    preset: "openai",
+    preset: "OpenAI",
     profile: "openai",
     baseUrl: "https://api.openai.com/v1",
     protocol: "openai_chat",
@@ -357,7 +363,7 @@ test("an empty provider form applies the complete first preset and keeps the pri
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
   await webCapability.getByText(/线路协议切换为 Responses/).waitFor();
 
-  await page.locator("#set-preset").selectOption("deepseek");
+  await page.locator(".provider-preset").filter({ hasText: "DeepSeek" }).click();
   assert.equal(await page.locator("#set-profile-name").inputValue(), "deepseek");
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
   await webCapability.getByText("需切换线路", { exact: true }).waitFor();
@@ -391,7 +397,7 @@ test("an empty provider form applies the complete first preset and keeps the pri
 
   if (process.env.R_CODE_PROVIDER_FORM_SHOT) {
     fs.mkdirSync(path.dirname(process.env.R_CODE_PROVIDER_FORM_SHOT), { recursive: true });
-    await page.locator(".provider-editor").screenshot({ path: process.env.R_CODE_PROVIDER_FORM_SHOT });
+    await page.locator(".drawer-panel").screenshot({ path: process.env.R_CODE_PROVIDER_FORM_SHOT });
   }
 
   await page.locator(".provider-advanced > summary").click();
@@ -399,7 +405,7 @@ test("an empty provider form applies the complete first preset and keeps the pri
   assert.equal(await page.locator("#set-protocol").isVisible(), true);
   if (process.env.R_CODE_PROVIDER_FORM_ADVANCED_SHOT) {
     fs.mkdirSync(path.dirname(process.env.R_CODE_PROVIDER_FORM_ADVANCED_SHOT), { recursive: true });
-    await page.locator(".provider-editor").screenshot({ path: process.env.R_CODE_PROVIDER_FORM_ADVANCED_SHOT });
+    await page.locator(".drawer-panel").screenshot({ path: process.env.R_CODE_PROVIDER_FORM_ADVANCED_SHOT });
   }
   await page.getByRole("button", { name: "Anthropic 兼容口" }).click();
   assert.equal(await page.locator("#set-base-url").inputValue(), "https://api.deepseek.com/anthropic");
@@ -439,9 +445,8 @@ test("model candidate menu lists every preset model while the input is prefilled
   // Avoid CJK literals in test sources: "设置" is composed from code points.
   const settingsLabel = String.fromCodePoint(0x8BBE, 0x7F6E);
   await page.getByRole("button", { name: settingsLabel, exact: true }).click();
-  await page.locator("#set-preset").waitFor({ state: "visible" });
-
-  await page.locator(".provider-list .provider-row").filter({ hasText: "DeepSeek" }).click();
+  await page.locator(".provider-roster .provider-row").filter({ hasText: "DeepSeek" }).click();
+  await page.locator("#set-model").waitFor({ state: "visible" });
   await page.waitForFunction(() => document.querySelector("#set-model")?.value === "deepseek-v4-pro");
 
   // The native datalist was replaced: it filtered suggestions by the prefilled value,

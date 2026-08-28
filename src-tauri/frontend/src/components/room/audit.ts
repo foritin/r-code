@@ -21,6 +21,17 @@ import type {
 import { permissionRiskLabel, toolTarget, toolVerb } from "../../lib/format";
 import { summarizeOutput } from "./model";
 
+/** 工具调用构成：按动词聚合（读取/命令/检索/编辑/写入/其他）。 */
+export interface ToolComposition {
+  read: number;
+  command: number;
+  search: number;
+  edit: number;
+  write: number;
+  other: number;
+  total: number;
+}
+
 export type AuditKind = "tool" | "file" | "verify" | "permission" | "agent" | "session";
 /** ok=成功 fail=失败 wait=进行中/待处理 info=中性记录 */
 export type AuditState = "ok" | "fail" | "wait" | "info";
@@ -338,6 +349,67 @@ function eventRows(events: readonly TaskEvent[]): AuditRow[] {
     });
   }
   return rows;
+}
+
+// ---------- 运行简报聚合 ----------
+
+/**
+ * 工具调用构成 —— 从会话 JSONL 的 tool_call 按动词聚合，排除协调类工具
+ * （delegate/wait 等不产生面板上可读的"操作"）。用于把平铺的读取/检索噪声
+ * 压缩成一条构成条，总数直接来自消息流，不受审计条数上限影响。
+ */
+export function summarizeToolComposition(messages: readonly SessionMessage[]): ToolComposition {
+  const counts: ToolComposition = { read: 0, command: 0, search: 0, edit: 0, write: 0, other: 0, total: 0 };
+  for (const message of messages) {
+    if (message.kind !== "tool_call") continue;
+    const name = (message.tool_name ?? "").trim();
+    if (!name || isCoordinationTool(name)) continue;
+    switch (toolVerb(name)) {
+      case "run": counts.command += 1; break;
+      case "read": counts.read += 1; break;
+      case "search": counts.search += 1; break;
+      case "edit": counts.edit += 1; break;
+      case "write": counts.write += 1; break;
+      default: counts.other += 1;
+    }
+    counts.total += 1;
+  }
+  return counts;
+}
+
+/** 常规后台动作（成功/进行中的读取与检索）：折叠进构成条，不占关键事件时间线。 */
+export function isRoutineAuditRow(row: AuditRow): boolean {
+  return row.kind === "tool" && row.state !== "fail" && (row.tag === "读取" || row.tag === "检索");
+}
+
+/**
+ * 关键事件 = 审计流里值得逐条看的拐点：命令、编辑、写入、文件变更、验证、
+ * 权限、子代理起落、会话标记，以及任何失败行。常规读取/检索由调用方折叠计数。
+ */
+export function buildKeyEvents(rows: readonly AuditRow[], limit = 7): AuditRow[] {
+  return rows.filter((row) => !isRoutineAuditRow(row)).slice(0, limit);
+}
+
+/**
+ * 活动火花线 —— 把 task_events 的时间戳按会话时间跨度分桶，返回 0..1 归一化
+ * 强度序列（长度 = buckets）。无事件或跨度不足一分钟时返回空数组。
+ */
+export function activityBuckets(events: readonly TaskEvent[], buckets = 12): number[] {
+  const stamps = events
+    .map((event) => Date.parse(event.created_at))
+    .filter((at) => !Number.isNaN(at))
+    .sort((a, b) => a - b);
+  if (stamps.length === 0) return [];
+  const start = stamps[0];
+  const end = stamps[stamps.length - 1];
+  if (end - start < 60_000) return [];
+  const counts = new Array<number>(buckets).fill(0);
+  for (const at of stamps) {
+    const index = Math.min(buckets - 1, Math.floor(((at - start) / (end - start)) * buckets));
+    counts[index] += 1;
+  }
+  const peak = Math.max(...counts);
+  return peak > 0 ? counts.map((count) => count / peak) : [];
 }
 
 // ---------- 工具函数 ----------

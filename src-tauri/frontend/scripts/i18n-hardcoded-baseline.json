@@ -92,8 +92,8 @@
     "sha256": "dff71b8674b5aede4715dc542dffe494ee728460f82aab79a73837b1216c96d7"
   },
   "src/components/room/Canvas.tsx": {
-    "count": 358,
-    "sha256": "bb87ae9a2d30781c7a47b77f04ceef4bf569f546f3bcf06bace3e76e2fb06b98"
+    "count": 422,
+    "sha256": "9631f3845fda32cf277068cd8aac20b5caebfc92eec017ba40c08e248992f230"
   },
   "src/components/room/CodexModelConfiguration.tsx": {
     "count": 26,
@@ -224,8 +224,8 @@
     "sha256": "d268094ae6ed8a655a1db6f75d9c1a361b14526bd965c2f83e56c2b5cd6783cb"
   },
   "src/components/scenes/SettingsScene.tsx": {
-    "count": 478,
-    "sha256": "48aee91619a64c773f0deab941041e900463bc17e1258c4d47d65823532ed8da"
+    "count": 509,
+    "sha256": "a9fb64f8a5f327c5741e9b5b8a8b5bd398d6968566df064187a93ad137271fe5"
   },
   "src/components/scenes/SubagentProvidersPanel.tsx": {
     "count": 94,
@@ -262,6 +262,10 @@
   "src/components/ui/ConfirmDialog.tsx": {
     "count": 1,
     "sha256": "2b898bbb0f64cbd04ff7642b92d868c1fa83414bd2a6b5f005c4232436bfc8f3"
+  },
+  "src/components/ui/Drawer.tsx": {
+    "count": 2,
+    "sha256": "0b4846a27cf9ea1d24381bef1aa346ab12ec1e7e8b27b01ef4a359740d33e5ac"
   },
   "src/components/ui/ErrorBoundary.tsx": {
     "count": 4,

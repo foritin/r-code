@@ -1,6 +1,6 @@
 # Settings 功能保全与设计盘点矩阵
 
-<!-- generated_from_settings_capability_baseline: f36468c0efdcbe125dbe3b7a6f946e25a14f878565eaea15b99e652ffc0e9458 -->
+<!-- generated_from_settings_capability_baseline: dededb6bd3c6d6a30d11805f368272803f4cd929de50f1dfaad463ebc7a9e3e2 -->
 
 > 本文区分两件事：结构化 inventory 对当前 `dev` 能力的分类，以及逐项源码证据、精确行为合同和运行时验证。前者不能替代后三者。
 >

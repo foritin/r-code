@@ -1,0 +1,1370 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>R-Code · 体验原型 v2</title>
+<style>
+  /* ============ tokens —— 取自 src/styles/tokens.css（Obsidian / Studio Light） ============ */
+  :root {
+    --font-ui: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+    --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+    --bg-app: #10110f;
+    --bg-sidebar: #1c1918;
+    --bg-panel: #151614;
+    --bg-card: #1b1c19;
+    --bg-chip: #25241f;
+    --bg-control: #23231f;
+    --bg-inset: #0b0c0a;
+    --bg-hover: #20211e;
+    --bg-active: #29261f;
+    --bg-float: #1e1d1a;
+
+    --border: #2b2b27;
+    --border-strong: #4b463d;
+    --divider: #32312c;
+
+    --fg: #f1efe9;
+    --fg-muted: #a49f95;
+    --fg-faint: #817b72;
+
+    --accent: #f4742b;
+    --accent-hover: #ff8642;
+    --accent-2: #c49a61;
+    --accent-fg: #17100b;
+    --accent-icon: #ff9b5d;
+    --accent-soft: rgba(244, 116, 43, .14);
+
+    --warning: #e5a15b;
+    --success: #69c798;
+    --danger: #df6b62;
+
+    /* signature 光晕（暗色，与 tokens.css 一致） */
+    --glow-corner-hot: rgba(255, 139, 72, .18);
+    --glow-corner-soft: rgba(216, 67, 33, .07);
+    --glow-side-deep: rgba(176, 53, 34, .12);
+    --glow-side-hot: rgba(244, 116, 43, .06);
+    --glow-wash: rgba(244, 116, 43, .025);
+
+    --radius-btn: 6px;
+    --radius-pane: 8px;
+    --radius-card: 12px;
+    --radius-composer: 16px;
+    --workspace-radius: 28px;
+
+    --topbar-h: 42px;
+    --rail-w: 264px;
+
+    --shadow-float: 0 24px 64px rgba(0, 0, 0, .5);
+    --workspace-shadow: -18px -18px 46px rgba(0, 0, 0, .12);
+    --ease: cubic-bezier(.32, .72, .24, 1);
+  }
+  [data-theme="light"] {
+    --bg-app: #fbf9f5;
+    --bg-sidebar: #f5f0ea;
+    --bg-panel: #fffdf9;
+    --bg-card: #ffffff;
+    --bg-chip: #f1ece4;
+    --bg-control: #f6f1ea;
+    --bg-inset: #efe9e0;
+    --bg-hover: #efe9e1;
+    --bg-active: #eae2d7;
+    --bg-float: #fffdf9;
+
+    --border: #e4ddd2;
+    --border-strong: #cfc5b6;
+    --divider: #e4ddd2;
+
+    --fg: #2b241f;
+    --fg-muted: #6f675c;
+    --fg-faint: #9b9084;
+
+    --accent: #ed6514;
+    --accent-hover: #d9531f;
+    --accent-2: #b94c13;
+    --accent-fg: #fff8f2;
+    --accent-icon: #d9531f;
+    --accent-soft: rgba(237, 101, 20, .1);
+
+    --glow-corner-hot: rgba(191, 91, 73, .11);
+    --glow-corner-soft: rgba(191, 91, 73, .035);
+    --glow-side-deep: rgba(191, 91, 73, .08);
+    --glow-side-hot: rgba(191, 91, 73, .055);
+    --glow-wash: rgba(191, 91, 73, .035);
+
+    --shadow-float: 0 24px 64px rgba(64, 42, 20, .16);
+    --workspace-shadow: -18px -18px 46px rgba(64, 42, 20, .06);
+  }
+
+  /* ============ base ============ */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--fg);
+    background: var(--bg-sidebar);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  input, textarea, select { font: inherit; color: inherit; }
+  ::selection { background: var(--accent-soft); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  svg { display: block; flex: none; }
+
+  /* ============ 骨架：整窗光晕在根节点，主面板只有左上角 28px 圆角 ============ */
+  .app {
+    height: 100vh;
+    display: grid;
+    grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    background-color: var(--bg-sidebar);
+    background-image:
+      radial-gradient(210px 172px at var(--rail-w) var(--topbar-h),
+        var(--glow-corner-hot) 0%, var(--glow-corner-soft) 34%, transparent 74%),
+      radial-gradient(112% 72% at 18% 112%,
+        var(--glow-side-deep) 0%, rgba(176, 53, 34, .05) 34%, transparent 72%),
+      radial-gradient(82% 58% at -14% 28%,
+        var(--glow-side-hot) 0%, transparent 73%),
+      linear-gradient(90deg, var(--glow-wash), transparent 78%);
+  }
+  [data-theme="light"] .app {
+    background-image:
+      radial-gradient(210px 172px at var(--rail-w) var(--topbar-h),
+        var(--glow-corner-hot) 0%, var(--glow-corner-soft) 34%, transparent 74%),
+      radial-gradient(112% 72% at 18% 112%,
+        var(--glow-side-deep) 0%, rgba(191, 91, 73, .04) 34%, transparent 72%),
+      radial-gradient(82% 58% at -14% 28%,
+        var(--glow-side-hot) 0%, transparent 73%),
+      linear-gradient(90deg, var(--glow-wash), transparent 78%);
+  }
+
+  /* ============ topbar（整窗通栏） ============ */
+  .topbar {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 10px 0 12px;
+  }
+  .topbar .menus { display: flex; gap: 2px; margin-left: 8px; color: var(--fg-muted); font-size: 12.5px; }
+  .topbar .menus span { padding: 3px 8px; border-radius: var(--radius-btn); cursor: default; }
+  .crumb { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--fg-faint); margin-left: 14px; min-width: 0; }
+  .crumb b { color: var(--fg-muted); font-weight: 550; }
+  .topbar .spacer { flex: 1; }
+
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: var(--radius-btn);
+    display: grid; place-items: center;
+    color: var(--fg-faint);
+    transition: background .12s, color .12s;
+  }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
+
+  .status-pill {
+    display: flex; align-items: center; gap: 7px;
+    height: 28px; padding: 0 12px;
+    border-radius: 999px;
+    background: var(--bg-control);
+    border: 1px solid var(--border);
+    font-size: 12px; color: var(--fg-muted);
+    transition: background .12s, border-color .12s;
+    margin-right: 4px;
+  }
+  .status-pill:hover { border-color: var(--border-strong); color: var(--fg); }
+  .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+  .status-pill.checking .dot { background: var(--warning); animation: pulse 1.2s infinite; }
+
+  .win-controls { display: flex; align-items: center; gap: 2px; margin-left: 6px; }
+
+  /* ============ sidebar ============ */
+  .sidebar {
+    display: flex; flex-direction: column;
+    padding: 6px 12px 10px 14px;
+    gap: 3px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 14px; }
+  .brand-mark {
+    width: 26px; height: 26px;
+    border-radius: 9px 9px 3px 9px;      /* signature 不对称圆角母题 */
+    background: linear-gradient(135deg, #ff8642, #e85f16);
+    color: #fff; font-weight: 700; font-size: 13.5px;
+    display: grid; place-items: center;
+  }
+  .brand-name { font-weight: 600; font-size: 14.5px; letter-spacing: .01em; }
+  .brand .icon-btn { margin-left: auto; }
+
+  .btn-new {
+    display: flex; align-items: center; gap: 8px;
+    height: 34px; padding: 0 12px;
+    border-radius: var(--radius-btn);
+    color: var(--fg-muted); font-size: 13px; font-weight: 550;
+    border: 1px solid var(--border);
+    background: var(--bg-control);
+    margin: 0 2px 14px;
+    transition: border-color .13s, color .13s, background .13s;
+  }
+  .btn-new:hover { border-color: var(--border-strong); color: var(--fg); }
+  .btn-new svg { color: var(--accent-icon); }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    height: 32px; padding: 0 10px;
+    border-radius: 3px 9px 9px 3px;
+    color: var(--fg-muted); font-size: 13px;
+    width: 100%; text-align: left;
+    transition: background .12s, color .12s;
+  }
+  .nav-item:hover { background: var(--bg-hover); color: var(--fg); }
+  .nav-item.active {
+    color: var(--fg); font-weight: 550;
+    background: linear-gradient(90deg, rgba(244, 116, 43, .14), rgba(244, 116, 43, .025) 62%, transparent);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  [data-theme="light"] .nav-item.active {
+    background: linear-gradient(90deg, rgba(237, 101, 20, .13), rgba(237, 101, 20, .03) 62%, transparent);
+  }
+  .nav-item.active svg { color: var(--accent-icon); }
+  .nav-item .count { margin-left: auto; font-size: 11.5px; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+  .nav-item .count.attn { color: var(--accent-icon); font-weight: 600; }
+
+  .side-label {
+    font-size: 11.5px; color: var(--fg-faint);
+    padding: 15px 10px 5px;
+    display: flex; align-items: center;
+    letter-spacing: .02em;
+  }
+  .side-label .add {
+    margin-left: auto; color: var(--fg-faint);
+    display: flex; align-items: center; gap: 3px;
+    font-size: 11.5px; padding: 2px 6px; border-radius: var(--radius-btn);
+  }
+  .side-label .add:hover { color: var(--fg); background: var(--bg-hover); }
+  .side-empty { padding: 2px 10px; color: var(--fg-faint); font-size: 12.5px; }
+
+  .project { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; border-radius: var(--radius-btn); color: var(--fg-muted); width: 100%; text-align: left; font-size: 13px; }
+  .project:hover { background: var(--bg-hover); color: var(--fg); }
+  .project .name { font-weight: 550; color: var(--fg); }
+  .project .dots { margin-left: auto; opacity: 0; color: var(--fg-faint); }
+  .project:hover .dots { opacity: 1; }
+
+  .thread {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 5px 10px 5px 22px;
+    color: var(--fg-muted); font-size: 12.5px;
+    border-radius: var(--radius-btn); width: 100%; text-align: left;
+  }
+  .thread:hover { background: var(--bg-hover); }
+  .thread .t-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread .t-time { margin-left: auto; color: var(--fg-faint); font-size: 11.5px; flex: none; }
+  .thread .run-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; align-self: center; animation: pulse 1.6s var(--ease) infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+  .side-foot { margin-top: auto; padding-top: 10px; }
+
+  /* ============ 主面板：圆框 ============ */
+  .main {
+    position: relative;
+    min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--bg-app);
+    border-radius: var(--workspace-radius) 0 0 0;
+    border-top: 1px solid var(--divider);
+    border-left: 1px solid var(--divider);
+    box-shadow: var(--workspace-shadow);
+    overflow: hidden;
+  }
+  /* 圆角刻痕：顶边 62px 橙色渐隐线 + 左边 48px 橙色渐隐线 */
+  .main::before {
+    content: ""; position: absolute; top: 0; left: 32px;
+    width: 62px; height: 1px; z-index: 2;
+    background: linear-gradient(90deg, rgba(244, 116, 43, .76), transparent);
+    pointer-events: none;
+  }
+  .main::after {
+    content: ""; position: absolute; top: 32px; left: 0;
+    width: 1px; height: 48px; z-index: 2;
+    background: linear-gradient(180deg, rgba(244, 116, 43, .76), transparent);
+    pointer-events: none;
+  }
+
+  /* ============ scenes ============ */
+  .scenes { flex: 1; position: relative; min-height: 0; }
+  .scene {
+    position: absolute; inset: 0;
+    overflow-y: auto;
+    display: none;
+  }
+  .scene.on { display: block; animation: scene-in .26s var(--ease); }
+  @keyframes scene-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  /* ============ home ============ */
+  .home { height: 100%; display: flex; padding: 0 28px 12px; }
+  .home-stage {
+    width: min(900px, 100%);
+    margin: 0 auto;
+    padding-top: clamp(40px, 11vh, 120px);
+    display: flex; flex-direction: column;
+    min-height: 100%;
+  }
+  .home-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 680;
+    letter-spacing: .105em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  .home h1 {
+    margin: 10px 0 8px;
+    font-size: clamp(27px, 2.35vw, 35px);
+    font-weight: 640; line-height: 1.15;
+    letter-spacing: -.035em;
+  }
+  .home-subtitle { font-size: 13px; line-height: 1.7; color: var(--fg-muted); max-width: 700px; }
+
+  .home-suggestions { margin-top: 30px; border-top: 1px solid var(--border); }
+  .suggestion {
+    display: flex; align-items: center; gap: 13px;
+    width: 100%; min-height: 52px; padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--fg-muted); font-size: 13.5px; text-align: left;
+    transition: color .13s;
+    position: relative;
+  }
+  .suggestion::before {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, var(--accent-soft), transparent 55%);
+    opacity: 0; transition: opacity .15s;
+    pointer-events: none;
+  }
+  .suggestion:hover { color: var(--fg); }
+  .suggestion:hover::before { opacity: 1; }
+  .suggestion svg { color: var(--fg-faint); }
+  .suggestion .arrow { margin-left: auto; color: var(--fg-faint); transition: transform .15s var(--ease), color .15s; }
+  .suggestion:hover .arrow { transform: translateX(3px); color: var(--accent-icon); }
+
+  /* ============ composer ============ */
+  .home-composer { margin-top: auto; padding-top: 26px; }
+  .composer {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-composer);
+    padding: 12px 12px 10px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .composer:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(244, 116, 43, .18);
+  }
+  .composer textarea {
+    width: 100%; border: 0; background: none; resize: none;
+    font-size: 14px; line-height: 1.6;
+    color: var(--fg); outline: none;
+    min-height: 58px; padding: 2px 4px;
+  }
+  .composer textarea::placeholder { color: var(--fg-faint); }
+  .composer-foot {
+    display: flex; align-items: center; gap: 8px;
+    padding-top: 10px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 34px; padding: 0 12px;
+    border-radius: var(--radius-pane);
+    background: var(--bg-control);
+    border: 1px solid var(--border);
+    color: var(--fg-muted); font-size: 12.5px;
+    white-space: nowrap;
+    transition: border-color .13s, color .13s;
+  }
+  .pill:hover { border-color: var(--border-strong); color: var(--fg); }
+  .pill .caret { opacity: .5; }
+  .pill b { font-weight: 550; color: var(--fg); }
+  .composer-foot .spacer { flex: 1; }
+  .link-action {
+    color: var(--accent-icon); font-size: 12.5px; font-weight: 550;
+    padding: 0 6px; height: 34px; border-radius: var(--radius-btn);
+  }
+  .link-action:hover { background: var(--accent-soft); }
+
+  .send-btn {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-fg);
+    display: grid; place-items: center; flex: none;
+    transition: background .15s, transform .1s;
+  }
+  .send-btn:hover { background: var(--accent-hover); }
+  .send-btn:active { transform: scale(.94); }
+
+  /* ============ conversation ============ */
+  .convo { max-width: 780px; margin: 0 auto; padding: 22px 32px 40px; display: flex; flex-direction: column; gap: 26px; }
+  .msg-user {
+    align-self: flex-end;
+    max-width: 72%;
+    background: var(--bg-chip);
+    border: 1px solid var(--border);
+    border-radius: 10px 10px 3px 10px;
+    padding: 11px 16px;
+    font-size: 14px;
+  }
+  .msg-agent { display: flex; gap: 13px; }
+  .avatar {
+    width: 26px; height: 26px; flex: none;
+    border-radius: 9px 9px 3px 9px;
+    background: linear-gradient(135deg, #ff8642, #e85f16);
+    color: #fff; font-weight: 700; font-size: 12px;
+    display: grid; place-items: center;
+    margin-top: 2px;
+  }
+  .msg-agent .body { min-width: 0; flex: 1; }
+  .msg-agent .meta { font-size: 11.5px; color: var(--fg-faint); margin-bottom: 6px; display: flex; gap: 10px; align-items: center; letter-spacing: .02em; }
+  .msg-agent .meta .working { color: var(--accent-icon); font-weight: 550; display: inline-flex; align-items: center; gap: 6px; }
+  .msg-agent p { font-size: 14px; margin-bottom: 10px; }
+  .msg-agent p b { font-weight: 650; }
+
+  .run-card {
+    border: 1px solid var(--border);
+    border-radius: 10px 10px 4px 10px;
+    background: var(--bg-card);
+    margin: 12px 0;
+    overflow: hidden;
+  }
+  .run-head { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 13px 16px; }
+  .run-head:hover { background: var(--bg-hover); }
+  .run-icon {
+    width: 30px; height: 30px; border-radius: var(--radius-pane);
+    background: var(--accent-soft); color: var(--accent-icon);
+    display: grid; place-items: center;
+  }
+  .run-title { font-weight: 600; font-size: 13.5px; }
+  .run-sub { font-size: 12px; color: var(--fg-faint); margin-top: 1px; }
+  .run-meta { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--fg-faint); font-size: 12px; flex: none; }
+  .run-meta .caret { transition: transform .2s var(--ease); }
+  .run-card.open .run-meta .caret { transform: rotate(180deg); }
+  .run-progress { height: 2px; background: var(--bg-inset); }
+  .run-progress i { display: block; height: 100%; width: 72%; background: var(--accent); border-radius: 2px; transition: width .6s var(--ease); }
+  .run-trace { display: none; border-top: 1px solid var(--border); padding: 6px 16px 12px; }
+  .run-card.open .run-trace { display: block; }
+  .trace-row { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; font-size: 12.5px; border-bottom: 1px dashed var(--border); }
+  .trace-row:last-child { border-bottom: 0; }
+  .trace-row .t-ic { color: var(--fg-faint); align-self: center; }
+  .trace-row .t-ic.done { color: var(--success); }
+  .trace-row code { font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); }
+  .trace-row .t-time { margin-left: auto; color: var(--fg-faint); font-size: 11.5px; flex: none; }
+
+  .convo-composer-wrap { position: sticky; bottom: 0; padding: 12px 0 18px; background: linear-gradient(to top, var(--bg-app) 62%, transparent); }
+  .kbd-hints { display: flex; gap: 14px; justify-content: center; margin-top: 9px; color: var(--fg-faint); font-size: 11.5px; }
+  .kbd-hints kbd { font-family: var(--font-mono); font-size: 11px; background: var(--bg-control); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+
+  /* ============ 页面通用（待处理/活动/归档） ============ */
+  .page { max-width: 720px; margin: 0 auto; padding: 26px 32px 60px; }
+  .page h2 { font-size: 20px; font-weight: 640; letter-spacing: -.02em; margin-bottom: 4px; }
+  .page .page-sub { color: var(--fg-muted); font-size: 13px; margin-bottom: 24px; }
+
+  .inbox-item { display: flex; gap: 14px; align-items: flex-start; padding: 16px 4px; border-bottom: 1px solid var(--border); }
+  .inbox-item:last-child { border-bottom: 0; }
+  .inbox-ic { width: 34px; height: 34px; border-radius: 10px; flex: none; display: grid; place-items: center; }
+  .inbox-ic.amber { background: var(--accent-soft); color: var(--accent-icon); }
+  .inbox-ic.red { background: rgba(223, 107, 98, .12); color: var(--danger); }
+  .inbox-ic.green { background: rgba(105, 199, 152, .12); color: var(--success); }
+  .inbox-item .i-body { flex: 1; min-width: 0; }
+  .inbox-item .i-title { font-weight: 600; font-size: 14px; }
+  .inbox-item .i-desc { color: var(--fg-muted); font-size: 13px; margin-top: 2px; }
+  .inbox-item .i-desc code { font-family: var(--font-mono); font-size: 12px; background: var(--bg-control); padding: 1px 5px; border-radius: 4px; }
+  .inbox-item .i-time { color: var(--fg-faint); font-size: 12px; margin-top: 4px; }
+  .inbox-actions { display: flex; gap: 8px; flex: none; align-items: center; margin-top: 2px; }
+
+  .btn {
+    height: 32px; padding: 0 14px; border-radius: var(--radius-btn);
+    font-size: 13px; font-weight: 550;
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid transparent;
+    transition: background .13s, color .13s, border-color .13s, transform .1s;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn-primary { background: var(--accent); color: var(--accent-fg); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-ghost { color: var(--fg-muted); border-color: var(--border); background: var(--bg-control); }
+  .btn-ghost:hover { color: var(--fg); border-color: var(--border-strong); }
+
+  .timeline { display: flex; flex-direction: column; }
+  .tl-row { display: flex; gap: 14px; padding: 12px 4px; border-bottom: 1px solid var(--border); align-items: baseline; }
+  .tl-row:last-child { border: 0; }
+  .tl-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: center; }
+  .tl-dot.ok { background: var(--success); }
+  .tl-dot.info { background: var(--fg-faint); }
+  .tl-dot.warn { background: var(--warning); }
+  .tl-body { flex: 1; min-width: 0; }
+  .tl-title { font-size: 13.5px; font-weight: 550; }
+  .tl-sub { color: var(--fg-muted); font-size: 12.5px; margin-top: 1px; }
+  .tl-time { color: var(--fg-faint); font-size: 12px; flex: none; }
+
+  /* ============ settings ============ */
+  .settings-wrap { display: grid; grid-template-columns: 210px minmax(0, 1fr); height: 100%; }
+  .settings-nav { padding: 20px 12px; border-right: 1px solid var(--border); overflow-y: auto; }
+  .settings-nav .group { font-size: 11.5px; color: var(--fg-faint); padding: 14px 10px 5px; letter-spacing: .02em; }
+  .settings-body { overflow-y: auto; padding: 28px 40px 80px; }
+  .settings-inner { max-width: 640px; }
+  .settings-inner h2 { font-size: 20px; font-weight: 640; letter-spacing: -.02em; }
+  .settings-inner .page-sub { color: var(--fg-muted); font-size: 13px; margin: 5px 0 26px; }
+  .set-section { margin-bottom: 36px; }
+  .set-section > .s-head { display: flex; align-items: center; margin-bottom: 6px; }
+  .set-section h3 { font-size: 15px; font-weight: 620; }
+  .set-section .s-sub { color: var(--fg-faint); font-size: 12.5px; margin-bottom: 10px; }
+  .set-section .s-head .btn { margin-left: auto; }
+
+  .provider-row { display: flex; align-items: center; gap: 13px; padding: 13px 6px; border-bottom: 1px solid var(--border); border-radius: var(--radius-btn); }
+  .provider-row:last-child { border-bottom: 0; }
+  .provider-row:hover { background: var(--bg-hover); }
+  /* provider logo tile —— 与 App 内 provider-icon-tile 一致：浅暖底保证深色 logo 可读 */
+  .p-tile {
+    width: 32px; height: 32px; border-radius: 6px; flex: none;
+    background: #f2ede6;
+    display: grid; place-items: center;
+  }
+  .p-tile img { width: 20px; height: 20px; object-fit: contain; }
+  .p-tile.sm { width: 24px; height: 24px; }
+  .p-tile.sm img { width: 16px; height: 16px; }
+  .p-tile .p-initial { font-weight: 650; font-size: 13px; color: #6b6156; }
+  .p-body { flex: 1; min-width: 0; }
+  .p-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .p-tag { font-size: 11px; font-weight: 600; font-style: normal; color: var(--accent-icon); background: var(--accent-soft); border-radius: 5px; padding: 1.5px 6px; }
+  .p-sub { color: var(--fg-faint); font-size: 12.5px; margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+  .p-sub .ok-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .p-sub code { font-family: var(--font-mono); font-size: 11.5px; }
+  .p-actions { display: flex; gap: 8px; flex: none; }
+
+  .set-row { display: flex; align-items: center; gap: 16px; padding: 14px 4px; border-bottom: 1px solid var(--border); }
+  .set-row:last-child { border-bottom: 0; }
+  .set-row .r-body { flex: 1; min-width: 0; }
+  .set-row .r-title { font-size: 13.5px; font-weight: 550; }
+  .set-row .r-sub { color: var(--fg-faint); font-size: 12.5px; margin-top: 2px; max-width: 52ch; }
+
+  .switch { position: relative; width: 38px; height: 22px; flex: none; border-radius: 999px; background: var(--bg-active); border: 1px solid var(--border); transition: background .18s var(--ease); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s var(--ease); }
+  .switch[aria-checked="true"] { background: var(--accent); border-color: transparent; }
+  .switch[aria-checked="true"]::after { transform: translateX(16px); }
+
+  .seg { display: inline-flex; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-pane); padding: 3px; gap: 2px; }
+  .seg button { height: 28px; padding: 0 13px; border-radius: var(--radius-btn); font-size: 12.5px; color: var(--fg-muted); transition: all .13s; }
+  .seg button.on { background: var(--bg-float); color: var(--fg); font-weight: 550; box-shadow: 0 1px 4px rgba(0, 0, 0, .25); }
+
+  select.select {
+    height: 32px; padding: 0 28px 0 12px;
+    border-radius: var(--radius-btn); border: 1px solid var(--border);
+    background: var(--bg-control) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a49f95' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+    appearance: none; font-size: 13px; color: var(--fg); cursor: pointer;
+  }
+
+  /* ============ drawer（执行台） ============ */
+  .drawer-scrim { position: fixed; inset: 0; z-index: 30; background: rgba(6, 4, 2, .45); opacity: 0; pointer-events: none; transition: opacity .22s var(--ease); }
+  .drawer-scrim.on { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 10px; right: 10px; bottom: 10px; z-index: 31;
+    width: 340px;
+    background: var(--bg-float);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-float);
+    transform: translateX(calc(100% + 20px));
+    transition: transform .3s var(--ease);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .drawer.on { transform: none; }
+  .drawer-head { display: flex; align-items: center; padding: 16px 18px 12px; }
+  .drawer-head h3 { font-size: 14.5px; font-weight: 620; }
+  .drawer-head .sub { margin-left: 8px; color: var(--fg-faint); font-size: 12px; }
+  .drawer-head .icon-btn { margin-left: auto; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 4px 18px 18px; }
+  .d-block { padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .d-block:last-child { border: 0; }
+  .d-label { font-size: 12px; color: var(--fg-faint); margin-bottom: 8px; }
+  .d-title { font-weight: 620; font-size: 14px; margin-bottom: 4px; }
+  .d-text { color: var(--fg-muted); font-size: 12.5px; }
+  .d-stats { display: flex; gap: 26px; }
+  .d-stat .n { font-size: 20px; font-weight: 640; font-variant-numeric: tabular-nums; }
+  .d-stat .l { font-size: 11.5px; color: var(--fg-faint); margin-top: 1px; }
+  .d-feed { display: flex; flex-direction: column; gap: 10px; }
+  .d-feed .f-row { font-size: 12.5px; color: var(--fg-muted); }
+  .d-feed .f-row .f-t { color: var(--fg-faint); font-size: 11.5px; display: block; }
+
+  /* ============ toast ============ */
+  .toast {
+    position: fixed; right: 22px; bottom: 22px; z-index: 50;
+    display: flex; align-items: center; gap: 9px;
+    background: var(--bg-float);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-float);
+    padding: 11px 16px;
+    font-size: 13px;
+    transform: translateY(16px); opacity: 0;
+    transition: all .3s var(--ease);
+    pointer-events: none;
+  }
+  .toast.on { transform: none; opacity: 1; }
+  .toast .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+
+  /* ============ popover（连接健康） ============ */
+  .popover {
+    position: fixed; top: 46px; right: 128px; z-index: 40;
+    width: 330px;
+    background: var(--bg-float);
+    border: 1px solid var(--border);
+    border-radius: 10px 4px 10px 4px;
+    box-shadow: var(--shadow-float);
+    padding: 6px;
+    opacity: 0; transform: translateY(-6px) scale(.98);
+    pointer-events: none;
+    transition: all .2s var(--ease);
+  }
+  .popover.on { opacity: 1; transform: none; pointer-events: auto; }
+  .pop-head { display: flex; align-items: center; padding: 10px 12px 8px; }
+  .pop-head b { font-size: 13px; font-weight: 620; }
+  .pop-head span { margin-left: 8px; font-size: 12px; color: var(--fg-faint); }
+  .pop-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-btn); }
+  .pop-row:hover { background: var(--bg-hover); }
+  .pop-row .pr-body { flex: 1; min-width: 0; }
+  .pop-row .pr-name { font-size: 13px; font-weight: 550; }
+  .pop-row .pr-sub { font-size: 11.5px; color: var(--fg-faint); }
+  .pop-row .pr-state { font-size: 12px; color: var(--success); flex: none; }
+  .pop-row .pr-state.warn { color: var(--warning); }
+  .pop-foot { padding: 8px 12px 10px; border-top: 1px solid var(--border); margin-top: 4px; display: flex; justify-content: space-between; align-items: center; }
+  .pop-foot .hint { font-size: 11.5px; color: var(--fg-faint); }
+
+  .hidden { display: none !important; }
+
+  @media (max-width: 900px) {
+    :root { --rail-w: 216px; --workspace-radius: 20px; }
+    .settings-wrap { grid-template-columns: 180px minmax(0, 1fr); }
+    .settings-body { padding: 22px 24px 60px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ================= topbar ================= -->
+  <header class="topbar">
+    <button class="icon-btn" title="切换侧栏" aria-label="切换侧栏" tabindex="-1">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M6 2.5v11" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+    <button class="icon-btn" title="后退" aria-label="后退" tabindex="-1"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2.5L4.5 7 9 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="icon-btn" title="前进" aria-label="前进" tabindex="-1"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2.5L9.5 7 5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <nav class="menus" aria-hidden="true"><span>文件</span><span>编辑</span><span>视图</span><span>帮助</span></nav>
+    <nav class="crumb" id="crumb" aria-label="当前位置"><span>新对话</span></nav>
+    <div class="spacer"></div>
+
+    <button class="status-pill checking" id="statusPill" aria-haspopup="dialog" aria-expanded="false">
+      <span class="dot"></span>
+      <span id="statusText">正在检查连接</span>
+    </button>
+
+    <button class="icon-btn" id="btnDrawer" title="执行台" aria-label="打开执行台">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M10 2.5v11" stroke="currentColor" stroke-width="1.3"/></svg>
+    </button>
+    <button class="icon-btn" title="通知" aria-label="通知，2 条未读" style="position:relative">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2a4 4 0 00-4 4v2.5l-1.2 2.4a.4.4 0 00.36.6h9.68a.4.4 0 00.36-.6L12 8.5V6a4 4 0 00-4-4zM6.5 12.5a1.5 1.5 0 003 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span style="position:absolute;top:2px;right:2px;min-width:13px;height:13px;border-radius:7px;background:var(--accent);color:var(--accent-fg);font-size:9px;font-weight:700;display:grid;place-items:center;padding:0 3px;">2</span>
+    </button>
+    <div class="win-controls" aria-hidden="true">
+      <button class="icon-btn" title="最小化" tabindex="-1"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button>
+      <button class="icon-btn" title="最大化" tabindex="-1"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2.5" y="2.5" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="icon-btn" title="关闭" tabindex="-1"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button>
+    </div>
+  </header>
+
+  <!-- ================= sidebar ================= -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">R</span>
+      <span class="brand-name">R-Code</span>
+      <button class="icon-btn" aria-label="搜索" title="搜索">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <button class="btn-new" id="btnNew">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      新对话
+    </button>
+
+    <button class="nav-item active" data-scene="home">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 3.5a1 1 0 011-1h9a1 1 0 011 1v6a1 1 0 01-1 1H7l-3.2 2.4a.4.4 0 01-.63-.32V3.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      对话
+    </button>
+    <button class="nav-item" data-scene="inbox">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 9.5h3l1 1.5h3l1-1.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.3 3.5h9.4a.8.8 0 01.8.8v6.4a.8.8 0 01-.8.8H3.3a.8.8 0 01-.8-.8V4.3a.8.8 0 01.8-.8z" stroke="currentColor" stroke-width="1.3"/></svg>
+      待处理
+      <span class="count attn">3</span>
+    </button>
+    <button class="nav-item" data-scene="activity">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 8h3l1.5-4 3 8L11 8h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      活动
+    </button>
+    <button class="nav-item" data-scene="archive">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="3" width="11" height="3" rx=".8" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 6v5.5a1 1 0 001 1h7a1 1 0 001-1V6M6.5 8.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      归档
+    </button>
+
+    <div class="side-label">最近</div>
+    <div class="side-empty">无聊天</div>
+
+    <div class="side-label">项目
+      <button class="add" id="btnAddProject">
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        添加
+      </button>
+    </div>
+    <button class="project" data-scene="run">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 5.5V4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V5.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      <span class="name">r-code</span>
+      <span class="dots">···</span>
+    </button>
+    <button class="thread" data-scene="run">
+      <span class="run-dot" aria-hidden="true"></span>
+      <span class="t-title">重构任务执行体验</span>
+      <span class="t-time">进行中</span>
+    </button>
+    <button class="project" data-scene="archive">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 5.5V4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V5.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      <span class="name">falib</span>
+      <span class="dots">···</span>
+    </button>
+    <button class="thread" data-scene="archive">
+      <span class="t-title">review 下 falib，可以…</span>
+      <span class="t-time">10m</span>
+    </button>
+
+    <div class="side-foot">
+      <button class="nav-item" data-scene="settings">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        设置
+      </button>
+    </div>
+  </aside>
+
+  <!-- ================= main panel（圆框） ================= -->
+  <div class="main">
+    <div class="scenes">
+
+      <!-- ======== home ======== -->
+      <section class="scene on" id="scene-home" aria-label="新对话">
+        <div class="home">
+          <div class="home-stage">
+            <span class="home-eyebrow">新任务 · R-Code</span>
+            <h1>从结果开始，而不是从工具开始。</h1>
+            <p class="home-subtitle">连接任意兼容模型服务后，直接描述目标。工作区不必预先附加——需要读取或修改代码时，再把它交给 Agent。</p>
+
+            <div class="home-suggestions">
+              <button class="suggestion" data-fill="审查 falib 最近一周的改动，给出风险清单">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                审查 falib 最近一周的改动，给出风险清单
+                <svg class="arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="suggestion" data-fill="把 r-code 的 Windows 命令可靠性回归再跑一遍">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13 8A5 5 0 113 8a5 5 0 0110 0z" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3l2 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                把 r-code 的 Windows 命令可靠性回归再跑一遍
+                <svg class="arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="suggestion" data-fill="整理本周产生的项目记忆，归档过期条目">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="3" width="11" height="3" rx=".8" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 6v5.5a1 1 0 001 1h7a1 1 0 001-1V6M6.5 8.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                整理本周产生的项目记忆，归档过期条目
+                <svg class="arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+
+            <div class="home-composer">
+              <form class="composer" id="composerHome">
+                <textarea id="homeInput" placeholder="先在设置中连接模型服务…" rows="2" aria-label="输入目标"></textarea>
+                <div class="composer-foot">
+                  <button type="button" class="pill" aria-label="添加附件" style="padding:0 10px">
+                    <svg width="13" height="13" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  </button>
+                  <button type="button" class="pill">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 5.5V4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V5.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                    未附加文件夹
+                    <svg class="caret" width="9" height="9" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                  </button>
+                  <button type="button" class="pill">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 1.5l1.8 3.7 4 .6-2.9 2.8.7 4L8 10.7l-3.6 1.9.7-4L2.2 5.8l4-.6L8 1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                    <b>R-Code</b>
+                    <svg class="caret" width="9" height="9" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                  </button>
+                  <button type="button" class="pill">
+                    Codex 配置&nbsp;<b>GPT-5.6-SoL · 最大</b>
+                    <svg class="caret" width="9" height="9" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                  </button>
+                  <span class="spacer"></span>
+                  <button type="button" class="link-action" data-scene="settings">连接模型服务</button>
+                  <button type="submit" class="send-btn" aria-label="发送" title="发送">
+                    <svg width="15" height="15" viewBox="0 0 14 14" fill="none"><path d="M7 11.5v-8M3.5 6L7 2.5 10.5 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======== run ======== -->
+      <section class="scene" id="scene-run" aria-label="对话进行中">
+        <div class="convo">
+          <div class="msg-user">重构 UI 和交互：关闭窗口要可选择，启动时检查 Provider，模型工作过程更有反馈，轨迹可以收起。</div>
+
+          <div class="msg-agent">
+            <span class="avatar">R</span>
+            <div class="body">
+              <div class="meta">R-CODE · <span class="working"><span class="run-dot" style="width:6px;height:6px"></span>正在工作</span></div>
+              <p>我先把问题拆成四条体验链：<b>应用生命周期、连接健康、对话反馈、执行台层级</b>。当前协议已经能提供 commentary、工具生命周期和子代理状态，主要缺口在表现与编排，不需要重造底层事件。</p>
+
+              <div class="run-card" id="runCard">
+                <button class="run-head" id="runHead" aria-expanded="false">
+                  <span class="run-icon">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M3 6.5v3M6 4.5v7M9 2.5v11M12 5.5v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  </span>
+                  <span>
+                    <span class="run-title">正在形成体验方案</span>
+                    <span class="run-sub" style="display:block">代码审计、交互状态与实施约束正在汇合</span>
+                  </span>
+                  <span class="run-meta">
+                    <span>3 子代理</span>
+                    <span>阶段 3 / 4</span>
+                    <svg class="caret" width="10" height="10" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                  </span>
+                </button>
+                <div class="run-progress"><i></i></div>
+                <div class="run-trace">
+                  <div class="trace-row">
+                    <span class="t-ic done"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-6.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                    <span>审计现有窗口关闭行为</span>
+                    <code>window-lifecycle.ts</code>
+                    <span class="t-time">1m 12s</span>
+                  </div>
+                  <div class="trace-row">
+                    <span class="t-ic done"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-6.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                    <span>梳理 Provider 启动检查路径</span>
+                    <code>provider-health.rs</code>
+                    <span class="t-time">2m 04s</span>
+                  </div>
+                  <div class="trace-row">
+                    <span class="t-ic"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.4" stroke-dasharray="3 2.4"/></svg></span>
+                    <span>汇合交互状态与实施约束</span>
+                    <code>experience-plan.md</code>
+                    <span class="t-time">进行中</span>
+                  </div>
+                </div>
+              </div>
+
+              <p>Provider 启动检查不应该阻塞首屏，也不应每次都发送一次完整推理请求。更稳妥的方案是后台健康协调器：复用近期回执，只探测已配置且过期的连接，限制并发与频率，失败时在全局状态入口给出明确修复动作。</p>
+            </div>
+          </div>
+
+          <div class="convo-composer-wrap">
+            <form class="composer" id="composerRun">
+              <textarea placeholder="补充要求、调整方向，或 @ 引用文件…" rows="2" aria-label="补充要求"></textarea>
+              <div class="composer-foot">
+                <button type="button" class="pill">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 1.5l1.8 3.7 4 .6-2.9 2.8.7 4L8 10.7l-3.6 1.9.7-4L2.2 5.8l4-.6L8 1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                  <b>R-Code</b> 主 Agent
+                </button>
+                <button type="button" class="pill">deepseek-v4-flash</button>
+                <span class="spacer"></span>
+                <button type="button" class="pill">请求审批</button>
+                <button type="submit" class="send-btn" aria-label="发送" title="发送">
+                  <svg width="15" height="15" viewBox="0 0 14 14" fill="none"><path d="M7 11.5v-8M3.5 6L7 2.5 10.5 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+            </form>
+            <div class="kbd-hints">
+              <span><kbd>Enter</kbd> 发送</span>
+              <span><kbd>Shift + Enter</kbd> 换行</span>
+              <span><kbd>Alt + Enter</kbd> 排队</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======== inbox ======== -->
+      <section class="scene" id="scene-inbox" aria-label="待处理">
+        <div class="page">
+          <h2>待处理</h2>
+          <p class="page-sub">需要你决策的事项，按到达顺序排列。处理完即消失。</p>
+
+          <div class="inbox-item">
+            <span class="inbox-ic amber">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2l6 10.5H2L8 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 6.5v3M8 11h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            </span>
+            <div class="i-body">
+              <div class="i-title">权限审批 · 重构任务执行体验</div>
+              <div class="i-desc">Agent 请求执行 <code>git push origin dev</code>。该操作会发布到远端，需要你的批准。</div>
+              <div class="i-time">2 分钟前 · r-code</div>
+            </div>
+            <div class="inbox-actions">
+              <button class="btn btn-ghost" data-toast="已拒绝，Agent 将改用本地提交">拒绝</button>
+              <button class="btn btn-primary" data-toast="已批准，继续执行">批准</button>
+            </div>
+          </div>
+
+          <div class="inbox-item">
+            <span class="inbox-ic red">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.8" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            </span>
+            <div class="i-body">
+              <div class="i-title">DeepSeek 连接失败（401）</div>
+              <div class="i-desc">凭据已失效。重新填写 API Key 前，该服务不会参与对话与后台检查。</div>
+              <div class="i-time">18 分钟前</div>
+            </div>
+            <div class="inbox-actions">
+              <button class="btn btn-primary" data-scene="settings">去处理</button>
+            </div>
+          </div>
+
+          <div class="inbox-item">
+            <span class="inbox-ic green">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2.5v8M4.5 7L8 10.5 11.5 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 13h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            </span>
+            <div class="i-body">
+              <div class="i-title">v1.2.0 已下载，重启后生效</div>
+              <div class="i-desc">包含连接检查降噪与执行台合并。当前对话不受影响。</div>
+              <div class="i-time">1 小时前</div>
+            </div>
+            <div class="inbox-actions">
+              <button class="btn btn-ghost" data-toast="将在下次退出时安装">稍后</button>
+              <button class="btn btn-primary" data-toast="正在重启…">立即重启</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======== activity ======== -->
+      <section class="scene" id="scene-activity" aria-label="活动">
+        <div class="page">
+          <h2>活动</h2>
+          <p class="page-sub">后台任务的完整流水。这里只读，不打断你。</p>
+
+          <div class="timeline">
+            <div class="tl-row">
+              <span class="tl-dot ok"></span>
+              <div class="tl-body">
+                <div class="tl-title">后台连接检查完成</div>
+                <div class="tl-sub">3 个连接正常 · 复用 30 分钟内回执，未产生额外请求</div>
+              </div>
+              <span class="tl-time">刚刚</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-dot ok"></span>
+              <div class="tl-body">
+                <div class="tl-title">记忆整理完成</div>
+                <div class="tl-sub">新增 2 条项目记忆 · r-code</div>
+              </div>
+              <span class="tl-time">4 分钟前</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-dot ok"></span>
+              <div class="tl-body">
+                <div class="tl-title">模型目录同步</div>
+                <div class="tl-sub">revision 32 · Provider 与图片理解共享同一目录</div>
+              </div>
+              <span class="tl-time">12 分钟前</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-dot warn"></span>
+              <div class="tl-body">
+                <div class="tl-title">DeepSeek 凭据失效</div>
+                <div class="tl-sub">401 · 已暂停该服务的后台探测</div>
+              </div>
+              <span class="tl-time">18 分钟前</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-dot info"></span>
+              <div class="tl-body">
+                <div class="tl-title">更新检查</div>
+                <div class="tl-sub">发现 v1.2.0，已在后台下载</div>
+              </div>
+              <span class="tl-time">1 小时前</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======== archive ======== -->
+      <section class="scene" id="scene-archive" aria-label="归档">
+        <div class="page">
+          <h2>归档</h2>
+          <p class="page-sub">已完成或暂停的对话。归档只移出列表，不删除任何记录。</p>
+
+          <div class="timeline">
+            <div class="tl-row">
+              <span class="tl-dot info"></span>
+              <div class="tl-body">
+                <div class="tl-title">review 下 falib，可以先跑一遍基线测试</div>
+                <div class="tl-sub">falib · 已完成 · 14 条消息</div>
+              </div>
+              <span class="tl-time">10m</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-dot info"></span>
+              <div class="tl-body">
+                <div class="tl-title">Windows 命令执行可靠性方案</div>
+                <div class="tl-sub">r-code · 已完成 · 8 个切片全部合并</div>
+              </div>
+              <span class="tl-time">昨天</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-dot info"></span>
+              <div class="tl-body">
+                <div class="tl-title">发布流程梳理与 v1.0.0 发版</div>
+                <div class="tl-sub">r-code · 已完成</div>
+              </div>
+              <span class="tl-time">3 天前</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======== settings ======== -->
+      <section class="scene" id="scene-settings" aria-label="设置">
+        <div class="settings-wrap">
+          <nav class="settings-nav" aria-label="设置分区">
+            <div class="group">AI 与执行</div>
+            <button class="nav-item active" data-setpage="providers">模型服务</button>
+            <button class="nav-item" disabled title="本原型未覆盖此分区" style="opacity:.4;cursor:default">Agent 编排</button>
+            <button class="nav-item" disabled title="本原型未覆盖此分区" style="opacity:.4;cursor:default">子代理配置</button>
+            <div class="group">工作区</div>
+            <button class="nav-item" disabled title="本原型未覆盖此分区" style="opacity:.4;cursor:default">权限</button>
+            <button class="nav-item" disabled title="本原型未覆盖此分区" style="opacity:.4;cursor:default">知识与指令</button>
+            <div class="group">应用</div>
+            <button class="nav-item" data-setpage="appearance">外观与语言</button>
+            <button class="nav-item" disabled title="本原型未覆盖此分区" style="opacity:.4;cursor:default">更新</button>
+          </nav>
+
+          <div class="settings-body">
+            <!-- providers -->
+            <div class="settings-inner" id="setpage-providers">
+              <h2>模型服务</h2>
+              <p class="page-sub">管理已保存的 Provider、模型与图片理解。名称来自脱敏的本机开发审计。</p>
+
+              <div class="set-section">
+                <div class="s-head">
+                  <h3>已保存的服务</h3>
+                  <button class="btn btn-primary" data-toast="打开新建服务向导（示意）">新建服务</button>
+                </div>
+                <p class="s-sub">启动时只检查配置指纹变化或回执过期的连接，并发上限 2，不会自动 fallback。</p>
+
+                <div class="provider-row">
+                  <span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/deepseek.png" alt="DeepSeek"></span>
+                  <div class="p-body">
+                    <div class="p-name">DeepSeek <em class="p-tag">默认</em></div>
+                    <div class="p-sub"><span class="ok-dot"></span><code>deepseek-v4-flash</code> · 回执有效 · 962ms</div>
+                  </div>
+                  <div class="p-actions">
+                    <button class="btn btn-ghost" data-toast="正在测试 DeepSeek…">测试</button>
+                    <button class="btn btn-ghost" data-toast="编辑（示意）">编辑</button>
+                  </div>
+                </div>
+                <div class="provider-row">
+                  <span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/ark.png" alt="火山引擎"></span>
+                  <div class="p-body">
+                    <div class="p-name">ark_token_plan</div>
+                    <div class="p-sub"><span class="ok-dot"></span><code>glm-5.3</code> · 子代理候选 · 回执有效 · 1716ms</div>
+                  </div>
+                  <div class="p-actions">
+                    <button class="btn btn-ghost" data-toast="已设为默认服务">设为默认</button>
+                    <button class="btn btn-ghost" data-toast="正在测试 ark_token_plan…">测试</button>
+                    <button class="btn btn-ghost" data-toast="编辑（示意）">编辑</button>
+                  </div>
+                </div>
+                <div class="provider-row">
+                  <span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/openai.png" alt="OpenAI"></span>
+                  <div class="p-body">
+                    <div class="p-name">Codex CLI</div>
+                    <div class="p-sub"><span class="ok-dot"></span><code>gpt-5.6-sol</code> · 本地运行时 · 安装来源已确认</div>
+                  </div>
+                  <div class="p-actions">
+                    <button class="btn btn-ghost" data-toast="已设为默认服务">设为默认</button>
+                    <button class="btn btn-ghost" data-toast="详情（示意）">详情</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-section">
+                <h3 style="margin-bottom:6px">后台检查</h3>
+                <div class="set-row">
+                  <div class="r-body">
+                    <div class="r-title">启动后检查过期连接</div>
+                    <div class="r-sub">API Provider 可能产生一次极短请求；关闭后仍可随时手动检查。</div>
+                  </div>
+                  <button class="switch" role="switch" aria-checked="true" aria-label="启动后检查过期连接" data-switch data-toast-on="已开启启动检查" data-toast-off="已关闭启动检查"></button>
+                </div>
+                <div class="set-row">
+                  <div class="r-body">
+                    <div class="r-title">检查频率</div>
+                    <div class="r-sub">成功回执 30 分钟内复用，失败回执 5 分钟后重试。</div>
+                  </div>
+                  <select class="select" aria-label="检查频率">
+                    <option>自动（推荐）</option>
+                    <option>仅手动</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- appearance -->
+            <div class="settings-inner hidden" id="setpage-appearance">
+              <h2>外观与语言</h2>
+              <p class="page-sub">即时生效，并记住你的选择。</p>
+
+              <div class="set-section">
+                <div class="set-row">
+                  <div class="r-body">
+                    <div class="r-title">主题</div>
+                    <div class="r-sub">深色为默认；跟随系统时随操作系统切换。</div>
+                  </div>
+                  <div class="seg" role="group" aria-label="主题">
+                    <button data-theme-set="dark" class="on">深色</button>
+                    <button data-theme-set="light">浅色</button>
+                  </div>
+                </div>
+                <div class="set-row">
+                  <div class="r-body">
+                    <div class="r-title">界面语言</div>
+                    <div class="r-sub">默认跟随系统；本原型以中文内容演示。</div>
+                  </div>
+                  <select class="select" aria-label="界面语言">
+                    <option>简体中文</option>
+                    <option>English</option>
+                  </select>
+                </div>
+                <div class="set-row">
+                  <div class="r-body">
+                    <div class="r-title">界面字号</div>
+                    <div class="r-sub">影响全局文字大小，不影响代码字号。</div>
+                  </div>
+                  <div class="seg" role="group" aria-label="界面字号">
+                    <button data-font-set="13">小</button>
+                    <button data-font-set="14" class="on">标准</button>
+                    <button data-font-set="15.5">大</button>
+                  </div>
+                </div>
+                <div class="set-row">
+                  <div class="r-body">
+                    <div class="r-title">减少动态效果</div>
+                    <div class="r-sub">开启后禁用过渡与脉冲动画。系统开启「减少动态」时自动生效。</div>
+                  </div>
+                  <button class="switch" role="switch" aria-checked="false" aria-label="减少动态效果" data-switch id="reduceMotionSwitch"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ================= popover：连接健康 ================= -->
+<div class="popover" id="healthPop" role="dialog" aria-label="连接健康">
+  <div class="pop-head"><b>连接健康</b><span>回执 30 分钟内复用</span></div>
+  <div class="pop-row">
+    <span class="p-tile sm"><img src="../../src-tauri/frontend/src/assets/providers/deepseek.png" alt=""></span>
+    <div class="pr-body">
+      <div class="pr-name">DeepSeek · deepseek-v4-flash</div>
+      <div class="pr-sub">默认服务</div>
+    </div>
+    <span class="pr-state">正常 · 962ms</span>
+  </div>
+  <div class="pop-row">
+    <span class="p-tile sm"><img src="../../src-tauri/frontend/src/assets/providers/ark.png" alt=""></span>
+    <div class="pr-body">
+      <div class="pr-name">ark_token_plan · glm-5.3</div>
+      <div class="pr-sub">子代理候选</div>
+    </div>
+    <span class="pr-state">正常 · 1716ms</span>
+  </div>
+  <div class="pop-row">
+    <span class="p-tile sm"><img src="../../src-tauri/frontend/src/assets/providers/openai.png" alt=""></span>
+    <div class="pr-body">
+      <div class="pr-name">Codex CLI · gpt-5.6-sol</div>
+      <div class="pr-sub">本地运行时</div>
+    </div>
+    <span class="pr-state warn">等待并发槽位</span>
+  </div>
+  <div class="pop-foot">
+    <span class="hint">并发上限 2 · 不自动 fallback</span>
+    <button class="btn btn-ghost" data-scene="settings" style="height:28px;font-size:12.5px">连接设置</button>
+  </div>
+</div>
+
+<!-- ================= drawer：执行台 ================= -->
+<div class="drawer-scrim" id="drawerScrim"></div>
+<aside class="drawer" id="drawer" aria-label="执行台">
+  <div class="drawer-head">
+    <h3>执行台</h3>
+    <span class="sub">实时 · 1 运行</span>
+    <button class="icon-btn" id="btnDrawerClose" aria-label="关闭执行台">
+      <svg width="13" height="13" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body">
+    <div class="d-block">
+      <div class="d-label">当前阶段</div>
+      <div class="d-title">整合原型与可执行计划</div>
+      <div class="d-text">保留现有事件合同，收束主对话、运行轨迹和执行台之间的职责。</div>
+      <div class="run-progress" style="margin-top:12px"><i style="width:72%"></i></div>
+      <div class="d-text" style="margin-top:8px;display:flex;justify-content:space-between"><span>阶段 3 / 4</span><span>已用 4m 18s</span></div>
+    </div>
+    <div class="d-block">
+      <div class="d-stats">
+        <div class="d-stat"><div class="n">3</div><div class="l">子代理</div></div>
+        <div class="d-stat"><div class="n">4</div><div class="l">变更文件</div></div>
+        <div class="d-stat"><div class="n">0</div><div class="l">待审批</div></div>
+      </div>
+    </div>
+    <div class="d-block">
+      <div class="d-label" style="margin-bottom:12px">最近进展</div>
+      <div class="d-feed">
+        <div class="f-row"><span class="f-t">刚刚</span>确认 Windows 现有关闭行为直接隐藏到托盘，缺少首次决策入口。</div>
+        <div class="f-row"><span class="f-t">1 分钟前</span>确认丰富交互协议已完成，轨迹折叠只需改表现层与聚合策略。</div>
+        <div class="f-row"><span class="f-t">3 分钟前</span>识别 Provider 面板已有局部自动探测，可上移为全局健康服务。</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<div class="toast" id="toast"><span class="dot"></span><span id="toastText"></span></div>
+
+<script>
+(function () {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  let toastTimer;
+  function toast(msg) {
+    const el = $('#toast');
+    $('#toastText').textContent = msg;
+    el.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('on'), 2600);
+  }
+
+  const crumbs = {
+    home: '<span>新对话</span>',
+    run: '<span>r-code</span><span class="sep">›</span><b>重构任务执行体验</b>',
+    inbox: '<b>待处理</b>',
+    activity: '<b>活动</b>',
+    archive: '<b>归档</b>',
+    settings: '<b>设置</b>'
+  };
+  function showScene(name) {
+    $$('.scene').forEach(s => s.classList.toggle('on', s.id === 'scene-' + name));
+    $('#crumb').innerHTML = crumbs[name] || crumbs.home;
+    $$('.sidebar .nav-item[data-scene]').forEach(n =>
+      n.classList.toggle('active', n.dataset.scene === name));
+    closePop(); closeDrawer();
+  }
+  document.addEventListener('click', e => {
+    const fill = e.target.closest('[data-fill]');
+    if (fill) {
+      showScene('home');
+      const input = $('#homeInput');
+      input.value = fill.dataset.fill;
+      input.focus();
+      return;
+    }
+    const nav = e.target.closest('[data-scene]');
+    if (nav) { showScene(nav.dataset.scene); return; }
+    const t = e.target.closest('[data-toast]');
+    if (t) toast(t.dataset.toast);
+  });
+  $('#btnNew').addEventListener('click', () => {
+    showScene('home');
+    $('#homeInput').focus();
+  });
+  $('#btnAddProject').addEventListener('click', () => toast('打开添加项目对话框（示意）'));
+
+  $('#composerHome').addEventListener('submit', e => {
+    e.preventDefault();
+    const v = $('#homeInput').value.trim();
+    if (!v) { toast('先在设置中连接模型服务'); return; }
+    showScene('run');
+    toast('已创建任务，Agent 开始工作');
+  });
+  $('#composerRun').addEventListener('submit', e => {
+    e.preventDefault();
+    toast('已发送，排队等待当前阶段完成');
+  });
+
+  const runCard = $('#runCard');
+  $('#runHead').addEventListener('click', () => {
+    const open = runCard.classList.toggle('open');
+    $('#runHead').setAttribute('aria-expanded', String(open));
+  });
+
+  const pill = $('#statusPill'), pop = $('#healthPop');
+  function closePop() { pop.classList.remove('on'); pill.setAttribute('aria-expanded', 'false'); }
+  pill.addEventListener('click', e => {
+    e.stopPropagation();
+    const on = pop.classList.toggle('on');
+    pill.setAttribute('aria-expanded', String(on));
+  });
+  document.addEventListener('click', e => { if (!e.target.closest('#healthPop')) closePop(); });
+  setTimeout(() => {
+    pill.classList.remove('checking');
+    $('#statusText').textContent = '连接正常';
+    toast('后台检查完成：3 个连接正常');
+  }, 3200);
+
+  const drawer = $('#drawer'), scrim = $('#drawerScrim');
+  function closeDrawer() { drawer.classList.remove('on'); scrim.classList.remove('on'); }
+  $('#btnDrawer').addEventListener('click', () => {
+    drawer.classList.add('on'); scrim.classList.add('on');
+  });
+  $('#btnDrawerClose').addEventListener('click', closeDrawer);
+  scrim.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closePop(); closeDrawer(); }
+  });
+
+  $$('[data-setpage]').forEach(btn => btn.addEventListener('click', () => {
+    $$('[data-setpage]').forEach(b => b.classList.toggle('active', b === btn));
+    $$('.settings-inner').forEach(p => p.classList.toggle('hidden', p.id !== 'setpage-' + btn.dataset.setpage));
+  }));
+
+  $$('[data-switch]').forEach(sw => sw.addEventListener('click', () => {
+    const on = sw.getAttribute('aria-checked') !== 'true';
+    sw.setAttribute('aria-checked', String(on));
+    if (sw.id === 'reduceMotionSwitch') {
+      document.documentElement.style.setProperty('--ease', on ? 'linear' : 'cubic-bezier(.32,.72,.24,1)');
+      toast(on ? '已减少动态效果' : '已恢复动态效果');
+      return;
+    }
+    if (sw.dataset.toastOn) toast(on ? sw.dataset.toastOn : sw.dataset.toastOff);
+  }));
+
+  $$('[data-theme-set]').forEach(btn => btn.addEventListener('click', () => {
+    $$('[data-theme-set]').forEach(b => b.classList.toggle('on', b === btn));
+    document.documentElement.dataset.theme = btn.dataset.themeSet;
+    toast(btn.dataset.themeSet === 'dark' ? '已切换到深色主题' : '已切换到浅色主题');
+  }));
+
+  $$('[data-font-set]').forEach(btn => btn.addEventListener('click', () => {
+    $$('[data-font-set]').forEach(b => b.classList.toggle('on', b === btn));
+    document.body.style.fontSize = btn.dataset.fontSet + 'px';
+    toast('界面字号已调整');
+  }));
+})();
+</script>
+</body>
+</html>

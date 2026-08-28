@@ -4068,11 +4068,13 @@ test("image understanding section configures engine, vision provider, and persis
     await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.locator("#image-understanding-block").waitFor({ state: "visible" });
 
-    // 默认 OCR 引擎：radio 选中且无服务/模型下拉。
+    // 默认 OCR 引擎：radio 选中，服务/模型配置行保留但置灰禁用（不隐藏）。
     const ocrRadio = page.locator('.image-engine-option[role="radio"]').first();
     await ocrRadio.waitFor({ state: "visible" });
     assert.equal(await ocrRadio.getAttribute("aria-checked"), "true");
-    assert.equal(await page.locator("#set-image-provider").count(), 0);
+    assert.equal(await page.locator("#set-image-provider").isDisabled(), true);
+    assert.equal(await page.locator("#image-understanding-block .image-understanding-target")
+      .evaluate((element) => element.classList.contains("is-off")), true);
 
     // 切到视觉模型：服务下拉列出全部已配置服务（能力标注下沉到模型级）。
     await page.locator(".image-engine-option", { hasText: "视觉模型" }).click();
@@ -4205,8 +4207,8 @@ test("saved providers auto-sync models on open; manual sync stays in the new-pro
     // 隔离同步快照缓存，保证本测试确实触发一次自动同步。
     await page.evaluate(() => window.localStorage.removeItem("r-code.provider.synced"));
 
-    // 点开已保存的 DeepSeek：自动发起模型同步，无需点任何按钮。
-    await page.locator(".provider-list .provider-row").filter({ hasText: "DeepSeek" }).click();
+    // 点开已保存的 DeepSeek：抽屉打开并自动发起模型同步，无需点任何按钮。
+    await page.locator(".provider-roster .provider-row").filter({ hasText: "DeepSeek" }).click();
     await page.locator(".provider-field-success").waitFor({ state: "visible" });
     const syncMessage = await page.locator(".provider-field-success").textContent();
     assert.match(syncMessage, /服务返回 \d+ 个可用模型/, "opening a saved provider auto-syncs its model list");
@@ -4231,7 +4233,8 @@ test("saved providers auto-sync models on open; manual sync stays in the new-pro
     assert.equal(await page.locator(".provider-model-refresh").count(), 0,
       "manual sync button is hidden for saved providers");
 
-    // 新建服务（草稿）：手动同步按钮保留。
+    // 新建服务（草稿）：手动同步按钮保留。抽屉盖住了页头按钮，先 Esc 关闭。
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "新建服务" }).click();
     await page.locator(".provider-model-refresh").waitFor({ state: "visible" });
     // 草稿密钥为空、地址来自预设，按钮可用。

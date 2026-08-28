@@ -1605,9 +1605,12 @@ impl std::fmt::Debug for FrozenSubagentSlot {
 pub struct FrozenSubagentCandidatePool {
     pub revision: String,
     pub slots: Vec<FrozenSubagentSlot>,
-    /// Safe host-rendered reason for a persisted non-empty pool that could not be loaded or whose
-    /// connectivity receipts went stale. `Some` is distinct from an intentional empty pool.
-    pub unavailable_reason: Option<String>,
+    /// Safe host-rendered note describing per-slot degradation: slots dropped after an automatic
+    /// re-probe, or a persisted pool that could not be interpreted at all. `Some` means the saved
+    /// configuration differs from what is installed; when the pool is also empty, routing falls
+    /// back to the R-Code runtime itself instead of the legacy router. Distinct from an
+    /// intentional empty pool.
+    pub degraded_reason: Option<String>,
 }
 
 /// Result returned by a host-provided external Agent bridge.
@@ -2130,7 +2133,7 @@ impl LlmAgentRuntime {
         let replacement = Arc::new(FrozenSubagentCandidatePool {
             revision: revision.into(),
             slots,
-            unavailable_reason: None,
+            degraded_reason: None,
         });
         *self
             .next_subagent_candidate_pool
@@ -2138,21 +2141,25 @@ impl LlmAgentRuntime {
             .expect("subagent candidate pool lock poisoned") = replacement;
     }
 
-    /// Freeze an unavailable persisted pool for future roots without silently falling back to the
-    /// legacy router. Active roots retain their earlier Arc snapshot.
-    pub fn replace_subagent_candidate_pool_error(
+    /// Freeze a degraded persisted pool for future roots: some or all saved slots were dropped
+    /// after an automatic re-probe (or the configuration could not be interpreted). Remaining
+    /// healthy slots keep serving; when none remain, routing falls back to the R-Code runtime
+    /// itself with this reason surfaced in the routing note. Active roots retain their earlier
+    /// Arc snapshot.
+    pub fn replace_subagent_candidate_pool_degraded(
         &self,
         revision: impl Into<String>,
-        reason: impl Into<String>,
+        slots: Vec<FrozenSubagentSlot>,
+        degraded_reason: impl Into<String>,
     ) {
-        let reason = reason
+        let reason = degraded_reason
             .into()
             .chars()
             .filter(|character| !character.is_control() || *character == '\n')
             .take(512)
             .collect::<String>();
         let reason = if reason.trim().is_empty() {
-            "候选池配置或连通状态不可用".to_string()
+            "部分或全部槽位探测未通过，已按剩余健康槽位降级".to_string()
         } else {
             reason.trim().to_string()
         };
@@ -2162,8 +2169,8 @@ impl LlmAgentRuntime {
             .expect("subagent candidate pool lock poisoned") =
             Arc::new(FrozenSubagentCandidatePool {
                 revision: revision.into(),
-                slots: Vec::new(),
-                unavailable_reason: Some(reason),
+                slots,
+                degraded_reason: Some(reason),
             });
     }
 
@@ -6397,7 +6404,7 @@ impl SessionToolHost {
                     supervisor.available_external_backends(),
                     supervisor.can_delegate(),
                     !supervisor.candidate_pool.slots.is_empty()
-                        || supervisor.candidate_pool.unavailable_reason.is_some(),
+                        || supervisor.candidate_pool.degraded_reason.is_some(),
                 ));
             }
         }
@@ -7864,12 +7871,6 @@ impl SubagentSupervisor {
     }
 
     fn validate_candidate_pool(&self) -> Result<(), ProductError> {
-        if let Some(reason) = self.candidate_pool.unavailable_reason.as_deref() {
-            return Err(ProductError::Other(format!(
-                "子代理候选池 revision={} 当前不可用：{reason}",
-                self.candidate_pool.revision
-            )));
-        }
         let slots = &self.candidate_pool.slots;
         if slots.is_empty() {
             return Ok(());
@@ -7942,7 +7943,9 @@ impl SubagentSupervisor {
             }
             total = total.saturating_add(u16::from(descriptor.weight));
         }
-        if total != 100 {
+        // 权重和必须为 100 是“保存时的完整池”的契约；降级池（坏槽被剔除）允许部分和，
+        // 路由时 roll 会按剩余权重和归一化。
+        if self.candidate_pool.degraded_reason.is_none() && total != 100 {
             return Err(ProductError::Other(format!(
                 "子代理候选池配置无效：权重合计必须为 100，当前为 {total}"
             )));
@@ -8294,64 +8297,44 @@ delegate_task 的 agent 枚举",
         complexity: TaskComplexity,
         child_run_id: &str,
     ) -> Result<(SubagentBackend, String), ProductError> {
-        if (requested == "auto" || requested.starts_with("slot:"))
-            && self.candidate_pool.unavailable_reason.is_some()
-        {
-            self.validate_candidate_pool()?;
-        }
-        if requested == "auto" && !self.candidate_pool.slots.is_empty() {
-            self.validate_candidate_pool()?;
-            let roll = deterministic_candidate_roll(&self.parent_run_id, child_run_id);
-            let mut cumulative = 0_u16;
-            let index = self
-                .candidate_pool
-                .slots
-                .iter()
-                .position(|slot| {
-                    cumulative += u16::from(slot.descriptor.weight);
-                    u16::from(roll) < cumulative
-                })
-                .ok_or_else(|| {
-                    ProductError::Other("子代理候选池配置无效：权重区间未覆盖路由值".to_string())
-                })?;
-            let descriptor = &self.candidate_pool.slots[index].descriptor;
-            if let Err(error) =
-                self.ensure_candidate_slot_enabled(&self.candidate_pool.slots[index])
-            {
-                return Ok((
-                    SubagentBackend::RCode,
-                    format!(
-                        "候选池 revision={}：roll={} 命中槽位 '{}'，但{}；按设置自动回退 R-Code",
-                        self.candidate_pool.revision, roll, descriptor.slot_id, error
-                    ),
-                ));
+        // 降级策略：候选池的任何不可用（槽位被剔除、配置损坏、显式槽位落空）都不再堵死委派
+        // 链路——回退 R-Code 自身并把原因写进路由 note，供模型与日志可见。
+        let degrade_note = |detail: String| -> String {
+            match &self.candidate_pool.degraded_reason {
+                Some(reason) => format!("候选池已降级（{reason}）：{detail}"),
+                None => detail,
             }
-            return Ok((
-                SubagentBackend::Candidate(index),
-                format!(
-                    "候选池 revision={}：roll={} 选择槽位 '{}'（source={}，model={}，weight={}%）",
-                    self.candidate_pool.revision,
-                    roll,
-                    descriptor.slot_id,
-                    descriptor.source.stable_name(),
-                    descriptor.model,
-                    descriptor.weight
-                ),
-            ));
-        }
+        };
 
         if let Some(slot_id) = requested.strip_prefix("slot:") {
-            self.validate_candidate_pool()?;
-            let (index, slot) = self
+            if let Err(error) = self.validate_candidate_pool() {
+                return Ok((
+                    SubagentBackend::RCode,
+                    degrade_note(format!("候选池结构无效（{error}）；本次委派回退 R-Code 自身")),
+                ));
+            }
+            let found = self
                 .candidate_pool
                 .slots
                 .iter()
                 .enumerate()
-                .find(|(_, slot)| slot.descriptor.slot_id == slot_id)
-                .ok_or_else(|| {
-                    ProductError::Other(format!("未知或未就绪的子代理候选槽位：{slot_id}"))
-                })?;
-            self.ensure_candidate_slot_enabled(slot)?;
+                .find(|(_, slot)| slot.descriptor.slot_id == slot_id);
+            let Some((index, slot)) = found else {
+                return Ok((
+                    SubagentBackend::RCode,
+                    degrade_note(format!(
+                        "请求的子代理槽位 '{slot_id}' 不存在或已被剔除；本次委派回退 R-Code 自身"
+                    )),
+                ));
+            };
+            if let Err(error) = self.ensure_candidate_slot_enabled(slot) {
+                return Ok((
+                    SubagentBackend::RCode,
+                    degrade_note(format!(
+                        "槽位 '{slot_id}' 当前不可用：{error}；本次委派回退 R-Code 自身"
+                    )),
+                ));
+            }
             return Ok((
                 SubagentBackend::Candidate(index),
                 format!(
@@ -8362,6 +8345,83 @@ delegate_task 的 agent 枚举",
                     slot.descriptor.weight
                 ),
             ));
+        }
+
+        if requested == "auto" && !self.candidate_pool.slots.is_empty() {
+            if let Err(error) = self.validate_candidate_pool() {
+                // 非降级池结构非法 = Host 构建侧 bug，保持 Err 哨兵；降级池（允许部分
+                // 权重和）理论上不会再有结构错误，兜底走 self。
+                if self.candidate_pool.degraded_reason.is_none() {
+                    return Err(error);
+                }
+                return Ok((
+                    SubagentBackend::RCode,
+                    degrade_note(format!("候选池结构无效（{error}）；本次委派回退 R-Code 自身")),
+                ));
+            }
+            // roll 按剩余槽位的权重和归一化：坏槽被剔除后权重和可能小于 100，
+            // 不归一化会让高位 roll 落不进任何区间。确定性保持不变（同一 parent/child 对
+            // 仍映射到同一槽位序）。
+            let total: u32 = self
+                .candidate_pool
+                .slots
+                .iter()
+                .map(|slot| u32::from(slot.descriptor.weight))
+                .sum();
+            let roll = deterministic_candidate_roll(&self.parent_run_id, child_run_id);
+            let scaled = u32::from(roll) % total.max(1);
+            let mut cumulative: u32 = 0;
+            let index = self
+                .candidate_pool
+                .slots
+                .iter()
+                .position(|slot| {
+                    cumulative += u32::from(slot.descriptor.weight);
+                    scaled < cumulative
+                })
+                .ok_or_else(|| {
+                    ProductError::Other("子代理候选池配置无效：权重区间未覆盖路由值".to_string())
+                })?;
+            let descriptor = &self.candidate_pool.slots[index].descriptor;
+            if let Err(error) =
+                self.ensure_candidate_slot_enabled(&self.candidate_pool.slots[index])
+            {
+                return Ok((
+                    SubagentBackend::RCode,
+                    degrade_note(format!(
+                        "roll={} 命中槽位 '{}'，但{}；本次委派回退 R-Code 自身",
+                        roll, descriptor.slot_id, error
+                    )),
+                ));
+            }
+            return Ok((
+                SubagentBackend::Candidate(index),
+                degrade_note(format!(
+                    "候选池 revision={}：roll={}（归一化 {} / 权重和 {}）选择槽位 '{}'（source={}，model={}，weight={}%）",
+                    self.candidate_pool.revision,
+                    roll,
+                    scaled,
+                    total,
+                    descriptor.slot_id,
+                    descriptor.source.stable_name(),
+                    descriptor.model,
+                    descriptor.weight
+                )),
+            ));
+        }
+
+        if requested == "auto" {
+            if let Some(reason) = &self.candidate_pool.degraded_reason {
+                // 配置过子代理但全部不可用：强制使用 R-Code 自身，不回落 legacy 路由——
+                // 避免全挂的池静默改走 Codex 等其它引擎。
+                return Ok((
+                    SubagentBackend::RCode,
+                    format!(
+                        "候选池 revision={} 已全部降级：{reason}；本次委派使用 R-Code 自身",
+                        self.candidate_pool.revision
+                    ),
+                ));
+            }
         }
 
         self.route_backend_legacy(requested, complexity)

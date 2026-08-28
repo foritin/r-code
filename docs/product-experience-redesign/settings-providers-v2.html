@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>R-Code · 设置 / 模型服务 — 重构原型</title>
+<style>
+  /* ============ tokens —— 取自 src/styles/tokens.css（Obsidian） ============ */
+  :root {
+    --font-ui: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+    --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+    --bg-app: #10110f;
+    --bg-sidebar: #1c1918;
+    --bg-card: #1b1c19;
+    --bg-chip: #25241f;
+    --bg-control: #23231f;
+    --bg-inset: #0b0c0a;
+    --bg-hover: #20211e;
+    --bg-active: #29261f;
+    --bg-float: #1e1d1a;
+
+    --border: #2b2b27;
+    --border-strong: #4b463d;
+    --divider: #32312c;
+
+    --fg: #f1efe9;
+    --fg-muted: #a49f95;
+    --fg-faint: #817b72;
+
+    --accent: #f4742b;
+    --accent-hover: #ff8642;
+    --accent-fg: #17100b;
+    --accent-icon: #ff9b5d;
+    --accent-soft: rgba(244, 116, 43, .14);
+
+    --warning: #e5a15b;
+    --success: #69c798;
+    --danger: #df6b62;
+
+    --glow-corner-hot: rgba(255, 139, 72, .18);
+    --glow-corner-soft: rgba(216, 67, 33, .07);
+    --glow-side-deep: rgba(176, 53, 34, .12);
+    --glow-side-hot: rgba(244, 116, 43, .06);
+    --glow-wash: rgba(244, 116, 43, .025);
+
+    --radius-btn: 6px;
+    --radius-pane: 8px;
+    --radius-card: 12px;
+    --workspace-radius: 28px;
+
+    --topbar-h: 42px;
+    --rail-w: 264px;
+
+    --shadow-float: 0 24px 64px rgba(0, 0, 0, .5);
+    --workspace-shadow: -18px -18px 46px rgba(0, 0, 0, .12);
+    --ease: cubic-bezier(.32, .72, .24, 1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    font-size: 14px; line-height: 1.55;
+    color: var(--fg); background: var(--bg-sidebar);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  input, textarea, select { font: inherit; color: inherit; }
+  ::selection { background: var(--accent-soft); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  svg { display: block; flex: none; }
+
+  /* ============ 骨架 + 光晕（与 App 同配方） ============ */
+  .app {
+    height: 100vh;
+    display: grid;
+    grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    background-color: var(--bg-sidebar);
+    background-image:
+      radial-gradient(210px 172px at var(--rail-w) var(--topbar-h),
+        var(--glow-corner-hot) 0%, var(--glow-corner-soft) 34%, transparent 74%),
+      radial-gradient(112% 72% at 18% 112%,
+        var(--glow-side-deep) 0%, rgba(176, 53, 34, .05) 34%, transparent 72%),
+      radial-gradient(82% 58% at -14% 28%,
+        var(--glow-side-hot) 0%, transparent 73%),
+      linear-gradient(90deg, var(--glow-wash), transparent 78%);
+  }
+
+  /* ============ topbar ============ */
+  .topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 4px; padding: 0 10px 0 12px; }
+  .topbar .menus { display: flex; gap: 2px; margin-left: 8px; color: var(--fg-muted); font-size: 12.5px; }
+  .topbar .menus span { padding: 3px 8px; cursor: default; }
+  .crumb { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--fg-faint); margin-left: 14px; }
+  .crumb b { color: var(--fg-muted); font-weight: 550; }
+  .topbar .spacer { flex: 1; }
+  .icon-btn {
+    width: 28px; height: 28px; border-radius: var(--radius-btn);
+    display: grid; place-items: center; color: var(--fg-faint);
+    transition: background .12s, color .12s;
+  }
+  .icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
+  .search-box {
+    display: flex; align-items: center; gap: 8px;
+    width: 250px; height: 30px; padding: 0 11px;
+    border-radius: var(--radius-pane);
+    background: var(--bg-control); border: 1px solid var(--border);
+    color: var(--fg-faint);
+    transition: border-color .13s;
+  }
+  .search-box:focus-within { border-color: var(--border-strong); }
+  .search-box input { flex: 1; min-width: 0; background: none; border: 0; outline: none; font-size: 12.5px; color: var(--fg); }
+  .search-box input::placeholder { color: var(--fg-faint); }
+  .win-controls { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+
+  /* ============ sidebar（应用壳，示意） ============ */
+  .sidebar { display: flex; flex-direction: column; padding: 6px 12px 10px 14px; gap: 3px; overflow-y: auto; }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 14px; }
+  .brand-mark {
+    width: 26px; height: 26px; border-radius: 9px 9px 3px 9px;
+    background: linear-gradient(135deg, #ff8642, #e85f16);
+    color: #fff; font-weight: 700; font-size: 13.5px;
+    display: grid; place-items: center;
+  }
+  .brand-name { font-weight: 600; font-size: 14.5px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    height: 32px; padding: 0 10px;
+    border-radius: 3px 9px 9px 3px;
+    color: var(--fg-muted); font-size: 13px;
+    width: 100%; text-align: left;
+    transition: background .12s, color .12s;
+  }
+  .nav-item:hover { background: var(--bg-hover); color: var(--fg); }
+  .nav-item.active {
+    color: var(--fg); font-weight: 550;
+    background: linear-gradient(90deg, rgba(244, 116, 43, .14), rgba(244, 116, 43, .025) 62%, transparent);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .nav-item.active svg { color: var(--accent-icon); }
+  .side-label { font-size: 11.5px; color: var(--fg-faint); padding: 15px 10px 5px; }
+  .side-empty { padding: 2px 10px; color: var(--fg-faint); font-size: 12.5px; }
+  .side-foot { margin-top: auto; padding-top: 10px; }
+
+  /* ============ 主面板（圆框） ============ */
+  .main {
+    position: relative; min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--bg-app);
+    border-radius: var(--workspace-radius) 0 0 0;
+    border-top: 1px solid var(--divider);
+    border-left: 1px solid var(--divider);
+    box-shadow: var(--workspace-shadow);
+    overflow: hidden;
+  }
+  .main::before {
+    content: ""; position: absolute; top: 0; left: 32px;
+    width: 62px; height: 1px; z-index: 2;
+    background: linear-gradient(90deg, rgba(244, 116, 43, .76), transparent);
+    pointer-events: none;
+  }
+  .main::after {
+    content: ""; position: absolute; top: 32px; left: 0;
+    width: 1px; height: 48px; z-index: 2;
+    background: linear-gradient(180deg, rgba(244, 116, 43, .76), transparent);
+    pointer-events: none;
+  }
+
+  /* ============ settings 布局 ============ */
+  .settings-wrap { display: grid; grid-template-columns: 216px minmax(0, 1fr); height: 100%; min-height: 0; }
+  .settings-nav { padding: 26px 12px; overflow-y: auto; }
+  .settings-nav .nav-item { margin-bottom: 1px; }
+  .settings-body { overflow-y: auto; padding: 30px 44px 90px; }
+  .settings-inner { max-width: 680px; }
+
+  .page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 6px; }
+  .page-head h1 { font-size: 21px; font-weight: 640; letter-spacing: -.02em; }
+  .page-head .btn { margin-left: auto; margin-bottom: 2px; }
+  .page-sub { color: var(--fg-muted); font-size: 13px; max-width: 60ch; }
+
+  /* ============ 分区标题：mono kicker ============ */
+  .section { margin-top: 40px; }
+  .section-kicker {
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 680;
+    letter-spacing: .105em; text-transform: uppercase;
+    color: var(--fg-faint);
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 4px;
+  }
+  .section-kicker .hint { font-family: var(--font-ui); font-size: 11.5px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+  /* ============ 服务列表：平静的只读行 ============ */
+  .provider-row {
+    display: flex; align-items: center; gap: 15px;
+    padding: 17px 10px;
+    margin: 0 -10px;
+    border-bottom: 1px solid var(--border);
+    border-radius: var(--radius-pane);
+    cursor: pointer;
+    transition: background .13s;
+  }
+  .provider-row:last-child { border-bottom: 0; }
+  .provider-row:hover { background: var(--bg-hover); }
+  .p-tile {
+    width: 36px; height: 36px; border-radius: 8px; flex: none;
+    background: #f2ede6;
+    display: grid; place-items: center;
+  }
+  .p-tile img { width: 22px; height: 22px; object-fit: contain; }
+  .p-body { flex: 1; min-width: 0; }
+  .p-name { font-weight: 600; font-size: 14.5px; display: flex; align-items: center; gap: 9px; }
+  .p-tag { font-size: 11px; font-weight: 600; font-style: normal; color: var(--accent-icon); background: var(--accent-soft); border-radius: 5px; padding: 1.5px 7px; }
+  .p-sub { color: var(--fg-faint); font-size: 12.5px; margin-top: 3px; display: flex; align-items: center; gap: 7px; }
+  .p-sub code { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-muted); }
+  .p-state { display: flex; align-items: center; gap: 7px; flex: none; font-size: 12.5px; color: var(--fg-muted); }
+  .state-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .state-dot.ok { background: var(--success); }
+  .state-dot.warn { background: var(--warning); }
+  .p-actions { display: flex; gap: 8px; flex: none; opacity: 0; transition: opacity .13s; }
+  .provider-row:hover .p-actions, .provider-row:focus-within .p-actions { opacity: 1; }
+  .row-link {
+    height: 30px; padding: 0 11px; border-radius: var(--radius-btn);
+    font-size: 12.5px; color: var(--fg-muted);
+    display: inline-flex; align-items: center;
+    border: 1px solid var(--border); background: var(--bg-control);
+    transition: color .12s, border-color .12s;
+  }
+  .row-link:hover { color: var(--fg); border-color: var(--border-strong); }
+  .row-link.accent { color: var(--accent-icon); border-color: transparent; background: none; }
+  .row-link.accent:hover { background: var(--accent-soft); }
+  .row-chevron { color: var(--fg-faint); flex: none; margin-left: 2px; }
+
+  /* ============ 平铺设置行 ============ */
+  .set-row { display: flex; align-items: center; gap: 16px; padding: 15px 4px; border-bottom: 1px solid var(--border); }
+  .set-row:last-child { border-bottom: 0; }
+  .set-row .r-body { flex: 1; min-width: 0; }
+  .set-row .r-title { font-size: 13.5px; font-weight: 550; }
+  .set-row .r-sub { color: var(--fg-faint); font-size: 12.5px; margin-top: 2px; max-width: 56ch; }
+
+  .switch { position: relative; width: 38px; height: 22px; flex: none; border-radius: 999px; background: var(--bg-active); border: 1px solid var(--border); transition: background .18s var(--ease); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s var(--ease); }
+  .switch[aria-checked="true"] { background: var(--accent); border-color: transparent; }
+  .switch[aria-checked="true"]::after { transform: translateX(16px); }
+
+  select.select {
+    height: 32px; padding: 0 28px 0 12px;
+    border-radius: var(--radius-btn); border: 1px solid var(--border);
+    background: var(--bg-control) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a49f95' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+    appearance: none; font-size: 13px; color: var(--fg); cursor: pointer;
+  }
+
+  .btn {
+    height: 32px; padding: 0 14px; border-radius: var(--radius-btn);
+    font-size: 13px; font-weight: 550;
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid transparent;
+    transition: background .13s, color .13s, border-color .13s, transform .1s;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn-primary { background: var(--accent); color: var(--accent-fg); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-ghost { color: var(--fg-muted); border-color: var(--border); background: var(--bg-control); }
+  .btn-ghost:hover { color: var(--fg); border-color: var(--border-strong); }
+
+  /* ============ 编辑抽屉 ============ */
+  .scrim { position: fixed; inset: 0; z-index: 30; background: rgba(6, 4, 2, .45); opacity: 0; pointer-events: none; transition: opacity .22s var(--ease); }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 10px; right: 10px; bottom: 10px; z-index: 31;
+    width: 400px;
+    background: var(--bg-float);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow-float);
+    transform: translateX(calc(100% + 20px));
+    transition: transform .3s var(--ease);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .drawer.on { transform: none; }
+  .drawer-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+  .drawer-head .d-titles { min-width: 0; }
+  .drawer-head h2 { font-size: 15px; font-weight: 620; }
+  .drawer-head .d-sub { font-size: 12px; color: var(--fg-faint); margin-top: 1px; }
+  .drawer-head .icon-btn { margin-left: auto; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 6px 20px 20px; }
+  .drawer-foot {
+    display: flex; align-items: center; gap: 8px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .drawer-foot .spacer { flex: 1; }
+  .test-result { font-size: 12px; color: var(--success); display: none; align-items: center; gap: 6px; }
+  .test-result.on { display: inline-flex; }
+
+  .f-group { margin-top: 20px; }
+  .f-label { font-size: 12px; font-weight: 600; color: var(--fg-muted); margin-bottom: 7px; display: flex; align-items: center; gap: 8px; }
+  .f-label .f-note { font-weight: 400; color: var(--fg-faint); margin-left: auto; font-size: 11.5px; }
+  .f-label .f-note.ok { color: var(--success); }
+  .f-input, .f-select {
+    width: 100%; height: 36px; padding: 0 12px;
+    border-radius: var(--radius-pane);
+    border: 1px solid var(--border);
+    background: var(--bg-inset);
+    color: var(--fg); font-size: 13.5px;
+    outline: none;
+    transition: border-color .13s, box-shadow .13s;
+  }
+  .f-input:focus, .f-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(244, 116, 43, .16); }
+  .f-input::placeholder { color: var(--fg-faint); }
+  .f-select {
+    appearance: none; cursor: pointer;
+    background: var(--bg-inset) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a49f95' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 12px center;
+  }
+  .f-caption { font-size: 12px; color: var(--fg-faint); margin-top: 6px; }
+  .f-caption a { color: var(--accent-icon); text-decoration: none; }
+  .f-caption a:hover { text-decoration: underline; }
+
+  /* 预设栅格（新建模式） */
+  .preset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .preset {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 14px 6px 12px;
+    border-radius: var(--radius-card);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    font-size: 12px; color: var(--fg-muted);
+    transition: border-color .13s, color .13s, background .13s;
+  }
+  .preset:hover { border-color: var(--border-strong); color: var(--fg); }
+  .preset.on { border-color: var(--accent); color: var(--fg); background: var(--accent-soft); }
+  .preset .p-tile { width: 32px; height: 32px; }
+  .preset .p-tile img { width: 20px; height: 20px; }
+  .preset .p-initial { width: 32px; height: 32px; border-radius: 8px; background: var(--bg-chip); display: grid; place-items: center; font-weight: 650; color: var(--fg-muted); }
+
+  /* 行为行（抽屉内的平铺 toggle 行） */
+  .f-row { display: flex; align-items: flex-start; gap: 14px; padding: 13px 0; border-top: 1px solid var(--border); }
+  .f-row .r-body { flex: 1; min-width: 0; }
+  .f-row .r-title { font-size: 13px; font-weight: 550; display: flex; align-items: center; gap: 8px; }
+  .f-row .r-sub { color: var(--fg-faint); font-size: 12px; margin-top: 3px; line-height: 1.6; }
+  .badge-host { font-size: 10.5px; font-weight: 600; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 4px; padding: 1px 5px; }
+
+  details.advanced { margin-top: 18px; border-top: 1px solid var(--border); }
+  details.advanced summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    padding: 13px 0;
+    font-size: 13px; color: var(--fg-muted); font-weight: 550;
+  }
+  details.advanced summary::-webkit-details-marker { display: none; }
+  details.advanced summary .caret { transition: transform .18s var(--ease); color: var(--fg-faint); }
+  details.advanced[open] summary .caret { transform: rotate(90deg); }
+  details.advanced summary .sum-note { margin-left: auto; font-size: 11.5px; color: var(--fg-faint); font-weight: 400; font-family: var(--font-mono); }
+  .advanced-body { padding: 2px 0 12px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* ============ toast ============ */
+  .toast {
+    position: fixed; right: 22px; bottom: 22px; z-index: 50;
+    display: flex; align-items: center; gap: 9px;
+    background: var(--bg-float); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: var(--shadow-float);
+    padding: 11px 16px; font-size: 13px;
+    transform: translateY(16px); opacity: 0;
+    transition: all .3s var(--ease); pointer-events: none;
+  }
+  .toast.on { transform: none; opacity: 1; }
+  .toast .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+
+  /* ============ 图片理解：引擎二选一 ============ */
+  .engine-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 4px; }
+  .engine-opt {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 15px 16px;
+    text-align: left;
+    border-radius: var(--radius-card);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    transition: border-color .15s, background .15s;
+  }
+  .engine-opt:hover { border-color: var(--border-strong); }
+  .engine-opt.is-selected { border-color: var(--accent); background: linear-gradient(135deg, var(--accent-soft), transparent 70%), var(--bg-card); }
+  .engine-opt .radio {
+    width: 16px; height: 16px; border-radius: 50%; flex: none;
+    border: 1.5px solid var(--border-strong);
+    margin-top: 2px;
+    position: relative;
+    transition: border-color .15s;
+  }
+  .engine-opt.is-selected .radio { border-color: var(--accent); }
+  .engine-opt.is-selected .radio::after {
+    content: ""; position: absolute; inset: 3px;
+    border-radius: 50%; background: var(--accent);
+  }
+  .engine-opt .e-title { font-size: 13.5px; font-weight: 600; display: block; }
+  .engine-opt .e-sub { font-size: 12px; color: var(--fg-faint); margin-top: 3px; display: block; line-height: 1.6; }
+  .engine-detail { margin-top: 6px; }
+  .engine-detail.off { opacity: .45; pointer-events: none; }
+  .section-note { font-size: 12px; color: var(--fg-faint); padding: 12px 4px 0; }
+
+  .hidden { display: none !important; }
+
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  @media (max-width: 900px) { :root { --rail-w: 216px; --workspace-radius: 20px; } .settings-body { padding: 24px 26px 60px; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ================= topbar ================= -->
+  <header class="topbar">
+    <button class="icon-btn" title="切换侧栏" tabindex="-1"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M6 2.5v11" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    <button class="icon-btn" title="后退" tabindex="-1"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2.5L4.5 7 9 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="icon-btn" title="前进" tabindex="-1"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2.5L9.5 7 5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <nav class="menus" aria-hidden="true"><span>文件</span><span>编辑</span><span>视图</span><span>帮助</span></nav>
+    <nav class="crumb" aria-label="当前位置"><b>设置</b><span>›</span><span>模型服务</span></nav>
+    <div class="spacer"></div>
+    <label class="search-box">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <input id="settingsSearch" type="search" placeholder="搜索设置项" aria-label="搜索设置项">
+    </label>
+    <div class="win-controls" aria-hidden="true">
+      <button class="icon-btn" title="最小化" tabindex="-1"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button>
+      <button class="icon-btn" title="最大化" tabindex="-1"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2.5" y="2.5" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="icon-btn" title="关闭" tabindex="-1"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button>
+    </div>
+  </header>
+
+  <!-- ================= 应用侧栏（壳，示意） ================= -->
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">R</span><span class="brand-name">R-Code</span></div>
+    <button class="nav-item" data-shell><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 3.5a1 1 0 011-1h9a1 1 0 011 1v6a1 1 0 01-1 1H7l-3.2 2.4a.4.4 0 01-.63-.32V3.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>对话</button>
+    <button class="nav-item" data-shell><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 9.5h3l1 1.5h3l1-1.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.3 3.5h9.4a.8.8 0 01.8.8v6.4a.8.8 0 01-.8.8H3.3a.8.8 0 01-.8-.8V4.3a.8.8 0 01.8-.8z" stroke="currentColor" stroke-width="1.3"/></svg>待处理</button>
+    <button class="nav-item" data-shell><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 8h3l1.5-4 3 8L11 8h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>活动</button>
+    <button class="nav-item" data-shell><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="3" width="11" height="3" rx=".8" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 6v5.5a1 1 0 001 1h7a1 1 0 001-1V6M6.5 8.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>归档</button>
+    <div class="side-label">最近</div>
+    <div class="side-empty">无聊天</div>
+    <div class="side-foot">
+      <button class="nav-item active"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>设置</button>
+    </div>
+  </aside>
+
+  <!-- ================= 主面板 ================= -->
+  <div class="main">
+    <div class="settings-wrap">
+
+      <nav class="settings-nav" aria-label="设置分区" id="settingsNav">
+        <button class="nav-item active">模型服务</button>
+        <button class="nav-item" data-shell>Agent 编排</button>
+        <button class="nav-item" data-shell>子代理配置</button>
+        <button class="nav-item" data-shell>工具与连接</button>
+        <button class="nav-item" data-shell>知识与指令</button>
+        <button class="nav-item" data-shell>权限</button>
+        <button class="nav-item" data-shell>隐私与安全</button>
+        <button class="nav-item" data-shell>外观与小助手</button>
+        <button class="nav-item" data-shell>通知</button>
+        <button class="nav-item" data-shell>启动与关闭</button>
+        <button class="nav-item" data-shell>更新</button>
+        <button class="nav-item" data-shell>诊断</button>
+      </nav>
+
+      <div class="settings-body">
+        <div class="settings-inner">
+
+          <div class="page-head">
+            <h1>模型服务</h1>
+            <button class="btn btn-primary" id="btnNewService">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+              新建服务
+            </button>
+          </div>
+          <p class="page-sub">配置对话与图片理解使用的模型服务。访问密钥只保存在本设备的安全存储中，界面不会回显。</p>
+
+          <!-- ========== 对话模型 ========== -->
+          <section class="section" aria-label="对话模型">
+            <div class="section-kicker">对话模型<span class="hint">点击任意服务即可编辑</span></div>
+
+            <div class="provider-row" data-edit="deepseek" tabindex="0" role="button" aria-label="编辑 DeepSeek">
+              <span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/deepseek.png" alt="DeepSeek"></span>
+              <div class="p-body">
+                <div class="p-name">DeepSeek <em class="p-tag" id="defaultTag">默认</em></div>
+                <div class="p-sub"><code>deepseek-v4-flash</code><span>·</span><span>1,000,000 上下文</span></div>
+              </div>
+              <span class="p-state"><span class="state-dot ok"></span>回执有效 · 962ms</span>
+              <span class="p-actions">
+                <button class="row-link" data-test="DeepSeek">测试</button>
+                <button class="row-link" data-edit="deepseek">编辑</button>
+              </span>
+              <svg class="row-chevron" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 2.5L9.5 7 5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+
+            <div class="provider-row" data-edit="ark" tabindex="0" role="button" aria-label="编辑 ark_token_plan">
+              <span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/ark.png" alt="火山引擎"></span>
+              <div class="p-body">
+                <div class="p-name">ark_token_plan</div>
+                <div class="p-sub"><code>glm-5.3</code><span>·</span><span>子代理候选</span></div>
+              </div>
+              <span class="p-state"><span class="state-dot ok"></span>回执有效 · 1716ms</span>
+              <span class="p-actions">
+                <button class="row-link accent" data-default="ark_token_plan">设为默认</button>
+                <button class="row-link" data-test="ark_token_plan">测试</button>
+                <button class="row-link" data-edit="ark">编辑</button>
+              </span>
+              <svg class="row-chevron" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 2.5L9.5 7 5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+
+            <div class="provider-row" data-edit="codex" tabindex="0" role="button" aria-label="编辑 Codex CLI">
+              <span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/openai.png" alt="OpenAI"></span>
+              <div class="p-body">
+                <div class="p-name">Codex CLI</div>
+                <div class="p-sub"><code>gpt-5.6-sol</code><span>·</span><span>本地运行时</span></div>
+              </div>
+              <span class="p-state"><span class="state-dot warn"></span>等待并发槽位</span>
+              <span class="p-actions">
+                <button class="row-link accent" data-default="Codex CLI">设为默认</button>
+                <button class="row-link" data-edit="codex">详情</button>
+              </span>
+              <svg class="row-chevron" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 2.5L9.5 7 5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+
+            <div class="set-row">
+              <div class="r-body">
+                <div class="r-title">启动后检查过期连接</div>
+                <div class="r-sub">仅探测配置指纹变化或回执过期的连接，并发上限 2，不会自动 fallback。可能产生一次极短请求。</div>
+              </div>
+              <button class="switch" role="switch" aria-checked="true" aria-label="启动后检查过期连接" data-switch data-toast-on="已开启启动检查" data-toast-off="已关闭启动检查"></button>
+            </div>
+          </section>
+
+          <!-- ========== 图片理解 ========== -->
+          <section class="section" aria-label="图片理解">
+            <div class="section-kicker">图片理解<span class="hint">只对文本主模型生效 · 主模型确认为多模态时原图直发，不经引擎</span></div>
+
+            <div class="engine-options" role="radiogroup" aria-label="图片理解引擎">
+              <button class="engine-opt" role="radio" aria-checked="false" data-engine="ocr" type="button">
+                <span class="radio" aria-hidden="true"></span>
+                <span class="e-body">
+                  <span class="e-title">本机 OCR</span>
+                  <span class="e-sub">只提取图片中的文字。离线、免费、即时。</span>
+                </span>
+              </button>
+              <button class="engine-opt is-selected" role="radio" aria-checked="true" data-engine="model" type="button">
+                <span class="radio" aria-hidden="true"></span>
+                <span class="e-body">
+                  <span class="e-title">视觉模型</span>
+                  <span class="e-sub">理解整张图片并生成结构化描述，消耗一次模型调用。</span>
+                </span>
+              </button>
+            </div>
+
+            <div class="engine-detail" id="engineDetail">
+              <div class="set-row">
+                <div class="r-body">
+                  <div class="r-title">视觉服务</div>
+                  <div class="r-sub">复用上方已就绪的服务，无需单独配置密钥。</div>
+                </div>
+                <select class="select" aria-label="视觉服务">
+                  <option>ark_token_plan</option>
+                  <option>DeepSeek</option>
+                </select>
+              </div>
+              <div class="set-row">
+                <div class="r-body">
+                  <div class="r-title">模型</div>
+                  <div class="r-sub">目录确认多模态的型号带徽标；未确认能力的型号按三态标注。</div>
+                </div>
+                <select class="select" aria-label="视觉模型">
+                  <option>glm-5.3 · 多模态</option>
+                  <option>glm-5.3-turbo · 能力未确认</option>
+                </select>
+              </div>
+              <p class="section-note">切换后对新发送的图片生效；原图仅本地留存预览。</p>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 编辑 / 新建抽屉 ================= -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+  <div class="drawer-head">
+    <span class="p-tile" id="drawerTile"><img id="drawerLogo" src="../../src-tauri/frontend/src/assets/providers/deepseek.png" alt=""></span>
+    <div class="d-titles">
+      <h2 id="drawerTitle">DeepSeek</h2>
+      <div class="d-sub" id="drawerSub">编辑服务 · 更改保存后即时生效</div>
+    </div>
+    <button class="icon-btn" id="drawerClose" aria-label="关闭">
+      <svg width="13" height="13" viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <div class="drawer-body">
+    <!-- 新建模式：预设栅格 -->
+    <div class="f-group hidden" id="presetGroup">
+      <div class="f-label">选择预设</div>
+      <div class="preset-grid" id="presetGrid">
+        <button class="preset" data-preset="DeepSeek" data-logo="deepseek"><span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/deepseek.png" alt=""></span>DeepSeek</button>
+        <button class="preset" data-preset="OpenAI" data-logo="openai"><span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/openai.png" alt=""></span>OpenAI</button>
+        <button class="preset" data-preset="Anthropic" data-logo="anthropic"><span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/anthropic.png" alt=""></span>Anthropic</button>
+        <button class="preset" data-preset="Kimi" data-logo="kimi"><span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/kimi.png" alt=""></span>Kimi</button>
+        <button class="preset" data-preset="智谱" data-logo="zhipu"><span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/zhipu.png" alt=""></span>智谱</button>
+        <button class="preset" data-preset="火山方舟" data-logo="ark"><span class="p-tile"><img src="../../src-tauri/frontend/src/assets/providers/ark.png" alt=""></span>火山方舟</button>
+      </div>
+    </div>
+
+    <div class="f-group">
+      <div class="f-label">配置名称</div>
+      <input class="f-input" id="fName" value="deepseek" spellcheck="false">
+    </div>
+
+    <div class="f-group">
+      <div class="f-label">访问密钥<span class="f-note ok" id="keyState">已安全保存</span></div>
+      <input class="f-input" type="password" placeholder="留空则保留当前密钥" aria-label="访问密钥">
+      <p class="f-caption" id="presetHint">OpenAI Chat Completions · 1,000,000 上下文 · <a href="#" onclick="return false">获取密钥</a></p>
+    </div>
+
+    <div class="f-group">
+      <div class="f-label">模型</div>
+      <select class="f-select" aria-label="模型">
+        <option>deepseek-v4-flash</option>
+        <option>deepseek-v4-pro</option>
+        <option>deepseek-r2</option>
+      </select>
+      <p class="f-caption">服务返回 3 个可用模型 · 允许自由填写未列入的型号</p>
+    </div>
+
+    <div class="f-group" style="margin-top:24px">
+      <div class="f-row" style="border-top:0;padding-top:0">
+        <div class="r-body">
+          <div class="r-title">显示思考过程</div>
+          <div class="r-sub">展示模型明确返回的思考内容；关闭只隐藏展示，不改变模型自身推理。</div>
+        </div>
+        <button class="switch" role="switch" aria-checked="true" aria-label="显示思考过程" data-switch></button>
+      </div>
+      <div class="f-row">
+        <div class="r-body">
+          <div class="r-title">联网能力 <span class="badge-host">DeepSeek 托管</span></div>
+          <div class="r-sub">启用服务端的 Web Search。读取指定 URL 仍由 R-Code 的本地工具处理。</div>
+        </div>
+        <button class="switch" role="switch" aria-checked="true" aria-label="联网能力" data-switch></button>
+      </div>
+    </div>
+
+    <details class="advanced">
+      <summary>
+        <svg class="caret" width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M5 2.5L9.5 7 5 11.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        高级设置
+        <span class="sum-note">OpenAI Responses · 最大输出 393216</span>
+      </summary>
+      <div class="advanced-body">
+        <div>
+          <div class="f-label">接口协议</div>
+          <select class="f-select" aria-label="接口协议"><option>OpenAI Responses</option><option>OpenAI Chat Completions</option></select>
+        </div>
+        <div>
+          <div class="f-label">最大输出 Token</div>
+          <input class="f-input" value="393216" inputmode="numeric" aria-label="最大输出 Token">
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="drawer-foot">
+    <button class="btn btn-ghost" id="btnTest">测试连接</button>
+    <span class="test-result" id="testResult">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-6.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      连接正常 · 962ms
+    </span>
+    <span class="spacer"></span>
+    <button class="btn btn-ghost" id="btnCancel">取消</button>
+    <button class="btn btn-primary" id="btnSave">保存并设为默认</button>
+  </div>
+</aside>
+
+<div class="toast" id="toast"><span class="dot"></span><span id="toastText"></span></div>
+
+<script>
+(function () {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  let toastTimer;
+  function toast(msg) {
+    $('#toastText').textContent = msg;
+    $('#toast').classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $('#toast').classList.remove('on'), 2600);
+  }
+
+  /* ---------- 壳上的占位导航 ---------- */
+  document.addEventListener('click', e => {
+    const shell = e.target.closest('[data-shell]');
+    if (shell) toast('本原型仅覆盖「设置 · 模型服务」');
+  });
+
+  /* ---------- 设置搜索：过滤左侧分区 ---------- */
+  $('#settingsSearch').addEventListener('input', e => {
+    const q = e.target.value.trim();
+    $$('#settingsNav .nav-item').forEach(n => {
+      n.style.display = !q || n.textContent.includes(q) ? '' : 'none';
+    });
+  });
+
+  /* ---------- 抽屉 ---------- */
+  const drawer = $('#drawer'), scrim = $('#scrim');
+  const providers = {
+    deepseek: { name: 'DeepSeek', logo: 'deepseek', sub: '编辑服务 · 更改保存后即时生效', field: 'deepseek', keySaved: true },
+    ark: { name: 'ark_token_plan', logo: 'ark', sub: '编辑服务 · 更改保存后即时生效', field: 'ark_token_plan', keySaved: true },
+    codex: { name: 'Codex CLI', logo: 'openai', sub: '本地运行时 · 安装来源已确认', field: 'codex_cli', keySaved: false }
+  };
+  function openDrawer(mode, key) {
+    const isNew = mode === 'new';
+    const p = !isNew && providers[key] ? providers[key] : null;
+    $('#presetGroup').classList.toggle('hidden', !isNew);
+    $('#drawerTitle').textContent = isNew ? '新建服务' : p.name;
+    $('#drawerSub').textContent = isNew ? '选择预设后填写凭据，一分钟内完成' : p.sub;
+    $('#drawerLogo').src = '../../src-tauri/frontend/src/assets/providers/' + (p ? p.logo : 'deepseek') + '.png';
+    $('#fName').value = p ? p.field : '';
+    $('#fName').placeholder = isNew ? '例如：deepseek 主力' : '';
+    $('#keyState').textContent = p && p.keySaved ? '已安全保存' : '尚未保存密钥';
+    $('#keyState').classList.toggle('ok', !!(p && p.keySaved));
+    $('#btnSave').textContent = isNew ? '保存并设为默认' : '保存';
+    $('#testResult').classList.remove('on');
+    if (isNew) $$('#presetGrid .preset').forEach(x => x.classList.remove('on'));
+    drawer.classList.add('on'); scrim.classList.add('on');
+    $('#fName').focus();
+  }
+  function closeDrawer() { drawer.classList.remove('on'); scrim.classList.remove('on'); }
+
+  document.addEventListener('click', e => {
+    if (e.target.closest('[data-test]') || e.target.closest('[data-default]')) return;
+    const edit = e.target.closest('[data-edit]');
+    if (edit) { openDrawer('edit', edit.dataset.edit); return; }
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.matches('.provider-row')) openDrawer('edit', e.target.dataset.edit);
+    if (e.key === 'Escape') closeDrawer();
+  });
+  $('#btnNewService').addEventListener('click', () => openDrawer('new'));
+  $('#drawerClose').addEventListener('click', closeDrawer);
+  $('#btnCancel').addEventListener('click', closeDrawer);
+  scrim.addEventListener('click', closeDrawer);
+
+  /* ---------- 预设栅格 ---------- */
+  $('#presetGrid').addEventListener('click', e => {
+    const p = e.target.closest('.preset');
+    if (!p) return;
+    $$('#presetGrid .preset').forEach(x => x.classList.toggle('on', x === p));
+    $('#drawerLogo').src = '../../src-tauri/frontend/src/assets/providers/' + p.dataset.logo + '.png';
+    $('#presetHint').firstChild.textContent = p.dataset.preset + ' · OpenAI Chat Completions 兼容 · ';
+  });
+
+  /* ---------- 测试连接 ---------- */
+  let testing = false;
+  function runTest(name, btn, resultEl) {
+    if (testing) return;
+    testing = true;
+    const old = btn.textContent;
+    btn.textContent = '测试中…';
+    setTimeout(() => {
+      btn.textContent = old;
+      testing = false;
+      if (resultEl) resultEl.classList.add('on');
+      else toast(name + ' 连接正常');
+    }, 900);
+  }
+  $('#btnTest').addEventListener('click', () => runTest('', $('#btnTest'), $('#testResult')));
+  document.addEventListener('click', e => {
+    const t = e.target.closest('[data-test]');
+    if (t) { e.stopPropagation(); runTest(t.dataset.test, t, null); }
+  });
+
+  /* ---------- 设为默认 ---------- */
+  document.addEventListener('click', e => {
+    const d = e.target.closest('[data-default]');
+    if (!d) return;
+    e.stopPropagation();
+    const tag = $('#defaultTag');
+    tag.remove();
+    const nameEl = d.closest('.provider-row').querySelector('.p-name');
+    nameEl.appendChild(tag);
+    toast('已将 ' + d.dataset.default + ' 设为默认服务');
+  });
+
+  /* ---------- 保存 ---------- */
+  $('#btnSave').addEventListener('click', () => {
+    closeDrawer();
+    toast('已保存，回执将立即刷新');
+  });
+
+  /* ---------- 图片理解引擎切换 ---------- */
+  $$('.engine-opt').forEach(opt => opt.addEventListener('click', () => {
+    $$('.engine-opt').forEach(o => {
+      const on = o === opt;
+      o.classList.toggle('is-selected', on);
+      o.setAttribute('aria-checked', String(on));
+    });
+    const isModel = opt.dataset.engine === 'model';
+    $('#engineDetail').classList.toggle('off', !isModel);
+    toast(isModel ? '已切换为视觉模型理解' : '已切换为本机 OCR，只提取文字');
+  }));
+
+  /* ---------- 开关 ---------- */
+  $$('[data-switch]').forEach(sw => sw.addEventListener('click', () => {
+    const on = sw.getAttribute('aria-checked') !== 'true';
+    sw.setAttribute('aria-checked', String(on));
+    if (sw.dataset.toastOn) toast(on ? sw.dataset.toastOn : sw.dataset.toastOff);
+  }));
+})();
+</script>
+</body>
+</html>

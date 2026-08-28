@@ -221,7 +221,7 @@
     {
       "source_id": "SRC-SETTINGS-SCENE",
       "path": "src-tauri/frontend/src/components/scenes/SettingsScene.tsx",
-      "sha256": "1217d7444a4dfd30eaad8f37b527a571083777ac0215b56f1e16233c133d4600",
+      "sha256": "debbf68b4022ba097c4b9844e19bd1f3b49874146308b252a6a3c30cef50a3bd",
       "role": "production_ui",
       "symbol_locators": [
         "export function SettingsScene() {",
@@ -295,7 +295,7 @@
     {
       "source_id": "SRC-I18N",
       "path": "src-tauri/frontend/src/i18n/index.ts",
-      "sha256": "86d16a5e81d91d701ad158aa68294068a8246d9ffb7c20fccdf180a54b0ba393",
+      "sha256": "3f451ad0f1d17e0ff9d9a3d9b2609f65fd7dd7014380fc981090bac92f59745f",
       "role": "production_frontend_domain",
       "symbol_locators": [
         "export const APP_LOCALES = [\"zh-CN\", \"en-US\"] as const;"
@@ -403,7 +403,7 @@
     {
       "source_id": "SRC-HOST-COMMANDS",
       "path": "src-tauri/src/commands.rs",
-      "sha256": "cdca1938e27b879b6e818b9d67c0268b6f1d6bb54b218a3aaea41bc41a4afffc",
+      "sha256": "0bf5177a58fa7b30ab26c2a181ba7a55373c62aa033f5b5d71fbaacae2c085a3",
       "role": "production_host",
       "symbol_locators": [
         "pub struct ExternalAgentRegistry {",
@@ -433,7 +433,7 @@
     {
       "source_id": "SRC-TAURI-MAIN",
       "path": "src-tauri/src/main.rs",
-      "sha256": "daa5dc0e8ba6a8c232ba22e4fa42674294ecabeac020029b44611043d7da325c",
+      "sha256": "21590e5be4734ad891f835e1e866c3f3fa33c0a1ad9ece64258fc9d753703f39",
       "role": "production_handler_registry",
       "symbol_locators": [
         "fn main() {"
@@ -559,7 +559,7 @@
     {
       "source_id": "SRC-UPDATER-MOD",
       "path": "src-tauri/src/updater/mod.rs",
-      "sha256": "4d59cf393a7349d34da5d677b3ced0bf98d62f15f0f60d3acad6904e1120796b",
+      "sha256": "ac39c1fa49e7cc58b9a5f9cb8be5b7c2ea1196fccda395de815706d11504ab98",
       "role": "production_host",
       "symbol_locators": [
         "pub struct ApplicationUpdaterState {"

@@ -829,14 +829,9 @@
   letter-spacing: 0.04em;
 }
 
-#app.r-code-signature .subagent-avatar {
-  border-radius: 7px 7px 3px 7px;
-  background: color-mix(in srgb, var(--subagent-color) 7%, var(--bg-card));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 3%, transparent);
-}
-
-#app.r-code-signature .subagent-list-row,
-#app.r-code-signature .sum-subagents-button {
+/* 子智能体头像的基础样式（不对称圆角 + 暗色嵌底 + 执行器色系微光）已是 signature
+   母题，这里不再覆盖轮廓；只保留列表行的圆角分组。 */
+#app.r-code-signature .subagent-list-row {
   border-radius: 6px 6px 2px 6px;
 }
 

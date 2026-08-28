@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>R-Code · 运行与子代理面板 v2 — 设计提案</title>
+<style>
+  /* ============ tokens —— 与 src/styles/tokens.css（Obsidian 暗色）一致 ============ */
+  :root {
+    --font-ui: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+    --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+    --bg-app: #10110f;
+    --bg-sidebar: #1c1918;
+    --bg-panel: #151614;
+    --bg-card: #1b1c19;
+    --bg-chip: #25241f;
+    --bg-control: #23231f;
+    --bg-inset: #0b0c0a;
+    --bg-hover: #20211e;
+    --bg-active: #29261f;
+
+    --border: #2b2b27;
+    --border-strong: #4b463d;
+    --divider: #32312c;
+
+    --fg: #f1efe9;
+    --fg-muted: #a49f95;
+    --fg-faint: #817b72;
+
+    --accent: #f4742b;
+    --accent-hover: #ff8642;
+    --accent-2: #c49a61;
+    --accent-icon: #ff9b5d;
+    --accent-soft: rgba(244, 116, 43, .14);
+
+    --warning: #e5a15b;
+    --success: #69c798;
+    --danger: #df6b62;
+    --steel: #7d9bbf;
+
+    /* signature 光晕 */
+    --glow-corner-hot: rgba(255, 139, 72, .18);
+    --glow-corner-soft: rgba(216, 67, 33, .07);
+    --glow-side-deep: rgba(176, 53, 34, .12);
+    --glow-side-hot: rgba(244, 116, 43, .06);
+    --glow-wash: rgba(244, 116, 43, .025);
+
+    --ease: cubic-bezier(.22, .8, .3, 1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #0a0b09; color: var(--fg); font-family: var(--font-ui); }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; text-align: left; }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  /* ============ 文档页（不进入截图的部分） ============ */
+  .doc-head { max-width: 1760px; margin: 0 auto; padding: 34px 40px 10px; }
+  .doc-head h1 { font-size: 19px; font-weight: 650; letter-spacing: .01em; }
+  .doc-head h1 b { color: var(--accent-icon); font-weight: 650; }
+  .doc-moves { display: flex; gap: 26px; margin-top: 12px; flex-wrap: wrap; }
+  .doc-moves div { font-size: 12px; color: var(--fg-muted); }
+  .doc-moves b { color: var(--fg); font-weight: 600; }
+  .doc-moves i { font-style: normal; color: var(--accent-icon); font-family: var(--font-mono); margin-right: 6px; }
+
+  .shot { padding: 22px 40px 40px; }
+  .shot-frame {
+    margin: 0 auto; width: max-content;
+    border: 1px solid var(--border); border-radius: 14px;
+    background: var(--bg-app);
+    box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 4px 18px rgba(0,0,0,.4);
+    overflow: hidden;
+  }
+  .shot-foot {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 9px 16px; border-top: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); letter-spacing: .04em;
+    background: var(--bg-inset);
+  }
+  .shot-foot b { color: var(--accent-2); font-weight: 500; }
+
+  /* ============ 窗口骨架（context 图） ============ */
+  .window { width: 1760px; height: 980px; display: flex; flex-direction: column; }
+  .chrome {
+    height: 38px; flex: none; display: flex; align-items: center; gap: 18px;
+    padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--bg-sidebar);
+    font-size: 12px; color: var(--fg-muted);
+  }
+  .chrome .menu { display: flex; gap: 16px; }
+  .chrome .menu span:hover { color: var(--fg); }
+  .chrome .win-ctl { margin-left: auto; display: flex; gap: 18px; color: var(--fg-faint); font-family: var(--font-mono); }
+  .win-body { flex: 1; display: flex; min-height: 0; }
+
+  /* 左栏（上下文，从简） */
+  .rail {
+    width: 204px; flex: none; background: var(--bg-sidebar); border-right: 1px solid var(--border);
+    padding: 12px 10px; font-size: 12.5px; color: var(--fg-muted);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .rail .brand { display: flex; align-items: center; gap: 8px; color: var(--fg); font-weight: 650; font-size: 13.5px; padding: 2px 6px 12px; }
+  .rail .brand i {
+    width: 22px; height: 22px; border-radius: 7px 7px 2px 7px; font-style: normal;
+    background: linear-gradient(140deg, var(--accent), #c25a1e); color: #fff4ec;
+    display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    box-shadow: 0 0 14px rgba(244,116,43,.35);
+  }
+  .rail .new-task {
+    border: 1px solid var(--border-strong); border-radius: 8px 8px 3px 8px;
+    padding: 7px 10px; color: var(--fg); margin-bottom: 10px; background: var(--bg-control);
+  }
+  .rail .nav { padding: 6px 8px; border-radius: 7px; display: flex; gap: 9px; align-items: center; }
+  .rail .nav.on { background: var(--bg-active); color: var(--fg); border-left: 2px solid var(--accent); border-radius: 3px 7px 7px 3px; }
+  .rail .grp { margin-top: 14px; padding: 0 8px 4px; font-size: 10.5px; color: var(--fg-faint); letter-spacing: .08em; }
+  .rail .proj { padding: 5px 8px; color: var(--fg-muted); display: flex; gap: 7px; align-items: center; }
+  .rail .task-item {
+    margin: 2px 0 0 10px; padding: 6px 8px; border-radius: 7px; background: var(--bg-active);
+    color: var(--fg); border-left: 2px solid var(--accent); border-radius: 3px 7px 7px 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px;
+  }
+  .rail .foot { margin-top: auto; padding: 8px; color: var(--fg-faint); border-top: 1px solid var(--border); }
+
+  /* 中间对话区（上下文，压暗从简） */
+  .chat { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-app); position: relative; }
+  .chat::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(720px 340px at 88% -6%, var(--glow-corner-soft), transparent 70%),
+      linear-gradient(180deg, var(--glow-wash), transparent 40%);
+  }
+  .chat-head { padding: 13px 22px; border-bottom: 1px solid var(--border); font-size: 13.5px; font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
+  .chat-head small { color: var(--fg-faint); font-weight: 400; font-size: 11.5px; }
+  .chat-flow { flex: 1; padding: 20px 26px; overflow: hidden; opacity: .52; font-size: 12.8px; line-height: 1.75; color: var(--fg-muted); }
+  .chat-flow h3 { color: var(--fg); font-size: 13.5px; margin: 16px 0 7px; }
+  .chat-flow h3:first-child { margin-top: 0; }
+  .chat-flow li { margin: 3px 0 3px 18px; }
+  .chat-flow code { font-family: var(--font-mono); font-size: 11.5px; background: var(--bg-chip); padding: 1px 5px; border-radius: 4px; color: var(--accent-2); }
+  .chat-flow ol li { margin-left: 22px; }
+  .composer {
+    margin: 0 26px 18px; border: 1px solid var(--border-strong); border-radius: 12px 12px 5px 12px;
+    background: var(--bg-card); padding: 12px 14px; color: var(--fg-faint); font-size: 12.5px;
+    display: flex; align-items: center; gap: 10px; position: relative; z-index: 1;
+  }
+  .composer .send {
+    margin-left: auto; background: linear-gradient(140deg, var(--accent), #d0611f); color: #fff3e8;
+    border-radius: 8px 8px 3px 8px; padding: 6px 16px; font-size: 12.5px; color: #fff;
+    box-shadow: 0 0 16px rgba(244,116,43,.28);
+  }
+
+  /* ============================================================
+     面板本体 —— 运行与子代理 v2
+     ============================================================ */
+  .panel {
+    width: 400px; flex: none; position: relative;
+    background: var(--bg-panel); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  /* signature 角落光晕 */
+  .panel::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(430px 260px at 96% -4%, var(--glow-corner-hot), var(--glow-corner-soft) 42%, transparent 76%),
+      radial-gradient(300px 520px at 106% 46%, var(--glow-side-deep), transparent 72%),
+      linear-gradient(180deg, var(--glow-wash), transparent 30%);
+  }
+  .panel > * { position: relative; z-index: 1; }
+
+  .p-head {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px 10px; border-bottom: 1px solid var(--border);
+  }
+  .p-head .p-ico { color: var(--accent-icon); font-size: 13px; }
+  .p-head .p-name { font-size: 12.5px; font-weight: 650; letter-spacing: .02em; }
+  .p-head .p-close { margin-left: auto; color: var(--fg-faint); font-size: 13px; padding: 2px 6px; border-radius: 6px; }
+  .p-head .p-close:hover { background: var(--bg-hover); color: var(--fg); }
+
+  .p-scroll { flex: 1; overflow-y: auto; padding: 13px 14px 12px; display: flex; flex-direction: column; gap: 13px; }
+  .p-scroll::-webkit-scrollbar { width: 8px; }
+  .p-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+
+  /* ---- 任务头 ---- */
+  .t-head { display: flex; align-items: center; gap: 8px; }
+  .chip {
+    flex: none; font-size: 10.5px; padding: 2.5px 8px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--fg-muted); background: var(--bg-chip);
+    display: inline-flex; align-items: center; gap: 5px; letter-spacing: .02em;
+  }
+  .chip.done { color: var(--success); border-color: rgba(105,199,152,.35); background: rgba(105,199,152,.08); }
+  .chip.run { color: var(--accent-icon); border-color: rgba(244,116,43,.4); background: var(--accent-soft); }
+  .chip .pulse { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1.6s var(--ease) infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(244,116,43,.5); } 55% { box-shadow: 0 0 0 5px rgba(244,116,43,0); } }
+  .t-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .t-age { margin-left: auto; flex: none; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); }
+  .t-scope { margin-top: 7px; font-size: 11px; color: var(--fg-faint); display: flex; gap: 6px; flex-wrap: wrap; }
+  .t-scope b { color: var(--fg-muted); font-weight: 500; }
+  .t-scope .perm { color: var(--accent-2); }
+
+  /* ---- 分区标题：mono 标签 + 发丝线 ---- */
+  .sec-label {
+    display: flex; align-items: baseline; gap: 8px;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: .14em; color: var(--fg-faint);
+    text-transform: uppercase; margin: 3px 0 -5px;
+  }
+  .sec-label .sec-note { letter-spacing: .02em; text-transform: none; font-size: 10.5px; color: var(--fg-faint); }
+  .sec-label .sec-note.warn { color: var(--warning); }
+  .sec-label::after { content: ""; flex: 1; height: 1px; background: var(--border); align-self: center; }
+
+  /* ---- 卡片基座（不对称圆角母题） ---- */
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px 10px 4px 10px;
+  }
+
+  /* ---- 运行简报 ---- */
+  .brief { overflow: hidden; }
+  .brief-outcomes { display: flex; }
+  .oc {
+    flex: 1; padding: 10px 4px 9px; text-align: center; position: relative;
+    transition: background .15s var(--ease);
+  }
+  .oc:hover { background: var(--bg-hover); }
+  .oc + .oc::before { content: ""; position: absolute; left: 0; top: 22%; bottom: 22%; width: 1px; background: var(--border); }
+  .oc-v { font-family: var(--font-mono); font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .oc-v.accent { color: var(--accent-icon); }
+  .oc-v.ok { color: var(--success); }
+  .oc-v.warn { color: var(--warning); }
+  .oc-v.dim { color: var(--fg-faint); font-size: 12.5px; padding-top: 3.5px; }
+  .oc-k { margin-top: 2px; font-size: 10.5px; color: var(--fg-faint); }
+  .brief-activity { border-top: 1px solid var(--border); padding: 10px 12px 11px; }
+  .bar { display: flex; gap: 2px; height: 5px; }
+  .bar span { border-radius: 2.5px; }
+  .bar .b-read { background: #5c5851; }
+  .bar .b-cmd { background: var(--accent); box-shadow: 0 0 8px rgba(244,116,43,.35); }
+  .bar .b-search { background: var(--accent-2); }
+  .bar .b-write { background: var(--success); }
+  .bar .b-verify { background: var(--steel); }
+  .legend { display: flex; align-items: center; gap: 11px; margin-top: 8px; font-size: 10.5px; color: var(--fg-muted); }
+  .legend i { display: inline-block; width: 6px; height: 6px; border-radius: 2px; margin-right: 4px; vertical-align: 1px; }
+  .legend .d-read { background: #5c5851; } .legend .d-cmd { background: var(--accent); }
+  .legend .d-search { background: var(--accent-2); } .legend .d-write { background: var(--success); }
+  .legend .d-verify { background: var(--steel); }
+  .legend em { font-style: normal; font-family: var(--font-mono); }
+  .legend .legend-total { margin-left: auto; font-family: var(--font-mono); color: var(--fg-faint); font-size: 10px; }
+  .spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; margin-right: 7px; vertical-align: -3px; }
+  .spark s { width: 3px; border-radius: 1.5px; background: #45423c; text-decoration: none; }
+  .spark s.hot { background: var(--accent-2); }
+
+  /* ---- 当前运行（live） ---- */
+  .live {
+    padding: 11px 13px 12px;
+    background: linear-gradient(160deg, rgba(244,116,43,.09), rgba(244,116,43,.02) 55%), var(--bg-card);
+    border: 1px solid rgba(244,116,43,.32);
+    box-shadow: 0 0 24px rgba(244,116,43,.07), inset 0 0 18px rgba(244,116,43,.03);
+  }
+  .live-top { display: flex; align-items: center; gap: 7px; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.6s var(--ease) infinite; }
+  .live-tag { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .18em; color: var(--accent-icon); }
+  .live-elapsed { margin-left: auto; font-family: var(--font-mono); font-size: 13px; color: var(--accent-icon); font-weight: 600; }
+  .live-cmd { margin-top: 7px; font-size: 12.5px; color: var(--fg); }
+  .live-cmd code { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-2); }
+  .live-bar { margin-top: 9px; height: 3px; border-radius: 2px; background: var(--bg-inset); overflow: hidden; }
+  .live-bar i {
+    display: block; height: 100%; width: 38%; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: slide 1.8s linear infinite;
+  }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(280%); } }
+  .live-sub { margin-top: 8px; font-size: 10.5px; color: var(--fg-muted); font-family: var(--font-mono); }
+
+  /* ---- 待批权限（可行动） ---- */
+  .perm-card {
+    padding: 11px 13px 12px;
+    background: linear-gradient(160deg, rgba(229,161,91,.1), rgba(229,161,91,.02) 55%), var(--bg-card);
+    border: 1px solid rgba(229,161,91,.4);
+  }
+  .perm-top { display: flex; align-items: center; gap: 7px; font-size: 11.5px; }
+  .perm-top .warn-ico { color: var(--warning); }
+  .perm-top b { color: var(--warning); font-weight: 600; }
+  .perm-top .risk { margin-left: auto; font-size: 10px; color: var(--warning); border: 1px solid rgba(229,161,91,.4); border-radius: 999px; padding: 1.5px 8px; background: rgba(229,161,91,.08); }
+  .perm-cmd {
+    margin-top: 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg);
+    background: var(--bg-inset); border: 1px solid var(--border); border-radius: 7px 7px 3px 7px; padding: 7px 9px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .perm-why { margin-top: 6px; font-size: 10.5px; color: var(--fg-muted); }
+  .perm-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .perm-actions button { flex: 1; padding: 6px 0; text-align: center; font-size: 11.5px; border-radius: 7px 7px 3px 7px; transition: filter .15s; }
+  .perm-actions .approve { background: linear-gradient(140deg, var(--accent), #d0611f); color: #fff; box-shadow: 0 0 14px rgba(244,116,43,.25); }
+  .perm-actions .approve:hover { filter: brightness(1.1); }
+  .perm-actions .deny { border: 1px solid var(--border-strong); color: var(--fg-muted); }
+  .perm-actions .deny:hover { background: var(--bg-hover); color: var(--fg); }
+
+  /* ---- 子代理编队 ---- */
+  .squad { display: flex; flex-direction: column; gap: 8px; }
+  .sq-card {
+    display: flex; align-items: center; gap: 10px; padding: 9px 11px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px 10px 4px 10px;
+    transition: border-color .15s var(--ease), background .15s var(--ease);
+    width: 100%;
+  }
+  .sq-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+  .avatar {
+    flex: none; width: 30px; height: 30px; border-radius: 9px 9px 3px 9px;
+    display: grid; place-items: center; position: relative;
+    background: var(--bg-inset); font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; color: var(--fg-muted);
+  }
+  /* 状态环 + 微光晕；落位时内部替换为 runtime logo（沿用 SubagentAvatar） */
+  .avatar::after { content: ""; position: absolute; inset: -2.5px; border-radius: 11px 11px 5px 11px; border: 1.5px solid transparent; }
+  .avatar.ok::after { border-color: rgba(105,199,152,.55); box-shadow: 0 0 10px rgba(105,199,152,.18); }
+  .avatar.warn::after { border-color: rgba(229,161,91,.6); box-shadow: 0 0 10px rgba(229,161,91,.2); }
+  .avatar.run::after { border-color: rgba(244,116,43,.75); box-shadow: 0 0 12px rgba(244,116,43,.35); animation: pulse 1.6s var(--ease) infinite; }
+  .avatar.run { color: var(--accent-icon); }
+  .sq-main { flex: 1; min-width: 0; }
+  .sq-top { display: flex; align-items: baseline; gap: 8px; }
+  .sq-top b { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sq-top em { margin-left: auto; flex: none; font-style: normal; font-family: var(--font-mono); font-size: 10px; color: var(--fg-faint); }
+  .sq-sub { margin-top: 3px; font-size: 10.8px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sq-sub.ok { color: var(--success); }
+  .sq-sub.warn { color: var(--warning); }
+  .sq-sub.live-sub2 { color: var(--accent-icon); font-family: var(--font-mono); font-size: 10px; }
+  .sq-chev { flex: none; color: var(--fg-faint); font-size: 14px; }
+
+  /* ---- 关键事件时间线 ---- */
+  .events { position: relative; display: flex; flex-direction: column; }
+  .events::before { content: ""; position: absolute; left: 4px; top: 10px; bottom: 10px; width: 1px; background: var(--border); }
+  .ev { display: flex; gap: 12px; padding: 6.5px 0; position: relative; }
+  .ev-dot {
+    flex: none; width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; z-index: 1;
+    background: var(--fg-faint); border: 2px solid var(--bg-panel);
+  }
+  .ev.ok .ev-dot { background: var(--success); box-shadow: 0 0 7px rgba(105,199,152,.4); }
+  .ev.danger .ev-dot { background: var(--danger); box-shadow: 0 0 8px rgba(223,107,98,.5); }
+  .ev.warn .ev-dot { background: var(--warning); box-shadow: 0 0 7px rgba(229,161,91,.4); }
+  .ev.live-ev .ev-dot { background: var(--accent); box-shadow: 0 0 8px rgba(244,116,43,.5); animation: pulse 1.6s var(--ease) infinite; }
+  .ev-main { flex: 1; min-width: 0; }
+  .ev-top { display: flex; align-items: baseline; gap: 8px; }
+  .ev-kind { flex: none; font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em; color: var(--fg-faint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--bg-chip); }
+  .ev-top b { font-size: 11.8px; font-weight: 550; font-family: var(--font-mono); color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev-top b.plain { font-family: var(--font-ui); }
+  .ev-top em { margin-left: auto; flex: none; font-style: normal; font-size: 10px; color: var(--fg-faint); font-family: var(--font-mono); }
+  .ev-sub { margin-top: 2px; font-size: 10.8px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev.danger .ev-sub { color: var(--danger); }
+  .ev.warn .ev-sub { color: var(--warning); }
+  .ev-sub .dur { color: var(--fg-faint); font-family: var(--font-mono); font-size: 10px; }
+
+  /* ---- 折叠的原始审计 ---- */
+  .audit-collapsed {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 1px dashed var(--border-strong); border-radius: 8px 8px 3px 8px;
+    padding: 8px 11px; font-size: 11px; color: var(--fg-muted);
+    transition: background .15s;
+  }
+  .audit-collapsed:hover { background: var(--bg-hover); }
+  .audit-collapsed .tri { color: var(--accent-2); font-size: 9px; }
+  .audit-collapsed em { margin-left: auto; font-style: normal; font-family: var(--font-mono); font-size: 10px; color: var(--fg-faint); }
+
+  .p-foot { text-align: center; padding: 1px 0 2px; }
+  .p-foot a { font-size: 11px; color: var(--accent-2); text-decoration: none; }
+  .p-foot a:hover { color: var(--accent-icon); }
+
+  /* ============ states 图：双栏 ============ */
+  .states-row { display: flex; gap: 44px; width: max-content; margin: 0 auto; padding: 6px 4px 2px; align-items: flex-start; }
+  .state-col { width: 400px; }
+  .state-tag {
+    display: flex; align-items: baseline; gap: 9px; margin-bottom: 10px;
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em; color: var(--fg-faint);
+  }
+  .state-tag b { color: var(--accent-icon); font-weight: 600; }
+  .state-col .panel { border: 1px solid var(--border); border-radius: 12px; height: 902px; box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+  .state-col .panel .p-head { border-radius: 12px 12px 0 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="doc-head">
+  <h1>R-Code · <b>运行与子代理</b> 面板 v2 — 从「原始日志」到「运行简报」</h1>
+  <div class="doc-moves">
+    <div><i>01</i><b>结果先行</b> — 发现/变更/验证/待批置顶；工具调用压缩为构成条 + 活动火花线</div>
+    <div><i>02</i><b>子代理编队</b> — 每个子代理的职责、耗时、产出直接可见，「无产出」不再藏进计数</div>
+    <div><i>03</i><b>关键事件</b> — 时间线只留命令/验证/权限/子代理拐点；失败用危险色；相对时间替代绝对时刻</div>
+    <div><i>04</i><b>可行动</b> — 待批权限内联批准/拒绝；原始审计流折叠但一键可达</div>
+  </div>
+</header>
+
+<!-- ================= 图 1：完整窗口上下文（已完成态） ================= -->
+<section class="shot" id="shot-context">
+  <div class="shot-frame">
+    <div class="window">
+      <div class="chrome">
+        <span>≡</span>
+        <div class="menu"><span>文件</span><span>编辑</span><span>视图</span><span>帮助</span></div>
+        <div class="win-ctl"><span>🔔</span><span>—</span><span>▢</span><span>✕</span></div>
+      </div>
+      <div class="win-body">
+        <aside class="rail">
+          <div class="brand"><i>R</i>R-Code</div>
+          <div class="new-task">＋ 新对话</div>
+          <div class="nav on">◷ 对话</div>
+          <div class="nav">▣ 待处理</div>
+          <div class="nav">↗ 活动</div>
+          <div class="nav">▤ 归档</div>
+          <div class="grp">项目</div>
+          <div class="proj">▾ 📁 falib</div>
+          <div class="task-item">review下falib，可以…</div>
+          <div class="foot">⚙ 设置</div>
+        </aside>
+
+        <main class="chat">
+          <div class="chat-head">review下falib，可以使用子代理提速，看看有什么问题 <small>falib · 会话就绪</small></div>
+          <div class="chat-flow">
+            <h3>四、在途未提交修复的审查（errors/log/web/vector）</h3>
+            <ul>
+              <li><b>F-08 未修完且自相矛盾</b>：新加的 <code>falib_error_handler</code>（<code>web/response.py:545-575</code>）读取实例 metadata，而 F-08 使实例 metadata 恒为 <code>{}</code> —— 其 docstring 示例输出就是 <code>"metadata": {}</code>，声明 metadata 仍到不了响应。</li>
+              <li><code>install_hooks</code> 默认值 <code>True→False</code> 是行为变更（符合 AGENTS.md，但依赖默认接管的调用方需显式传参）。</li>
+              <li><code>ResponseBuilder._validate_object_data</code> 对非 dict/BaseModel 抛 <code>TypeError</code>，属破坏性契约收紧，传 dataclass 等的老调用方会挂。</li>
+              <li>异步日志仍有 2 个单测失败（F-03/F-09），在途修复未覆盖。</li>
+            </ul>
+            <h3>五、建议优先顺序</h3>
+            <ol>
+              <li>资金/可信度风险：F-01（下单去重/对账）、F-02（回测前视，先核验依赖 <code>next_open</code> 的历史结果）、F-03/F-09（可观测性+关闭清理）。</li>
+              <li>门禁恢复：F-04 迁移/删除过时 websocket 测试、F-15 清零 ruff，恢复 <code>pytest -m unit</code> 可执行。</li>
+              <li>正确性边界：F-05/F-06/F-07 统一"有限且范围内"数值校验 + 固定空 schema；F-08 补 metadata 合并。</li>
+              <li>并发/安全：F-10/F-11 single-flight + 租约、F-12 timeout 统一、F-13 AI 日志脱敏。</li>
+            </ol>
+            <h3>过程说明</h3>
+            <ul>
+              <li>3 个子代理中 2 个未产出报告，其负责方向（adapter、log/errors/web）已由我亲自核实；backtest/schema/domain 由子代理核验并已复核。审查期间运行 pytest/ruff 均只读，<code>git status</code> 与审查前一致，无新增改动。</li>
+            </ul>
+          </div>
+          <div class="composer">回复、提问或补充上下文…（输入 @ 引用文件）<span class="send">发送</span></div>
+        </main>
+
+        <!-- ======== 面板 v2 · 已完成态 ======== -->
+        <aside class="panel" aria-label="运行与子代理">
+          <header class="p-head">
+            <span class="p-ico">◤</span><span class="p-name">运行与子代理</span>
+            <button class="p-close" aria-label="关闭面板">✕</button>
+          </header>
+          <div class="p-scroll">
+
+            <div>
+              <div class="t-head">
+                <span class="chip done">已完成</span>
+                <span class="t-title">review下falib，可以使用子代理提速，看看…</span>
+                <span class="t-age">12m</span>
+              </div>
+              <div class="t-scope"><span>falib</span>·<span>模型 · <b>默认模型服务</b></span>·<span><b>Agent</b></span>·<span class="perm">完全访问权限</span></div>
+            </div>
+
+            <div class="sec-label">运行简报</div>
+            <div class="brief card">
+              <div class="brief-outcomes">
+                <button class="oc" title="跳转到对话中的审查报告"><div class="oc-v accent">16</div><div class="oc-k">项发现</div></button>
+                <button class="oc" title="查看变更文件"><div class="oc-v">0</div><div class="oc-k">变更文件</div></button>
+                <button class="oc" title="查看验证记录"><div class="oc-v dim">未运行</div><div class="oc-k">验证</div></button>
+                <button class="oc" title="查看待批权限"><div class="oc-v">0</div><div class="oc-k">待批权限</div></button>
+              </div>
+              <div class="brief-activity">
+                <div class="bar" role="img" aria-label="操作构成：读取 21，命令 4，检索 3，写入 0">
+                  <span class="b-read" style="width:75%"></span><span class="b-cmd" style="width:14.3%"></span><span class="b-search" style="width:10.7%"></span>
+                </div>
+                <div class="legend">
+                  <span><i class="d-read"></i>读取 <em>21</em></span>
+                  <span><i class="d-cmd"></i>命令 <em>4</em></span>
+                  <span><i class="d-search"></i>检索 <em>3</em></span>
+                  <span><i class="d-write"></i>写入 <em>0</em></span>
+                  <span class="legend-total">
+                    <span class="spark" aria-hidden="true"><s style="height:4px"></s><s style="height:6px"></s><s style="height:8px"></s><s style="height:12px" class="hot"></s><s style="height:9px"></s><s style="height:7px"></s><s style="height:10px" class="hot"></s><s style="height:13px" class="hot"></s><s style="height:8px"></s><s style="height:6px"></s><s style="height:5px"></s><s style="height:4px"></s></span>28 次操作
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sec-label">子代理编队 <span class="sec-note warn">3 个 · 2 个无产出报告</span></div>
+            <div class="squad">
+              <button class="sq-card" title="打开该子代理的运行过程">
+                <span class="avatar ok">BS</span>
+                <span class="sq-main">
+                  <span class="sq-top"><b>backtest · schema · domain 核验</b><em>6分20秒</em></span>
+                  <span class="sq-sub ok">✓ 核验完成 · 9 项发现已并入报告</span>
+                </span>
+                <span class="sq-chev">›</span>
+              </button>
+              <button class="sq-card" title="打开该子代理的运行过程">
+                <span class="avatar warn">AD</span>
+                <span class="sq-main">
+                  <span class="sq-top"><b>adapter 方向审查</b><em>3分05秒</em></span>
+                  <span class="sq-sub warn">⚠ 未产出报告 · 主代理已亲自核实</span>
+                </span>
+                <span class="sq-chev">›</span>
+              </button>
+              <button class="sq-card" title="打开该子代理的运行过程">
+                <span class="avatar warn">LW</span>
+                <span class="sq-main">
+                  <span class="sq-top"><b>log · errors · web 审查</b><em>4分48秒</em></span>
+                  <span class="sq-sub warn">⚠ 未产出报告 · 主代理接管，确认 F-08 矛盾</span>
+                </span>
+                <span class="sq-chev">›</span>
+              </button>
+            </div>
+
+            <div class="sec-label">关键事件 <span class="sec-note">24 次常规读取/检索已折叠</span></div>
+            <div class="events">
+              <div class="ev info">
+                <span class="ev-dot"></span>
+                <div class="ev-main">
+                  <div class="ev-top"><span class="ev-kind">会话</span><b class="plain">运行完成 · 报告已发送至对话</b><em>2 分钟前</em></div>
+                  <div class="ev-sub">16 项发现 · 建议优先顺序已给出</div>
+                </div>
+              </div>
+              <div class="ev danger">
+                <span class="ev-dot"></span>
+                <div class="ev-main">
+                  <div class="ev-top"><span class="ev-kind">命令</span><b>pytest test_issue_regressions.py -q</b><em>3 分钟前</em></div>
+                  <div class="ev-sub">✗ 2 项失败（F-03 / F-09 在途） <span class="dur">· 12.1s</span></div>
+                </div>
+              </div>
+              <div class="ev ok">
+                <span class="ev-dot"></span>
+                <div class="ev-main">
+                  <div class="ev-top"><span class="ev-kind">命令</span><b>rtk git diff -- falib/web</b><em>4 分钟前</em></div>
+                  <div class="ev-sub">✓ 与审查前一致，无新增改动 <span class="dur">· 11.7s</span></div>
+                </div>
+              </div>
+              <div class="ev warn">
+                <span class="ev-dot"></span>
+                <div class="ev-main">
+                  <div class="ev-top"><span class="ev-kind">子代理</span><b class="plain">log · errors · web 审查结束</b><em>8 分钟前</em></div>
+                  <div class="ev-sub">无产出报告 · 主代理接管核实</div>
+                </div>
+              </div>
+              <div class="ev ok">
+                <span class="ev-dot"></span>
+                <div class="ev-main">
+                  <div class="ev-top"><span class="ev-kind">子代理</span><b class="plain">backtest · schema · domain 核验完成</b><em>9 分钟前</em></div>
+                  <div class="ev-sub">9 项发现已回传 <span class="dur">· 6分20秒</span></div>
+                </div>
+              </div>
+              <div class="ev info">
+                <span class="ev-dot"></span>
+                <div class="ev-main">
+                  <div class="ev-top"><span class="ev-kind">会话</span><b class="plain">主代理委派 3 个子代理并行审查</b><em>12 分钟前</em></div>
+                </div>
+              </div>
+            </div>
+
+            <button class="audit-collapsed" aria-expanded="false">
+              <span class="tri">▸</span> 原始审计流 <em>读取 21 · 检索 3 · 会话事件 4</em>
+            </button>
+
+            <div class="p-foot"><a href="#">完整审计记录 →</a></div>
+          </div>
+        </aside>
+      </div>
+      <div class="shot-foot">
+        <span><b>运行与子代理 v2</b> · 已完成态 · 应用内上下文</span>
+        <span>结果先行 · 子代理编队 · 关键事件 · 原始审计折叠</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 图 2：双状态并排 ================= -->
+<section class="shot" id="shot-states">
+  <div class="states-row">
+
+    <!-- 状态 A · 运行中 -->
+    <div class="state-col">
+      <div class="state-tag"><b>STATE A</b> 运行中 · 实时可操作</div>
+      <aside class="panel" aria-label="运行与子代理（运行中）">
+        <header class="p-head">
+          <span class="p-ico">◤</span><span class="p-name">运行与子代理</span>
+          <button class="p-close" aria-label="关闭面板">✕</button>
+        </header>
+        <div class="p-scroll">
+
+          <div>
+            <div class="t-head">
+              <span class="chip run"><span class="pulse"></span>进行中</span>
+              <span class="t-title">修复 falib 异步日志的两项单测失败</span>
+              <span class="t-age">3m</span>
+            </div>
+            <div class="t-scope"><span>falib</span>·<span>模型 · <b>deepseek-v4-flash</b></span>·<span><b>Agent</b></span>·<span class="perm">默认工作区 · 写需批准</span></div>
+          </div>
+
+          <div class="live card">
+            <div class="live-top"><span class="live-dot"></span><span class="live-tag">LIVE · 当前运行</span><span class="live-elapsed">02:41</span></div>
+            <div class="live-cmd">正在执行 · <code>pytest -m unit --tb=short</code></div>
+            <div class="live-bar"><i></i></div>
+            <div class="live-sub">已读取 14 个文件 · 3 条命令 · 0 写入</div>
+          </div>
+
+          <div class="perm-card card">
+            <div class="perm-top"><span class="warn-ico">⚠</span><b>待批权限 · 1</b><span class="risk">中风险</span></div>
+            <div class="perm-cmd">git checkout -- falib/log/_async_wrapper.py</div>
+            <div class="perm-why">将丢弃该文件的未提交改动 · 由子代理 AD 发起</div>
+            <div class="perm-actions">
+              <button class="deny">拒绝</button>
+              <button class="approve">批准本次</button>
+            </div>
+          </div>
+
+          <div class="sec-label">运行简报</div>
+          <div class="brief card">
+            <div class="brief-outcomes">
+              <button class="oc"><div class="oc-v">2</div><div class="oc-k">变更文件</div></button>
+              <button class="oc"><div class="oc-v dim">运行中…</div><div class="oc-k">验证</div></button>
+              <button class="oc"><div class="oc-v warn">1</div><div class="oc-k">待批权限</div></button>
+              <button class="oc"><div class="oc-v ok">0</div><div class="oc-k">失败操作</div></button>
+            </div>
+            <div class="brief-activity">
+              <div class="bar" role="img" aria-label="操作构成：读取 14，命令 3，检索 2，写入 2">
+                <span class="b-read" style="width:66.7%"></span><span class="b-cmd" style="width:14.3%"></span><span class="b-search" style="width:9.5%"></span><span class="b-write" style="width:9.5%"></span>
+              </div>
+              <div class="legend">
+                <span><i class="d-read"></i>读取 <em>14</em></span>
+                <span><i class="d-cmd"></i>命令 <em>3</em></span>
+                <span><i class="d-search"></i>检索 <em>2</em></span>
+                <span><i class="d-write"></i>写入 <em>2</em></span>
+                <span class="legend-total">21 次 · 进行中</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec-label">子代理编队 <span class="sec-note">2 个 · 1 运行中</span></div>
+          <div class="squad">
+            <button class="sq-card">
+              <span class="avatar run">LW</span>
+              <span class="sq-main">
+                <span class="sq-top"><b>log · errors · web 审查</b><em>02:31</em></span>
+                <span class="sq-sub live-sub2">▸ 正在读取 …/log/_async_backend.py</span>
+              </span>
+              <span class="sq-chev">›</span>
+            </button>
+            <button class="sq-card">
+              <span class="avatar ok">BS</span>
+              <span class="sq-main">
+                <span class="sq-top"><b>backtest · schema 核验</b><em>6分20秒</em></span>
+                <span class="sq-sub ok">✓ 完成 · 结论已回传主代理</span>
+              </span>
+              <span class="sq-chev">›</span>
+            </button>
+          </div>
+
+          <div class="sec-label">关键事件 <span class="sec-note">16 次常规操作已折叠</span></div>
+          <div class="events">
+            <div class="ev live-ev">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">验证</span><b>pytest -m unit --tb=short</b><em>刚刚</em></div>
+                <div class="ev-sub">运行中 · 已进行 <span class="dur">41s</span></div>
+              </div>
+            </div>
+            <div class="ev ok">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">命令</span><b>rtk git diff -- falib/log</b><em>1 分钟前</em></div>
+                <div class="ev-sub">✓ 2 个文件改动 <span class="dur">· 0.8s</span></div>
+              </div>
+            </div>
+            <div class="ev ok">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">子代理</span><b class="plain">backtest · schema 核验完成</b><em>2 分钟前</em></div>
+                <div class="ev-sub">结论已回传 <span class="dur">· 6分20秒</span></div>
+              </div>
+            </div>
+            <div class="ev info">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">会话</span><b class="plain">运行开始 · 已附加 falib 工作区</b><em>3 分钟前</em></div>
+              </div>
+            </div>
+          </div>
+
+          <button class="audit-collapsed" aria-expanded="false">
+            <span class="tri">▸</span> 原始审计流 <em>读取 14 · 检索 2</em>
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 状态 B · 已完成 -->
+    <div class="state-col">
+      <div class="state-tag"><b>STATE B</b> 已完成 · 运行简报</div>
+      <aside class="panel" aria-label="运行与子代理（已完成）">
+        <header class="p-head">
+          <span class="p-ico">◤</span><span class="p-name">运行与子代理</span>
+          <button class="p-close" aria-label="关闭面板">✕</button>
+        </header>
+        <div class="p-scroll">
+
+          <div>
+            <div class="t-head">
+              <span class="chip done">已完成</span>
+              <span class="t-title">review下falib，可以使用子代理提速，看看…</span>
+              <span class="t-age">12m</span>
+            </div>
+            <div class="t-scope"><span>falib</span>·<span>模型 · <b>默认模型服务</b></span>·<span><b>Agent</b></span>·<span class="perm">完全访问权限</span></div>
+          </div>
+
+          <div class="sec-label">运行简报</div>
+          <div class="brief card">
+            <div class="brief-outcomes">
+              <button class="oc"><div class="oc-v accent">16</div><div class="oc-k">项发现</div></button>
+              <button class="oc"><div class="oc-v">0</div><div class="oc-k">变更文件</div></button>
+              <button class="oc"><div class="oc-v dim">未运行</div><div class="oc-k">验证</div></button>
+              <button class="oc"><div class="oc-v">0</div><div class="oc-k">待批权限</div></button>
+            </div>
+            <div class="brief-activity">
+              <div class="bar" role="img" aria-label="操作构成：读取 21，命令 4，检索 3，写入 0">
+                <span class="b-read" style="width:75%"></span><span class="b-cmd" style="width:14.3%"></span><span class="b-search" style="width:10.7%"></span>
+              </div>
+              <div class="legend">
+                <span><i class="d-read"></i>读取 <em>21</em></span>
+                <span><i class="d-cmd"></i>命令 <em>4</em></span>
+                <span><i class="d-search"></i>检索 <em>3</em></span>
+                <span><i class="d-write"></i>写入 <em>0</em></span>
+                <span class="legend-total">
+                  <span class="spark" aria-hidden="true"><s style="height:4px"></s><s style="height:6px"></s><s style="height:8px"></s><s style="height:12px" class="hot"></s><s style="height:9px"></s><s style="height:7px"></s><s style="height:10px" class="hot"></s><s style="height:13px" class="hot"></s><s style="height:8px"></s><s style="height:6px"></s><s style="height:5px"></s><s style="height:4px"></s></span>28 次操作
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec-label">子代理编队 <span class="sec-note warn">3 个 · 2 个无产出报告</span></div>
+          <div class="squad">
+            <button class="sq-card">
+              <span class="avatar ok">BS</span>
+              <span class="sq-main">
+                <span class="sq-top"><b>backtest · schema · domain 核验</b><em>6分20秒</em></span>
+                <span class="sq-sub ok">✓ 核验完成 · 9 项发现已并入报告</span>
+              </span>
+              <span class="sq-chev">›</span>
+            </button>
+            <button class="sq-card">
+              <span class="avatar warn">AD</span>
+              <span class="sq-main">
+                <span class="sq-top"><b>adapter 方向审查</b><em>3分05秒</em></span>
+                <span class="sq-sub warn">⚠ 未产出报告 · 主代理已亲自核实</span>
+              </span>
+              <span class="sq-chev">›</span>
+            </button>
+            <button class="sq-card">
+              <span class="avatar warn">LW</span>
+              <span class="sq-main">
+                <span class="sq-top"><b>log · errors · web 审查</b><em>4分48秒</em></span>
+                <span class="sq-sub warn">⚠ 未产出报告 · 主代理接管，确认 F-08 矛盾</span>
+              </span>
+              <span class="sq-chev">›</span>
+            </button>
+          </div>
+
+          <div class="sec-label">关键事件 <span class="sec-note">24 次常规读取/检索已折叠</span></div>
+          <div class="events">
+            <div class="ev info">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">会话</span><b class="plain">运行完成 · 报告已发送至对话</b><em>2 分钟前</em></div>
+                <div class="ev-sub">16 项发现 · 建议优先顺序已给出</div>
+              </div>
+            </div>
+            <div class="ev danger">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">命令</span><b>pytest test_issue_regressions.py -q</b><em>3 分钟前</em></div>
+                <div class="ev-sub">✗ 2 项失败（F-03 / F-09 在途） <span class="dur">· 12.1s</span></div>
+              </div>
+            </div>
+            <div class="ev ok">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">命令</span><b>rtk git diff -- falib/web</b><em>4 分钟前</em></div>
+                <div class="ev-sub">✓ 与审查前一致，无新增改动 <span class="dur">· 11.7s</span></div>
+              </div>
+            </div>
+            <div class="ev warn">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">子代理</span><b class="plain">log · errors · web 审查结束</b><em>8 分钟前</em></div>
+                <div class="ev-sub">无产出报告 · 主代理接管核实</div>
+              </div>
+            </div>
+            <div class="ev ok">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">子代理</span><b class="plain">backtest · schema · domain 核验完成</b><em>9 分钟前</em></div>
+                <div class="ev-sub">9 项发现已回传 <span class="dur">· 6分20秒</span></div>
+              </div>
+            </div>
+            <div class="ev info">
+              <span class="ev-dot"></span>
+              <div class="ev-main">
+                <div class="ev-top"><span class="ev-kind">会话</span><b class="plain">主代理委派 3 个子代理并行审查</b><em>12 分钟前</em></div>
+              </div>
+            </div>
+          </div>
+
+          <button class="audit-collapsed" aria-expanded="false">
+            <span class="tri">▸</span> 原始审计流 <em>读取 21 · 检索 3 · 会话事件 4</em>
+          </button>
+
+          <div class="p-foot"><a href="#">完整审计记录 →</a></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+  <div class="shot-foot" style="width:max-content;margin:14px auto 0;min-width:844px;">
+    <span><b>运行与子代理 v2</b> · 双状态</span>
+    <span>A：LIVE 当前运行 + 待批权限内联决策 ｜ B：结果简报 + 编队产出 + 拐点时间线</span>
+  </div>
+</section>
+
+</body>
+</html>

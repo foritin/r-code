@@ -3,11 +3,34 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const frontendDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+// fileURLToPath 而非 new URL().pathname：后者在 Windows 上产生 "/D:/..."，
+// 经 path.resolve 变成 "D:\D:\..." 的坏 cwd，spawn 会以 ENOENT 静默失败。
+const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const viteBin = path.join(frontendDir, "node_modules", "vite", "bin", "vite.js");
+
+// 与 onboarding-campaign / app-shell 同一套候选：CI(linux) 用 /usr/bin/chromium，
+// 本地 Windows/macOS 落到 Chrome/Edge，CHROMIUM_PATH 仍可显式覆盖。
+function browserExecutable() {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  const candidates = [
+    path.join(process.env.PROGRAMFILES ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(process.env["PROGRAMFILES(X86)"] ?? "", "Microsoft", "Edge", "Application", "msedge.exe"),
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+  const found = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+  if (!found) throw new Error("no Chromium-compatible browser found; set CHROMIUM_PATH");
+  return found;
+}
 
 function freePort() {
   return new Promise((resolve) => {
@@ -29,13 +52,29 @@ test.before(async () => {
   baseUrl = `http://127.0.0.1:${port}/`;
   server = spawn(
     process.execPath,
-    ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
-    { cwd: frontendDir, stdio: ["ignore", "pipe", "pipe"] },
+    [viteBin, "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+    { cwd: frontendDir, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   );
-  await new Promise((resolve) => setTimeout(resolve, 4000));
+  // Windows 冷启动会超过固定 sleep，改为轮询就绪（与 onboarding-campaign 一致）。
+  let viteErr = "";
+  server.stderr?.setEncoding("utf8");
+  server.stderr?.on("data", (chunk) => { viteErr += chunk; });
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (server.exitCode != null) {
+      throw new Error(`Vite exited with ${server.exitCode}\n${viteErr.slice(0, 800)}`);
+    }
+    try {
+      const response = await fetch(baseUrl);
+      if (response.ok) break;
+    } catch {
+      // Server is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
   browser = await chromium.launch({
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH ?? "/usr/bin/chromium",
+    executablePath: browserExecutable(),
   });
 });
 

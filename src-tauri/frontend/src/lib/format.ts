@@ -33,6 +33,22 @@ export function elapsedMinutes(iso: string, now = Date.now()): string {
   return `${minutes}m`;
 }
 
+/** RFC3339 → 相对时刻："刚刚" / "3 分钟前" / "2 小时前" / "昨天" / "5 天前"，超过一周回落到日期。 */
+export function relativeAgo(iso: string, now = Date.now()): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "—";
+  const seconds = Math.max(0, Math.floor((now - t) / 1000));
+  if (seconds < 45) return "刚刚";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "昨天";
+  if (days < 7) return `${days} 天前`;
+  return iso.slice(0, 10);
+}
+
 /** 仅用于展示：移除 Windows canonicalize 产生的 verbatim 路径前缀。 */
 export function displayPath(path: string): string {
   const uncPrefix = "\\\\?\\UNC\\";

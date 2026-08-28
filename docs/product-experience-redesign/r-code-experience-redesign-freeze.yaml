@@ -22,8 +22,8 @@ normative_input:
   normalization: ai-worklist-markers-v1 + canonical-json-v1
   component_digests:
     prd_normative: 180e6a2e752d5a1b1e465b22685639da795d22897960bebe93b2e2ec6177eb6e
-    settings_capability_baseline: f36468c0efdcbe125dbe3b7a6f946e25a14f878565eaea15b99e652ffc0e9458
-  digest: 6d6b5305290647a2432d7be672404092091006994a07f345ee743ab672d68c0b
+    settings_capability_baseline: dededb6bd3c6d6a30d11805f368272803f4cd929de50f1dfaad463ebc7a9e3e2
+  digest: 60ce5cce06a7cc1a8e0a976beb360e7048f6acc1d75ab13fc937cb04cde1f7c9
 
 settings_validation:
   executed_live: true
@@ -31,7 +31,7 @@ settings_validation:
   validator_digest: 0bb74b37f2a21538a4aacfa0defdc4bcf60ac3a63537b051133f61fbd24c4029
   report_schema: settings-capability-gate.v3
   report_status: passed
-  report_digest: 2d4f1a0176d9294f170f73d7c8191f662fc91e30e47e0921d6e3de160fa0aa53
+  report_digest: 0e1069c4b97b08a47a380dc4b8ab2455f3b6ed845a61034c858eae900803cbdd
   baseline_count: 111
   mapped_count: 111
   verified_count: 0

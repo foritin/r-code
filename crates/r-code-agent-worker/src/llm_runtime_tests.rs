@@ -1507,7 +1507,7 @@ async fn weighted_candidate_route_is_deterministic_and_executes_the_selected_slo
     });
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "revision-weighted".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![
             weighted_native_candidate_slot(
                 "implementation",
@@ -1590,7 +1590,7 @@ async fn weighted_candidate_route_is_deterministic_and_executes_the_selected_slo
 fn api_only_candidate_pool_delegate_spec_describes_the_configured_subagent_router() {
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "api-only-spec".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![weighted_native_candidate_slot(
             "api-only",
             "provider-a",
@@ -1665,7 +1665,7 @@ async fn native_candidate_uses_its_slot_request_profile_without_root_provider_le
         });
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "slot-profile".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![weighted_native_candidate_slot(
             "profile-slot",
             "configured-provider",
@@ -1914,7 +1914,7 @@ async fn external_candidate_events_are_allowlisted_and_cannot_forge_control_even
     let workspace = TempDir::new().unwrap();
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "external-event-filter".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![FrozenSubagentSlot {
             descriptor: FrozenSubagentSlotDescriptor {
                 slot_id: "external-filter-slot".to_string(),
@@ -1987,7 +1987,7 @@ fn invalid_non_empty_candidate_pool_fails_closed_instead_of_using_the_legacy_rou
     });
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "invalid".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![weighted_native_candidate_slot(
             "bad-weight",
             "provider-a",
@@ -2001,6 +2001,8 @@ fn invalid_non_empty_candidate_pool_fails_closed_instead_of_using_the_legacy_rou
     let supervisor =
         test_supervisor(Arc::new(MockProvider::new("mock")), event_tx).with_candidate_pool(pool);
 
+    // 非降级池的结构非法 = Host 构建侧的 bug（build 保证只产出合法池）；
+    // 这里保持 fail-closed 作为哨兵，而不是静默改走 legacy 路由。
     let error = supervisor
         .route_backend_for_run("auto", TaskComplexity::Standard, "child")
         .unwrap_err();
@@ -2015,7 +2017,7 @@ fn native_candidate_rejects_a_one_shot_runner_that_cannot_host_the_worker_loop()
     });
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "false-native".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![weighted_native_candidate_slot(
             "false-native",
             "provider-a",
@@ -2028,6 +2030,8 @@ fn native_candidate_rejects_a_one_shot_runner_that_cannot_host_the_worker_loop()
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     let supervisor =
         test_supervisor(Arc::new(MockProvider::new("primary")), event_tx).with_candidate_pool(pool);
+    // 非降级池的结构非法 = Host 构建侧 bug（build 保证只产出真实原生 runner）；
+    // 保持 Err 哨兵而不是静默降级。
     let error = supervisor
         .route_backend_for_run("auto", TaskComplexity::Standard, "child")
         .unwrap_err();
@@ -2036,7 +2040,7 @@ fn native_candidate_rejects_a_one_shot_runner_that_cannot_host_the_worker_loop()
 }
 
 #[test]
-fn unavailable_non_empty_pool_never_falls_back_to_legacy_for_auto_or_slot_routes() {
+fn degraded_pool_serves_remaining_slots_or_falls_back_to_r_code_never_the_legacy_router() {
     let runtime = LlmAgentRuntime::new(
         Box::new(MockProvider::new("primary")),
         "primary-model".to_string(),
@@ -2044,37 +2048,50 @@ fn unavailable_non_empty_pool_never_falls_back_to_legacy_for_auto_or_slot_routes
         None,
         None,
     );
-    runtime.replace_subagent_candidate_pool(
-        "healthy-revision",
-        vec![weighted_native_candidate_slot(
-            "healthy-slot",
-            "provider-a",
-            "model-a",
-            100,
-            "Prompt",
-            Arc::new(NativeProviderCandidateRunner {
-                provider: Arc::new(MockProvider::new("native-provider")),
-            }),
-        )],
-    );
-    let active_root_snapshot = runtime.next_subagent_candidate_pool.read().unwrap().clone();
-    runtime.replace_subagent_candidate_pool_error(
+    let healthy_snapshot = {
+        runtime.replace_subagent_candidate_pool(
+            "healthy-revision",
+            vec![weighted_native_candidate_slot(
+                "healthy-slot",
+                "provider-a",
+                "model-a",
+                100,
+                "Prompt",
+                Arc::new(NativeProviderCandidateRunner {
+                    provider: Arc::new(MockProvider::new("native-provider")),
+                }),
+            )],
+        );
+        runtime.next_subagent_candidate_pool.read().unwrap().clone()
+    };
+    // 全部槽位被剔除的降级池：auto 强制回退 R-Code 自身（不落 legacy 路由），
+    // 显式槽位请求同样降级，原因随 note 透出。
+    runtime.replace_subagent_candidate_pool_degraded(
         "stale-revision",
+        Vec::new(),
         "configured Provider connectivity receipt is stale",
     );
     let frozen = runtime.next_subagent_candidate_pool.read().unwrap().clone();
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let unavailable = test_supervisor(Arc::new(MockProvider::new("primary")), event_tx)
+    let degraded_empty = test_supervisor(Arc::new(MockProvider::new("primary")), event_tx)
         .with_candidate_pool(frozen);
-    for requested in ["auto", "slot:configured-slot"] {
-        let error = unavailable
-            .route_backend_for_run(requested, TaskComplexity::Standard, "child")
-            .unwrap_err();
-        assert!(error.to_string().contains("stale-revision"));
-        assert!(error.to_string().contains("当前不可用"));
-    }
+    let (backend, note) = degraded_empty
+        .route_backend_for_run("auto", TaskComplexity::Standard, "child")
+        .unwrap();
+    assert_eq!(backend, SubagentBackend::RCode, "all-degraded pool serves self");
+    assert!(note.contains("stale-revision"));
+    assert!(note.contains("已全部降级"));
+    assert!(note.contains("R-Code 自身"));
+
+    let (backend, note) = degraded_empty
+        .route_backend_for_run("slot:configured-slot", TaskComplexity::Standard, "child")
+        .unwrap();
+    assert_eq!(backend, SubagentBackend::RCode);
+    assert!(note.contains("configured-slot"));
+    assert!(note.contains("回退 R-Code 自身"));
+
     assert_eq!(
-        unavailable
+        degraded_empty
             .route_backend_for_run("r_code", TaskComplexity::Standard, "child")
             .unwrap()
             .0,
@@ -2082,16 +2099,17 @@ fn unavailable_non_empty_pool_never_falls_back_to_legacy_for_auto_or_slot_routes
         "an explicit legacy route remains distinct from auto candidate routing"
     );
 
+    // 已冻结健康 Arc 的活跃 root 不受后续 Host 降级影响。
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     let active_root = test_supervisor(Arc::new(MockProvider::new("primary")), event_tx)
-        .with_candidate_pool(active_root_snapshot);
+        .with_candidate_pool(healthy_snapshot);
     assert_eq!(
         active_root
             .route_backend_for_run("auto", TaskComplexity::Standard, "active-child")
             .unwrap()
             .0,
         SubagentBackend::Candidate(0),
-        "a root that already froze the healthy Arc must not observe a later Host reload error"
+        "a root that already froze the healthy Arc must not observe a later Host degradation"
     );
 
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2105,12 +2123,44 @@ fn unavailable_non_empty_pool_never_falls_back_to_legacy_for_auto_or_slot_routes
     );
 }
 
+#[test]
+fn partially_degraded_pool_normalizes_the_roll_over_remaining_weights() {
+    // 权重和 30 的降级池：roll 0..=99 归一化到 0..=30 后必须始终落进剩余槽位，
+    // 而不是触发“权重区间未覆盖路由值”。
+    let runner: Arc<dyn SubagentCandidateRunner> = Arc::new(NativeProviderCandidateRunner {
+        provider: Arc::new(MockProvider::new("surviving-native-provider")),
+    });
+    let pool = Arc::new(FrozenSubagentCandidatePool {
+        revision: "partial-degraded".to_string(),
+        degraded_reason: Some("1/2 个槽位不可用已剔除：stale-slot（探测未通过）".to_string()),
+        slots: vec![weighted_native_candidate_slot(
+            "surviving-slot",
+            "provider-a",
+            "model-a",
+            30,
+            "Prompt",
+            runner,
+        )],
+    });
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor =
+        test_supervisor(Arc::new(MockProvider::new("primary")), event_tx).with_candidate_pool(pool);
+    for child in ["child-0", "child-1", "child-2", "child-3", "child-4"] {
+        let (backend, note) = supervisor
+            .route_backend_for_run("auto", TaskComplexity::Standard, child)
+            .unwrap();
+        assert_eq!(backend, SubagentBackend::Candidate(0), "child={child}");
+        assert!(note.contains("已降级"), "child={child}: {note}");
+        assert!(note.contains("归一化"), "child={child}: {note}");
+    }
+}
+
 #[tokio::test]
 async fn disabled_cross_engine_switch_blocks_external_candidate_pool_routes_and_spawns() {
     let calls = Arc::new(StdMutex::new(Vec::new()));
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "external-disabled".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![FrozenSubagentSlot {
             descriptor: FrozenSubagentSlotDescriptor {
                 slot_id: "codex-review".to_string(),
@@ -2139,17 +2189,17 @@ async fn disabled_cross_engine_switch_blocks_external_candidate_pool_routes_and_
         .unwrap();
     assert_eq!(auto_backend, SubagentBackend::RCode);
     assert!(auto_reason.contains("外部 Agent 子代理协作已关闭"));
-    assert!(auto_reason.contains("自动回退 R-Code"));
-    let explicit_error = supervisor
+    assert!(auto_reason.contains("回退 R-Code 自身"));
+    let (explicit_backend, explicit_note) = supervisor
         .route_backend_for_run(
             "slot:codex-review",
             TaskComplexity::Standard,
             "disabled-child",
         )
-        .unwrap_err();
-    assert!(explicit_error
-        .to_string()
-        .contains("外部 Agent 子代理协作已关闭"));
+        .unwrap();
+    assert_eq!(explicit_backend, SubagentBackend::RCode);
+    assert!(explicit_note.contains("外部 Agent 子代理协作已关闭"));
+    assert!(explicit_note.contains("回退 R-Code 自身"));
     let error = supervisor
         .spawn_with_run_id(
             "disabled-direct-spawn".to_string(),
@@ -2168,7 +2218,7 @@ async fn disabled_cross_engine_switch_blocks_external_candidate_pool_routes_and_
 
     let native_pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "native-still-enabled".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![weighted_native_candidate_slot(
             "native-slot",
             "provider-a",
@@ -6030,7 +6080,7 @@ async fn native_api_candidate_uses_the_shared_tree_and_can_delegate_a_grandchild
     });
     let pool = Arc::new(FrozenSubagentCandidatePool {
         revision: "native-nested".to_string(),
-        unavailable_reason: None,
+        degraded_reason: None,
         slots: vec![weighted_native_candidate_slot(
             "native-api",
             "configured-provider",

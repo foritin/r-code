@@ -68,6 +68,7 @@ import { modalityLabel, resolveImageCapability } from "../room/model-capabilitie
 import { Menu, MenuEmpty, MenuItem } from "../ui/Menu";
 import { InfoTip } from "../ui/InfoTip";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { Drawer } from "../ui/Drawer";
 import { pushToast } from "../../store/toast";
 import { useCompanionStore, type CompanionMotion } from "../../store/companion";
 import { providerIconFor, providerInitial } from "../../lib/provider-icons";
@@ -83,6 +84,13 @@ const EMPTY_PROVIDERS: NonNullable<AppConfig["providers"]> = {};
 const OUTPUT_DEFAULT = "8192";
 /** 自建网关：不套用任何预设，全部字段手填。 */
 const CUSTOM_PRESET = "custom";
+
+/** 行级“测试连接”的一次结果（SET-PROV-015 的 UI 前置，后端复用模型同步通道）。 */
+interface ProbeState {
+  state: "running" | "ok" | "failed";
+  ms?: number;
+  error?: string;
+}
 
 const SETTINGS_PANES: Array<{
   key: SettingsPane;
@@ -869,10 +877,16 @@ function ProviderSection({
   const [hostedWebRoutes, setHostedWebRoutes] = useState<HostedWebRoute[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [presetName, setPresetName] = useState(CUSTOM_PRESET);
-  // 新建草稿态：点击“新建服务”后左侧出现占位行，保存成功或取消后消失。
+  // 新建草稿态：点击“新建服务”后打开新建抽屉，保存成功或取消后消失。
   const [drafting, setDrafting] = useState(false);
-  // 新建态下点击已有服务时暂存目标，等用户确认“放弃未保存的更改”后再切换。
-  const [pendingSelect, setPendingSelect] = useState<string | null>(null);
+  // 编辑抽屉开关：列表行只负责“打开抽屉看某个服务”，不再常驻右栏。
+  const [editorOpen, setEditorOpen] = useState(false);
+  // 行级“测试”结果（SET-PROV-015 的 UI 前置）：key = 服务名。
+  const [probe, setProbe] = useState<Record<string, ProbeState>>({});
+  // 用户是否改过抽屉里的表单：关闭/切换目标前据此弹“放弃更改”确认。
+  const [formDirty, setFormDirty] = useState(false);
+  // 未保存守卫：close = 丢弃并关抽屉；switch = 丢弃并切换到目标服务。
+  const [discard, setDiscard] = useState<{ mode: "close" } | { mode: "switch"; name: string } | null>(null);
   const [profileName, setProfileName] = useState("");
   const [fields, setFields] = useState({
     base_url: "",
@@ -891,6 +905,12 @@ function ProviderSection({
   const [modelsMessage, setModelsMessage] = useState<string | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const modelRequest = useRef(0);
+  const probeRequest = useRef(0);
+  // 用户手改字段 = 表单变脏；effect 里的程序化回填不走这里，避免误报。
+  const mutateFields = (updater: (value: typeof fields) => typeof fields) => {
+    setFormDirty(true);
+    setFields(updater);
+  };
   const initialPresetApplied = useRef(false);
 
   // 目录来自后端 provider_catalog.rs：预设一旦分散成两份就会漂移，
@@ -942,6 +962,7 @@ function ProviderSection({
       setKeyInput("");
       setSaved(null);
       setErr(null);
+      setFormDirty(false);
       // 没有任何已保存服务时，目录异步返回后的首次初始化必须整组应用预设。
       // 只改 presetName 会造成下拉框显示 Anthropic，而名称、地址和协议仍是空白/Chat。
       if (!initialPresetApplied.current && catalog.length > 0 && names.length === 0) {
@@ -978,6 +999,7 @@ function ProviderSection({
     setKeyInput("");
     setSaved(null);
     setErr(null);
+    setFormDirty(false);
     // catalog 触发目录异步返回后的重算；否则已有内置配置可能被误显示为“自建服务”。
   }, [applyPreset, catalog, names.length, presetName, providers, providerStatus, selectedProvider]);
 
@@ -1042,7 +1064,8 @@ function ProviderSection({
       if (modelRequest.current !== requestId) return;
       setRemoteModels(response.models);
       if (!fields.model.trim() && response.models[0]) {
-        setFields((value) => ({ ...value, model: response.models[0] }));
+        // 程序化回填（同步结果预选首个模型）：不算用户修改，不打脏标。
+        setFields((current) => ({ ...current, model: response.models[0] }));
       }
       // 已保存服务：同步结果持久化（供模型胶囊、图片理解下拉等跨页消费）。
       // 按本次请求的服务名记账，避免选中切换瞬间的过期闭包把清单记到别的服务上。
@@ -1056,6 +1079,36 @@ function ProviderSection({
       setModelsError(errText(cause));
     } finally {
       if (modelRequest.current === requestId) setModelsBusy(false);
+    }
+  };
+
+  // SET-PROV-015 的 UI 前置：行级“测试”复用模型同步通道（providerModels）对已
+  // 保存服务做一次轻量探测并计时。apiKey 传 null = 使用已保存凭据，与点开抽屉
+  // 后的自动同步走同一条路；同名的同步结果顺手刷新，供模型胶囊等跨页消费。
+  const probeProvider = async (name: string) => {
+    const profile = providers[name] as ProviderConfig | undefined;
+    if (!profile || busy) return;
+    const preset = presetOf(profile.provider_kind ?? name);
+    const requestId = ++probeRequest.current;
+    const started = performance.now();
+    setProbe((value) => ({ ...value, [name]: { state: "running" } }));
+    try {
+      const response = await providerModels({
+        name,
+        preset: preset?.id ?? null,
+        baseUrl: profile.base_url ?? "",
+        apiKey: null,
+        protocol: providerStatus[name]?.effective_protocol ?? profile.protocol ?? "openai_chat",
+      });
+      if (probeRequest.current !== requestId) return;
+      rememberSyncedModels(name, response.models);
+      setProbe((value) => ({
+        ...value,
+        [name]: { state: "ok", ms: Math.max(1, Math.round(performance.now() - started)) },
+      }));
+    } catch (cause) {
+      if (probeRequest.current !== requestId) return;
+      setProbe((value) => ({ ...value, [name]: { state: "failed", error: errText(cause) } }));
     }
   };
 
@@ -1093,8 +1146,15 @@ function ProviderSection({
       });
       setSelectedProvider(name);
       setDrafting(false);
-      setPendingSelect(null);
+      setFormDirty(false);
       setKeyInput("");
+      // 保存后的配置已变化，旧行内测试结果不再代表当前状态。
+      setProbe((value) => {
+        if (!(name in value)) return value;
+        const next = { ...value };
+        delete next[name];
+        return next;
+      });
     }, activate ? "已保存，并设为默认服务" : "配置已保存");
 
   const selectProvider = (name: string) =>
@@ -1110,27 +1170,80 @@ function ProviderSection({
 
   const startNewProvider = () => {
     setDrafting(true);
-    setPendingSelect(null);
+    setDiscard(null);
+    setFormDirty(false);
     setSelectedProvider(null);
     applyPreset(catalog[0]?.id ?? CUSTOM_PRESET);
+    setEditorOpen(true);
   };
 
   const cancelDraft = () => {
     setDrafting(false);
-    setPendingSelect(null);
+    setDiscard(null);
+    setFormDirty(false);
     setSelectedProvider(
       configDefault && providers[configDefault] ? configDefault : names[0] ?? null
     );
+    setEditorOpen(false);
   };
 
-  const commitPendingSelect = () => {
-    const target = pendingSelect;
-    setPendingSelect(null);
+  // 行点击 / “编辑”：抽屉里有未保存修改时先确认，再切换目标。
+  const requestEdit = (name: string) => {
+    if (formDirty) {
+      setDiscard({ mode: "switch", name });
+      return;
+    }
     setDrafting(false);
-    setSelectedProvider(target);
+    setSelectedProvider(name);
+    setEditorOpen(true);
+  };
+
+  const requestCloseDrawer = () => {
+    if (formDirty) {
+      setDiscard({ mode: "close" });
+      return;
+    }
+    if (drafting) {
+      cancelDraft();
+      return;
+    }
+    setEditorOpen(false);
+  };
+
+  const commitDiscard = () => {
+    const action = discard;
+    setDiscard(null);
+    setFormDirty(false);
+    if (!action) return;
+    if (action.mode === "close") {
+      if (drafting) {
+        setDrafting(false);
+        setSelectedProvider(
+          configDefault && providers[configDefault] ? configDefault : names[0] ?? null
+        );
+      }
+      setEditorOpen(false);
+      return;
+    }
+    setDrafting(false);
+    setSelectedProvider(action.name);
+    setEditorOpen(true);
   };
 
   const editing = selectedProvider ? (providers[selectedProvider] as ProviderConfig | undefined) : undefined;
+  const editingIcon = editing && selectedProvider
+    ? providerIconFor(editing.provider_kind ?? presetOf(selectedProvider)?.id ?? selectedProvider)
+    : null;
+  const drawerProbe = selectedProvider ? probe[selectedProvider] : undefined;
+  const drawerTile = drafting ? (
+    <span className="provider-icon-tile is-fallback" aria-hidden="true">＋</span>
+  ) : (
+    <span className={`provider-icon-tile${editingIcon ? "" : " is-fallback"}`} aria-hidden="true">
+      {editingIcon
+        ? <img src={editingIcon} alt="" />
+        : providerInitial(activePreset?.label ?? providerLabel(selectedProvider ?? ""))}
+    </span>
+  );
   const credential = selectedProvider ? providerStatus[selectedProvider] : undefined;
   const credentialLabel = credential?.configured
     ? credential.source === "environment"
@@ -1211,50 +1324,64 @@ function ProviderSection({
       {err && <div className="errbar" role="alert">{err}</div>}
       {saved && <div className="okbar" role="status">{saved}</div>}
 
-      <div className="provider-layout">
-        <div className="provider-list" aria-label="已保存的模型服务">
-          <div className="provider-list-label">已保存的服务</div>
-          {drafting && (
-            <button
-              className="provider-row provider-row-draft selected"
-              type="button"
-              disabled={busy}
-            >
-              <span className="provider-icon-tile is-fallback" aria-hidden="true">＋</span>
-              <span className="provider-row-title">未保存的新服务</span>
-              <span className="provider-row-model">正在填写，保存后生效</span>
-              <span className="provider-row-state">草稿</span>
-            </button>
-          )}
-          {names.length === 0 && !drafting ? (
-            <div className="provider-empty">还没有服务。选择一个预设，填入密钥即可开始聊天。</div>
-          ) : (
-            names.map((name) => {
-              const profile = providers[name] as ProviderConfig;
-              const active = name === configDefault;
-              const status = providerStatus[name];
-              const icon = providerIconFor(profile.provider_kind ?? presetOf(name)?.id ?? name);
-              return (
-                <div key={name} className={`provider-row-wrap${name === selectedProvider ? " selected" : ""}`}>
-                  <button
-                    className={`provider-row${name === selectedProvider ? " selected" : ""}`}
-                    disabled={busy}
-                    onClick={() => (drafting ? setPendingSelect(name) : setSelectedProvider(name))}
-                  >
-                    <span className={`provider-icon-tile${icon ? "" : " is-fallback"}`} aria-hidden="true">
-                      {icon ? <img src={icon} alt="" /> : providerInitial(providerLabel(name))}
-                    </span>
+      <div className="provider-roster" aria-label="已保存的模型服务">
+        {names.length === 0 && !drafting ? (
+          <div className="provider-empty">还没有服务。点击「新建服务」，选择预设并填入密钥即可开始对话。</div>
+        ) : (
+          names.map((name) => {
+            const profile = providers[name] as ProviderConfig;
+            const active = name === configDefault;
+            const status = providerStatus[name];
+            const icon = providerIconFor(profile.provider_kind ?? presetOf(name)?.id ?? name);
+            const probeInfo = probe[name];
+            const probeRunning = probeInfo?.state === "running";
+            const stateClass = probeInfo?.state === "ok"
+              ? " is-ok"
+              : probeInfo?.state === "failed"
+                ? " is-failed"
+                : status?.ready ? " ready" : "";
+            const stateLabel = probeRunning
+              ? "测试中…"
+              : probeInfo?.state === "ok"
+                ? `连接正常 · ${probeInfo.ms}ms`
+                : probeInfo?.state === "failed"
+                  ? "连接失败"
+                  : providerStateLabel(status);
+            return (
+              <div key={name} className="provider-item">
+                <button
+                  className="provider-row"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => requestEdit(name)}
+                >
+                  <span className={`provider-icon-tile${icon ? "" : " is-fallback"}`} aria-hidden="true">
+                    {icon ? <img src={icon} alt="" /> : providerInitial(providerLabel(name))}
+                  </span>
+                  <span className="provider-row-text">
                     <span className="provider-row-title">
                       {providerLabel(name)}
                       {active && <em>默认</em>}
                     </span>
                     <span className="provider-row-model">{profile.model || "尚未设置模型"}</span>
-                    <span className={`provider-row-state${status?.ready ? " ready" : ""}`}>{providerStateLabel(status)}</span>
-                  </button>
-                  {!active && !drafting && (
+                  </span>
+                  <span
+                    className={`provider-row-state${stateClass}`}
+                    title={probeInfo?.state === "failed" ? probeInfo.error : undefined}
+                  >
+                    {probeRunning ? (
+                      <IconRefresh width={12} height={12} />
+                    ) : (
+                      <span className="provider-state-dot" aria-hidden="true" />
+                    )}
+                    {stateLabel}
+                  </span>
+                </button>
+                <div className="provider-row-actions">
+                  {!active && (
                     <button
                       type="button"
-                      className="provider-row-quick-default quiet-link"
+                      className="provider-row-action accent"
                       disabled={busy || !status?.ready}
                       title="设为默认后，新对话将使用这项服务；已开始的对话不受影响"
                       onClick={() => selectProvider(name)}
@@ -1262,58 +1389,134 @@ function ProviderSection({
                       设为默认
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="provider-row-action"
+                    disabled={busy || probeRunning}
+                    title="向该服务发送一次轻量请求，验证连通性"
+                    onClick={() => void probeProvider(name)}
+                  >
+                    测试
+                  </button>
+                  <button
+                    type="button"
+                    className="provider-row-action"
+                    disabled={busy}
+                    onClick={() => requestEdit(name)}
+                  >
+                    编辑
+                  </button>
                 </div>
-              );
-            })
-          )}
-        </div>
+              </div>
+            );
+          })
+        )}
+      </div>
 
-        <div className="provider-editor">
-          <div className="provider-editor-head">
-            <div>
-              <span className="provider-editor-kicker">{editing ? "编辑服务" : "新建服务"}</span>
-              <h4>{editing ? providerLabel(selectedProvider ?? "") : "添加一个模型服务"}</h4>
-            </div>
+      <Drawer
+        open={editorOpen && (drafting || selectedProvider != null)}
+        title={editing ? providerLabel(selectedProvider ?? "") : "新建服务"}
+        subtitle={editing ? "编辑服务 · 更改保存后立即生效" : "选择预设，填入密钥后保存即可开始对话"}
+        closeLabel="关闭"
+        onClose={requestCloseDrawer}
+        closeDisabled={busy}
+        icon={drawerTile}
+        footer={
+          <>
             {editing && selectedProvider && selectedProvider !== configDefault && (
               <button className="quiet-link danger-link" disabled={busy} onClick={() => deleteProvider(selectedProvider)}>
                 删除
               </button>
             )}
-          </div>
-
-          <div className="provider-form">
-            <div className="provider-form-grid">
+            {editing && selectedProvider && selectedProvider !== configDefault && (
+              <button
+                className="btn"
+                disabled={busy || !providerStatus[selectedProvider]?.ready}
+                title="设为默认后，新对话将使用这项服务；已开始的对话不受影响"
+                onClick={() => selectProvider(selectedProvider)}
+              >
+                设为默认服务
+              </button>
+            )}
+            {drafting && (
+              <button className="btn" disabled={busy} onClick={cancelDraft}>取消</button>
+            )}
+            <span className="spacer" />
+            <button className="btn accent" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并设为默认</button>
+          </>
+        }
+      >
+        <div className="provider-form">
+          <div className="provider-form-grid">
               <div className="provider-form-field">
-                <label htmlFor="set-preset">预设</label>
-                <select id="set-preset"
-                  className="input"
-                  value={presetName}
-                  disabled={busy || Boolean(editing)}
-                  onChange={(event) => applyPreset(event.target.value)}
-                >
-                  {groupByCategory(catalog).map(([category, presets]) => (
-                    <optgroup key={category} label={CATEGORY_LABELS[category] ?? category}>
-                      {presets.map((preset) => (
-                        <option key={preset.id} value={preset.id}>{preset.label}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                  <option value={CUSTOM_PRESET}>自建 / 其它 OpenAI 兼容接口</option>
-                </select>
-                {activePreset && (
-                  <span className="provider-field-meta">
-                    {PROTOCOL_LABELS[activePreset.protocol]}
-                    {activePreset.context_window != null &&
-                      ` · ${activePreset.context_window.toLocaleString()} 上下文`}
-                    {activePreset.api_key_url && (
-                      <>
-                        {" · "}
-                        <a href={activePreset.api_key_url} target="_blank" rel="noreferrer">获取密钥</a>
-                      </>
+                <label>预设</label>
+                {editing ? (
+                  <div className="provider-preset-fixed">
+                    <span className={`provider-icon-tile${editingIcon ? "" : " is-fallback"}`} aria-hidden="true">
+                      {editingIcon
+                        ? <img src={editingIcon} alt="" />
+                        : providerInitial(activePreset?.label ?? providerLabel(selectedProvider ?? ""))}
+                    </span>
+                    <span className="provider-preset-fixed-text">
+                      <strong>{activePreset?.label ?? "自建 / 其它 OpenAI 兼容接口"}</strong>
+                      {activePreset && (
+                        <small>
+                          {PROTOCOL_LABELS[activePreset.protocol]}
+                          {activePreset.context_window != null &&
+                            ` · ${activePreset.context_window.toLocaleString()} 上下文`}
+                          {activePreset.api_key_url && (
+                            <>
+                              {" · "}
+                              <a href={activePreset.api_key_url} target="_blank" rel="noreferrer">获取密钥</a>
+                            </>
+                          )}
+                        </small>
+                      )}
+                    </span>
+                    <span className="provider-field-meta">更换预设请新建服务</span>
+                  </div>
+                ) : (
+                  <div className="provider-preset-grid" role="radiogroup" aria-label="选择预设">
+                    {groupByCategory(catalog).map(([category, presets]) =>
+                      presets.map((preset) => {
+                        const icon = providerIconFor(preset.id);
+                        const selected = presetName === preset.id;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            className={`provider-preset${selected ? " selected" : ""}`}
+                            disabled={busy}
+                            title={CATEGORY_LABELS[category] ?? category}
+                            onClick={() => { setFormDirty(true); applyPreset(preset.id); }}
+                          >
+                            <span className={`provider-icon-tile${icon ? "" : " is-fallback"}`} aria-hidden="true">
+                              {icon ? <img src={icon} alt="" /> : providerInitial(preset.label)}
+                            </span>
+                            <span className="provider-preset-label">{preset.label}</span>
+                            <span className="provider-preset-meta">{PROTOCOL_LABELS[preset.protocol]}</span>
+                          </button>
+                        );
+                      })
                     )}
-                  </span>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={presetName === CUSTOM_PRESET}
+                      className={`provider-preset${presetName === CUSTOM_PRESET ? " selected" : ""}`}
+                      disabled={busy}
+                      onClick={() => { setFormDirty(true); applyPreset(CUSTOM_PRESET); }}
+                    >
+                      <span className="provider-icon-tile is-fallback" aria-hidden="true">
+                        {providerInitial("自建")}
+                      </span>
+                      <span className="provider-preset-label">自建 / 其它</span>
+                      <span className="provider-preset-meta">OpenAI 兼容</span>
+                    </button>
+                  </div>
                 )}
-                {editing && <span className="provider-field-meta">更换预设请新建服务</span>}
               </div>
 
               <div className="provider-form-field">
@@ -1323,7 +1526,7 @@ function ProviderSection({
                   value={profileName}
                   readOnly={Boolean(editing)}
                   placeholder="例如：DeepSeek 工作账户"
-                  onChange={(event) => setProfileName(event.target.value)}
+                  onChange={(event) => { setFormDirty(true); setProfileName(event.target.value); }}
                 />
               </div>
 
@@ -1338,7 +1541,7 @@ function ProviderSection({
                   autoComplete="off"
                   placeholder={credential?.configured ? "留空则保留当前密钥" : "粘贴访问密钥"}
                   value={keyInput}
-                  onChange={(event) => setKeyInput(event.target.value)}
+                  onChange={(event) => { setFormDirty(true); setKeyInput(event.target.value); }}
                 />
               </div>
 
@@ -1350,7 +1553,7 @@ function ProviderSection({
                     className="provider-model-text"
                     value={fields.model}
                     placeholder="输入或同步模型名称"
-                    onChange={(event) => setFields((value) => ({ ...value, model: event.target.value }))}
+                    onChange={(event) => mutateFields((value) => ({ ...value, model: event.target.value }))}
                   />
                   <div className="provider-model-actions">
                     <Menu
@@ -1393,7 +1596,7 @@ function ProviderSection({
                                   close={close}
                                   checked={fields.model.trim() === modelName}
                                   onSelect={() => {
-                                    setFields((value) => ({ ...value, model: modelName }));
+                                    mutateFields((value) => ({ ...value, model: modelName }));
                                     rememberModel(profileName.trim() || activePreset?.id || "", modelName);
                                   }}
                                 >
@@ -1437,7 +1640,7 @@ function ProviderSection({
                   checked={fields.show_reasoning}
                   disabled={busy}
                   onChange={(event) =>
-                    setFields((value) => ({ ...value, show_reasoning: event.target.checked }))
+                    mutateFields((value) => ({ ...value, show_reasoning: event.target.checked }))
                   }
                 />
               </label>
@@ -1482,7 +1685,7 @@ function ProviderSection({
                     className="input"
                     value={fields.base_url}
                     placeholder="https://api.example.com/v1"
-                    onChange={(event) => setFields((value) => ({ ...value, base_url: event.target.value }))}
+                    onChange={(event) => mutateFields((value) => ({ ...value, base_url: event.target.value }))}
                   />
                   {!activePreset && (
                     <span className="provider-field-meta">填写服务根地址，不含 /chat/completions</span>
@@ -1506,7 +1709,7 @@ function ProviderSection({
                           .map((protocol) => PROTOCOL_LABELS[protocol])
                           .join(" / ")}）`}
                         onClick={() =>
-                          setFields((value) => ({
+                          mutateFields((value) => ({
                             ...value,
                             base_url: activePreset.base_url,
                             protocol: activePreset.protocol,
@@ -1530,7 +1733,7 @@ function ProviderSection({
                             // 协议必须跟着地址一起切：多数备用线路是同一厂商的另一个协议口，
                             // 只改地址会把 Anthropic 的请求发到一个只有 Chat 的 endpoint 上。
                             onClick={() =>
-                              setFields((value) => ({
+                              mutateFields((value) => ({
                                 ...value,
                                 base_url: candidate.url,
                                 protocol: candidate.protocol,
@@ -1552,7 +1755,7 @@ function ProviderSection({
                     disabled={busy}
                     value={fields.protocol}
                     onChange={(event) =>
-                      setFields((value) => ({
+                      mutateFields((value) => ({
                         ...value,
                         protocol: event.target.value as ProviderProtocol,
                       }))
@@ -1592,7 +1795,7 @@ function ProviderSection({
                     inputMode="numeric"
                     value={fields.max_tokens}
                     disabled={maxOutputLocked}
-                    onChange={(event) => setFields((value) => ({ ...value, max_tokens: event.target.value }))}
+                    onChange={(event) => mutateFields((value) => ({ ...value, max_tokens: event.target.value }))}
                   />
                   <span className="provider-field-meta">
                     {providerMaxOutput != null
@@ -1604,7 +1807,7 @@ function ProviderSection({
                   {outputExceedsProviderLimit && (
                     <span className="provider-field-warning" role="alert">
                       当前值超出服务上限，请
-                      <button className="quiet-link" type="button" onClick={() => setFields((value) => ({ ...value, max_tokens: String(providerMaxOutput ?? OUTPUT_DEFAULT) }))}>
+                      <button className="quiet-link" type="button" onClick={() => mutateFields((value) => ({ ...value, max_tokens: String(providerMaxOutput ?? OUTPUT_DEFAULT) }))}>
                         恢复为 {Number(providerMaxOutput ?? OUTPUT_DEFAULT).toLocaleString()}
                       </button>
                     </span>
@@ -1622,40 +1825,29 @@ function ProviderSection({
                     className="input"
                     inputMode="decimal"
                     value={fields.temperature}
-                    onChange={(event) => setFields((value) => ({ ...value, temperature: event.target.value }))}
+                    onChange={(event) => mutateFields((value) => ({ ...value, temperature: event.target.value }))}
                   />
                   <span className="provider-field-meta">编码任务建议 0.1–0.3</span>
                 </div>
               </div>
             </details>
-          </div>
 
-          <div className="footbar provider-actions">
-            {editing && selectedProvider && selectedProvider !== configDefault && (
-              <button
-                className="btn"
-                disabled={busy || !providerStatus[selectedProvider]?.ready}
-                title="设为默认后，新对话将使用这项服务；已开始的对话不受影响"
-                onClick={() => selectProvider(selectedProvider)}
-              >
-                设为默认服务
-              </button>
+            {drawerProbe?.state === "ok" && (
+              <span className="provider-field-success" role="status">连接正常 · {drawerProbe.ms}ms</span>
             )}
-            {drafting && (
-              <button className="btn" disabled={busy} onClick={cancelDraft}>取消</button>
+            {drawerProbe?.state === "failed" && (
+              <span className="provider-field-warning" role="alert">连接失败：{drawerProbe.error}</span>
             )}
-            <span className="spacer" />
-            <button className="btn accent" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并设为默认</button>
           </div>
-        </div>
-      </div>
+        </Drawer>
+
       <ConfirmDialog
-        open={pendingSelect != null}
+        open={discard != null}
         title="放弃未保存的更改？"
-        description="你正在新建服务，切换后会丢弃尚未保存的配置。"
+        description="抽屉里有尚未保存的修改，继续将丢弃这些内容。"
         confirmLabel="放弃更改"
-        onConfirm={commitPendingSelect}
-        onCancel={() => setPendingSelect(null)}
+        onConfirm={commitDiscard}
+        onCancel={() => setDiscard(null)}
       />
     </section>
   );
@@ -1797,6 +1989,7 @@ function ImageUnderstandingSection({
     <section className="settings-block image-understanding-block" id="image-understanding-block">
       <div className="block-title-row">
         <h3>图片理解 <InfoTip label="图片理解说明">辅助引擎只服务文本主模型：主模型目录确认多模态时原图直发，不经本机 OCR 或视觉模型。OCR 只提取文字（离线免费）；视觉模型理解整张图并生成描述（消耗调用）。</InfoTip></h3>
+        <span className="block-hint">只对文本主模型生效 · 主模型确认为多模态时原图直发，不经引擎</span>
         <button
           type="button"
           className="guide-link"
@@ -1822,12 +2015,10 @@ function ImageUnderstandingSection({
           disabled={busy != null}
           onClick={() => chooseEngine("ocr")}
         >
+          <span className="image-engine-radio" aria-hidden="true" />
           <span className="image-engine-copy">
             <strong>本机 OCR（默认）</strong>
             <small>文本主模型的辅助：离线、免费，仅提取图片中的文字（PNG/JPEG）注入上下文。</small>
-          </span>
-          <span className="image-engine-check" aria-hidden="true">
-            {engine === "ocr" && <IconCheck width={15} height={15} />}
           </span>
         </button>
         <button
@@ -1838,17 +2029,18 @@ function ImageUnderstandingSection({
           disabled={busy != null}
           onClick={() => chooseEngine("model")}
         >
+          <span className="image-engine-radio" aria-hidden="true" />
           <span className="image-engine-copy">
             <strong>视觉模型</strong>
             <small>文本主模型的辅助：由指定的多模态模型理解整张图片并生成描述；多图并发理解，每次消耗该服务的调用。</small>
           </span>
-          <span className="image-engine-check" aria-hidden="true">
-            {engine === "model" && <IconCheck width={15} height={15} />}
-          </span>
         </button>
       </div>
-      {engine === "model" && (
-        <div className="image-understanding-target">
+      {/* 选 OCR 时服务/模型两行不隐藏而是置灰：配置的位置感保留，误点被禁用挡住。 */}
+      <div
+        className={`image-understanding-target${engine === "model" ? "" : " is-off"}`}
+        aria-hidden={engine !== "model"}
+      >
           {providers.length === 0 ? (
             <p className="provider-field-warning" role="alert">
               先在上方配置模型服务并填好密钥，再选择视觉模型。
@@ -1861,7 +2053,7 @@ function ImageUnderstandingSection({
                   id="set-image-provider"
                   className="input"
                   value={configuredProvider}
-                  disabled={busy != null}
+                  disabled={busy != null || engine !== "model"}
                   onChange={(event) => selectProvider(event.target.value)}
                 >
                   <option value="" disabled>选择服务</option>
@@ -1884,7 +2076,7 @@ function ImageUnderstandingSection({
                   id="set-image-model"
                   className="input"
                   value={modelValue}
-                  disabled={busy != null || !selected}
+                  disabled={busy != null || !selected || engine !== "model"}
                   onChange={(event) => void save("model", event.target.value || null)}
                 >
                   <option value="" disabled>{selected ? "选择模型" : "先选择服务"}</option>
@@ -1902,8 +2094,7 @@ function ImageUnderstandingSection({
               </div>
             </>
           )}
-        </div>
-      )}
+      </div>
     </section>
   );
 }

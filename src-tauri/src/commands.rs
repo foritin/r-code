@@ -5118,11 +5118,14 @@ async fn ensure_real_runtime(
         Ok(pool) => pool,
         Err(error) => {
             // Candidate configuration must never make the primary provider unusable. The
-            // explicit unavailable state prevents fallback to a different legacy router.
+            // degraded empty pool forces fallback to the R-Code runtime itself and prevents
+            // silent fallback to a different legacy router.
             tracing::warn!(%error, "failed to rebuild subagent candidate pool");
             if persisted_candidate_pool_non_empty {
-                RuntimeSubagentCandidatePoolUpdate::Unavailable {
+                RuntimeSubagentCandidatePoolUpdate::Degraded {
                     revision: "snapshot-unavailable".to_string(),
+                    slots: Vec::new(),
+                    degraded_reason: "候选池快照构建失败，已回退 R-Code 自身".to_string(),
                 }
             } else {
                 RuntimeSubagentCandidatePoolUpdate::Ready {
@@ -15947,16 +15950,19 @@ fn runtime_subagent_capabilities(
     }
 }
 
-const SUBAGENT_POOL_UNAVAILABLE_REASON: &str =
-    "已保存的子代理候选池当前不可用；请在设置中重新测试全部槽位后再试";
-
 enum RuntimeSubagentCandidatePoolUpdate {
     Ready {
         revision: String,
         slots: Vec<FrozenSubagentSlot>,
     },
-    Unavailable {
+    /// Some or all saved slots were dropped after an automatic re-probe (or the persisted
+    /// configuration could not be interpreted). Remaining healthy slots keep serving; an empty
+    /// slot list makes delegation fall back to the R-Code runtime itself with the reason visible
+    /// in the routing note.
+    Degraded {
         revision: String,
+        slots: Vec<FrozenSubagentSlot>,
+        degraded_reason: String,
     },
 }
 
@@ -15968,30 +15974,40 @@ fn install_runtime_subagent_candidate_pool(
         RuntimeSubagentCandidatePoolUpdate::Ready { revision, slots } => {
             runtime.replace_subagent_candidate_pool(revision, slots);
         }
-        RuntimeSubagentCandidatePoolUpdate::Unavailable { revision } => {
-            // Renderer-visible reason is deliberately fixed and contains no provider error,
-            // credential, executable path or CLI output. Full diagnostics remain in Host logs.
-            runtime
-                .replace_subagent_candidate_pool_error(revision, SUBAGENT_POOL_UNAVAILABLE_REASON);
+        RuntimeSubagentCandidatePoolUpdate::Degraded {
+            revision,
+            slots,
+            degraded_reason,
+        } => {
+            runtime.replace_subagent_candidate_pool_degraded(revision, slots, degraded_reason);
         }
     }
 }
 
-/// Rebuild the source paired with each saved slot for the next root run. The persisted pool is
-/// all-or-nothing at runtime: one invalid/stale receipt disables the whole pool, preventing an
-/// apparently healthy subset from silently changing the user's weighted routing policy.
+/// Rebuild the source paired with each saved slot for the next root run. Degradation policy
+/// (supersedes the former all-or-nothing gate): slots whose connectivity receipt is stale — or
+/// whose runtime prerequisites vanished — are re-probed once through the same channel the
+/// settings page uses; slots that still fail are dropped while healthy slots keep serving the
+/// user's weighted routing. When every slot drops, the pool installs empty with a degraded note
+/// so delegation falls back to the R-Code runtime itself instead of erroring out and blocking
+/// the task.
 async fn build_runtime_subagent_candidate_pool(
     config_dir: &Path,
     db: &Arc<Database>,
     permission_engine: Arc<PermissionEngine>,
     config: agent_config::Config,
 ) -> Result<RuntimeSubagentCandidatePoolUpdate, String> {
-    let context = build_subagent_catalog_context(config_dir, config).await?;
-    let snapshot = subagent_pool_snapshot_from_context(&context, chrono::Utc::now())?;
+    let mut context = build_subagent_catalog_context(config_dir, config).await?;
+    let mut snapshot = subagent_pool_snapshot_from_context(&context, chrono::Utc::now())?;
     let revision = snapshot.revision.clone();
+    let total_slots = snapshot.pool.slots.len();
     if let Err(error) = snapshot.pool.validate() {
-        tracing::warn!(%error, "disabled invalid persisted subagent candidate pool");
-        return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+        tracing::warn!(%error, "installed empty subagent pool: persisted configuration is invalid");
+        return Ok(RuntimeSubagentCandidatePoolUpdate::Degraded {
+            revision,
+            slots: Vec::new(),
+            degraded_reason: format!("候选池配置无效：{error}"),
+        });
     }
     if snapshot.pool.slots.is_empty() {
         return Ok(RuntimeSubagentCandidatePoolUpdate::Ready {
@@ -15999,38 +16015,78 @@ async fn build_runtime_subagent_candidate_pool(
             slots: Vec::new(),
         });
     }
-    if snapshot.slot_health.len() != snapshot.pool.slots.len()
-        || snapshot.slot_health.iter().any(|health| {
+
+    // 自动重测一次：回执过期或缺失的槽位在剔除前先探测一轮（与设置页“测试全部槽位”
+    // 同一通道、同一 30s 单次上限），通过则保留并刷新回执；仍失败才剔除。只对不健康
+    // 槽位发起，健康路径零开销；整体 20s 截止，未及探测的槽位本轮先剔除、下次运行再试。
+    let unhealthy = snapshot
+        .slot_health
+        .iter()
+        .filter(|health| {
             !health.selectable || health.health.state != SubagentProviderHealthState::Connected
         })
-    {
-        tracing::warn!(
-            revision,
-            "disabled stale subagent candidate pool until every slot is tested again"
-        );
-        return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unhealthy.is_empty() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        for health in &unhealthy {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    revision,
+                    "auto-probe budget exhausted; remaining stale slots are dropped for this run"
+                );
+                break;
+            }
+            let request = SubagentProviderProbeRequest {
+                source: health.source.clone(),
+                model: health.model.clone(),
+            };
+            let _ = tokio::time::timeout(
+                Duration::from_secs(25),
+                probe_subagent_provider_once(&mut context, &request),
+            )
+            .await;
+        }
+        SubagentHealthReceiptStore::new(config_dir)
+            .save(&context.receipts)
+            .map_err(err_str)?;
+        snapshot = subagent_pool_snapshot_from_context(&context, chrono::Utc::now())?;
     }
 
+    let mut dropped: Vec<String> = Vec::new();
     let mut slots = Vec::with_capacity(snapshot.pool.slots.len());
-    for (slot, health) in snapshot.pool.slots.into_iter().zip(snapshot.slot_health) {
+    for (slot, health) in snapshot.pool.slots.iter().zip(snapshot.slot_health.iter()) {
+        let slot_id = &slot.slot_id;
         if slot.slot_id != health.slot_id
             || slot.source != health.source
             || slot.model != health.model
         {
+            tracing::warn!(revision, slot_id, "dropped inconsistent subagent candidate slot");
+            dropped.push(format!("{slot_id}（快照不一致）"));
+            continue;
+        }
+        if !health.selectable || health.health.state != SubagentProviderHealthState::Connected {
             tracing::warn!(
                 revision,
-                "disabled inconsistent subagent candidate pool snapshot"
+                slot_id,
+                "dropped subagent candidate slot that failed the automatic re-probe"
             );
-            return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+            dropped.push(format!("{slot_id}（探测未通过）"));
+            continue;
         }
         let (source, runner): (SubagentCandidateSource, Arc<dyn SubagentCandidateRunner>) =
             match &slot.source {
                 SubagentProviderSource::ApiProvider { provider_id } => {
-                    let provider_config = context
-                        .config
-                        .providers
-                        .get(provider_id)
-                        .ok_or_else(|| format!("子代理 API Provider“{provider_id}”已不存在"))?;
+                    let Some(provider_config) = context.config.providers.get(provider_id) else {
+                        tracing::warn!(
+                            revision,
+                            slot_id,
+                            provider_id,
+                            "dropped subagent candidate slot whose API Provider no longer exists"
+                        );
+                        dropped.push(format!("{slot_id}（Provider 已不存在）"));
+                        continue;
+                    };
                     let mut exact_config = provider_config.clone();
                     exact_config.model = slot.model.clone();
                     let provider = agent_llm::create_provider(build_provider_config(
@@ -16060,9 +16116,11 @@ async fn build_runtime_subagent_candidate_pool(
                     if context.codex_cli_path.is_none() || context.codex.trust_chain.is_none() {
                         tracing::warn!(
                             revision,
-                            "disabled Codex candidate whose executable trust chain is unavailable"
+                            slot_id,
+                            "dropped Codex candidate whose executable trust chain is unavailable"
                         );
-                        return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+                        dropped.push(format!("{slot_id}（Codex 信任链不可用）"));
+                        continue;
                     }
                     (
                         SubagentCandidateSource::ExternalAgent(ExternalAgentId::Codex),
@@ -16076,18 +16134,58 @@ async fn build_runtime_subagent_candidate_pool(
             };
         slots.push(FrozenSubagentSlot {
             descriptor: FrozenSubagentSlotDescriptor {
-                slot_id: slot.slot_id,
+                slot_id: slot.slot_id.clone(),
                 source,
-                model: slot.model,
+                model: slot.model.clone(),
                 weight: slot.weight,
-                role_prompt: slot.prompt,
+                role_prompt: slot.prompt.clone(),
                 role_key: slot.prompt_template_id.clone(),
                 capabilities: runtime_subagent_capabilities(health.capabilities),
             },
             runner,
         });
     }
-    Ok(RuntimeSubagentCandidatePoolUpdate::Ready { revision, slots })
+
+    if slots.is_empty() {
+        let reason = if dropped.is_empty() {
+            "候选池当前不可用".to_string()
+        } else {
+            format!(
+                "{} 个槽位全部不可用（{}）",
+                total_slots,
+                dropped.join("、")
+            )
+        };
+        tracing::warn!(
+            revision,
+            "all subagent candidate slots dropped; delegation falls back to the R-Code runtime itself"
+        );
+        return Ok(RuntimeSubagentCandidatePoolUpdate::Degraded {
+            revision,
+            slots: Vec::new(),
+            degraded_reason: reason,
+        });
+    }
+    if dropped.is_empty() {
+        return Ok(RuntimeSubagentCandidatePoolUpdate::Ready { revision, slots });
+    }
+    let reason = format!(
+        "{}/{} 个槽位不可用已剔除：{}",
+        slots.len(),
+        total_slots,
+        dropped.join("、")
+    );
+    tracing::warn!(
+        revision,
+        kept = slots.len(),
+        dropped = dropped.len(),
+        "degraded subagent candidate pool to the remaining healthy slots"
+    );
+    Ok(RuntimeSubagentCandidatePoolUpdate::Degraded {
+        revision,
+        slots,
+        degraded_reason: reason,
+    })
 }
 
 fn validate_subagent_probe_request(request: &SubagentProviderProbeRequest) -> Result<(), String> {
@@ -31384,7 +31482,7 @@ kind = "codex_cli"
     }
 
     #[tokio::test]
-    async fn runtime_candidate_pool_uses_native_provider_and_marks_stale_pool_unavailable() {
+    async fn runtime_candidate_pool_uses_native_provider_and_degrades_failed_slots() {
         let (_dir, state) = setup_state();
         let provider_id = format!("candidate-provider-{}", uuid::Uuid::new_v4());
         settings_save_provider(
@@ -31472,8 +31570,12 @@ kind = "codex_cli"
         assert_eq!(runtime.temperature, Some(Some(0.2)));
         assert_eq!(runtime.inference, Some(InferenceOptions::default()));
 
+        // 指纹漂移后自动重测一次：base_url 指向本地保留端口，连接立即被拒（无网络
+        // 依赖）→ 该槽被剔除，池降级为空并回退 R-Code 自身，而不是整体报错堵死委派。
         let mut drifted = settings.load_global_unvalidated().unwrap();
-        drifted.providers.get_mut(&provider_id).unwrap().temperature = Some(0.7);
+        let drifted_provider = drifted.providers.get_mut(&provider_id).unwrap();
+        drifted_provider.temperature = Some(0.7);
+        drifted_provider.base_url = "http://127.0.0.1:1/v1".into();
         settings.save_global(&drifted).unwrap();
         let stale = build_runtime_subagent_candidate_pool(
             &state.config_dir,
@@ -31483,10 +31585,17 @@ kind = "codex_cli"
         )
         .await
         .unwrap();
-        assert!(matches!(
-            stale,
-            RuntimeSubagentCandidatePoolUpdate::Unavailable { .. }
-        ));
+        let RuntimeSubagentCandidatePoolUpdate::Degraded {
+            slots,
+            degraded_reason,
+            ..
+        } = stale
+        else {
+            panic!("a stale slot that fails its automatic re-probe must degrade the pool");
+        };
+        assert!(slots.is_empty());
+        assert!(degraded_reason.contains("native-slot"));
+        assert!(degraded_reason.contains("探测未通过"));
         settings.set_provider_secret(&provider_id, "").unwrap();
     }
 
