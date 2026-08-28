@@ -834,7 +834,9 @@ where
     // P1-E：冻结请求供流中断重放（重试字节与首试逐字节一致，不破坏前缀缓存）。
     // 重放只覆盖「流中断且尚无任何输出」的线路故障场景；MaxTokens 预算终态
     // 从不重放（docs §6.5），因此冻结请求在本次迭代内不再被改写。
-    let attempt_request = request.clone();
+    // request 在此之后不再使用：直接 move 为冻结副本，消掉一次含全部
+    // messages+tools 的整份克隆（F-perf-02；重试时仍从冻结副本逐次克隆）。
+    let attempt_request = request;
     let mut stream_recoveries: u32 = 0;
     let mut empty_response_recoveries: u32 = 0;
 

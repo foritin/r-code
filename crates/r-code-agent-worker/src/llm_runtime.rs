@@ -239,6 +239,9 @@ const MAX_QUALITY_REVIEW_FINDINGS_CHARS: usize = 3_000;
 const SUBAGENT_REPORT_DIRECT_CHARS: usize = 6_000;
 const SUBAGENT_REPORT_SUMMARY_TARGET_MIN_CHARS: usize = 2_000;
 const SUBAGENT_REPORT_SUMMARY_TARGET_MAX_CHARS: usize = 5_000;
+/// 报告浓缩的 complete() deadline：与 compaction/自动压缩的 120s 模式对齐
+///（F-robust-05）。超时走 fallback_subagent_report 降级，不再无限等待。
+const SUBAGENT_REPORT_SUMMARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 /// 总结服务失败时保留原报告的安全包络。超过后显式保留首尾，绝不伪装成完整报告。
 const SUBAGENT_REPORT_FALLBACK_CHARS: usize = 12_000;
 /// 早期实验中验证的昂贵探索轮阈值为 1,500 reasoning tokens。公共协议层
@@ -4528,18 +4531,15 @@ async fn run_loop(mut ctx: RunLoopCtx) {
                 );
             }
         }
-        let mut messages = model_projection
-            .clone()
-            .unwrap_or_else(|| canonical_messages.clone());
+        // 修复先于投影快照：repair 只改 canonical；投影存在且被修复判废时在此
+        // 置 None，随后的工作集快照统一从「投影 or 修复后 canonical」一次克隆
+        // 得到（旧顺序在 projection=None 的修复路径上会先克隆一次随即丢弃）。
         let repaired = repair_dangling_tool_uses(&mut canonical_messages);
         if repaired > 0 {
             if model_projection.is_some() {
                 // 旧投影可能已经基于损坏历史构造，丢弃并从修复后的 canonical
                 // transcript 重建本轮请求，避免合成结果插入位置发生漂移。
                 model_projection = None;
-                messages = canonical_messages.clone();
-            } else {
-                messages = canonical_messages.clone();
             }
             tracing::warn!(
                 session_id = %ctx.session_id,
@@ -4571,6 +4571,10 @@ async fn run_loop(mut ctx: RunLoopCtx) {
                 }
             }
         }
+        // 工作集唯一克隆点：投影存在拷投影，否则拷修复后的 canonical（一次）。
+        let mut messages = model_projection
+            .clone()
+            .unwrap_or_else(|| canonical_messages.clone());
         if applied_steers > 0 {
             emit_activity(
                 &ctx.event_tx,
@@ -5061,17 +5065,17 @@ async fn run_loop(mut ctx: RunLoopCtx) {
         // 预算（步骤 2/4）已在引用形态上算完；物化副本只存在于本次 Provider
         // 请求，迭代结束即丢弃——只有 outcome.appended_messages（assistant/
         // tool 协议消息，不含引用）会进入 canonical history（步骤 9）。
-        // `dispatch_ref_messages` 保留引用形态供 envelope 哈希与附件 id 审计：
-        // JSONL 投影重建自检必须对引用形态（而非物化 Base64）计算。
+        // JSONL 投影重建自检必须对引用形态（而非物化 Base64）计算：携带附件时
+        // 把引用形态整体 move 出来（不再无条件整份克隆——F-perf-02），未携带
+        // 附件时 request_messages 本身就是引用形态，消费方直接借用。
         // 无解析器（未接线持久附件）但存在引用时 fail closed，绝不降级发送。
-        let dispatch_ref_messages = request_messages.clone();
-        let has_attachment_refs = dispatch_ref_messages.iter().any(|message| {
+        let has_attachment_refs = request_messages.iter().any(|message| {
             message
                 .content
                 .iter()
                 .any(|block| matches!(block, ContentBlock::Attachment { .. }))
         });
-        if has_attachment_refs {
+        let dispatch_ref_messages = if has_attachment_refs {
             let Some(resolver) = ctx.attachment_resolver.clone() else {
                 terminal_err =
                     Some("会话携带附件引用但运行时未接入附件解析器，已取消本轮发送".to_string());
@@ -5080,7 +5084,7 @@ async fn run_loop(mut ctx: RunLoopCtx) {
             match materialize_attachments(&request_messages, &resolver).await {
                 Ok((materialized, wire_bytes)) => {
                     request_budget.materialized_wire_bytes = wire_bytes;
-                    request_messages = materialized;
+                    Some(std::mem::replace(&mut request_messages, materialized))
                 }
                 Err(error) => {
                     tracing::error!(
@@ -5092,7 +5096,9 @@ async fn run_loop(mut ctx: RunLoopCtx) {
                     break;
                 }
             }
-        }
+        } else {
+            None
+        };
 
         // P2-H：请求发送前捕获本轮前缀形状并与上一轮比对，命中缓存重置点时
         // 记录归因日志。rewrite_version 须在压缩块之后重新读取——本轮压缩刚
@@ -5124,7 +5130,9 @@ async fn run_loop(mut ctx: RunLoopCtx) {
             // 是引用形态副本 dispatch_ref_messages（JSONL 存 refs，不存物化
             // Base64——对物化副本哈希会让重建自检必然误报）。
             let normalized = normalized_dispatch_messages(
-                &dispatch_ref_messages,
+                dispatch_ref_messages
+                    .as_deref()
+                    .unwrap_or(&request_messages),
                 memory_message.is_some(),
                 tail_labels.len(),
             );
@@ -5188,6 +5196,8 @@ async fn run_loop(mut ctx: RunLoopCtx) {
                     .map(str::to_string),
                 context_profile: Some(context_profile.as_str().to_string()),
                 attachment_ids: dispatch_ref_messages
+                    .as_deref()
+                    .unwrap_or(&request_messages)
                     .iter()
                     .flat_map(|message| message.content.iter())
                     .filter_map(|block| {
@@ -10301,9 +10311,20 @@ was truncated. No tools are available in this summarization turn."
         };
         let completion = provider.complete(request);
         tokio::pin!(completion);
+        // 子代理报告浓缩与 compaction/自动压缩同类调用对齐 120s deadline
+        //（F-robust-05）：vendor complete() 读 body 无总超时，网关停发 body 即
+        // 永久 Pending，会同步挂住父级 wait_for_subagent 的 join 槽位。
+        let summary_deadline = tokio::time::Instant::now() + SUBAGENT_REPORT_SUMMARY_TIMEOUT;
         let response = loop {
             tokio::select! {
                 result = &mut completion => break result,
+                _ = tokio::time::sleep_until(summary_deadline) => {
+                    tracing::warn!(
+                        task_id = %self.task_id,
+                        "subagent report summary timed out; using explicit fallback"
+                    );
+                    return fallback_subagent_report(&report, "自动总结超时");
+                }
                 _ = tokio::time::sleep(PARENT_ABORT_BRIDGE_POLL) => {
                     if self.is_child_cancelled(abort) {
                         return report;
