@@ -4655,9 +4655,7 @@ async fn run_loop(mut ctx: RunLoopCtx) {
             }
             specs
         };
-        let tools_json_len = serde_json::to_string(&tools)
-            .map(|json| json.len())
-            .unwrap_or(0);
+        let tools_json_len = json_byte_len(&tools);
 
         // ---- P2-G：发送请求前的分层压缩检查（可选优化：任何异常都降级为
         // 不压缩，绝不 panic/Err 终止 run）。压缩改写只作用于本地发送副本
@@ -6252,6 +6250,24 @@ fn tool_policy_for_task_mode(mode: TaskMode) -> ToolPolicy {
 /// model-facing alias and translate it back before dispatching to the gateway.
 const HOSTED_WEB_FILE_SEARCH_ALIAS: &str = "search_files";
 const DIRECT_MCP_TOOL_PREFIX: &str = "mcp__";
+
+/// 序列化字节长度（零分配）：与 `serde_json::to_string(v).len()` 逐字节一致，
+/// 只计数不建串（F-perf-06：每轮为取长度全量序列化 ~10-50KB 工具目录）。
+fn json_byte_len<T: serde::Serialize>(value: &T) -> usize {
+    struct CountingWriter(usize);
+    impl std::io::Write for CountingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = CountingWriter(0);
+    let _ = serde_json::to_writer(&mut counter, value);
+    counter.0
+}
 
 fn client_tools_for_hosted_tools(
     mut tools: Vec<ToolSpec>,
@@ -9677,9 +9693,7 @@ impl SubagentExecutionContext {
             } else {
                 client_tools_for_hosted_tools(tool_host.tool_specs(), &active_hosted_tools)
             };
-            let tools_json_len = serde_json::to_string(&tools)
-                .map(|json| json.len())
-                .unwrap_or(0);
+            let tools_json_len = json_byte_len(&tools);
 
             // ---- P2-G：发送请求前的分层压缩检查（与主 run_loop 同一闸门；任何异常都
             // 降级为不压缩，绝不 panic/Err 终止 child run）。压缩只改写投影 messages，
@@ -11939,5 +11953,29 @@ mod compaction_tests {
             .contains("[R-Code 已截断超长内容]"));
         let total_chars = trimmed.iter().map(message_text_chars).sum::<usize>();
         assert!(total_chars <= 40_000);
+    }
+}
+
+#[cfg(test)]
+mod json_byte_len_tests {
+    use super::json_byte_len;
+
+    /// F-perf-06 钉子：计数 writer 与 to_string().len() 逐字节一致
+    ///（工具目录 token 估算的输入不能漂移）。
+    #[test]
+    fn counting_writer_matches_to_string_length_exactly() {
+        let value = serde_json::json!({
+            "name": "bash",
+            "schema": {"type": "object", "properties": {"command": {"type": "string"}}},
+            "nested": [{"a": 1}, {"b": [true, false, null]}],
+            "unicode": "中文emoji🎉"
+        });
+        let expected = serde_json::to_string(&value).unwrap().len();
+        assert_eq!(json_byte_len(&value), expected);
+        let empty: Vec<u32> = Vec::new();
+        assert_eq!(
+            json_byte_len(&empty),
+            serde_json::to_string(&empty).unwrap().len()
+        );
     }
 }

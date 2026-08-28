@@ -972,7 +972,9 @@ impl ToolGateway {
                 caller,
                 tool_name,
                 risk_level,
-                &input.to_string(),
+                // 复用审计记录的序列化串（F-perf-08）：input 全量 JSON 每次
+                // 工具调用只序列化一次，权限摘要不再付第二遍。
+                &audit.input_json,
                 target,
                 permission_access_mode,
             )
