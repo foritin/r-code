@@ -767,7 +767,8 @@ impl SettingsService {
         }
         let toml_str = toml::to_string(config)
             .map_err(|e| ProductError::ConfigError(format!("serialize config: {e}")))?;
-        std::fs::write(&path, toml_str)?;
+        // 原子替换（F-obs-05）：裸 write 半途崩溃会留下截断 TOML 且无备份。
+        crate::fs_util::atomic_write(&path, toml_str.as_bytes())?;
         Ok(())
     }
 

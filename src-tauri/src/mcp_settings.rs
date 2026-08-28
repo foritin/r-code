@@ -2,8 +2,7 @@
 use std::sync::LazyLock;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -383,7 +382,7 @@ impl McpSettingsService {
         let content = toml::to_string_pretty(file).map_err(|error| {
             ProductError::ConfigError(format!("serialize MCP settings: {error}"))
         })?;
-        atomic_write(&self.path(), content.as_bytes())
+        crate::fs_util::atomic_write(&self.path(), content.as_bytes())
     }
 }
 
@@ -433,20 +432,6 @@ fn validate_servers(servers: &[McpServerConfig]) -> Result<(), ProductError> {
             )));
         }
     }
-    Ok(())
-}
-
-fn atomic_write(path: &Path, content: &[u8]) -> Result<(), ProductError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| ProductError::ConfigError("MCP settings path has no parent".to_string()))?;
-    std::fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(content)?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .map_err(|error| ProductError::from(error.error))?;
     Ok(())
 }
 

@@ -21,6 +21,7 @@ pub mod commands;
 pub mod control_door;
 pub mod event_coalesce;
 pub mod feature_flags;
+pub mod fs_util;
 pub mod ipc;
 pub mod legacy_memory;
 pub mod lifecycle_commands;

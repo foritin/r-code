@@ -93,7 +93,8 @@ impl FeatureFlagService {
         let content = toml::to_string_pretty(&flags).map_err(|error| {
             ProductError::ConfigError(format!("serialize feature flags: {error}"))
         })?;
-        std::fs::write(self.path(), content)?;
+        // 原子替换（F-obs-05/06）：损坏的 features.toml 会让 browser/automation/worktree 全部不可用。
+        crate::fs_util::atomic_write(&self.path(), content.as_bytes())?;
         Ok(())
     }
 }
