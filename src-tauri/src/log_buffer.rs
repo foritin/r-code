@@ -48,7 +48,9 @@ fn buffer() -> &'static Mutex<VecDeque<LogEntry>> {
 
 /// 读取最近 `limit` 条日志；`level` 非空时按级别精确过滤（大小写不敏感）。
 pub fn tail(limit: usize, level: Option<&str>) -> Vec<LogEntry> {
-    let buf = buffer().lock().unwrap();
+    let buf = buffer()
+        .lock()
+        .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
     let level = level.map(|l| l.to_ascii_uppercase());
     buf.iter()
         .rev()
@@ -88,7 +90,9 @@ impl<S: tracing::Subscriber> Layer<S> for BufferLayer {
             // 日志在落盘前即脱敏，支持包导出时还会再做一次防御性脱敏。
             message: redact_text(&visitor.finish()),
         };
-        let mut buf = buffer().lock().unwrap();
+        let mut buf = buffer()
+            .lock()
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
         if buf.len() >= CAPACITY {
             buf.pop_front();
         }
@@ -134,7 +138,9 @@ pub fn hydrate_from_persistence(log_dir: &Path) -> std::io::Result<usize> {
     }
 
     let count = entries.len();
-    let mut buf = buffer().lock().unwrap();
+    let mut buf = buffer()
+        .lock()
+        .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
     buf.clear();
     buf.extend(entries);
     Ok(count)

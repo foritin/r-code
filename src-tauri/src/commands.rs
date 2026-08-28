@@ -82,6 +82,7 @@ use r_code_core::process::{hide_background_console, kill_tree};
 use r_code_core::progress_contract::{PUBLIC_PROGRESS_CONTRACT, SUBAGENT_REPORTING_CONTRACT};
 use r_code_core::secret::redact_text;
 use r_code_core::security::{PathGuard, WorkspaceFileAccess};
+use r_code_core::sync_util::recover_poisoned_guard;
 use r_code_core::{
     project_task_status, MemoryEntry, MemoryReviewSettingsUpdate, MemoryReviewSettingsView,
     MemorySnapshot, MemorySnapshotLoadOutcome, TaskStatusProjectionInput, TaskStatusView,
@@ -334,7 +335,11 @@ struct QueuedDispatchResources {
 }
 
 fn queued_dispatch_resources(state: &CommandState) -> QueuedDispatchResources {
-    let sink = state.agent_event_sink.lock().unwrap().clone();
+    let sink = state
+        .agent_event_sink
+        .lock()
+        .unwrap_or_else(recover_poisoned_guard)
+        .clone();
     QueuedDispatchResources {
         agent_pool: state.agent.clone(),
         external_agents: state.external_agents.clone(),
@@ -1352,7 +1357,10 @@ impl CommandState {
 
     /// 注入 agent 事件出口（bin 侧 setup 时调用一次）。
     pub fn set_agent_event_sink(&self, sink: AgentEventSink) {
-        *self.agent_event_sink.lock().unwrap() = Some(sink);
+        *self
+            .agent_event_sink
+            .lock()
+            .unwrap_or_else(recover_poisoned_guard) = Some(sink);
     }
 
     /// 为非 Tauri 宿主（MCP stdio server 等）启用真实 provider runtime。
@@ -1365,7 +1373,11 @@ impl CommandState {
 
     /// 向 WebView 广播 agent 事件（未注入出口时静默跳过，如测试环境）。
     pub fn emit_agent_event(&self, task_id: &str, event: &AgentEvent) {
-        let sink = self.agent_event_sink.lock().unwrap().clone();
+        let sink = self
+            .agent_event_sink
+            .lock()
+            .unwrap_or_else(recover_poisoned_guard)
+            .clone();
         if let Some(sink) = sink {
             sink(task_id, event);
         }
@@ -8088,7 +8100,13 @@ pub async fn agent_send_with_attachment_refs(
             )?;
             if active.is_none() {
                 drop(bridge);
-                let sink = { state.agent_event_sink.lock().unwrap().clone() };
+                let sink = {
+                    state
+                        .agent_event_sink
+                        .lock()
+                        .unwrap_or_else(recover_poisoned_guard)
+                        .clone()
+                };
                 dispatch_next_queued(
                     QueuedDispatchResources {
                         agent_pool: state.agent.clone(),
@@ -8521,7 +8539,13 @@ pub async fn agent_send_with_mode_and_attachments(
                 drop(bridge);
                 // 必须在 await 前释放 std::sync::MutexGuard，否则 Tauri 命令 future
                 // 无法满足 Send 约束。
-                let sink = { state.agent_event_sink.lock().unwrap().clone() };
+                let sink = {
+                    state
+                        .agent_event_sink
+                        .lock()
+                        .unwrap_or_else(recover_poisoned_guard)
+                        .clone()
+                };
                 dispatch_next_queued(
                     QueuedDispatchResources {
                         agent_pool: state.agent.clone(),
@@ -8663,7 +8687,11 @@ fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
         state.mcp_manager.clone(),
         state.subagent_config_mutations.clone(),
         state.planning.clone(),
-        state.agent_event_sink.lock().unwrap().clone(),
+        state
+            .agent_event_sink
+            .lock()
+            .unwrap_or_else(recover_poisoned_guard)
+            .clone(),
         active,
     );
 }
@@ -8672,6 +8700,98 @@ const AGENT_EVENT_DRAIN_INTERVAL: Duration = Duration::from_millis(40);
 const EXTERNAL_INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[allow(clippy::too_many_arguments)]
+/// 监督式 spawn：后台任务 panic 时把 JoinError 落日志，而不是被 tokio 静默
+/// 吞掉（F-corr-09）。fire-and-forget 的目标任务必须返回 ()。
+fn spawn_supervised<F>(context: &'static str, future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::spawn(future);
+    tokio::spawn(async move {
+        if let Err(join_error) = handle.await {
+            if join_error.is_cancelled() {
+                return;
+            }
+            let detail = match join_error.try_into_panic() {
+                Ok(payload) => payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "non-string panic payload".to_string()),
+                Err(_) => "join error without panic".to_string(),
+            };
+            tracing::error!(task = context, panic = %detail, "background task panicked");
+        }
+    });
+}
+
+/// drain loop 的 panic 终态护栏（F-robust-06）。
+///
+/// 正常路径在收尾完成后 `disarm`；unwind（任务内 panic 被 tokio 吞掉前）经
+/// Drop 强制收敛：run 落 Aborted、任务状态落 Interrupted、bridge.active 释放。
+/// 没有这层护栏时任务在 UI 永久卡 running、active 槽被占用直到重启应用。
+struct DrainPanicGuard {
+    db: Arc<Database>,
+    bridge: Arc<tokio::sync::Mutex<AgentBridge>>,
+    task_id: String,
+    branch_id: String,
+    run_id: String,
+    sink: Option<AgentEventSink>,
+    disarmed: bool,
+}
+
+impl DrainPanicGuard {
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for DrainPanicGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        tracing::error!(
+            task_id = %self.task_id,
+            run_id = %self.run_id,
+            "drain loop panicked before terminal state; forcing Interrupted"
+        );
+        // 与正常中止同一收敛路径（mark_run_aborted 幂等：ended_at 已置则跳过）；
+        // run 行尚未落库时兜底仍把任务状态收敛为 Interrupted。
+        let active = ActiveRun {
+            task_id: self.task_id.clone(),
+            branch_id: self.branch_id.clone(),
+            runtime_session_id: String::new(),
+            run_id: self.run_id.clone(),
+            memory: ActiveMemoryCapture::default(),
+        };
+        let _ = mark_run_aborted(&self.db, &active);
+        let _ = TaskRepository::new(&self.db).update_state(&self.task_id, TaskState::Interrupted);
+        if let Some(sink) = self.sink.as_ref() {
+            sink(
+                &self.task_id,
+                &AgentEvent::State {
+                    state: TaskState::Interrupted,
+                },
+            );
+        }
+        // unwind 中不能 await：try_lock 尽力释放 active 槽；竞争失败时留给
+        // 启动恢复（capture_startup_recovery）收束。
+        if let Ok(mut bridge) = self.bridge.try_lock() {
+            if bridge
+                .active
+                .as_ref()
+                .is_some_and(|current| current.run_id == self.run_id)
+            {
+                bridge.active = None;
+            }
+            if bridge.closing_run_id.as_deref() == Some(self.run_id.as_str()) {
+                bridge.closing_run_id = None;
+            }
+        }
+    }
+}
+
 fn spawn_drain_loop_with_resources(
     agent_pool: Arc<AgentRuntimePool>,
     external_agents: Arc<ExternalAgentRegistry>,
@@ -8688,10 +8808,19 @@ fn spawn_drain_loop_with_resources(
     sink: Option<AgentEventSink>,
     active: ActiveRun,
 ) {
-    tokio::spawn(async move {
+    spawn_supervised("agent-drain-loop", async move {
         let task_id = active.task_id.clone();
         let branch_id = active.branch_id.clone();
         let agent = agent_pool.bridge_for(&task_id).await;
+        let mut panic_guard = DrainPanicGuard {
+            db: Arc::clone(&db),
+            bridge: Arc::clone(&agent),
+            task_id: task_id.clone(),
+            branch_id: branch_id.clone(),
+            run_id: active.run_id.clone(),
+            sink: sink.clone(),
+            disarmed: false,
+        };
         let storage_id = {
             let bridge = agent.lock().await;
             bridge
@@ -9061,6 +9190,7 @@ fn spawn_drain_loop_with_resources(
             task_id,
         )
         .await;
+        panic_guard.disarm();
     });
 }
 
@@ -9677,7 +9807,7 @@ async fn record_accepted_queue_steer(
     let db = state.db.clone();
     let queue_id = queued.id.clone();
     let task_id = task_id.to_string();
-    tokio::spawn(async move {
+    spawn_supervised("queued-steer-recorder", async move {
         for attempt in 1_u64..=8 {
             tokio::time::sleep(Duration::from_millis(250 * attempt)).await;
             if QueuedMessageRepository::new(&db)
@@ -20141,7 +20271,13 @@ async fn agent_send_codex_with_mode(
         return Ok(());
     }
 
-    let sink = { state.agent_event_sink.lock().unwrap().clone() };
+    let sink = {
+        state
+            .agent_event_sink
+            .lock()
+            .unwrap_or_else(recover_poisoned_guard)
+            .clone()
+    };
     start_codex_main_with_resources(
         state.agent.clone(),
         state.external_agents.clone(),
@@ -24825,7 +24961,7 @@ async fn run_codex_app_server_process_with_images_and_registry(
         while let Ok(answer) = receiver.try_recv() {
             let _ = answer.response.send(ExternalUserInputOutcome::Rejected);
         }
-        tokio::spawn(async move {
+        spawn_supervised("codex-app-server-pump", async move {
             while let Some(answer) = receiver.recv().await {
                 let _ = answer.response.send(ExternalUserInputOutcome::Rejected);
             }
@@ -25061,7 +25197,7 @@ fn spawn_codex_main(
     memory_context: Option<String>,
     memory: ActiveMemoryCapture,
 ) {
-    tokio::spawn(async move {
+    spawn_supervised("codex-main-spawn", async move {
         let session_store = SessionStore::new(sessions_dir.clone());
         let image_paths = prepared_images
             .as_ref()
@@ -25304,7 +25440,7 @@ fn spawn_codex_exec_subagent(
     cancellation: CancellationToken,
     sink: Option<AgentEventSink>,
 ) {
-    tokio::spawn(async move {
+    spawn_supervised("codex-exec-subagent", async move {
         let session_store = SessionStore::new(sessions_dir.clone());
         persist_and_emit_external_event(
             &db,
@@ -25419,7 +25555,7 @@ fn spawn_codex_mcp_subagent(
     cancellation: CancellationToken,
     sink: Option<AgentEventSink>,
 ) {
-    tokio::spawn(async move {
+    spawn_supervised("codex-mcp-subagent", async move {
         let session_store = SessionStore::new(sessions_dir.clone());
         persist_and_emit_external_event(
             &db,
@@ -25647,7 +25783,11 @@ pub async fn agent_delegate_codex(
     }
     drop(bridge);
 
-    let sink = state.agent_event_sink.lock().unwrap().clone();
+    let sink = state
+        .agent_event_sink
+        .lock()
+        .unwrap_or_else(recover_poisoned_guard)
+        .clone();
     persist_and_emit_external_event(
         &state.db,
         &state.session_store,
@@ -25829,7 +25969,11 @@ pub async fn agent_delegate_codex_mcp(
     }
     drop(bridge);
 
-    let sink = state.agent_event_sink.lock().unwrap().clone();
+    let sink = state
+        .agent_event_sink
+        .lock()
+        .unwrap_or_else(recover_poisoned_guard)
+        .clone();
     persist_and_emit_external_event(
         &state.db,
         &state.session_store,
@@ -26092,6 +26236,105 @@ pub fn create_external_session_injection(text: &str) -> String {
     // Bracketed paste 序列：ESC[200~ + text + ESC[201~
     // 刻意不追加 \r（回车），由用户显式按 Enter 触发执行
     format!("\x1b[200~{text}\x1b[201~")
+}
+
+#[cfg(test)]
+mod drain_panic_guard_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn undisarmed_guard_drop_forces_aborted_and_interrupted() {
+        let db = Arc::new(Database::open_in_memory().expect("in-memory db"));
+        let task = Task::new(
+            Some("/tmp/guard-test".into()),
+            "护栏",
+            "goal",
+            TaskMode::Ask,
+        );
+        TaskRepository::new(&db).create(&task).expect("create task");
+        let run = AgentRun::new(&task.id, "native");
+        AgentRunRepository::new(&db)
+            .create(&run)
+            .expect("create run");
+
+        let bridge = Arc::new(tokio::sync::Mutex::new(AgentBridge::with_real_mode(
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )));
+        {
+            let mut bridge_guard = bridge.lock().await;
+            bridge_guard.active = Some(ActiveRun {
+                task_id: task.id.clone(),
+                branch_id: run.branch_id.clone(),
+                runtime_session_id: String::new(),
+                run_id: run.id.clone(),
+                memory: ActiveMemoryCapture::default(),
+            });
+        }
+
+        let guard = DrainPanicGuard {
+            db: Arc::clone(&db),
+            bridge: Arc::clone(&bridge),
+            task_id: task.id.clone(),
+            branch_id: run.branch_id.clone(),
+            run_id: run.id.clone(),
+            sink: None,
+            disarmed: false,
+        };
+        drop(guard); // 未 disarm 的 Drop 即 unwind 收敛路径
+
+        let fetched = AgentRunRepository::new(&db)
+            .get(&run.id)
+            .expect("query run")
+            .expect("run exists");
+        assert_eq!(fetched.review_state, ReviewState::Aborted);
+        let task_after = TaskRepository::new(&db)
+            .get(&task.id)
+            .expect("query task")
+            .expect("task exists");
+        assert_eq!(task_after.state, TaskState::Interrupted);
+        assert!(bridge.lock().await.active.is_none(), "active slot released");
+    }
+
+    #[tokio::test]
+    async fn disarmed_guard_drop_changes_nothing() {
+        let db = Arc::new(Database::open_in_memory().expect("in-memory db"));
+        let task = Task::new(
+            Some("/tmp/guard-test-2".into()),
+            "护栏2",
+            "goal",
+            TaskMode::Ask,
+        );
+        TaskRepository::new(&db).create(&task).expect("create task");
+        let run = AgentRun::new(&task.id, "native");
+        AgentRunRepository::new(&db)
+            .create(&run)
+            .expect("create run");
+
+        let mut guard = DrainPanicGuard {
+            db: Arc::clone(&db),
+            bridge: Arc::new(tokio::sync::Mutex::new(AgentBridge::with_real_mode(
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ))),
+            task_id: task.id.clone(),
+            branch_id: run.branch_id.clone(),
+            run_id: run.id.clone(),
+            sink: None,
+            disarmed: true,
+        };
+        guard.disarm();
+        drop(guard);
+
+        let fetched = AgentRunRepository::new(&db)
+            .get(&run.id)
+            .expect("query run")
+            .expect("run exists");
+        assert_eq!(fetched.review_state, ReviewState::Pending);
+        let task_after = TaskRepository::new(&db)
+            .get(&task.id)
+            .expect("query task")
+            .expect("task exists");
+        assert_eq!(task_after.state, TaskState::Idle);
+    }
 }
 
 #[cfg(test)]

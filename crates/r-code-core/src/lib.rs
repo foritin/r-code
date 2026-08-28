@@ -23,6 +23,7 @@ pub mod progress_contract;
 pub mod secret;
 pub mod security;
 pub mod state;
+pub mod sync_util;
 pub mod task_status;
 pub mod user_error;
 #[cfg(windows)]

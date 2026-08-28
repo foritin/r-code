@@ -167,7 +167,10 @@ fn claim_delivery_source(app: &AppHandle, source_key: &str, inserted: bool) -> b
     let Some(state) = app.try_state::<NativeNotificationState>() else {
         return inserted;
     };
-    let mut sources = state.delivered_sources.lock().unwrap();
+    let mut sources = state
+        .delivered_sources
+        .lock()
+        .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
     if sources.iter().any(|source| source == source_key) {
         return false;
     }
@@ -195,7 +198,11 @@ pub fn set_locale(app: &AppHandle, locale: &str) -> Result<(), UserFacingError> 
         UserFacingError::new("notifications.service_unavailable")
             .with_debug_detail("NativeNotificationState is not managed by the application")
     })?;
-    *state.locale.lock().unwrap() = NativeLocale::parse(locale);
+    *state
+        .locale
+        .lock()
+        .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard) =
+        NativeLocale::parse(locale);
     Ok(())
 }
 
@@ -237,7 +244,12 @@ fn map_permission_state(state: PermissionState) -> NativeNotificationPermissionS
 
 fn current_locale(app: &AppHandle) -> NativeLocale {
     app.try_state::<NativeNotificationState>()
-        .map(|state| *state.locale.lock().unwrap())
+        .map(|state| {
+            *state
+                .locale
+                .lock()
+                .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
+        })
         .unwrap_or(NativeLocale::ZhCn)
 }
 

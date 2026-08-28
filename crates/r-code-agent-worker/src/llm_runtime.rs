@@ -125,7 +125,10 @@ struct SubagentNameAllocator {
 
 impl SubagentNameAllocator {
     fn allocate(&self, language: SubagentNameLanguage, self_derived: bool) -> String {
-        let mut used = self.used.lock().expect("subagent name allocator poisoned");
+        let mut used = self
+            .used
+            .lock()
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
         if self_derived {
             let base = match language {
                 SubagentNameLanguage::Chinese => "本家",
@@ -2135,7 +2138,7 @@ impl LlmAgentRuntime {
         *self
             .next_subagent_candidate_pool
             .write()
-            .expect("subagent candidate pool lock poisoned") = replacement;
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard) = replacement;
     }
 
     /// Freeze a degraded persisted pool for future roots: some or all saved slots were dropped
@@ -2163,7 +2166,7 @@ impl LlmAgentRuntime {
         *self
             .next_subagent_candidate_pool
             .write()
-            .expect("subagent candidate pool lock poisoned") =
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard) =
             Arc::new(FrozenSubagentCandidatePool {
                 revision: revision.into(),
                 slots,
@@ -2382,7 +2385,7 @@ impl AgentRuntime for LlmAgentRuntime {
         let candidate_pool = self
             .next_subagent_candidate_pool
             .read()
-            .expect("subagent candidate pool lock poisoned")
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
             .clone();
         let supervisor = Arc::new(
             SubagentSupervisor::new(
@@ -7346,7 +7349,7 @@ impl SubagentActivityPermitLease {
         let previous = self
             .permit
             .lock()
-            .expect("subagent activity permit lock poisoned")
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
             .replace(permit);
         debug_assert!(previous.is_none(), "activity permit installed twice");
     }
@@ -7354,7 +7357,7 @@ impl SubagentActivityPermitLease {
     fn release(&self) -> bool {
         self.permit
             .lock()
-            .expect("subagent activity permit lock poisoned")
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
             .take()
             .is_some()
     }
@@ -7368,7 +7371,7 @@ impl SubagentActivityPermitLease {
         if self
             .permit
             .lock()
-            .expect("subagent activity permit lock poisoned")
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
             .is_some()
         {
             return Ok(());
@@ -7400,7 +7403,7 @@ impl SubagentActivityPermitLease {
         let mut slot = self
             .permit
             .lock()
-            .expect("subagent activity permit lock poisoned");
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
         if slot.is_none() {
             *slot = Some(permit);
         }
@@ -8031,7 +8034,7 @@ delegate_task"
         let spawns_used = self
             .plan_gate
             .lock()
-            .expect("delegation plan gate lock poisoned")
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
             .spawns_used;
         let allowed_total = spawns_used.max(existing_children) + planned;
         if allowed_total > MAX_MODEL_SUBAGENTS_PER_RUN {
@@ -8262,7 +8265,7 @@ delegate_task 的 agent 枚举",
             let mut gate = self
                 .plan_gate
                 .lock()
-                .expect("delegation plan gate lock poisoned");
+                .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard);
             gate.revision += 1;
             gate.confirmed = Some(ConfirmedDelegationPlan {
                 allowed_total,
@@ -8888,7 +8891,7 @@ delegate_task 的 agent 枚举",
                 if let Err(message) = self
                     .plan_gate
                     .lock()
-                    .expect("delegation plan gate lock poisoned")
+                    .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
                     .reserve_model_spawn()
                 {
                     self.descendants_created.fetch_sub(1, Ordering::SeqCst);
@@ -8979,7 +8982,7 @@ delegate_task 的 agent 枚举",
         // JoinHandle 会被 detach。同步 slot 未被其他线程长时间持有，可立即安装。
         join_slot
             .lock()
-            .expect("subagent join slot poisoned")
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
             .replace(AbortOnDropJoinHandle::new(abort.clone(), join));
 
         Ok(ToolCallOutcome {
@@ -10482,7 +10485,7 @@ impl RCodeSubagentRunner {
         let managed_join = handle
             .join
             .lock()
-            .expect("subagent join slot poisoned")
+            .unwrap_or_else(r_code_core::sync_util::recover_poisoned_guard)
             .take();
         if let Some(join) = managed_join {
             join.join(std::time::Duration::from_secs(10)).await;
