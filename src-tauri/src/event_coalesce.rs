@@ -39,9 +39,10 @@ pub enum CoalesceStep<'e> {
         event: &'e AgentEvent,
     },
     /// 先 emit 冲刷出来的合并帧，再 emit 当前事件（借用）。
+    /// 冲刷帧装箱：AgentEvent 较大，避免枚举整体随最大变体膨胀。
     FlushThenEmit {
         flushed_task_id: String,
-        flushed_event: AgentEvent,
+        flushed_event: Box<AgentEvent>,
         task_id: &'e str,
         event: &'e AgentEvent,
     },
@@ -61,10 +62,10 @@ impl DeltaCoalescer {
                     self.pending = Some((task_id.to_string(), text.clone()));
                     CoalesceStep::FlushThenEmit {
                         flushed_task_id: pending_task,
-                        flushed_event: AgentEvent::Message {
+                        flushed_event: Box::new(AgentEvent::Message {
                             text: merged,
                             delta: true,
-                        },
+                        }),
                         task_id,
                         event,
                     }
@@ -79,10 +80,10 @@ impl DeltaCoalescer {
         match self.pending.take() {
             Some((pending_task, merged)) => CoalesceStep::FlushThenEmit {
                 flushed_task_id: pending_task,
-                flushed_event: AgentEvent::Message {
+                flushed_event: Box::new(AgentEvent::Message {
                     text: merged,
                     delta: true,
-                },
+                }),
                 task_id,
                 event,
             },
@@ -162,7 +163,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(
-                    flushed_event,
+                    *flushed_event,
                     AgentEvent::Message {
                         text: "part-".to_string(),
                         delta: true,
@@ -190,7 +191,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(flushed_task_id, "t1");
-                assert_eq!(flushed_event, delta("a"));
+                assert_eq!(*flushed_event, delta("a"));
                 assert_eq!(task_id, "t2");
             }
             other => panic!("expected flush-then-emit, got {other:?}"),

@@ -4096,7 +4096,7 @@ impl ProviderMetricsCounters {
             aborted: self.aborted.load(Ordering::Relaxed),
             total_duration_ms: total,
             slowest_ms: self.slowest_ms.load(Ordering::Relaxed),
-            avg_ms: if requests > 0 { total / requests } else { 0 },
+            avg_ms: total.checked_div(requests).unwrap_or(0),
         }
     }
 }

@@ -894,6 +894,7 @@ fn apply_env(config: &mut Config) {
 ///
 /// - 两边均为 table：深度合并（`over` 的叶子覆盖 `base` 同名键）。
 /// - 否则：`over` 整体覆盖 `base`。
+///
 /// 工作区 `.r-code/config.toml` 的 provider 网络面字段剥离（F-sec-03）。
 ///
 /// base_url/api_key/protocol/provider_kind 决定请求去向与凭据注入目标：

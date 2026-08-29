@@ -52,27 +52,23 @@ pub fn next_run_minutes(
             }
         }
         Recurrence::Weekdays => {
-            let mut m = from_minute + 1;
-            for _ in 0..(7 * DAY) {
+            for m in (from_minute + 1)..=(from_minute + 7 * DAY) {
                 let weekday = ((m / DAY) as u32 + at_weekday) % 7; // 相位由调用方锚定
                 let is_weekend = matches!(weekday, 0 | 6);
                 let at_time = m % DAY == target_of_day;
                 if !is_weekend && at_time {
                     return ScheduleOutcome::RunAt(m);
                 }
-                m += 1;
             }
             ScheduleOutcome::Done
         }
         Recurrence::Weekly => {
-            let mut m = from_minute + 1;
-            for _ in 0..(7 * DAY) {
+            for m in (from_minute + 1)..=(from_minute + 7 * DAY) {
                 let weekday = ((m / DAY) as u32 + at_weekday) % 7;
                 let at_time = m % DAY == target_of_day;
                 if weekday == at_weekday && at_time {
                     return ScheduleOutcome::RunAt(m);
                 }
-                m += 1;
             }
             ScheduleOutcome::Done
         }

@@ -775,15 +775,14 @@ impl CodexToolOutputBuffer {
             let overflow = self.tail_chars - Self::TAIL_CHARS;
             self.dropped_chars += overflow;
             self.tail_chars = Self::TAIL_CHARS;
-            let mut drain_to = self.tail.len();
-            let mut seen = 0usize;
-            for (index, _) in self.tail.char_indices() {
-                if seen == overflow {
-                    drain_to = index;
-                    break;
-                }
-                seen += 1;
-            }
+            // 溢出字节数 = 第 overflow 个字符的字节偏移（clippy 建议的
+            // enumerate 形式，语义一致）。
+            let drain_to = self
+                .tail
+                .char_indices()
+                .nth(overflow)
+                .map(|(index, _)| index)
+                .unwrap_or(self.tail.len());
             self.tail.drain(..drain_to);
         }
     }

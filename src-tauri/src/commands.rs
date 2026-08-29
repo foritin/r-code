@@ -8776,6 +8776,7 @@ impl Drop for DrainPanicGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_drain_loop_with_resources(
     agent_pool: Arc<AgentRuntimePool>,
     external_agents: Arc<ExternalAgentRegistry>,
@@ -23211,8 +23212,8 @@ async fn handle_codex_app_server_request(
                 .unwrap_or_else(|| request_id.to_string());
             format!("codex-approval-{}", bounded_text(&source, 80))
         });
-    let (tool_name, summary) = codex_app_server_approval_summary(method, &params);
-    let standing_target = codex_approval_rule_target(method, &item_id, &params);
+    let (tool_name, summary) = codex_app_server_approval_summary(method, params);
+    let standing_target = codex_approval_rule_target(method, &item_id, params);
     let handler_cancelled = Arc::new(AtomicBool::new(false));
     let lifetime_cancelled = handler_cancelled.clone();
     let run_cancellation = cancellation.clone();
@@ -23242,7 +23243,7 @@ async fn handle_codex_app_server_request(
             if writer
                 .try_send(serde_json::json!({
                     "id": request_id,
-                    "result": codex_approval_response(method, &params, "decline", approval.workspace.as_deref()),
+                    "result": codex_approval_response(method, params, "decline", approval.workspace.as_deref()),
                 }))
                 .is_err()
             {
@@ -23291,7 +23292,7 @@ async fn handle_codex_app_server_request(
     if writer
         .try_send(serde_json::json!({
             "id": request_id,
-            "result": codex_approval_response(method, &params, decision.0, approval.workspace.as_deref()),
+            "result": codex_approval_response(method, params, decision.0, approval.workspace.as_deref()),
         }))
         .is_err()
     {
@@ -23604,7 +23605,7 @@ async fn observe_codex_app_server_event(
 
     match method {
         "item/started" => {
-            let item = params.get("item").unwrap_or(&params);
+            let item = params.get("item").unwrap_or(params);
             if item
                 .get("type")
                 .and_then(serde_json::Value::as_str)
@@ -23623,7 +23624,7 @@ async fn observe_codex_app_server_event(
             // 工具类 item 由上方归一化事件驱动；agentMessage 在 M1-01 接线。
         }
         "item/completed" => {
-            let item = params.get("item").unwrap_or(&params);
+            let item = params.get("item").unwrap_or(params);
             let item_type = item.get("type").and_then(serde_json::Value::as_str);
             if item_type == Some("reasoning") {
                 let event = safe_codex_reasoning_summary(item)
@@ -23637,7 +23638,7 @@ async fn observe_codex_app_server_event(
             // 工具类 item 由上方归一化事件驱动。
         }
         "turn/completed" => {
-            let turn = params.get("turn").unwrap_or(&params);
+            let turn = params.get("turn").unwrap_or(params);
             if turn
                 .get("status")
                 .and_then(serde_json::Value::as_str)

@@ -128,16 +128,15 @@ impl ReadinessStore {
     }
 
     /// probe 结果回写的 CAS：token 必须仍是该 key 的在途 token，否则零写入。
-    pub fn finish_probe(&mut self, key: &str, token: ProbeToken, now: Instant) -> Result<(), ()> {
-        let Some(state) = self.keys.get_mut(key) else {
-            return Err(());
-        };
+    /// `None` = key 已消失或结果被更新一代替换（零写入）；`Some(true)` = 回执已记录。
+    pub fn finish_probe(&mut self, key: &str, token: ProbeToken, now: Instant) -> Option<bool> {
+        let state = self.keys.get_mut(key)?;
         if state.in_flight != Some(token.seq) {
-            return Err(()); // superseded：迟到结果零写入
+            return None; // superseded：迟到结果零写入
         }
         state.in_flight = None;
         state.receipt_at = Some(now);
-        Ok(())
+        Some(true)
     }
 }
 
@@ -151,9 +150,9 @@ mod tests {
         let now = Instant::now();
         let (d, token) = store.try_begin_probe("openai", "fp1", now);
         assert_eq!(d, ReadinessDecision::Begin);
-        store
+        assert!(store
             .finish_probe("openai", token.expect("token"), now)
-            .unwrap();
+            .unwrap());
         // TTL 内再次请求：FreshSkip，零 probe。
         let (d2, t2) = store.try_begin_probe("openai", "fp1", now + Duration::from_secs(60));
         assert_eq!(d2, ReadinessDecision::FreshSkip);
@@ -181,7 +180,7 @@ mod tests {
         store.bump_generation(); // startup opt-out
         assert_eq!(
             store.finish_probe("openai", token, now),
-            Err(()),
+            None,
             "迟到结果零写入"
         );
     }
