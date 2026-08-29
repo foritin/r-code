@@ -2347,7 +2347,18 @@ pub async fn cmd_local_image_preview(
 /// Reveal an already resolved local path using the platform file manager.
 #[tauri::command]
 pub async fn cmd_reveal_local_path(path: String) -> Result<(), CommandError> {
-    r_code_host::system_integration::reveal_in_file_manager(std::path::Path::new(&path))
+    // F-sec-02：只接受已解析的绝对路径。canonicalize 归一掉 `..` 与相对段，
+    // 并拒绝解析失败（不存在）或非绝对路径的裸字符串直通——文件管理器只
+    // 应打开本会话 resolve_local_file_target 产出的真实引用，如外部 file://
+    // 引用（产品合法功能），而非 WebView 任意拼的路径。归一后存在性仍由
+    // reveal_in_file_manager 校验（best-effort）。
+    let normalized = std::path::PathBuf::from(path.clone()).canonicalize().map_err(|error| {
+        CommandError::from("cannot reveal path: ".to_string() + &error.to_string())
+    })?;
+    if !normalized.is_absolute() {
+        return Err(CommandError::from("cannot reveal a relative path"));
+    }
+    r_code_host::system_integration::reveal_in_file_manager(&normalized)
         .map_err(CommandError::from)
 }
 
