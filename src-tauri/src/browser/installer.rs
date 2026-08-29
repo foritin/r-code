@@ -135,7 +135,11 @@ impl SessionRegistry {
         let removed = self
             .sessions
             .remove(task_id)
-            .map(|v| v.iter().map(|r| r.profile_path.clone()).collect())
+            .map(|v| {
+                v.iter()
+                    .map(|r| r.profile_path.clone())
+                    .collect::<Vec<String>>()
+            })
             .unwrap_or_default();
         for p in &removed {
             self.profiles.remove(p);

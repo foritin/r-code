@@ -23787,7 +23787,7 @@ fn codex_app_server_starts_tool(value: &serde_json::Value) -> bool {
 
 /// 用 App Server 执行一轮 Codex 子代理。只在 `请求批准` 预设下使用；其他预设
 /// 继续走轻量的 `codex exec --json` 路径。
-#[cfg(test)]
+#[cfg(all(test, windows))]
 #[allow(clippy::too_many_arguments)]
 async fn run_codex_app_server_process(
     workspace: &Path,

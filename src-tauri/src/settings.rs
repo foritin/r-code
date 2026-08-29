@@ -12,7 +12,9 @@
 //! [doc-14 阶段1] [agent-contracts/08]
 
 use std::path::Path;
-#[cfg(not(test))]
+// OS_PROVIDER_CREDENTIALS 只在非测试、非 macOS 构建；LazyLock import 与其同门控，
+// 避免 macOS 构建（测试态 OS 静态关闭）出现 unused import（`-D warnings`）。
+#[cfg(all(not(test), not(target_os = "macos")))]
 use std::sync::LazyLock;
 use std::{
     collections::HashMap,
