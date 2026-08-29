@@ -62,3 +62,35 @@ export function toUserFacingIpcError(cause: unknown): UserFacingIpcError | null 
   const payload = userFacingErrorPayload(cause);
   return payload ? new UserFacingIpcError(payload) : null;
 }
+
+/** 结构化命令错误载荷（host `tauri_commands::CommandError` 的前端镜像）。 */
+export interface CommandErrorPayload {
+  code: string;
+  message: string;
+  limit?: number;
+}
+
+export class IpcCommandError extends Error {
+  readonly code: string;
+  readonly limit?: number;
+
+  constructor(payload: CommandErrorPayload) {
+    super(payload.message);
+    this.name = "IpcCommandError";
+    this.code = payload.code;
+    this.limit = payload.limit;
+  }
+}
+
+/** 识别 host 结构化错误对象 `{ code, message, limit? }`；纯字符串返回 null
+ *  （历史 string 错误路径不受影响）。 */
+export function commandErrorPayload(cause: unknown): CommandErrorPayload | null {
+  if (typeof cause !== "object" || cause == null) return null;
+  const candidate = cause as Record<string, unknown>;
+  if (typeof candidate.code !== "string" || typeof candidate.message !== "string") return null;
+  return {
+    code: candidate.code,
+    message: candidate.message,
+    ...(typeof candidate.limit === "number" ? { limit: candidate.limit } : {}),
+  };
+}

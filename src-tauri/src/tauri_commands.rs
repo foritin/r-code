@@ -13,7 +13,7 @@ use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
     SessionBranch, Task, TaskMode, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
-use r_code_core::error::{ProductError, PROJECT_CONVERSATION_LIMIT_REACHED_CODE};
+use r_code_core::error::ProductError;
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };
@@ -30,36 +30,132 @@ use r_code_host::replay::ReplayEntry;
 use r_code_store::{EnhancedReviewTarget, EnhancedReviewView, PlanRejectResult};
 use serde::Serialize;
 
+/// IPC 命令边界的结构化错误（FX-11，F-corr-07 收敛到此单点）。
+///
+/// 序列化形状按错误族二选一，前端两条既有通道各取一侧：
+/// - 普通错误：`{ code, message, limit? }` —— `commandErrorPayload` 包装为
+///   `IpcCommandError`，`message` 与历史 err_str（Display）逐字一致；
+/// - UserFacing（i18n）：`{ code, args?, debug_detail? }`（刻意无
+///   `message`）—— `userFacingErrorPayload` 按 `errors.<code>` 查表。
 #[derive(Debug, Serialize)]
 pub struct CommandError {
-    code: &'static str,
+    code: String,
+    /// 用户可见文案；UserFacing i18n 通道留空并跳过序列化。
+    #[serde(skip_serializing_if = "String::is_empty")]
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    args: Option<serde_json::Value>,
+    #[serde(rename = "debug_detail", skip_serializing_if = "Option::is_none")]
+    debug_detail: Option<String>,
+}
+
+impl CommandError {
+    fn plain(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            limit: None,
+            args: None,
+            debug_detail: None,
+        }
+    }
+}
+
+/// ProductError 变体 → 稳定 IPC 错误码（snake_case）。穷尽匹配：新增变体
+/// 时编译器强制补码，杜绝静默落回 generic。
+fn stable_code(error: &ProductError) -> &'static str {
+    match error {
+        ProductError::UserFacing(_) => "user_facing",
+        ProductError::ProjectConversationLimitReached { .. } => {
+            "project_conversation_limit_reached"
+        }
+        ProductError::WorktreeError(_) => "worktree_error",
+        ProductError::PathEscape(_) => "path_escape",
+        ProductError::PathNotFound(_) => "path_not_found",
+        ProductError::BlobError(_) => "blob_error",
+        ProductError::DatabaseError(_) => "database_error",
+        ProductError::MigrationError(_) => "migration_error",
+        ProductError::BaselineError(_) => "baseline_error",
+        ProductError::RollbackError(_) => "rollback_error",
+        ProductError::VerificationError(_) => "verification_error",
+        ProductError::ExternalCliError(_) => "external_cli_error",
+        ProductError::TerminalError(_) => "terminal_error",
+        ProductError::ConfigError(_) => "config_error",
+        ProductError::StateMachineError(_) => "state_machine_error",
+        ProductError::PermissionError(_) => "permission_error",
+        ProductError::RecoverableToolError { .. } => "recoverable_tool_error",
+        ProductError::EmptyAssistantResponse => "empty_assistant_response",
+        ProductError::OutputBudgetExhausted { .. } => "output_budget_exhausted",
+        ProductError::ContextConstrainedOutputExhausted { .. } => {
+            "context_constrained_output_exhausted"
+        }
+        ProductError::OutputHeadroomBelowMinimum { .. } => "output_headroom_below_minimum",
+        ProductError::ContextPreflightFailed { .. } => "context_preflight_failed",
+        ProductError::AttachmentNotFound { .. } => "attachment_not_found",
+        ProductError::AttachmentOwnershipMismatch { .. } => "attachment_ownership_mismatch",
+        ProductError::AttachmentMetadataMismatch { .. } => "attachment_metadata_mismatch",
+        ProductError::AttachmentRouteDrift { .. } => "attachment_route_drift",
+        ProductError::VisionBudgetProfileMissing { .. } => "vision_budget_profile_missing",
+        ProductError::VisionWireUnsupported { .. } => "vision_wire_unsupported",
+        ProductError::VisionCapabilityDrift { .. } => "vision_capability_drift",
+        ProductError::PlanAnchorRouteDrift { .. } => "plan_anchor_route_drift",
+        ProductError::PlanFullCatalogNotRestored { .. } => "plan_full_catalog_not_restored",
+        ProductError::GitError(_) => "git_error",
+        ProductError::IpcError(_) => "ipc_error",
+        ProductError::SecretError(_) => "secret_error",
+        ProductError::NotImplemented(_) => "not_implemented",
+        ProductError::Other(_) => "internal",
+    }
 }
 
 impl From<ProductError> for CommandError {
     fn from(error: ProductError) -> Self {
-        let (code, limit) = match &error {
-            ProductError::ProjectConversationLimitReached { limit } => {
-                (PROJECT_CONVERSATION_LIMIT_REACHED_CODE, Some(*limit))
-            }
-            _ => ("COMMAND_FAILED", None),
+        if let ProductError::UserFacing(user_facing) = &error {
+            return Self {
+                code: user_facing.code.clone(),
+                message: String::new(),
+                limit: None,
+                args: Some(serde_json::to_value(&user_facing.args).unwrap_or_default()),
+                debug_detail: user_facing.debug_detail.clone(),
+            };
+        }
+        let limit = match &error {
+            ProductError::ProjectConversationLimitReached { limit } => Some(*limit),
+            _ => None,
         };
         Self {
-            code,
+            code: stable_code(&error).to_string(),
             message: error.to_string(),
             limit,
+            args: None,
+            debug_detail: None,
         }
+    }
+}
+
+/// 既有 String 错误的兼容通道：文案原样保留，码落泛型 COMMAND_FAILED。
+impl From<String> for CommandError {
+    fn from(message: String) -> Self {
+        Self::plain("COMMAND_FAILED", message)
+    }
+}
+
+impl From<&str> for CommandError {
+    fn from(message: &str) -> Self {
+        Self::plain("COMMAND_FAILED", message)
     }
 }
 
 impl From<r_code_host::rtk::RtkError> for CommandError {
     fn from(error: r_code_host::rtk::RtkError) -> Self {
         Self {
-            code: error.code().unwrap_or("COMMAND_FAILED"),
+            code: error.code().unwrap_or("COMMAND_FAILED").to_string(),
             message: error.to_string(),
             limit: None,
+            args: None,
+            debug_detail: None,
         }
     }
 }
@@ -75,10 +171,10 @@ pub fn cmd_app_quit(app: AppHandle) {
 /// Window creation can fail transiently (for example while WebView2 is recovering); surfacing the
 /// error lets the toggle roll back instead of persisting an impossible "enabled but absent" state.
 #[tauri::command]
-pub fn cmd_companion_ensure(app: AppHandle) -> Result<bool, String> {
+pub fn cmd_companion_ensure(app: AppHandle) -> Result<bool, CommandError> {
     if let Err(error) = crate::setup_companion_window(&app) {
         tracing::warn!(%error, "failed to ensure the native companion window");
-        return Err("native companion window is unavailable".to_string());
+        return Err("native companion window is unavailable".into());
     }
     if app
         .get_webview_window(crate::COMPANION_WINDOW_LABEL)
@@ -88,7 +184,7 @@ pub fn cmd_companion_ensure(app: AppHandle) -> Result<bool, String> {
             window_label = crate::COMPANION_WINDOW_LABEL,
             "native companion window is missing after a successful setup attempt"
         );
-        return Err("native companion window is unavailable".to_string());
+        return Err("native companion window is unavailable".into());
     }
     Ok(true)
 }
@@ -188,8 +284,10 @@ pub async fn cmd_project_conversation_create(
 pub async fn cmd_task_prepare(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::task_prepare(&state, &task_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::task_prepare(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 列出任务命令。
@@ -198,8 +296,10 @@ pub async fn cmd_task_list(
     state: State<'_, CommandState>,
     workspace_path: Option<String>,
     include_archived: bool,
-) -> Result<Vec<Task>, String> {
-    r_code_host::commands::task_list(&state, workspace_path.as_deref(), include_archived).await
+) -> Result<Vec<Task>, CommandError> {
+    r_code_host::commands::task_list(&state, workspace_path.as_deref(), include_archived)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 归档已停止的会话。
@@ -207,8 +307,10 @@ pub async fn cmd_task_list(
 pub async fn cmd_task_archive(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Task, String> {
-    r_code_host::commands::task_archive(&state, &task_id).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_archive(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 将归档会话还原到项目任务列表。
@@ -216,8 +318,10 @@ pub async fn cmd_task_archive(
 pub async fn cmd_task_restore(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Task, String> {
-    r_code_host::commands::task_restore(&state, &task_id).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_restore(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 切换空闲会话的主 Agent；下一次运行使用 R-Code provider 或 Codex CLI。
@@ -226,8 +330,10 @@ pub async fn cmd_task_set_agent_engine(
     state: State<'_, CommandState>,
     task_id: String,
     agent_engine: String,
-) -> Result<Task, String> {
-    r_code_host::commands::task_set_agent_engine(&state, &task_id, &agent_engine).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_set_agent_engine(&state, &task_id, &agent_engine)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 永久删除已停止的会话；项目目录和工作区文件不在删除范围内。
@@ -235,8 +341,10 @@ pub async fn cmd_task_set_agent_engine(
 pub async fn cmd_task_delete(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::task_delete(&state, &task_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::task_delete(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 为一个既有会话附加已登记工作区；绑定后仅允许同路径幂等刷新。
@@ -245,8 +353,10 @@ pub async fn cmd_task_set_workspace(
     state: State<'_, CommandState>,
     task_id: String,
     workspace_path: Option<String>,
-) -> Result<Task, String> {
-    r_code_host::commands::task_set_workspace(&state, &task_id, workspace_path.as_deref()).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_set_workspace(&state, &task_id, workspace_path.as_deref())
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 为尚未绑定项目的会话选择并一次性附加本地工作区。
@@ -256,12 +366,13 @@ pub async fn cmd_task_choose_workspace(
     app: AppHandle,
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Option<Task>, String> {
+) -> Result<Option<Task>, CommandError> {
     let Some(path) = pick_workspace_folder(app).await? else {
         return Ok(None);
     };
     r_code_host::commands::task_attach_workspace(&state, &task_id, &path)
         .await
+        .map_err(CommandError::from)
         .map(Some)
 }
 
@@ -271,8 +382,10 @@ pub async fn cmd_task_set_provider(
     state: State<'_, CommandState>,
     task_id: String,
     provider_name: String,
-) -> Result<Task, String> {
-    r_code_host::commands::task_set_provider(&state, &task_id, &provider_name).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_set_provider(&state, &task_id, &provider_name)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 切换空闲会话使用的具体模型；下一次运行生效。传 null 表示回退服务默认模型。
@@ -281,8 +394,10 @@ pub async fn cmd_task_set_model(
     state: State<'_, CommandState>,
     task_id: String,
     model: Option<String>,
-) -> Result<Task, String> {
-    r_code_host::commands::task_set_model(&state, &task_id, model.as_deref()).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_set_model(&state, &task_id, model.as_deref())
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 修改空闲会话的模型专属推理参数；空字段沿用服务默认值。
@@ -291,8 +406,10 @@ pub async fn cmd_task_set_inference(
     state: State<'_, CommandState>,
     task_id: String,
     inference: InferenceOptions,
-) -> Result<Task, String> {
-    r_code_host::commands::task_set_inference(&state, &task_id, inference).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_set_inference(&state, &task_id, inference)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 修改会话在列表中显示的名称。
@@ -301,8 +418,10 @@ pub async fn cmd_task_rename(
     state: State<'_, CommandState>,
     task_id: String,
     title: String,
-) -> Result<Task, String> {
-    r_code_host::commands::task_rename(&state, &task_id, &title).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_rename(&state, &task_id, &title)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// Update or clear the durable goal used by Plan and subsequent turns.
@@ -311,8 +430,10 @@ pub async fn cmd_task_update_goal(
     state: State<'_, CommandState>,
     task_id: String,
     goal: String,
-) -> Result<Task, String> {
-    r_code_host::commands::task_update_goal(&state, &task_id, &goal).await
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_update_goal(&state, &task_id, &goal)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// Switch the task policy without rebuilding its native conversation history.
@@ -321,57 +442,71 @@ pub async fn cmd_task_set_mode(
     state: State<'_, CommandState>,
     task_id: String,
     mode: String,
-) -> Result<Task, String> {
+) -> Result<Task, CommandError> {
     let mode =
         TaskMode::try_from_str(mode.trim()).ok_or_else(|| format!("invalid task mode: {mode}"))?;
-    r_code_host::commands::task_set_mode(&state, &task_id, mode).await
+    r_code_host::commands::task_set_mode(&state, &task_id, mode)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_entry_offer_get(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Option<PlanEntryOfferView>, String> {
-    r_code_host::plan_entry_commands::plan_entry_offer_get(&state, &task_id).await
+) -> Result<Option<PlanEntryOfferView>, CommandError> {
+    r_code_host::plan_entry_commands::plan_entry_offer_get(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_entry_decide(
     state: State<'_, CommandState>,
     input: PlanEntryDecisionInput,
-) -> Result<PlanEntryOfferView, String> {
-    r_code_host::plan_entry_commands::plan_entry_decide(&state, &input).await
+) -> Result<PlanEntryOfferView, CommandError> {
+    r_code_host::plan_entry_commands::plan_entry_decide(&state, &input)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_entry_retry_continuation(
     state: State<'_, CommandState>,
     offer_id: String,
-) -> Result<PlanEntryOfferView, String> {
-    r_code_host::plan_entry_commands::plan_entry_retry_continuation(&state, &offer_id).await
+) -> Result<PlanEntryOfferView, CommandError> {
+    r_code_host::plan_entry_commands::plan_entry_retry_continuation(&state, &offer_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_planning_status(
     state: State<'_, CommandState>,
-) -> Result<PlanningStatusView, String> {
-    r_code_host::plan_entry_commands::planning_status(&state).await
+) -> Result<PlanningStatusView, CommandError> {
+    r_code_host::plan_entry_commands::planning_status(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_get(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Option<PlanView>, String> {
-    r_code_host::commands::plan_get(&state, &task_id).await
+) -> Result<Option<PlanView>, CommandError> {
+    r_code_host::commands::plan_get(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_create(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_create(&state, &task_id).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_create(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -379,8 +514,10 @@ pub async fn cmd_plan_answer(
     state: State<'_, CommandState>,
     task_id: String,
     input: AnswerPlanQuestionsInput,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_answer(&state, &task_id, input).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_answer(&state, &task_id, input)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -388,8 +525,10 @@ pub async fn cmd_plan_retry_continuation(
     state: State<'_, CommandState>,
     task_id: String,
     question_set_id: String,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_retry_continuation(&state, &task_id, &question_set_id).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_retry_continuation(&state, &task_id, &question_set_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -398,8 +537,10 @@ pub async fn cmd_plan_approve(
     task_id: String,
     plan_id: String,
     expected_revision: u64,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_approve(&state, &task_id, &plan_id, expected_revision).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_approve(&state, &task_id, &plan_id, expected_revision)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -407,8 +548,10 @@ pub async fn cmd_plan_retry_implementation(
     state: State<'_, CommandState>,
     task_id: String,
     plan_id: String,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_retry_implementation(&state, &task_id, &plan_id).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_retry_implementation(&state, &task_id, &plan_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -417,8 +560,10 @@ pub async fn cmd_plan_cancel(
     task_id: String,
     plan_id: String,
     expected_revision: u64,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_cancel(&state, &task_id, &plan_id, expected_revision).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_cancel(&state, &task_id, &plan_id, expected_revision)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -426,8 +571,10 @@ pub async fn cmd_plan_repair_projection(
     state: State<'_, CommandState>,
     task_id: String,
     plan_id: String,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_repair_projection(&state, &task_id, &plan_id).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_repair_projection(&state, &task_id, &plan_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -435,48 +582,54 @@ pub async fn cmd_plan_update_item(
     state: State<'_, CommandState>,
     task_id: String,
     input: UpdatePlanItemInput,
-) -> Result<PlanView, String> {
-    r_code_host::commands::plan_update_item(&state, &task_id, input).await
+) -> Result<PlanView, CommandError> {
+    r_code_host::commands::plan_update_item(&state, &task_id, input)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_review_status(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Option<EnhancedReviewView>, String> {
-    r_code_host::commands::plan_review_status(&state, &task_id)
+) -> Result<Option<EnhancedReviewView>, CommandError> {
+    r_code_host::commands::plan_review_status(&state, &task_id).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_review_accept_file(
     state: State<'_, CommandState>,
     target: EnhancedReviewTarget,
-) -> Result<PlanReviewDecision, String> {
-    r_code_host::commands::plan_review_accept_file(&state, &target)
+) -> Result<PlanReviewDecision, CommandError> {
+    r_code_host::commands::plan_review_accept_file(&state, &target).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_review_accept_feature(
     state: State<'_, CommandState>,
     target: EnhancedReviewTarget,
-) -> Result<PlanReviewDecision, String> {
-    r_code_host::commands::plan_review_accept_feature(&state, &target)
+) -> Result<PlanReviewDecision, CommandError> {
+    r_code_host::commands::plan_review_accept_feature(&state, &target).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_review_reject_file(
     state: State<'_, CommandState>,
     target: EnhancedReviewTarget,
-) -> Result<PlanRejectResult, String> {
-    r_code_host::commands::plan_review_reject_file(&state, &target).await
+) -> Result<PlanRejectResult, CommandError> {
+    r_code_host::commands::plan_review_reject_file(&state, &target)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_plan_review_reject_feature(
     state: State<'_, CommandState>,
     target: EnhancedReviewTarget,
-) -> Result<PlanRejectResult, String> {
-    r_code_host::commands::plan_review_reject_feature(&state, &target).await
+) -> Result<PlanRejectResult, CommandError> {
+    r_code_host::commands::plan_review_reject_feature(&state, &target)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 从当前上下文末端创建新的活跃会话分支。
@@ -484,8 +637,10 @@ pub async fn cmd_plan_review_reject_feature(
 pub async fn cmd_task_fork_context(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<SessionBranch, String> {
-    r_code_host::commands::task_fork_context(&state, &task_id).await
+) -> Result<SessionBranch, CommandError> {
+    r_code_host::commands::task_fork_context(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 在同一任务中切换到空白上下文；旧分支与 JSONL 只读保留。
@@ -493,8 +648,10 @@ pub async fn cmd_task_fork_context(
 pub async fn cmd_task_clear_context(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<SessionBranch, String> {
-    r_code_host::commands::task_clear_context(&state, &task_id).await
+) -> Result<SessionBranch, CommandError> {
+    r_code_host::commands::task_clear_context(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 手动压缩当前分支的模型上下文；完整聊天记录继续保留用于回看与审计。
@@ -503,8 +660,10 @@ pub async fn cmd_task_compact_context(
     state: State<'_, CommandState>,
     task_id: String,
     focus: Option<String>,
-) -> Result<r_code_host::commands::ContextCompactionResult, String> {
-    r_code_host::commands::task_compact_context(&state, &task_id, focus.as_deref()).await
+) -> Result<r_code_host::commands::ContextCompactionResult, CommandError> {
+    r_code_host::commands::task_compact_context(&state, &task_id, focus.as_deref())
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取任务详情（含事件、变更、权限、验证）。
@@ -512,8 +671,10 @@ pub async fn cmd_task_compact_context(
 pub async fn cmd_task_detail(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<TaskDetail, String> {
-    r_code_host::commands::task_detail(&state, &task_id).await
+) -> Result<TaskDetail, CommandError> {
+    r_code_host::commands::task_detail(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 批量获取任务详情，避免项目 / 活动页产生 IPC N+1。
@@ -521,8 +682,10 @@ pub async fn cmd_task_detail(
 pub async fn cmd_task_detail_batch(
     state: State<'_, CommandState>,
     task_ids: Vec<String>,
-) -> Result<TaskDetailBatch, String> {
-    r_code_host::commands::task_detail_batch(&state, &task_ids).await
+) -> Result<TaskDetailBatch, CommandError> {
+    r_code_host::commands::task_detail_batch(&state, &task_ids)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 发送用户消息到 Agent。 [doc-04 §7]
@@ -534,7 +697,7 @@ pub async fn cmd_agent_send(
     mode: Option<String>,
     attachments: Option<Vec<r_code_host::commands::AttachmentInput>>,
     attachment_ids: Option<Vec<String>>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mode = match mode {
         Some(value) => AgentSendMode::try_from_str(&value)
             .ok_or_else(|| format!("invalid agent send mode: {value}"))?,
@@ -547,7 +710,8 @@ pub async fn cmd_agent_send(
             return r_code_host::commands::agent_send_with_attachment_refs(
                 &state, &task_id, &message, mode, ids,
             )
-            .await;
+            .await
+            .map_err(CommandError::from);
         }
     }
     r_code_host::commands::agent_send_with_mode_and_attachments(
@@ -558,6 +722,7 @@ pub async fn cmd_agent_send(
         attachments.as_deref().unwrap_or_default(),
     )
     .await
+    .map_err(CommandError::from)
 }
 
 /// 附件 staging（docs §2.2 边界 1）：一次性 IPC Base64 → Blob 引用。
@@ -566,8 +731,10 @@ pub async fn cmd_attachment_stage(
     state: State<'_, CommandState>,
     task_id: String,
     attachment: r_code_host::commands::AttachmentInput,
-) -> Result<r_code_host::commands::AttachmentRefDto, String> {
-    r_code_host::commands::attachment_stage(&state, &task_id, attachment).await
+) -> Result<r_code_host::commands::AttachmentRefDto, CommandError> {
+    r_code_host::commands::attachment_stage(&state, &task_id, attachment)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 删除草稿附件：立即释放 staged 引用与 Blob 计数。
@@ -576,8 +743,10 @@ pub async fn cmd_attachment_discard(
     state: State<'_, CommandState>,
     task_id: String,
     attachment_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::attachment_discard(&state, &task_id, &attachment_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::attachment_discard(&state, &task_id, &attachment_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 按引用取回时间线图片附件预览（OCR 落盘原图或会话内联 Image 块）。
@@ -586,8 +755,10 @@ pub async fn cmd_agent_attachment_preview(
     state: State<'_, CommandState>,
     task_id: String,
     reference: String,
-) -> Result<r_code_host::commands::AttachmentPreviewPayload, String> {
-    r_code_host::commands::agent_attachment_preview(&state, &task_id, &reference).await
+) -> Result<r_code_host::commands::AttachmentPreviewPayload, CommandError> {
+    r_code_host::commands::agent_attachment_preview(&state, &task_id, &reference)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 中止 Agent 运行。
@@ -595,8 +766,10 @@ pub async fn cmd_agent_attachment_preview(
 pub async fn cmd_agent_abort(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::agent_abort(&state, &task_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::agent_abort(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 中止当前主运行下的一个子代理。
@@ -605,8 +778,10 @@ pub async fn cmd_agent_abort_subagent(
     state: State<'_, CommandState>,
     task_id: String,
     subagent_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::agent_abort_subagent(&state, &task_id, &subagent_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::agent_abort_subagent(&state, &task_id, &subagent_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 以只读 `codex exec --json` 委派当前主运行的一项子任务。
@@ -616,8 +791,10 @@ pub async fn cmd_agent_delegate_codex(
     task_id: String,
     goal: String,
     label: Option<String>,
-) -> Result<AgentRun, String> {
-    r_code_host::commands::agent_delegate_codex(&state, &task_id, &goal, label.as_deref()).await
+) -> Result<AgentRun, CommandError> {
+    r_code_host::commands::agent_delegate_codex(&state, &task_id, &goal, label.as_deref())
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 以持久 MCP 会话委派 Codex；完成后可保留外部 thread ID 供后续续接。
@@ -627,8 +804,10 @@ pub async fn cmd_agent_delegate_codex_mcp(
     task_id: String,
     goal: String,
     label: Option<String>,
-) -> Result<AgentRun, String> {
-    r_code_host::commands::agent_delegate_codex_mcp(&state, &task_id, &goal, label.as_deref()).await
+) -> Result<AgentRun, CommandError> {
+    r_code_host::commands::agent_delegate_codex_mcp(&state, &task_id, &goal, label.as_deref())
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 列出当前会话分支的待发送消息。
@@ -636,8 +815,10 @@ pub async fn cmd_agent_delegate_codex_mcp(
 pub async fn cmd_agent_queue_list(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<QueuedMessage>, String> {
-    r_code_host::commands::agent_queue_list(&state, &task_id).await
+) -> Result<Vec<QueuedMessage>, CommandError> {
+    r_code_host::commands::agent_queue_list(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 移除一条尚未分发的待发送消息。
@@ -646,8 +827,10 @@ pub async fn cmd_agent_queue_remove(
     state: State<'_, CommandState>,
     task_id: String,
     queue_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::agent_queue_remove(&state, &task_id, &queue_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::agent_queue_remove(&state, &task_id, &queue_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 按界面从上到下的顺序重排当前分支尚未分发的消息。
@@ -656,8 +839,10 @@ pub async fn cmd_agent_queue_reorder(
     state: State<'_, CommandState>,
     task_id: String,
     queue_ids: Vec<String>,
-) -> Result<(), String> {
-    r_code_host::commands::agent_queue_reorder(&state, &task_id, &queue_ids).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::agent_queue_reorder(&state, &task_id, &queue_ids)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 编辑一条尚未分发的队列消息。
@@ -667,8 +852,10 @@ pub async fn cmd_agent_queue_update(
     task_id: String,
     queue_id: String,
     message: String,
-) -> Result<(), String> {
-    r_code_host::commands::agent_queue_update(&state, &task_id, &queue_id, &message).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::agent_queue_update(&state, &task_id, &queue_id, &message)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 将点选的队列消息优先引导进当前运行；无法安全注入时保留在队首。
@@ -677,8 +864,10 @@ pub async fn cmd_agent_queue_steer(
     state: State<'_, CommandState>,
     task_id: String,
     queue_id: String,
-) -> Result<String, String> {
-    r_code_host::commands::agent_queue_steer(&state, &task_id, &queue_id).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::agent_queue_steer(&state, &task_id, &queue_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// M3-01：提交 Codex `requestUserInput` 的用户答案。answers 形如
@@ -691,7 +880,7 @@ pub async fn cmd_codex_submit_user_input(
     run_id: String,
     request_key: String,
     answers: Option<serde_json::Value>,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     let external_agents = state.external_agents.clone();
     let outcome = r_code_host::commands::submit_codex_user_input_for_task(
         &external_agents,
@@ -714,8 +903,10 @@ pub async fn cmd_agent_resend(
     task_id: String,
     message_id: String,
     message: String,
-) -> Result<(), String> {
-    r_code_host::commands::agent_resend(&state, &task_id, &message_id, &message).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::agent_resend(&state, &task_id, &message_id, &message)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 审批权限请求。 [doc-02 §4]
@@ -726,8 +917,10 @@ pub async fn cmd_permission_approve(
     state: State<'_, CommandState>,
     request_id: String,
     decision: String,
-) -> Result<(), String> {
-    r_code_host::commands::permission_approve(&state, &request_id, &decision).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::permission_approve(&state, &request_id, &decision)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取待审批权限请求列表。
@@ -735,8 +928,10 @@ pub async fn cmd_permission_approve(
 pub async fn cmd_permission_pending(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<PermissionRequest>, String> {
-    r_code_host::commands::permission_pending(&state, &task_id).await
+) -> Result<Vec<PermissionRequest>, CommandError> {
+    r_code_host::commands::permission_pending(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 列出可已读的顶栏通知。
@@ -747,7 +942,7 @@ pub async fn cmd_notification_list(
     cursor: Option<String>,
     limit: u32,
     unread_only: bool,
-) -> Result<NotificationPage, String> {
+) -> Result<NotificationPage, CommandError> {
     let locale = r_code_host::native_notification::locale_code(&app);
     r_code_host::commands::notification_list_for_locale(
         &state,
@@ -757,6 +952,7 @@ pub async fn cmd_notification_list(
         locale,
     )
     .await
+    .map_err(CommandError::from)
 }
 
 /// 将一条通知标记为已读。
@@ -764,14 +960,20 @@ pub async fn cmd_notification_list(
 pub async fn cmd_notification_mark_read(
     state: State<'_, CommandState>,
     notification_id: String,
-) -> Result<bool, String> {
-    r_code_host::commands::notification_mark_read(&state, &notification_id).await
+) -> Result<bool, CommandError> {
+    r_code_host::commands::notification_mark_read(&state, &notification_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 将全部通知标记为已读，返回受影响数量。
 #[tauri::command]
-pub async fn cmd_notification_mark_all_read(state: State<'_, CommandState>) -> Result<u64, String> {
-    r_code_host::commands::notification_mark_all_read(&state).await
+pub async fn cmd_notification_mark_all_read(
+    state: State<'_, CommandState>,
+) -> Result<u64, CommandError> {
+    r_code_host::commands::notification_mark_all_read(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取桌面系统通知权限状态。
@@ -807,8 +1009,10 @@ pub fn cmd_native_notification_set_locale(
 pub async fn cmd_changes_list(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<FileChange>, String> {
-    r_code_host::commands::changes_list(&state, &task_id).await
+) -> Result<Vec<FileChange>, CommandError> {
+    r_code_host::commands::changes_list(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 回滚单个文件。返回回滚结果的描述字符串。
@@ -817,8 +1021,10 @@ pub async fn cmd_rollback_file(
     state: State<'_, CommandState>,
     task_id: String,
     path: String,
-) -> Result<String, String> {
-    r_code_host::commands::rollback_file(&state, &task_id, &path).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::rollback_file(&state, &task_id, &path)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 回滚任务的所有变更。
@@ -826,8 +1032,10 @@ pub async fn cmd_rollback_file(
 pub async fn cmd_rollback_task(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<String>, String> {
-    r_code_host::commands::rollback_task(&state, &task_id).await
+) -> Result<Vec<String>, CommandError> {
+    r_code_host::commands::rollback_task(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 回滚到本次运行最近一次绿灯 git checkpoint。
@@ -835,8 +1043,10 @@ pub async fn cmd_rollback_task(
 pub async fn cmd_rollback_task_to_checkpoint(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<String>, String> {
-    r_code_host::commands::rollback_task_to_checkpoint(&state, &task_id).await
+) -> Result<Vec<String>, CommandError> {
+    r_code_host::commands::rollback_task_to_checkpoint(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 接受任务变更。
@@ -844,8 +1054,10 @@ pub async fn cmd_rollback_task_to_checkpoint(
 pub async fn cmd_accept_task(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::accept_task(&state, &task_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::accept_task(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取应用内持久化审核状态（与 Git 暂存区无关）。
@@ -853,8 +1065,8 @@ pub async fn cmd_accept_task(
 pub async fn cmd_review_git_status(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<r_code_store::ReviewGitStatus, String> {
-    r_code_host::commands::review_git_status(&state, &task_id)
+) -> Result<r_code_store::ReviewGitStatus, CommandError> {
+    r_code_host::commands::review_git_status(&state, &task_id).map_err(CommandError::from)
 }
 
 /// 接受一条新增或删除行；仅写审核账本。
@@ -864,8 +1076,9 @@ pub async fn cmd_review_accept_line(
     task_id: String,
     path: String,
     line_id: String,
-) -> Result<r_code_store::ReviewAcceptResult, String> {
+) -> Result<r_code_store::ReviewAcceptResult, CommandError> {
     r_code_host::commands::review_accept_line(&state, &task_id, &path, &line_id)
+        .map_err(CommandError::from)
 }
 
 /// 接受一个任务文件；仅写审核账本。
@@ -874,8 +1087,8 @@ pub async fn cmd_review_accept_file(
     state: State<'_, CommandState>,
     task_id: String,
     path: String,
-) -> Result<r_code_store::ReviewAcceptResult, String> {
-    r_code_host::commands::review_accept_file(&state, &task_id, &path)
+) -> Result<r_code_store::ReviewAcceptResult, CommandError> {
+    r_code_host::commands::review_accept_file(&state, &task_id, &path).map_err(CommandError::from)
 }
 
 /// 接受该任务的全部待审核路径；仅写审核账本。
@@ -883,8 +1096,8 @@ pub async fn cmd_review_accept_file(
 pub async fn cmd_review_accept_all(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<r_code_store::ReviewAcceptResult, String> {
-    r_code_host::commands::review_accept_all(&state, &task_id)
+) -> Result<r_code_store::ReviewAcceptResult, CommandError> {
+    r_code_host::commands::review_accept_all(&state, &task_id).map_err(CommandError::from)
 }
 
 /// 拒绝一个文件并安全恢复其任务前内容。
@@ -893,8 +1106,10 @@ pub async fn cmd_review_reject_file(
     state: State<'_, CommandState>,
     task_id: String,
     path: String,
-) -> Result<r_code_store::ReviewAcceptResult, String> {
-    r_code_host::commands::review_reject_file(&state, &task_id, &path).await
+) -> Result<r_code_store::ReviewAcceptResult, CommandError> {
+    r_code_host::commands::review_reject_file(&state, &task_id, &path)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取审核页 Git 提交与推送状态。
@@ -902,8 +1117,8 @@ pub async fn cmd_review_reject_file(
 pub async fn cmd_git_delivery_status(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<r_code_store::GitDeliveryStatus, String> {
-    r_code_host::commands::git_delivery_status(&state, &task_id)
+) -> Result<r_code_store::GitDeliveryStatus, CommandError> {
+    r_code_host::commands::git_delivery_status(&state, &task_id).map_err(CommandError::from)
 }
 
 /// 显式将审核中保留的文件加入 Git 暂存区。
@@ -911,8 +1126,8 @@ pub async fn cmd_git_delivery_status(
 pub async fn cmd_git_stage_accepted(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<r_code_store::GitDeliveryStatus, String> {
-    r_code_host::commands::git_stage_accepted(&state, &task_id)
+) -> Result<r_code_store::GitDeliveryStatus, CommandError> {
+    r_code_host::commands::git_stage_accepted(&state, &task_id).map_err(CommandError::from)
 }
 
 /// 生成可编辑的提交信息建议。
@@ -920,8 +1135,8 @@ pub async fn cmd_git_stage_accepted(
 pub async fn cmd_git_suggest_commit_message(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<String, String> {
-    r_code_host::commands::git_suggest_commit_message(&state, &task_id)
+) -> Result<String, CommandError> {
+    r_code_host::commands::git_suggest_commit_message(&state, &task_id).map_err(CommandError::from)
 }
 
 /// 提交用户已显式加入暂存区的任务内容。
@@ -930,8 +1145,8 @@ pub async fn cmd_git_commit_task(
     state: State<'_, CommandState>,
     task_id: String,
     message: String,
-) -> Result<r_code_store::GitCommitResult, String> {
-    r_code_host::commands::git_commit_task(&state, &task_id, &message)
+) -> Result<r_code_store::GitCommitResult, CommandError> {
+    r_code_host::commands::git_commit_task(&state, &task_id, &message).map_err(CommandError::from)
 }
 
 /// 将当前分支普通推送到已有 upstream。
@@ -939,8 +1154,8 @@ pub async fn cmd_git_commit_task(
 pub async fn cmd_git_push_task(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<r_code_store::GitPushResult, String> {
-    r_code_host::commands::git_push_task(&state, &task_id)
+) -> Result<r_code_store::GitPushResult, CommandError> {
+    r_code_host::commands::git_push_task(&state, &task_id).map_err(CommandError::from)
 }
 
 /// 列出可调用的内置与自定义工作流 Skill。
@@ -948,8 +1163,9 @@ pub async fn cmd_git_push_task(
 pub async fn cmd_workflow_skills_list(
     state: State<'_, CommandState>,
     workspace_path: Option<String>,
-) -> Result<Vec<r_code_host::ScopedWorkflowSkill>, String> {
+) -> Result<Vec<r_code_host::ScopedWorkflowSkill>, CommandError> {
     r_code_host::commands::workflow_skills_list(&state, workspace_path.as_deref())
+        .map_err(CommandError::from)
 }
 
 /// 新建或保存一条 Skill；内置 Skill 保存为用户级覆盖。
@@ -958,8 +1174,9 @@ pub async fn cmd_workflow_skill_save(
     state: State<'_, CommandState>,
     workspace_path: Option<String>,
     draft: r_code_host::ScopedWorkflowSkillDraft,
-) -> Result<r_code_host::ScopedWorkflowSkill, String> {
+) -> Result<r_code_host::ScopedWorkflowSkill, CommandError> {
     r_code_host::commands::workflow_skill_save(&state, workspace_path.as_deref(), draft)
+        .map_err(CommandError::from)
 }
 
 /// 将内置 Skill 恢复为随应用发布的默认内容。
@@ -967,8 +1184,8 @@ pub async fn cmd_workflow_skill_save(
 pub async fn cmd_workflow_skill_reset(
     state: State<'_, CommandState>,
     id: String,
-) -> Result<r_code_host::ScopedWorkflowSkill, String> {
-    r_code_host::commands::workflow_skill_reset(&state, &id)
+) -> Result<r_code_host::ScopedWorkflowSkill, CommandError> {
+    r_code_host::commands::workflow_skill_reset(&state, &id).map_err(CommandError::from)
 }
 
 /// 删除自定义 Skill。内置 Skill 会被拒绝。
@@ -978,8 +1195,9 @@ pub async fn cmd_workflow_skill_delete(
     workspace_path: Option<String>,
     scope: r_code_host::WorkflowSkillScope,
     id: String,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     r_code_host::commands::workflow_skill_delete(&state, workspace_path.as_deref(), scope, &id)
+        .map_err(CommandError::from)
 }
 
 /// Atomically promote one project Skill into the global AppData catalog.
@@ -988,16 +1206,18 @@ pub async fn cmd_workflow_skill_sync_to_global(
     state: State<'_, CommandState>,
     workspace_path: String,
     id: String,
-) -> Result<r_code_host::ScopedWorkflowSkill, String> {
+) -> Result<r_code_host::ScopedWorkflowSkill, CommandError> {
     r_code_host::commands::workflow_skill_sync_to_global(&state, &workspace_path, &id)
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_knowledge_prompts_get(
     state: State<'_, CommandState>,
     workspace_path: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, CommandError> {
     r_code_host::commands::knowledge_prompts_get(&state, workspace_path.as_deref())
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1007,7 +1227,7 @@ pub async fn cmd_knowledge_prompts_save(
     mode: r_code_host::settings::ProjectPromptMode,
     main_agent: String,
     subagent: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, CommandError> {
     r_code_host::commands::knowledge_prompts_save(
         &state,
         workspace_path.as_deref(),
@@ -1015,14 +1235,16 @@ pub async fn cmd_knowledge_prompts_save(
         &main_agent,
         &subagent,
     )
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_knowledge_prompts_reset(
     state: State<'_, CommandState>,
     workspace_path: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, CommandError> {
     r_code_host::commands::knowledge_prompts_reset(&state, workspace_path.as_deref())
+        .map_err(CommandError::from)
 }
 
 /// 在审核阶段提出修改请求，启动下一轮 Agent 运行。
@@ -1031,8 +1253,10 @@ pub async fn cmd_change_request(
     state: State<'_, CommandState>,
     task_id: String,
     message: String,
-) -> Result<(), String> {
-    r_code_host::commands::change_request(&state, &task_id, &message).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::change_request(&state, &task_id, &message)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 单文件变更 diff（blob 缺失时降级返回元信息）。
@@ -1042,12 +1266,14 @@ pub async fn cmd_change_diff(
     task_id: String,
     path: String,
     run_id: Option<String>,
-) -> Result<ChangeDiff, String> {
+) -> Result<ChangeDiff, CommandError> {
     match run_id.as_deref() {
-        Some(run_id) => {
-            r_code_host::commands::change_diff_for_run(&state, &task_id, run_id, &path).await
-        }
-        None => r_code_host::commands::change_diff(&state, &task_id, &path).await,
+        Some(run_id) => r_code_host::commands::change_diff_for_run(&state, &task_id, run_id, &path)
+            .await
+            .map_err(CommandError::from),
+        None => r_code_host::commands::change_diff(&state, &task_id, &path)
+            .await
+            .map_err(CommandError::from),
     }
 }
 
@@ -1057,8 +1283,10 @@ pub async fn cmd_run_verification(
     state: State<'_, CommandState>,
     task_id: String,
     command: String,
-) -> Result<VerificationRecord, String> {
-    r_code_host::commands::run_verification(&state, &task_id, &command).await
+) -> Result<VerificationRecord, CommandError> {
+    r_code_host::commands::run_verification(&state, &task_id, &command)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取验证结果列表。
@@ -1066,14 +1294,20 @@ pub async fn cmd_run_verification(
 pub async fn cmd_verification_list(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<VerificationRecord>, String> {
-    r_code_host::commands::verification_list(&state, &task_id).await
+) -> Result<Vec<VerificationRecord>, CommandError> {
+    r_code_host::commands::verification_list(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 列出最近打开的 Workspace。
 #[tauri::command]
-pub async fn cmd_workspace_list(state: State<'_, CommandState>) -> Result<Vec<Workspace>, String> {
-    r_code_host::commands::workspace_list(&state).await
+pub async fn cmd_workspace_list(
+    state: State<'_, CommandState>,
+) -> Result<Vec<Workspace>, CommandError> {
+    r_code_host::commands::workspace_list(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 打开 Workspace。
@@ -1081,8 +1315,10 @@ pub async fn cmd_workspace_list(state: State<'_, CommandState>) -> Result<Vec<Wo
 pub async fn cmd_workspace_open(
     state: State<'_, CommandState>,
     path: String,
-) -> Result<Workspace, String> {
-    r_code_host::commands::workspace_open(&state, std::path::Path::new(&path)).await
+) -> Result<Workspace, CommandError> {
+    r_code_host::commands::workspace_open(&state, std::path::Path::new(&path))
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 清除 R-Code 内的项目及关联记录；不删除、移动或修改真实工作区目录。
@@ -1090,8 +1326,10 @@ pub async fn cmd_workspace_open(
 pub async fn cmd_workspace_forget(
     state: State<'_, CommandState>,
     workspace_path: String,
-) -> Result<WorkspaceForgetResult, String> {
-    r_code_host::commands::workspace_forget(&state, &workspace_path).await
+) -> Result<WorkspaceForgetResult, CommandError> {
+    r_code_host::commands::workspace_forget(&state, &workspace_path)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 调用系统原生目录选择器；用户取消时返回 None，不把任何路径授予前端文件权限。
@@ -1099,18 +1337,19 @@ pub async fn cmd_workspace_forget(
 pub async fn cmd_workspace_choose(
     app: AppHandle,
     state: State<'_, CommandState>,
-) -> Result<Option<Workspace>, String> {
+) -> Result<Option<Workspace>, CommandError> {
     let selected = pick_workspace_folder(app).await?;
 
     match selected {
         Some(path) => r_code_host::commands::workspace_open(&state, &path)
             .await
+            .map_err(CommandError::from)
             .map(Some),
         None => Ok(None),
     }
 }
 
-async fn pick_workspace_folder(app: AppHandle) -> Result<Option<std::path::PathBuf>, String> {
+async fn pick_workspace_folder(app: AppHandle) -> Result<Option<std::path::PathBuf>, CommandError> {
     let selected = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -1133,8 +1372,10 @@ pub async fn cmd_workspace_set_access_mode(
     state: State<'_, CommandState>,
     workspace_path: String,
     access_mode: ProjectAccessMode,
-) -> Result<Workspace, String> {
-    r_code_host::commands::workspace_set_access_mode(&state, &workspace_path, access_mode).await
+) -> Result<Workspace, CommandError> {
+    r_code_host::commands::workspace_set_access_mode(&state, &workspace_path, access_mode)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 以 generation CAS 更新项目记忆模式，并使未完成的旧快照失效。
@@ -1144,7 +1385,7 @@ pub async fn cmd_workspace_set_memory_mode(
     workspace_id: String,
     expected_generation: u64,
     memory_mode: WorkspaceMemoryMode,
-) -> Result<Workspace, String> {
+) -> Result<Workspace, CommandError> {
     r_code_host::commands::workspace_set_memory_mode(
         &state,
         &workspace_id,
@@ -1152,6 +1393,7 @@ pub async fn cmd_workspace_set_memory_mode(
         memory_mode,
     )
     .await
+    .map_err(CommandError::from)
 }
 
 /// 获取项目仪表盘聚合数据。
@@ -1159,8 +1401,10 @@ pub async fn cmd_workspace_set_memory_mode(
 pub async fn cmd_workspace_dashboard(
     state: State<'_, CommandState>,
     workspace_path: String,
-) -> Result<WorkspaceDashboard, String> {
-    r_code_host::commands::workspace_dashboard(&state, &workspace_path).await
+) -> Result<WorkspaceDashboard, CommandError> {
+    r_code_host::commands::workspace_dashboard(&state, &workspace_path)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取项目级活动流。
@@ -1170,9 +1414,10 @@ pub async fn cmd_project_activity_list(
     workspace_path: String,
     cursor: Option<String>,
     limit: u32,
-) -> Result<ProjectActivityPage, String> {
+) -> Result<ProjectActivityPage, CommandError> {
     r_code_host::commands::project_activity_list(&state, &workspace_path, cursor.as_deref(), limit)
         .await
+        .map_err(CommandError::from)
 }
 
 /// 获取跨项目活动流。
@@ -1181,8 +1426,10 @@ pub async fn cmd_activity_list(
     state: State<'_, CommandState>,
     cursor: Option<String>,
     limit: u32,
-) -> Result<ProjectActivityPage, String> {
-    r_code_host::commands::activity_list(&state, cursor.as_deref(), limit).await
+) -> Result<ProjectActivityPage, CommandError> {
+    r_code_host::commands::activity_list(&state, cursor.as_deref(), limit)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 快速打开 -- 模糊匹配文件路径。
@@ -1192,8 +1439,10 @@ pub async fn cmd_quick_open(
     workspace_path: String,
     query: String,
     limit: usize,
-) -> Result<Vec<String>, String> {
-    r_code_host::commands::quick_open(&state, &workspace_path, &query, limit).await
+) -> Result<Vec<String>, CommandError> {
+    r_code_host::commands::quick_open(&state, &workspace_path, &query, limit)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 全局搜索 -- 搜索文件内容。
@@ -1203,8 +1452,10 @@ pub async fn cmd_global_search(
     workspace_path: String,
     query: String,
     limit: usize,
-) -> Result<Vec<SearchMatch>, String> {
-    r_code_host::commands::global_search(&state, &workspace_path, &query, limit).await
+) -> Result<Vec<SearchMatch>, CommandError> {
+    r_code_host::commands::global_search(&state, &workspace_path, &query, limit)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取终端列表。
@@ -1212,8 +1463,10 @@ pub async fn cmd_global_search(
 pub async fn cmd_terminal_list(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<TerminalInfo>, String> {
-    r_code_host::commands::terminal_list(&state, &task_id).await
+) -> Result<Vec<TerminalInfo>, CommandError> {
+    r_code_host::commands::terminal_list(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 创建终端。返回终端 ID。
@@ -1222,8 +1475,10 @@ pub async fn cmd_terminal_create(
     state: State<'_, CommandState>,
     task_id: String,
     shell: String,
-) -> Result<String, String> {
-    r_code_host::commands::terminal_create(&state, &task_id, &shell).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::terminal_create(&state, &task_id, &shell)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 使用已探测到的真实 CLI 路径创建交互式 Codex 终端。
@@ -1231,8 +1486,10 @@ pub async fn cmd_terminal_create(
 pub async fn cmd_terminal_create_codex(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<String, String> {
-    r_code_host::commands::terminal_create_codex(&state, &task_id).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::terminal_create_codex(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 发送文本到终端。
@@ -1243,8 +1500,10 @@ pub async fn cmd_terminal_send(
     id: String,
     text: String,
     press_enter: bool,
-) -> Result<(), String> {
-    r_code_host::commands::terminal_send(&state, &task_id, &id, &text, press_enter).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::terminal_send(&state, &task_id, &id, &text, press_enter)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取终端输出。
@@ -1253,8 +1512,10 @@ pub async fn cmd_terminal_read(
     state: State<'_, CommandState>,
     task_id: String,
     id: String,
-) -> Result<String, String> {
-    r_code_host::commands::terminal_read(&state, &task_id, &id).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::terminal_read(&state, &task_id, &id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取终端完整保留输出。
@@ -1263,8 +1524,10 @@ pub async fn cmd_terminal_snapshot(
     state: State<'_, CommandState>,
     task_id: String,
     id: String,
-) -> Result<String, String> {
-    r_code_host::commands::terminal_snapshot(&state, &task_id, &id).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::terminal_snapshot(&state, &task_id, &id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取终端原始快照，仅交由桌面终端模拟器渲染。
@@ -1273,8 +1536,10 @@ pub async fn cmd_terminal_raw_snapshot(
     state: State<'_, CommandState>,
     task_id: String,
     id: String,
-) -> Result<TerminalRawSnapshot, String> {
-    r_code_host::commands::terminal_raw_snapshot(&state, &task_id, &id).await
+) -> Result<TerminalRawSnapshot, CommandError> {
+    r_code_host::commands::terminal_raw_snapshot(&state, &task_id, &id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取自指定游标以来的原始终端输出。
@@ -1284,8 +1549,10 @@ pub async fn cmd_terminal_raw_since(
     task_id: String,
     id: String,
     cursor: u64,
-) -> Result<TerminalRawBatch, String> {
-    r_code_host::commands::terminal_raw_since(&state, &task_id, &id, cursor).await
+) -> Result<TerminalRawBatch, CommandError> {
+    r_code_host::commands::terminal_raw_since(&state, &task_id, &id, cursor)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 终止终端。
@@ -1294,8 +1561,10 @@ pub async fn cmd_terminal_kill(
     state: State<'_, CommandState>,
     task_id: String,
     id: String,
-) -> Result<(), String> {
-    r_code_host::commands::terminal_kill(&state, &task_id, &id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::terminal_kill(&state, &task_id, &id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 调整终端 PTY 大小。
@@ -1306,22 +1575,30 @@ pub async fn cmd_terminal_resize(
     id: String,
     cols: u16,
     rows: u16,
-) -> Result<(), String> {
-    r_code_host::commands::terminal_resize(&state, &task_id, &id, cols, rows).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::terminal_resize(&state, &task_id, &id, cols, rows)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取恢复页面数据。 [doc-18 M10]
 #[tauri::command]
-pub async fn cmd_recovery_data(state: State<'_, CommandState>) -> Result<RecoveryPageData, String> {
-    r_code_host::commands::recovery_data(&state).await
+pub async fn cmd_recovery_data(
+    state: State<'_, CommandState>,
+) -> Result<RecoveryPageData, CommandError> {
+    r_code_host::commands::recovery_data(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 收束启动前遗留的运行、工具调用与权限请求。
 #[tauri::command]
 pub async fn cmd_recovery_cleanup(
     state: State<'_, CommandState>,
-) -> Result<RecoveryCleanupResult, String> {
-    r_code_host::commands::recovery_cleanup(&state).await
+) -> Result<RecoveryCleanupResult, CommandError> {
+    r_code_host::commands::recovery_cleanup(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 生成支持包。 [doc-18 M10-04] 返回生成的 JSON 文件路径。
@@ -1329,8 +1606,10 @@ pub async fn cmd_recovery_cleanup(
 pub async fn cmd_support_bundle(
     state: State<'_, CommandState>,
     output_dir: String,
-) -> Result<String, String> {
-    r_code_host::commands::support_bundle(&state, &output_dir).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::support_bundle(&state, &output_dir)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 通过系统原生目录选择器导出支持包；取消选择属于正常操作，返回 `None`。
@@ -1338,7 +1617,7 @@ pub async fn cmd_support_bundle(
 pub async fn cmd_support_bundle_choose(
     app: AppHandle,
     state: State<'_, CommandState>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, CommandError> {
     let selected = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -1356,6 +1635,7 @@ pub async fn cmd_support_bundle_choose(
     match selected {
         Some(path) => r_code_host::commands::support_bundle(&state, &path.to_string_lossy())
             .await
+            .map_err(CommandError::from)
             .map(Some),
         None => Ok(None),
     }
@@ -1365,8 +1645,10 @@ pub async fn cmd_support_bundle_choose(
 #[tauri::command]
 pub async fn cmd_support_preview(
     state: State<'_, CommandState>,
-) -> Result<serde_json::Value, String> {
-    r_code_host::commands::support_preview(&state).await
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::support_preview(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取指定深度的会话回放（recap / explore / verify）。
@@ -1375,8 +1657,10 @@ pub async fn cmd_replay(
     state: State<'_, CommandState>,
     session_id: String,
     depth: String,
-) -> Result<Vec<ReplayEntry>, String> {
-    r_code_host::commands::replay(&state, &session_id, &depth).await
+) -> Result<Vec<ReplayEntry>, CommandError> {
+    r_code_host::commands::replay(&state, &session_id, &depth)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取会话消息序列（Room 时间线数据源）。
@@ -1384,8 +1668,10 @@ pub async fn cmd_replay(
 pub async fn cmd_session_messages(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Vec<SessionMessage>, String> {
-    r_code_host::commands::session_messages(&state, &task_id).await
+) -> Result<Vec<SessionMessage>, CommandError> {
+    r_code_host::commands::session_messages(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// Read a historical branch without changing the active conversation.
@@ -1394,8 +1680,10 @@ pub async fn cmd_session_messages_for_branch(
     state: State<'_, CommandState>,
     task_id: String,
     branch_id: String,
-) -> Result<Vec<SessionMessage>, String> {
-    r_code_host::commands::session_messages_for_branch(&state, &task_id, &branch_id).await
+) -> Result<Vec<SessionMessage>, CommandError> {
+    r_code_host::commands::session_messages_for_branch(&state, &task_id, &branch_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取子代理独立会话日志（详情面板数据源）。
@@ -1404,8 +1692,10 @@ pub async fn cmd_subagent_session_messages(
     state: State<'_, CommandState>,
     task_id: String,
     subagent_id: String,
-) -> Result<Vec<SessionMessage>, String> {
-    r_code_host::commands::subagent_session_messages(&state, &task_id, &subagent_id).await
+) -> Result<Vec<SessionMessage>, CommandError> {
+    r_code_host::commands::subagent_session_messages(&state, &task_id, &subagent_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 增量读取子代理独立会话日志；支持最新窗口、追加轮询和向前加载历史。
@@ -1415,25 +1705,30 @@ pub async fn cmd_subagent_session_message_page(
     task_id: String,
     subagent_id: String,
     request: SubagentSessionMessagePageRequest,
-) -> Result<SubagentSessionMessagePage, String> {
+) -> Result<SubagentSessionMessagePage, CommandError> {
     r_code_host::commands::subagent_session_message_page(&state, &task_id, &subagent_id, request)
         .await
+        .map_err(CommandError::from)
 }
 
 /// 检查旧版项目记忆文件是否存在以及是否被 Git 跟踪。
 #[tauri::command]
 pub async fn cmd_memory_overview(
     state: State<'_, CommandState>,
-) -> Result<r_code_store::MemoryOverview, String> {
-    r_code_host::commands::memory_overview(&state).await
+) -> Result<r_code_store::MemoryOverview, CommandError> {
+    r_code_host::commands::memory_overview(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_memory_update_settings(
     state: State<'_, CommandState>,
     update: r_code_core::MemoryReviewSettingsUpdate,
-) -> Result<r_code_core::MemoryReviewSettingsView, String> {
-    r_code_host::commands::memory_update_settings(&state, update).await
+) -> Result<r_code_core::MemoryReviewSettingsView, CommandError> {
+    r_code_host::commands::memory_update_settings(&state, update)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1441,37 +1736,44 @@ pub async fn cmd_memory_review_now(
     state: State<'_, CommandState>,
     workspace_id: Option<String>,
     workspace_path: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, CommandError> {
     r_code_host::commands::memory_review_now(
         &state,
         workspace_id.as_deref(),
         workspace_path.as_deref(),
     )
     .await
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_memory_retry_job(
     state: State<'_, CommandState>,
     job_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::memory_retry_job(&state, &job_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::memory_retry_job(&state, &job_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_memory_cancel_job(
     state: State<'_, CommandState>,
     job_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::memory_cancel_job(&state, &job_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::memory_cancel_job(&state, &job_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_memory_add_entry(
     state: State<'_, CommandState>,
     draft: r_code_store::MemoryEntryDraft,
-) -> Result<r_code_core::MemoryEntry, String> {
-    r_code_host::commands::memory_add_entry(&state, draft).await
+) -> Result<r_code_core::MemoryEntry, CommandError> {
+    r_code_host::commands::memory_add_entry(&state, draft)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1479,8 +1781,10 @@ pub async fn cmd_memory_edit_entry(
     state: State<'_, CommandState>,
     entry_id: String,
     edit: r_code_store::MemoryEntryEdit,
-) -> Result<r_code_core::MemoryEntry, String> {
-    r_code_host::commands::memory_edit_entry(&state, &entry_id, edit).await
+) -> Result<r_code_core::MemoryEntry, CommandError> {
+    r_code_host::commands::memory_edit_entry(&state, &entry_id, edit)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1488,8 +1792,10 @@ pub async fn cmd_memory_delete_entry(
     state: State<'_, CommandState>,
     entry_id: String,
     expected_version: u64,
-) -> Result<(), String> {
-    r_code_host::commands::memory_delete_entry(&state, &entry_id, expected_version).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::memory_delete_entry(&state, &entry_id, expected_version)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1497,28 +1803,33 @@ pub async fn cmd_memory_approve_candidate(
     state: State<'_, CommandState>,
     candidate_id: String,
     edited_content: Option<String>,
-) -> Result<r_code_core::MemoryEntry, String> {
+) -> Result<r_code_core::MemoryEntry, CommandError> {
     r_code_host::commands::memory_approve_candidate(
         &state,
         &candidate_id,
         edited_content.as_deref(),
     )
     .await
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_memory_reject_candidate(
     state: State<'_, CommandState>,
     candidate_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::memory_reject_candidate(&state, &candidate_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::memory_reject_candidate(&state, &candidate_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_memory_clear_all(
     state: State<'_, CommandState>,
-) -> Result<r_code_core::MemoryReviewSettingsView, String> {
-    r_code_host::commands::memory_clear_all(&state).await
+) -> Result<r_code_core::MemoryReviewSettingsView, CommandError> {
+    r_code_host::commands::memory_clear_all(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 检查旧版项目记忆文件是否存在以及是否被 Git 跟踪。
@@ -1526,8 +1837,10 @@ pub async fn cmd_memory_clear_all(
 pub async fn cmd_legacy_memory_status(
     state: State<'_, CommandState>,
     workspace_path: String,
-) -> Result<r_code_host::LegacyMemoryStatus, String> {
-    r_code_host::commands::legacy_memory_status(&state, &workspace_path).await
+) -> Result<r_code_host::LegacyMemoryStatus, CommandError> {
+    r_code_host::commands::legacy_memory_status(&state, &workspace_path)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取最近的诊断日志条目（启动时已水合近七天尾部；level 如 "error"/"warn"）。
@@ -1536,22 +1849,30 @@ pub async fn cmd_logs_tail(
     state: State<'_, CommandState>,
     limit: usize,
     level: Option<String>,
-) -> Result<Vec<LogEntry>, String> {
-    r_code_host::commands::logs_tail(&state, limit, level.as_deref()).await
+) -> Result<Vec<LogEntry>, CommandError> {
+    r_code_host::commands::logs_tail(&state, limit, level.as_deref())
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取应用设置（JSON）。
 #[tauri::command]
-pub async fn cmd_settings_get(state: State<'_, CommandState>) -> Result<serde_json::Value, String> {
-    r_code_host::commands::settings_get(&state).await
+pub async fn cmd_settings_get(
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::settings_get(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取经过脱敏的 MCP 配置与实时状态；不会因查看设置页而启动第三方进程。
 #[tauri::command]
 pub async fn cmd_mcp_snapshot(
     state: State<'_, CommandState>,
-) -> Result<r_code_host::mcp_manager::McpManagerSnapshot, String> {
-    r_code_host::commands::mcp_snapshot(&state).await
+) -> Result<r_code_host::mcp_manager::McpManagerSnapshot, CommandError> {
+    r_code_host::commands::mcp_snapshot(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 新建或编辑自定义 MCP。新增及启动形态变化后保持关闭，等待单独确认。
@@ -1559,16 +1880,20 @@ pub async fn cmd_mcp_snapshot(
 pub async fn cmd_mcp_upsert(
     state: State<'_, CommandState>,
     request: r_code_host::mcp_manager::McpUpsertRequest,
-) -> Result<r_code_host::mcp_manager::McpServerView, String> {
-    r_code_host::commands::mcp_upsert(&state, request).await
+) -> Result<r_code_host::mcp_manager::McpServerView, CommandError> {
+    r_code_host::commands::mcp_upsert(&state, request)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_mcp_remove(
     state: State<'_, CommandState>,
     server_id: String,
-) -> Result<(), String> {
-    r_code_host::commands::mcp_remove(&state, &server_id).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::mcp_remove(&state, &server_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 开关 MCP；第三方首次开启分两步，第一次返回逐字段预览和一次性令牌。
@@ -1578,25 +1903,30 @@ pub async fn cmd_mcp_toggle(
     server_id: String,
     enabled: bool,
     confirmation_token: Option<String>,
-) -> Result<r_code_host::mcp_manager::McpToggleResult, String> {
+) -> Result<r_code_host::mcp_manager::McpToggleResult, CommandError> {
     r_code_host::commands::mcp_toggle(&state, &server_id, enabled, confirmation_token.as_deref())
         .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_mcp_test_connection(
     state: State<'_, CommandState>,
     server_id: String,
-) -> Result<Vec<r_code_mcp::McpToolDescriptor>, String> {
-    r_code_host::commands::mcp_test_connection(&state, &server_id).await
+) -> Result<Vec<r_code_mcp::McpToolDescriptor>, CommandError> {
+    r_code_host::commands::mcp_test_connection(&state, &server_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_mcp_credential_status(
     state: State<'_, CommandState>,
     server_id: String,
-) -> Result<Vec<r_code_host::mcp_manager::McpCredentialStatus>, String> {
-    r_code_host::commands::mcp_credential_status(&state, &server_id).await
+) -> Result<Vec<r_code_host::mcp_manager::McpCredentialStatus>, CommandError> {
+    r_code_host::commands::mcp_credential_status(&state, &server_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1605,8 +1935,10 @@ pub async fn cmd_mcp_set_credential(
     server_id: String,
     name: String,
     value: String,
-) -> Result<(), String> {
-    r_code_host::commands::mcp_set_credential(&state, &server_id, &name, &value).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::mcp_set_credential(&state, &server_id, &name, &value)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1614,8 +1946,10 @@ pub async fn cmd_mcp_delete_credential(
     state: State<'_, CommandState>,
     server_id: String,
     name: String,
-) -> Result<(), String> {
-    r_code_host::commands::mcp_delete_credential(&state, &server_id, &name).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::mcp_delete_credential(&state, &server_id, &name)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1624,17 +1958,18 @@ pub async fn cmd_mcp_market_search(
     query: Option<String>,
     cursor: Option<String>,
     limit: usize,
-) -> Result<r_code_mcp::MarketPage, String> {
+) -> Result<r_code_mcp::MarketPage, CommandError> {
     r_code_host::commands::mcp_market_search(&state, query.as_deref(), cursor.as_deref(), limit)
         .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_mcp_market_prepare_install(
     state: State<'_, CommandState>,
     request: r_code_host::mcp_manager::McpMarketInstallRequest,
-) -> Result<r_code_mcp::LaunchPreview, String> {
-    r_code_host::commands::mcp_market_prepare_install(&state, &request)
+) -> Result<r_code_mcp::LaunchPreview, CommandError> {
+    r_code_host::commands::mcp_market_prepare_install(&state, &request).map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1642,44 +1977,56 @@ pub async fn cmd_mcp_market_install(
     state: State<'_, CommandState>,
     request: r_code_host::mcp_manager::McpMarketInstallRequest,
     confirmation_token: String,
-) -> Result<r_code_host::mcp_manager::McpServerView, String> {
-    r_code_host::commands::mcp_market_install(&state, &request, &confirmation_token).await
+) -> Result<r_code_host::mcp_manager::McpServerView, CommandError> {
+    r_code_host::commands::mcp_market_install(&state, &request, &confirmation_token)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 获取内置模型服务目录，驱动设置页的"新建服务"表单。
 #[tauri::command]
-pub async fn cmd_provider_catalog() -> Result<serde_json::Value, String> {
-    r_code_host::commands::provider_catalog().await
+pub async fn cmd_provider_catalog() -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::provider_catalog()
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_subagent_provider_catalog(
     state: State<'_, CommandState>,
-) -> Result<r_code_host::subagent_providers::CatalogSnapshot, String> {
-    r_code_host::commands::subagent_provider_catalog(&state).await
+) -> Result<r_code_host::subagent_providers::CatalogSnapshot, CommandError> {
+    r_code_host::commands::subagent_provider_catalog(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_subagent_provider_test(
     state: State<'_, CommandState>,
     request: r_code_host::subagent_providers::SubagentProviderProbeRequest,
-) -> Result<r_code_host::subagent_providers::SubagentProviderProbeResponse, String> {
-    r_code_host::commands::subagent_provider_test(&state, request).await
+) -> Result<r_code_host::subagent_providers::SubagentProviderProbeResponse, CommandError> {
+    r_code_host::commands::subagent_provider_test(&state, request)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_subagent_provider_test_batch(
     state: State<'_, CommandState>,
     requests: Vec<r_code_host::subagent_providers::SubagentProviderProbeRequest>,
-) -> Result<r_code_host::subagent_providers::SubagentProviderProbeBatchResponse, String> {
-    r_code_host::commands::subagent_provider_test_batch(&state, requests).await
+) -> Result<r_code_host::subagent_providers::SubagentProviderProbeBatchResponse, CommandError> {
+    r_code_host::commands::subagent_provider_test_batch(&state, requests)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub async fn cmd_subagent_pool_snapshot(
     state: State<'_, CommandState>,
-) -> Result<r_code_host::subagent_providers::SubagentPoolSnapshot, String> {
-    r_code_host::commands::subagent_pool_snapshot(&state).await
+) -> Result<r_code_host::subagent_providers::SubagentPoolSnapshot, CommandError> {
+    r_code_host::commands::subagent_pool_snapshot(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -1687,8 +2034,10 @@ pub async fn cmd_subagent_pool_save(
     state: State<'_, CommandState>,
     revision: String,
     pool: agent_config::SubagentPoolConfig,
-) -> Result<r_code_host::subagent_providers::SubagentPoolSnapshot, String> {
-    r_code_host::commands::subagent_pool_save(&state, &revision, pool).await
+) -> Result<r_code_host::subagent_providers::SubagentPoolSnapshot, CommandError> {
+    r_code_host::commands::subagent_pool_save(&state, &revision, pool)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 模型胶囊悬停时按需读取 DeepSeek 官方账户余额。
@@ -1696,8 +2045,10 @@ pub async fn cmd_subagent_pool_save(
 pub async fn cmd_provider_balance(
     state: State<'_, CommandState>,
     request: r_code_host::commands::ProviderBalanceInput,
-) -> Result<serde_json::Value, String> {
-    r_code_host::commands::provider_balance(&state, request).await
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::provider_balance(&state, request)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 从当前 Provider 的模型目录端点读取可用模型。
@@ -1705,8 +2056,10 @@ pub async fn cmd_provider_balance(
 pub async fn cmd_provider_models(
     state: State<'_, CommandState>,
     request: r_code_host::commands::ProviderModelsInput,
-) -> Result<serde_json::Value, String> {
-    r_code_host::commands::provider_models(&state, request).await
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::provider_models(&state, request)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 设置应用配置项。`key` 支持点分路径（如 "providers.anthropic.model"）。
@@ -1715,8 +2068,10 @@ pub async fn cmd_settings_set(
     state: State<'_, CommandState>,
     key: String,
     value: serde_json::Value,
-) -> Result<(), String> {
-    r_code_host::commands::settings_set(&state, &key, value).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::settings_set(&state, &key, value)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 原子保存 Provider 表单并将其设为默认服务。
@@ -1724,8 +2079,10 @@ pub async fn cmd_settings_set(
 pub async fn cmd_settings_save_provider(
     state: State<'_, CommandState>,
     provider: r_code_host::commands::ProviderSettingsInput,
-) -> Result<(), String> {
-    r_code_host::commands::settings_save_provider(&state, provider).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::settings_save_provider(&state, provider)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 切换新对话默认使用的 Provider（仅允许切换到已就绪的配置）。
@@ -1733,8 +2090,10 @@ pub async fn cmd_settings_save_provider(
 pub async fn cmd_settings_select_provider(
     state: State<'_, CommandState>,
     name: String,
-) -> Result<(), String> {
-    r_code_host::commands::settings_select_provider(&state, &name).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::settings_select_provider(&state, &name)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 删除一个 Provider 与其本机凭据。
@@ -1742,16 +2101,20 @@ pub async fn cmd_settings_select_provider(
 pub async fn cmd_settings_delete_provider(
     state: State<'_, CommandState>,
     name: String,
-) -> Result<(), String> {
-    r_code_host::commands::settings_delete_provider(&state, &name).await
+) -> Result<(), CommandError> {
+    r_code_host::commands::settings_delete_provider(&state, &name)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// Detect the verified RTK binary and R-Code-owned enable marker.
 #[tauri::command]
 pub async fn cmd_rtk_status(
     state: State<'_, CommandState>,
-) -> Result<r_code_host::rtk::RtkStatus, String> {
-    r_code_host::commands::rtk_status(&state).await
+) -> Result<r_code_host::rtk::RtkStatus, CommandError> {
+    r_code_host::commands::rtk_status(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// F-obs-04：进程级 provider 调用指标（requests/failures/retries/aborted/
@@ -1760,8 +2123,10 @@ pub async fn cmd_rtk_status(
 pub async fn cmd_provider_metrics(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Option<r_code_agent_worker::ProviderMetricsSnapshot>, String> {
-    r_code_host::commands::provider_metrics(&state, &task_id).await
+) -> Result<Option<r_code_agent_worker::ProviderMetricsSnapshot>, CommandError> {
+    r_code_host::commands::provider_metrics(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// A4：请求信封审计自检计数（headers_appended, mismatches）。Real runtime
@@ -1770,8 +2135,10 @@ pub async fn cmd_provider_metrics(
 pub async fn cmd_request_audit_counters(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Option<(usize, usize)>, String> {
-    r_code_host::commands::request_audit_counters(&state, &task_id).await
+) -> Result<Option<(usize, usize)>, CommandError> {
+    r_code_host::commands::request_audit_counters(&state, &task_id)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 执行环境探测（R-OPS-01 设置卡：当前 shell 解析档/路径/是否检出 Git Bash）。
@@ -1803,73 +2170,94 @@ pub async fn cmd_rtk_set_enabled(
 /// Defender quarantined it. The custom protocol is handled by the Windows Security app, which is
 /// the only trusted channel when tamper protection blocks scripted exclusion changes.
 #[tauri::command]
-pub fn cmd_rtk_open_security_exclusions(app: AppHandle) -> Result<(), String> {
+pub fn cmd_rtk_open_security_exclusions(app: AppHandle) -> Result<(), CommandError> {
     app.opener()
         .open_url(
             r_code_host::rtk::WINDOWS_SECURITY_EXCLUSIONS_URL,
             None::<&str>,
         )
         .map_err(|error| format!("open Windows Security exclusions page: {error}"))
+        .map_err(CommandError::from)
 }
 
 /// 获取 Codex CLI 外部协作入口状态（只读）。
 #[tauri::command]
-pub async fn cmd_codex_integration_status() -> Result<serde_json::Value, String> {
-    r_code_host::commands::codex_integration_status().await
+pub async fn cmd_codex_integration_status() -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::codex_integration_status()
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 前端展示固定命令并获得用户明确确认后，安装官方 Codex CLI npm 包。
 #[tauri::command]
 pub async fn cmd_codex_install_cli(
     state: State<'_, CommandState>,
-) -> Result<serde_json::Value, String> {
-    r_code_host::commands::codex_install_cli(&state).await
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::codex_install_cli(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 进入 Codex 运行时设置时检查更新；已安装且有新版时由官方 CLI 自动升级。
 #[tauri::command]
 pub async fn cmd_codex_sync_cli(
     state: State<'_, CommandState>,
-) -> Result<serde_json::Value, String> {
-    r_code_host::commands::codex_sync_cli(&state).await
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::codex_sync_cli(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 在用户可见的终端中发起 Codex CLI 登录。
 #[tauri::command]
-pub async fn cmd_codex_start_login() -> Result<(), String> {
-    r_code_host::commands::codex_start_login().await
+pub async fn cmd_codex_start_login() -> Result<(), CommandError> {
+    r_code_host::commands::codex_start_login()
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 在用户可见的终端中发起 Codex CLI 设备码登录。
 #[tauri::command]
-pub async fn cmd_codex_start_device_login() -> Result<(), String> {
-    r_code_host::commands::codex_start_device_login().await
+pub async fn cmd_codex_start_device_login() -> Result<(), CommandError> {
+    r_code_host::commands::codex_start_device_login()
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 用户确认后，将 R-Code 的终端协作 Skill 安装到 Codex 目录。
 #[tauri::command]
-pub async fn cmd_codex_install_skill() -> Result<(), String> {
-    r_code_host::commands::codex_install_skill().await
+pub async fn cmd_codex_install_skill() -> Result<(), CommandError> {
+    r_code_host::commands::codex_install_skill()
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 用户确认后向 Codex 注册本机 R-Code MCP server。
 #[tauri::command]
-pub async fn cmd_codex_install_mcp_server(state: State<'_, CommandState>) -> Result<(), String> {
-    r_code_host::commands::codex_install_mcp_server(&state).await
+pub async fn cmd_codex_install_mcp_server(
+    state: State<'_, CommandState>,
+) -> Result<(), CommandError> {
+    r_code_host::commands::codex_install_mcp_server(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 用户一次确认后，更新协作 Skill 并补齐 R-Code MCP 配置。
 #[tauri::command]
 pub async fn cmd_codex_setup_collaboration(
     state: State<'_, CommandState>,
-) -> Result<serde_json::Value, String> {
-    r_code_host::commands::codex_setup_collaboration(&state).await
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::codex_setup_collaboration(&state)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 仅在 Codex 已登录后读取 CLI 实际可用模型与当前运行偏好。
 #[tauri::command]
-pub async fn cmd_codex_cli_preferences() -> Result<CodexCliPreferences, String> {
-    r_code_host::commands::codex_cli_preferences().await
+pub async fn cmd_codex_cli_preferences() -> Result<CodexCliPreferences, CommandError> {
+    r_code_host::commands::codex_cli_preferences()
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 保存 Codex CLI 的模型、推理强度、回复详细度与子代理权限；空模型字段恢复默认。
@@ -1880,7 +2268,7 @@ pub async fn cmd_codex_save_cli_preferences(
     reasoning_effort: Option<String>,
     verbosity: Option<String>,
     permission_mode: Option<String>,
-) -> Result<CodexCliPreferences, String> {
+) -> Result<CodexCliPreferences, CommandError> {
     r_code_host::commands::codex_save_cli_preferences(
         &state,
         model.as_deref(),
@@ -1889,6 +2277,7 @@ pub async fn cmd_codex_save_cli_preferences(
         permission_mode.as_deref(),
     )
     .await
+    .map_err(CommandError::from)
 }
 
 /// 列出工作区目录的直接子项（仅限受信任工作区）。
@@ -1897,8 +2286,10 @@ pub async fn cmd_file_list(
     state: State<'_, CommandState>,
     workspace_path: String,
     path: Option<String>,
-) -> Result<r_code_host::commands::FileTreeListing, String> {
-    r_code_host::commands::file_list(&state, &workspace_path, path.as_deref()).await
+) -> Result<r_code_host::commands::FileTreeListing, CommandError> {
+    r_code_host::commands::file_list(&state, &workspace_path, path.as_deref())
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 读取文件内容（限制在 project_root 内，512 KiB 截断）。
@@ -1907,8 +2298,10 @@ pub async fn cmd_file_read(
     state: State<'_, CommandState>,
     workspace_path: String,
     path: String,
-) -> Result<r_code_host::commands::FileContent, String> {
-    r_code_host::commands::file_read(&state, &workspace_path, &path).await
+) -> Result<r_code_host::commands::FileContent, CommandError> {
+    r_code_host::commands::file_read(&state, &workspace_path, &path)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 保存已经读取的文本文件；修订标识不匹配时拒绝覆盖磁盘上的新内容。
@@ -1919,9 +2312,10 @@ pub async fn cmd_file_write(
     path: String,
     content: String,
     expected_revision: String,
-) -> Result<r_code_host::commands::FileContent, String> {
+) -> Result<r_code_host::commands::FileContent, CommandError> {
     r_code_host::commands::file_write(&state, &workspace_path, &path, &content, &expected_revision)
         .await
+        .map_err(CommandError::from)
 }
 
 /// Resolve a local Markdown/artifact target and classify it against the attached workspace.
@@ -1930,8 +2324,9 @@ pub async fn cmd_local_file_target(
     state: State<'_, CommandState>,
     workspace_path: Option<String>,
     reference: String,
-) -> Result<r_code_host::commands::LocalFileTarget, String> {
+) -> Result<r_code_host::commands::LocalFileTarget, CommandError> {
     r_code_host::commands::resolve_local_file_target(&state, workspace_path.as_deref(), &reference)
+        .map_err(CommandError::from)
 }
 
 /// Return bounded image bytes through Tauri's binary IPC response (not JSON/base64).
@@ -1940,7 +2335,7 @@ pub async fn cmd_local_image_preview(
     state: State<'_, CommandState>,
     workspace_path: Option<String>,
     reference: String,
-) -> Result<tauri::ipc::Response, String> {
+) -> Result<tauri::ipc::Response, CommandError> {
     let (_, bytes) =
         r_code_host::commands::local_image_preview(&state, workspace_path.as_deref(), &reference)?;
     Ok(tauri::ipc::Response::new(bytes))
@@ -1948,13 +2343,14 @@ pub async fn cmd_local_image_preview(
 
 /// Reveal an already resolved local path using the platform file manager.
 #[tauri::command]
-pub async fn cmd_reveal_local_path(path: String) -> Result<(), String> {
+pub async fn cmd_reveal_local_path(path: String) -> Result<(), CommandError> {
     r_code_host::system_integration::reveal_in_file_manager(std::path::Path::new(&path))
+        .map_err(CommandError::from)
 }
 
 /// Make room for the docked workbench without granting window-mutation permissions to JS.
 #[tauri::command]
-pub async fn cmd_prepare_workbench_window(window: WebviewWindow) -> Result<bool, String> {
+pub async fn cmd_prepare_workbench_window(window: WebviewWindow) -> Result<bool, CommandError> {
     if window.is_maximized().map_err(|error| error.to_string())?
         || window.is_fullscreen().map_err(|error| error.to_string())?
     {
@@ -2005,8 +2401,10 @@ pub async fn cmd_prepare_workbench_window(window: WebviewWindow) -> Result<bool,
 pub async fn cmd_verification_output(
     state: State<'_, CommandState>,
     id: String,
-) -> Result<String, String> {
-    r_code_host::commands::verification_output(&state, &id).await
+) -> Result<String, CommandError> {
+    r_code_host::commands::verification_output(&state, &id)
+        .await
+        .map_err(CommandError::from)
 }
 
 #[cfg(test)]

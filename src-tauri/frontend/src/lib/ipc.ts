@@ -117,11 +117,11 @@ import {
   shouldUseBrowserMock,
 } from "./mock-data";
 import { browserMockInvoke } from "./browser-mock-runtime";
-import { toUserFacingIpcError } from "./ipc-error";
+import { commandErrorPayload, IpcCommandError, toUserFacingIpcError } from "./ipc-error";
 import type { UpdaterSnapshot } from "./updater-contract";
 import { APPLICATION_UPDATER_STATE_EVENT } from "./updater-contract";
 
-export { UserFacingIpcError, type UserFacingErrorPayload } from "./ipc-error";
+export { IpcCommandError, UserFacingIpcError, type UserFacingErrorPayload } from "./ipc-error";
 
 export const PROJECT_CONVERSATION_LIMIT_REACHED_CODE =
   "PROJECT_CONVERSATION_LIMIT_REACHED";
@@ -129,24 +129,6 @@ export const PROJECT_CONVERSATION_LIMIT_REACHED_CODE =
 /** RTK 安装后二进制被安全软件（通常为 Windows Defender）拦截或隔离。 */
 export const RTK_BLOCKED_BY_SECURITY_SOFTWARE =
   "RTK_BLOCKED_BY_SECURITY_SOFTWARE";
-
-interface CommandErrorPayload {
-  code: string;
-  message: string;
-  limit?: number;
-}
-
-export class IpcCommandError extends Error {
-  readonly code: string;
-  readonly limit?: number;
-
-  constructor(payload: CommandErrorPayload) {
-    super(payload.message);
-    this.name = "IpcCommandError";
-    this.code = payload.code;
-    this.limit = payload.limit;
-  }
-}
 
 const LEGACY_COMPANION_ENSURE_MISSING_ERROR =
   "Command cmd_companion_ensure not found";
@@ -156,17 +138,6 @@ function isLegacyCompanionEnsureMissing(cause: unknown): boolean {
   if (cause instanceof Error) return cause.message === LEGACY_COMPANION_ENSURE_MISSING_ERROR;
   if (typeof cause !== "object" || cause == null) return false;
   return (cause as Record<string, unknown>).message === LEGACY_COMPANION_ENSURE_MISSING_ERROR;
-}
-
-function commandErrorPayload(cause: unknown): CommandErrorPayload | null {
-  if (typeof cause !== "object" || cause == null) return null;
-  const candidate = cause as Record<string, unknown>;
-  if (typeof candidate.code !== "string" || typeof candidate.message !== "string") return null;
-  return {
-    code: candidate.code,
-    message: candidate.message,
-    ...(typeof candidate.limit === "number" ? { limit: candidate.limit } : {}),
-  };
 }
 
 async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<T> {
