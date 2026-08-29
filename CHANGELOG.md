@@ -6,6 +6,43 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-29
+
+### Fixed
+
+- Windows 下 Codex 子进程孤儿回收：codex app-server / mcp-server / 一次性 CLI 经 `cmd.exe` 启动时，结束/超时改为整棵进程树终止（`taskkill /T`），不再留下持有文件锁与端口的 node 后代。
+- Codex 工具输出缓冲去二次方开销：超长输出增量计数 + 一次截断，1MB 级工具输出不再卡死 UI。
+- 会话崩溃恢复：运行后台任务异常退出时自动收敛为「已中断」终态并释放占用（不再永久卡"运行中"直到重启）；运行主路径的锁中毒改为降级恢复而非连锁 panic。
+- 子代理报告总结超时（120s）自动回退到安全摘要；Codex 停发的半开连接由 120s 空闲 watchdog 终止。
+- 修复「返回运行与子代理」入口：此前会误收起整个右侧边栏；现只关闭子代理列表回到该面板。
+- 子代理列表运行态改为显示子代理自身呼吸灯头像（此前是统一加载圆环）。
+
+### Changed
+
+- IPC 命令错误改为结构化错误：`{ code, message }` 稳定错误码 + i18n UserFacing 通道，前端可精准提示（含项目对话上限、权限拒绝等类别），不再只展示拍平的字符串。
+- Provider 请求经 `Arc` 共享：会话长时（几十轮工具调用）每轮不再整份深拷贝全部消息与工具目录，流式渲染更省内存与 CPU。
+- Markdown 流式渲染增量解析：只重解析活跃尾块，已完成块缓存，长回答流式滚动更流畅。
+- 空闲轮询降频：任务详情 / git 状态 / 验证记录在空闲时降到数秒一次（运行中仍跟手）；终端列表折叠时降频。
+- 配置原子写入：主配置 / feature flags / MCP settings 改为临时文件 + rename 原子替换，写一半崩溃不再留损坏文件。
+- Provider 名称身份判定统一到单一实现；模型服务设置页的 DeepSeek Responses 模型集改由服务端目录驱动。
+
+### Added
+
+- Provider 调用指标：`cmd_provider_metrics` 暴露进程级 requests / failures / retries / aborted / 延迟聚合，诊断命令直读。
+- 配置 schema 版本：`config.toml` 写入 schema_version，宿主加载时显式拒绝「未来版本」配置（防止升级后配置被静默吞掉）。会话日志新增单日 64 MiB 字节上限（跨日自动重置）。
+
+### Security
+
+- 工作区 `.r-code/config.toml` 不再能改写 provider 网络面字段（base_url / api_key / protocol / provider_kind）——默认剥除并留痕，防止仓库内低信任文件重定向请求到攻击者网关。
+- `cmd_reveal_local_path` 只接受已解析的绝对路径（canonicalize + 拒相对路径），不再放行 WebView 任意拼的路径。
+- IPC 写帧显式拒绝超过 16 MiB 的负载（不再静默截断）。
+- 安装器 `/BRANDED_PROGRESS` 进度文件写入限定 `$TEMP` 前缀。
+
+### Performance
+
+- 日志启动水合改反向分块 tail 读（只解析最近 1000 条，不再全量解析 7 天文件）；控制台格式器与落盘同源脱敏。
+- 会话消息/工具目录/权限摘要的序列化次数削减；`SessionStore` 锁注册表改容量阈值懒清理。
+
 ## [1.0.0] - 2026-08-23
 
 ### Added
@@ -349,5 +386,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.3.3]: https://github.com/foritin/r-code/releases/tag/v0.3.3
 [0.9.0]: https://github.com/foritin/r-code/releases/tag/v0.9.0
 [0.9.1]: https://github.com/foritin/r-code/releases/tag/v0.9.1
-[Unreleased]: https://github.com/foritin/r-code/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/foritin/r-code/releases/tag/v1.0.0
+[Unreleased]: https://github.com/foritin/r-code/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/foritin/r-code/releases/tag/v1.0.1
