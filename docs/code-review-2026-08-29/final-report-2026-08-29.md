@@ -1,7 +1,7 @@
 # 最终交付报告 — 全仓 Code Review + 根因级修复（2026-08-29）
 
 **分支**：`feat/code-review-2026-08-29`（自 main 49f9193；全部提交仅落此分支，未推送）
-**范围**：阶段 A 九维度全仓 review（92 findings）→ 阶段 B 修复执行（**21/21 任务全部完成**；含续期会话交付的 FX-08/11/15/16）
+**范围**：阶段 A 九维度全仓 review（92 findings）→ 阶段 B 修复执行（**22/22 任务全部完成**；含续期会话交付的 FX-08/11/15/16，及 review 后用户症状溯源补充的 FX-21/F-robust-11）
 
 ---
 
@@ -31,7 +31,7 @@
 
 ## 二、修复统计（阶段 B）
 
-19/21 任务完成，17 个功能提交 + 3 个文档/保全提交：
+22/22 任务完成（含续期与 review 后补充交付；提交对照见下表与 git log）：
 
 | 任务 | 提交 | 内容 |
 | --- | --- | --- |
@@ -51,6 +51,7 @@
 | FX-12 | 7abba1d | 配置原子写统一 fs_util::atomic_write（settings/feature_flags/mcp_settings）；版本字段受 vendor 约束记遗留 |
 | FX-19 | add69cf | MCP 失败驱逐半死会话；应用退出收束终端 PTY（kill_all 并入 2s 退出预算） |
 | FX-20 | e9b2ff5 | 工作区 provider 网络面覆盖 fail-closed（base_url/api_key/protocol/provider_kind 剥除+留痕）；NSIS 进度文件限 $TEMP 前缀；CSP 副本对齐权威源并注明 |
+| FX-21 | 80770be | **major（review 后补充，F-robust-11）**：护栏刹停子代理零信息回传——两处跳闸改一次无工具收尾总结（专用提示携带跳闸原因；总结请求失败即 break 不重试，防 tripped 后带工具失控）、summary 在 LLM 压缩后拼 `[guard-trip]` 标注与原因（父代理可分辨「被刹停」与「干完了」）、`final_subagent_report` 向前回退取末条非空正文（保住边干边写的中间汇报）；+2 测试 |
 | FX-13 | 864be33 | 单日日志 64MB 字节上限（跨日重置、内存缓冲不受影响）；启动水合反向分块 tail 读（10000 行只读尾部）；控制台格式器与落盘同源脱敏 |
 | FX-14 | 21f02aa | provider 调用指标（requests/failures/retries/aborted/延迟聚合，AgentLoopOutcome 增 stream_recoveries）+ cmd_provider_metrics 暴露 |
 | FX-17 | 3ff8375 | 前端格式化收敛：formatDurationMs/formatDateTimeMedium/formatDateTimeCompact 唯一实现，三处本地副本改委托（tsc 0 错误） |
@@ -62,6 +63,7 @@
 ## 三、测试与验证（最终回归）
 
 - **cargo 全仓**：`evidence/final-cargo-test5.log` —— **2336 通过 / 0 失败 / EXIT=0**（含 vendor 子模块 agent-contracts 全量；基线 1661/1，唯一失败为环境性 symlink 特权问题且已由 FX-18 修复）。workspace clippy `--all-targets` **0 warning / 0 error**（`-D warnings` 语义下安全）。vendor 子模块 commit：87030cc（4 项健壮性修复）、6eb9271+459cb17（Arc 契约）、7e24fa3（config schema），每次均以 gitlink 成对记录且 `PIN_OK`。
+- **FX-21 后复跑（2026-08-29 收尾）**：cargo 全仓 `--workspace --all-features` **2338 通过 / 0 失败 / EXIT=0**（较 2336 净增 2 为 FX-21 新测试）；`r-code-agent-worker` clippy `--all-targets` 0 warning。
 - **过程中分项**：host lib 707/707、agent-worker 302/302、core 174+、store 519+、gateway 226/226、mcp 17/17、meta 测试 82/82、金集 fast 41/41。
 - **全仓 0 warning**（cargo check --workspace --all-targets；CI clippy -D warnings 可过）。
 - **前端**：tsc --noEmit 0 错误；build 验证 `evidence/final-frontend-build2.log`（EXIT=0）；受影响测试文件（memory-ui 5/5、runs-panel-v2 4/4、codex-message-stream 3/3、structured-command-error 5/5、user-error-contract 3/3[顺修 Windows pathname 缺陷]、long-content-performance 8/8[含 FX-16 新断言]）绿。**全量 npm test 未在最终态重跑**（基线 249/304，53 个既有失败属用户 WIP 重构中源文件 + 本地 Playwright 超时，见 KNOWN-FAILURES.md；修复任务验收均以"不新增失败"为口径逐文件验证）。
