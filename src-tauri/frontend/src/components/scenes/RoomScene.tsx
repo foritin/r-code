@@ -351,9 +351,12 @@ export function RoomScene() {
     else convoRef.current?.removeAttribute("inert");
   }, [workbenchMode]);
 
+  // FX-15 空闲降频：task_detail 一次拉 8 类数据；运行中保持 2s 跟手，
+  // 空闲（无活跃 run）降到 10s——状态迁移由 agent 事件与 r-code:refresh-now
+  // 即时唤醒，轮询只是兜底，不需要空闲时也全速。
   usePoll(
     () => (currentTaskId ? refreshDetail(currentTaskId) : undefined),
-    2000,
+    running ? 2000 : 10000,
     currentTaskId != null,
   );
 

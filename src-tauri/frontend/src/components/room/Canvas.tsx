@@ -1142,9 +1142,10 @@ function NormalChangesPanel({
     }
   }, [taskId]);
 
+  // FX-15：git status 是真实子进程；运行中 2s 跟手，空闲降到 8s。
   usePoll(async () => {
     await refreshGitStatus();
-  }, 2000, true, "审核变更");
+  }, running ? 2000 : 8000, true, "审核变更");
 
   useEffect(() => () => {
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
@@ -2741,7 +2742,8 @@ function TerminalPanel({
 
   // 状态由真实 PTY 输出和 shell integration 推进；定期刷新列表才能及时显示
   // Busy / Agent / Exited，而不是只在第一次打开画布时读到一份静态状态。
-  usePoll(list, 1200, true);
+  // FX-15：侧栏折叠时看不到状态行，降到 8s 省 IPC。
+  usePoll(list, sidebarCollapsed ? 8000 : 1200, true);
 
   const sel = selId;
   const selIndex = terms.findIndex((item) => item.id === sel);
@@ -2988,7 +2990,8 @@ function ReviewPanel({ taskId }: { taskId: string }) {
         setError(String(e));
       }
     },
-    2000,
+    // FX-15：验证记录只在任务推进时高频有意义；空闲降到 8s。
+    taskState === "in_progress" || taskState === "exploring" ? 2000 : 8000,
     true
   );
 
