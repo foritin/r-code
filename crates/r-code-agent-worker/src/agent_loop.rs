@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_contract::{
@@ -836,9 +837,9 @@ where
     // P1-E：冻结请求供流中断重放（重试字节与首试逐字节一致，不破坏前缀缓存）。
     // 重放只覆盖「流中断且尚无任何输出」的线路故障场景；MaxTokens 预算终态
     // 从不重放（docs §6.5），因此冻结请求在本次迭代内不再被改写。
-    // request 在此之后不再使用：直接 move 为冻结副本，消掉一次含全部
-    // messages+tools 的整份克隆（F-perf-02；重试时仍从冻结副本逐次克隆）。
-    let attempt_request = request;
+    // request 在此之后不再使用：包成 Arc 冻结，重试只做 Arc 引用计数，
+    // 不再整份深拷贝 messages/tools（F-perf-02）。
+    let attempt_request = Arc::new(request);
     let mut stream_recoveries: u32 = 0;
     let mut empty_response_recoveries: u32 = 0;
 
@@ -882,7 +883,7 @@ where
         // 「服务未返回内容」两种空响应终态。
         let mut stop_reason_max_tokens = false;
 
-        let connection = provider.stream(attempt_request.clone());
+        let connection = provider.stream(Arc::clone(&attempt_request));
         tokio::pin!(connection);
         let connect_deadline = tokio::time::sleep(LLM_PROVIDER_CONNECT_TIMEOUT);
         tokio::pin!(connect_deadline);
@@ -1489,13 +1490,13 @@ mod tests {
 
     #[async_trait]
     impl LlmProvider for ReasoningEchoProvider {
-        async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+        async fn complete(&self, request: Arc<CompletionRequest>) -> Result<CompletionResponse> {
             self.inner.complete(request).await
         }
 
         async fn stream(
             &self,
-            request: CompletionRequest,
+            request: Arc<CompletionRequest>,
         ) -> Result<futures::stream::BoxStream<'static, StreamEvent>> {
             self.inner.stream(request).await
         }
@@ -1715,7 +1716,7 @@ mod tests {
 
     #[async_trait]
     impl LlmProvider for PendingConnectProvider {
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+        async fn complete(&self, _request: Arc<CompletionRequest>) -> Result<CompletionResponse> {
             Err(Error::Internal(
                 "PendingConnectProvider only supports stream".to_string(),
             ))
@@ -1723,7 +1724,7 @@ mod tests {
 
         async fn stream(
             &self,
-            _request: CompletionRequest,
+            _request: Arc<CompletionRequest>,
         ) -> Result<futures::stream::BoxStream<'static, StreamEvent>> {
             let _drop = DropFlag(self.dropped.clone());
             self.started.store(true, Ordering::SeqCst);
@@ -1895,7 +1896,7 @@ mod tests {
 
     #[async_trait]
     impl LlmProvider for RecordingProvider {
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+        async fn complete(&self, _request: Arc<CompletionRequest>) -> Result<CompletionResponse> {
             Err(Error::Internal(
                 "RecordingProvider only supports stream".to_string(),
             ))
@@ -1903,9 +1904,9 @@ mod tests {
 
         async fn stream(
             &self,
-            request: CompletionRequest,
+            request: Arc<CompletionRequest>,
         ) -> Result<futures::stream::BoxStream<'static, StreamEvent>> {
-            self.requests.lock().unwrap().push(request.messages);
+            self.requests.lock().unwrap().push(request.messages.clone());
             Ok(Box::pin(futures::stream::iter(vec![
                 StreamEvent::TextDelta {
                     text: "recovered".to_string(),
@@ -3529,13 +3530,13 @@ mod tests {
 
     #[async_trait]
     impl LlmProvider for MaxTokensCaptureProvider {
-        async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+        async fn complete(&self, request: Arc<CompletionRequest>) -> Result<CompletionResponse> {
             self.inner.complete(request).await
         }
 
         async fn stream(
             &self,
-            request: CompletionRequest,
+            request: Arc<CompletionRequest>,
         ) -> Result<futures::stream::BoxStream<'static, StreamEvent>> {
             self.seen
                 .lock()

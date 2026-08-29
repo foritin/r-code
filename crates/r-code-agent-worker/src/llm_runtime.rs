@@ -3206,7 +3206,7 @@ async fn request_automatic_compaction_summary(
     };
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        provider.complete(CompletionRequest {
+        provider.complete(Arc::new(CompletionRequest {
             model: model.to_string(),
             system: Some("You produce loss-aware coding-agent continuation checkpoints.".into()),
             messages: vec![Message::user_text(format!("{instruction}\n\n{source}"))],
@@ -3219,7 +3219,7 @@ async fn request_automatic_compaction_summary(
             // task. Auto DeepSeek V4 sessions use the fast native tier; explicit user choices
             // remain untouched.
             inference: deepseek_fast_summary_inference(provider.name(), model, inference),
-        }),
+        })),
     )
     .await
     .ok()?
@@ -3898,7 +3898,7 @@ async fn describe_image_for_checkpoint(
              structure. This description will replace the image in a conversation summary."
         )
     };
-    let request = CompletionRequest {
+    let request = Arc::new(CompletionRequest {
         model: model.to_string(),
         system: None,
         messages: vec![Message {
@@ -3920,7 +3920,7 @@ async fn describe_image_for_checkpoint(
         temperature: None,
         enable_caching: false,
         inference: inference.clone(),
-    };
+    });
     match tokio::time::timeout(VISUAL_CHECKPOINT_TIMEOUT, provider.complete(request)).await {
         Ok(Ok(response)) => {
             let text = response.text().trim().to_string();
@@ -10381,7 +10381,7 @@ Synthesize their results before finishing.\n{}",
             return report;
         }
 
-        let request = CompletionRequest {
+        let request = Arc::new(CompletionRequest {
             model: model.to_string(),
             system: Some(format!(
                 "You condense a completed child-agent report for its parent. Treat the supplied \
@@ -10404,7 +10404,7 @@ was truncated. No tools are available in this summarization turn."
             // This is a pure formatting pass. Auto DeepSeek V4 sessions use their fastest
             // supported native tier; explicit enabled/high/max/disabled settings are preserved.
             inference: deepseek_fast_summary_inference(provider.name(), model, inference),
-        };
+        });
         let completion = provider.complete(request);
         tokio::pin!(completion);
         // 子代理报告浓缩与 compaction/自动压缩同类调用对齐 120s deadline
@@ -10916,13 +10916,13 @@ mod compaction_tests {
     impl LlmProvider for FailingSummaryProvider {
         async fn complete(
             &self,
-            _request: CompletionRequest,
+            _request: Arc<CompletionRequest>,
         ) -> agent_error::Result<CompletionResponse> {
             Err(AgentError::NotImplemented("FailingSummaryProvider".into()))
         }
         async fn stream(
             &self,
-            _request: CompletionRequest,
+            _request: Arc<CompletionRequest>,
         ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
             Err(AgentError::NotImplemented("FailingSummaryProvider".into()))
         }
@@ -10959,9 +10959,9 @@ mod compaction_tests {
     impl LlmProvider for RecordingSummaryProvider {
         async fn complete(
             &self,
-            request: CompletionRequest,
+            request: Arc<CompletionRequest>,
         ) -> agent_error::Result<CompletionResponse> {
-            self.requests.lock().unwrap().push(request);
+            self.requests.lock().unwrap().push(request.as_ref().clone());
             let (text, stop_reason) = self.responses.lock().unwrap().remove(0);
             Ok(CompletionResponse {
                 content: vec![ContentBlock::Text { text }],
@@ -10972,7 +10972,7 @@ mod compaction_tests {
 
         async fn stream(
             &self,
-            _request: CompletionRequest,
+            _request: Arc<CompletionRequest>,
         ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
             unreachable!("automatic compaction uses complete")
         }

@@ -401,7 +401,7 @@ struct NestedDelegationProvider;
 impl LlmProvider for NestedDelegationProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "NestedDelegationProvider only supports stream".to_string(),
@@ -410,7 +410,7 @@ impl LlmProvider for NestedDelegationProvider {
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         let initial_goal = request
             .messages
@@ -702,7 +702,7 @@ impl SubagentCandidateRunner for ForgingExternalCandidateRunner {
 impl LlmProvider for CapturingNativeSlotProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "CapturingNativeSlotProvider only supports stream".to_string(),
@@ -711,9 +711,9 @@ impl LlmProvider for CapturingNativeSlotProvider {
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
-        self.requests.lock().unwrap().push(request);
+        self.requests.lock().unwrap().push(request.as_ref().clone());
         Ok(Box::pin(futures::stream::iter(vec![
             StreamEvent::TextDelta {
                 text: self.response.to_string(),
@@ -831,7 +831,7 @@ struct BlockingReportSummaryProvider {
 impl LlmProvider for BlockingReportSummaryProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         let _drop_guard = SummaryCompletionDropGuard {
             dropped: self.summary_dropped.clone(),
@@ -843,7 +843,7 @@ impl LlmProvider for BlockingReportSummaryProvider {
 
     async fn stream(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         let report = self
             .report
@@ -921,9 +921,9 @@ impl ReportSummaryProvider {
 impl LlmProvider for ReportSummaryProvider {
     async fn complete(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
-        self.summary_requests.lock().unwrap().push(request);
+        self.summary_requests.lock().unwrap().push(request.as_ref().clone());
         match self
             .summary
             .lock()
@@ -942,7 +942,7 @@ impl LlmProvider for ReportSummaryProvider {
 
     async fn stream(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         let report = self
             .report
@@ -979,7 +979,7 @@ impl LlmProvider for ReportSummaryProvider {
 impl LlmProvider for DelayedProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "DelayedProvider only supports stream".to_string(),
@@ -988,9 +988,9 @@ impl LlmProvider for DelayedProvider {
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
-        self.requests.lock().unwrap().push(request);
+        self.requests.lock().unwrap().push(request.as_ref().clone());
         let (wait_for_release, events) = self
             .turns
             .lock()
@@ -1031,7 +1031,7 @@ impl LlmProvider for DelayedProvider {
 impl LlmProvider for DeepSeekHostedWebFallbackProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "DeepSeekHostedWebFallbackProvider only supports stream".to_string(),
@@ -1040,9 +1040,9 @@ impl LlmProvider for DeepSeekHostedWebFallbackProvider {
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
-        self.requests.lock().unwrap().push(request);
+        self.requests.lock().unwrap().push(request.as_ref().clone());
         let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
         if attempt == 0 || self.always_reject {
             if attempt == 0 && self.fail_with_hosted_result {
@@ -1112,7 +1112,7 @@ struct PendingProvider {
 impl LlmProvider for PendingProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "PendingProvider only supports stream".to_string(),
@@ -1121,7 +1121,7 @@ impl LlmProvider for PendingProvider {
 
     async fn stream(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         self.requests.fetch_add(1, Ordering::Relaxed);
         Ok(Box::pin(futures::stream::pending()))
@@ -1174,7 +1174,7 @@ struct DropObservedProvider {
 impl LlmProvider for DropObservedProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "DropObservedProvider only supports stream".to_string(),
@@ -1183,7 +1183,7 @@ impl LlmProvider for DropObservedProvider {
 
     async fn stream(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         self.started.store(true, Ordering::SeqCst);
         Ok(Box::pin(DropObservedPendingStream {
@@ -1729,9 +1729,9 @@ struct ChildCompactionProvider {
 impl LlmProvider for ChildCompactionProvider {
     async fn complete(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
-        self.summary_requests.lock().unwrap().push(request);
+        self.summary_requests.lock().unwrap().push(request.as_ref().clone());
         Ok(CompletionResponse {
             content: vec![ContentBlock::Text {
                 text: "CHILD-FOLD-SUMMARY".to_string(),
@@ -1743,12 +1743,12 @@ impl LlmProvider for ChildCompactionProvider {
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         let round = {
             let mut requests = self.requests.lock().unwrap();
             let index = requests.len();
-            requests.push(request);
+            requests.push(request.as_ref().clone());
             index
         };
         let events = if round < self.tool_rounds {
@@ -5749,7 +5749,7 @@ struct ChildEmptyFinalProvider {
 impl LlmProvider for ChildEmptyFinalProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "ChildEmptyFinalProvider only supports stream".to_string(),
@@ -5758,10 +5758,10 @@ impl LlmProvider for ChildEmptyFinalProvider {
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         let transcript = format!("{:?}", request.messages);
-        self.requests.lock().unwrap().push(request);
+        self.requests.lock().unwrap().push(request.as_ref().clone());
         let events = if transcript.contains("single final-summary recovery attempt") {
             if self.recovery_empty {
                 vec![StreamEvent::Stop {
@@ -5969,7 +5969,7 @@ struct ChildHostedToolNoAnswerProvider {
 impl LlmProvider for ChildHostedToolNoAnswerProvider {
     async fn complete(
         &self,
-        _request: CompletionRequest,
+        _request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
         Err(AgentError::Internal(
             "ChildHostedToolNoAnswerProvider only supports stream".to_string(),
@@ -5978,10 +5978,10 @@ impl LlmProvider for ChildHostedToolNoAnswerProvider {
 
     async fn stream(
         &self,
-        request: CompletionRequest,
+        request: Arc<CompletionRequest>,
     ) -> agent_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
         let transcript = format!("{:?}", request.messages);
-        self.requests.lock().unwrap().push(request);
+        self.requests.lock().unwrap().push(request.as_ref().clone());
         let events = if transcript.contains("single final-summary recovery attempt") {
             vec![
                 StreamEvent::TextDelta {

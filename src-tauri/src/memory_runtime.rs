@@ -83,7 +83,7 @@ async fn execute_claim(
         .map_err(|error| ("invalid_review_output", error.to_string()))?;
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        provider.complete(CompletionRequest {
+        provider.complete(Arc::new(CompletionRequest {
             model: claim.reviewer.model.clone(),
             system: Some(reviewer_system_prompt().to_string()),
             messages: vec![Message::user_text(format!(
@@ -95,7 +95,7 @@ async fn execute_claim(
             temperature: Some(0.1),
             enable_caching: false,
             inference: InferenceOptions::default(),
-        }),
+        })),
     )
     .await
     .map_err(|_| ("provider_request_failed", "memory review timed out".to_string()))?

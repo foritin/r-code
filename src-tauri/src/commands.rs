@@ -3298,7 +3298,7 @@ async fn request_compaction_summary(
     for attempt in 0..2 {
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            provider.complete(CompletionRequest {
+            provider.complete(Arc::new(CompletionRequest {
                 model: model.to_string(),
                 system: Some("你是精确的会话上下文压缩器。只返回结构化摘要。".to_string()),
                 messages: vec![Message::user_text(prompt.clone())],
@@ -3308,7 +3308,7 @@ async fn request_compaction_summary(
                 temperature: Some(0.1),
                 enable_caching: false,
                 inference: inference.clone(),
-            }),
+            })),
         )
         .await
         .map_err(|_| "生成上下文摘要超时，请稍后重试".to_string())?
@@ -7114,7 +7114,7 @@ async fn apply_vision_model_understanding(
             async move {
                 match timeout(
                     IMAGE_UNDERSTANDING_MODEL_TIMEOUT,
-                    provider.complete(request),
+                    provider.complete(Arc::new(request)),
                 )
                 .await
                 {
@@ -16102,7 +16102,7 @@ async fn run_api_subagent_probe(
     exact_config.model = model.to_string();
     let provider = agent_llm::create_provider(build_provider_config(provider_id, &exact_config))
         .map_err(|error| classify_subagent_probe_error(&err_str(error)))?;
-    let request = CompletionRequest {
+    let request = Arc::new(CompletionRequest {
         model: model.to_string(),
         system: Some("Connectivity probe. Reply with OK.".to_string()),
         messages: vec![Message::user_text("OK")],
@@ -16112,7 +16112,7 @@ async fn run_api_subagent_probe(
         temperature: Some(0.0),
         enable_caching: false,
         inference: InferenceOptions::default(),
-    };
+    });
     match timeout(SUBAGENT_PROVIDER_PROBE_TIMEOUT, provider.complete(request)).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(classify_subagent_probe_error(&err_str(error))),
@@ -27468,9 +27468,9 @@ input.on('line', (line) => {
     impl agent_contract::LlmProvider for CompactionTestProvider {
         async fn complete(
             &self,
-            request: CompletionRequest,
+            request: Arc<CompletionRequest>,
         ) -> agent_error::Result<agent_contract::CompletionResponse> {
-            self.requests.lock().unwrap().push(request);
+            self.requests.lock().unwrap().push(request.as_ref().clone());
             let mut responses = self.responses.lock().unwrap();
             let (text, stop_reason) = if responses.is_empty() {
                 (String::new(), agent_contract::StopReason::EndTurn)
@@ -27486,7 +27486,7 @@ input.on('line', (line) => {
 
         async fn stream(
             &self,
-            _request: CompletionRequest,
+            _request: Arc<CompletionRequest>,
         ) -> agent_error::Result<futures::stream::BoxStream<'static, agent_contract::StreamEvent>>
         {
             unreachable!("manual compaction uses complete")

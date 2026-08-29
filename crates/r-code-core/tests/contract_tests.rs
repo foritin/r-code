@@ -6,6 +6,8 @@
 //!
 //! 运行：`cargo test -p r-code-core --test contract_tests`
 
+use std::sync::Arc;
+
 use agent_compaction::{CompactionManager, SlidingWindowCompaction};
 use agent_config::Config;
 use agent_contract::*;
@@ -129,8 +131,8 @@ mod v_prov {
     use super::*;
     use futures::StreamExt;
 
-    fn mock_request() -> CompletionRequest {
-        CompletionRequest {
+    fn mock_request() -> Arc<CompletionRequest> {
+        Arc::new(CompletionRequest {
             model: "mock".into(),
             system: None,
             messages: vec![Message::user_text("hi")],
@@ -140,7 +142,7 @@ mod v_prov {
             temperature: None,
             enable_caching: false,
             inference: Default::default(),
-        }
+        })
     }
 
     /// V-PROV-01：MockProvider stream 依次产生 TextDelta / ToolUse / Usage / Done。

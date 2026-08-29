@@ -21,7 +21,7 @@
 //! P0-A 未落地的时间戳），守卫应归因 [`CacheChangeCause::System`] 并拉低命中率
 //! ——严格模式下断言变红，证明守卫确实在检测前缀字节稳定性（PRD P2-H 验收）。
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use agent_contract::{
     Capabilities, CompletionRequest, CompletionResponse, LlmProvider, Message, StopReason,
@@ -113,13 +113,13 @@ impl PrefixCacheMockProvider {
 
 #[async_trait]
 impl LlmProvider for PrefixCacheMockProvider {
-    async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+    async fn complete(&self, _request: Arc<CompletionRequest>) -> Result<CompletionResponse> {
         Err(Error::Internal(
             "PrefixCacheMockProvider only supports stream".to_string(),
         ))
     }
 
-    async fn stream(&self, request: CompletionRequest) -> Result<BoxStream<'static, StreamEvent>> {
+    async fn stream(&self, request: Arc<CompletionRequest>) -> Result<BoxStream<'static, StreamEvent>> {
         let mut state = self.state.lock().unwrap();
 
         // 公共前缀推导（对齐 Reasonix commonPrefixMsgs + charsOf，
