@@ -77,7 +77,7 @@
 
 ### 4.2 受外部约束的遗留 → 已全部处理（foritin/agent-contracts 子模块推进 + gitlink 记录）
 
-因 agent-contracts 子模块在仓库（`gh` 已认证为 foritin，可推送），以下 6 项全部在子模块内修复并对齐 gitlink（父指针 = 子模块 HEAD，CI submodule-pin 检查 `PIN_OK`）：
+因 agent-contracts 子模块在仓库（`gh` 已认证为 foritin），以下 6 项全部在子模块内修复并对齐 gitlink，且 4 个 commit 已推送 `foritin/agent-contracts` main（8e51287..7e24fa3，`SUBMODULE_SYNCED`；父指针 = 子模块 HEAD，CI submodule-pin 检查 `PIN_OK`）：
 
 | 项 | vendor commit | 交付 |
 | --- | --- | --- |
