@@ -187,13 +187,15 @@ jobs:
         if: matrix.os == 'windows-latest'
         working-directory: src-tauri/frontend
         run: npx playwright-core install chromium
-      # Windows 只跑真实依赖宿主 OS 行为的浏览器契约（Windows 路径/OCR、companion
+      # Windows 只跑真正依赖宿主 OS 行为的浏览器契约（Windows 路径/OCR、companion
       # 混合 DPI 坐标、原生窗口语义）；其余 e2e 全量在 ubuntu 的 Frontend job 覆盖，
       # 不再整套重复（整套串行约 7 分钟，且慢 runner 上的时序 flaky 大多来自这里）。
+      # companion.test.mjs 是纯静态源码断言（无 playwright/Chromium 依赖），已由 ubuntu
+      # Frontend job 的 npm test 全量覆盖，不再在 host-OS 腿重复（F-test-08）。
       - name: Test Windows frontend (host-OS contracts)
         if: matrix.os == 'windows-latest'
         working-directory: src-tauri/frontend
-        run: npm test -- app-shell.test.mjs companion-window-ui.test.mjs companion.test.mjs
+        run: npm test -- app-shell.test.mjs companion-window-ui.test.mjs
       - name: cargo test
         # Several workspace integration suites share process-global fixtures.
         # Serial execution avoids platform-dependent false hangs under CI load.
