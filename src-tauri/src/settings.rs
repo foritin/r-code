@@ -563,6 +563,16 @@ impl SettingsService {
         } else {
             Config::default()
         };
+        // FX-12：未来 schema 版本显式拒绝（旧文件反序列化到
+        // CONFIG_SCHEMA_VERSION=1，不会误报）。静默吞掉识别不了的字段
+        // 会让用户配置在升级后无声失效，加载即报错让用户知晓。
+        if config.schema_version > agent_config::CONFIG_SCHEMA_VERSION {
+            return Err(ProductError::ConfigError(format!(
+                "config schema version {} is newer than this build supports ({})",
+                config.schema_version,
+                agent_config::CONFIG_SCHEMA_VERSION
+            )));
+        }
         // Environment credentials have the highest runtime priority. Apply them before the
         // persisted-credential fallback so an explicitly supplied key never causes an unnecessary
         // platform store read.
@@ -1607,5 +1617,26 @@ model = "claude-sonnet-4"
             cfg.providers.get("anthropic").unwrap().api_key,
             "sk-from-env" // env 胜出
         );
+    }
+
+    #[test]
+    fn future_config_schema_version_is_rejected_explicitly() {
+        // FX-12：旧文件（无 schema_version）反序列化到 1；未来版本显式报错，
+        // 不静默吞掉识别不了的字段（否则配置升级后无声失效）。
+        let directory = tempfile::tempdir().unwrap();
+        let settings = SettingsService::new(directory.path().to_path_buf());
+
+        // 无版本旧文件 -> 默认 1，正常加载。
+        let plain = "default_provider = \"anthropic\"\nlog_level = \"info\"\n[providers.anthropic]\napi_key = \"x\"\nmodel = \"m\"\nbase_url = \"https://api.example\"\n";
+        std::fs::write(settings.config_path(), plain).unwrap();
+        let loaded = settings.load_global_unvalidated().unwrap();
+        assert_eq!(loaded.schema_version, agent_config::CONFIG_SCHEMA_VERSION);
+
+        // 未来版本 -> Err（顶层键需在 provider 段之前）。
+        let future = "schema_version = 99\ndefault_provider = \"anthropic\"\nlog_level = \"info\"\n[providers.anthropic]\napi_key = \"x\"\nmodel = \"m\"\nbase_url = \"https://api.example\"\n";
+        std::fs::write(settings.config_path(), future).unwrap();
+        let error = settings.load_global_unvalidated().unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("newer than this build supports"), "got: {text}");
     }
 }
