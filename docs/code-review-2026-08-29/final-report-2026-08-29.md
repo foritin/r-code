@@ -1,7 +1,7 @@
 # 最终交付报告 — 全仓 Code Review + 根因级修复（2026-08-29）
 
 **分支**：`feat/code-review-2026-08-29`（自 main 49f9193；全部提交仅落此分支，未推送）
-**范围**：阶段 A 九维度全仓 review（92 findings）→ 阶段 B 修复执行（19/21 任务完成）
+**范围**：阶段 A 九维度全仓 review（92 findings）→ 阶段 B 修复执行（**21/21 任务全部完成**；含续期会话交付的 FX-08/11/15/16）
 
 ---
 
@@ -54,25 +54,25 @@
 | FX-13 | 864be33 | 单日日志 64MB 字节上限（跨日重置、内存缓冲不受影响）；启动水合反向分块 tail 读（10000 行只读尾部）；控制台格式器与落盘同源脱敏 |
 | FX-14 | 21f02aa | provider 调用指标（requests/failures/retries/aborted/延迟聚合，AgentLoopOutcome 增 stream_recoveries）+ cmd_provider_metrics 暴露 |
 | FX-17 | 3ff8375 | 前端格式化收敛：formatDurationMs/formatDateTimeMedium/formatDateTimeCompact 唯一实现，三处本地副本改委托（tsc 0 错误） |
+| FX-08 | 15dfd2c | **major**：host 生产裸 SQL 全量收敛 `r-code-store::host_support`（17 个查询/事务函数 + 10 单测），恢复清理事务边界随迁 store；生产位点 rg 清零（schema 迁移与 bin 工具除外） |
+| FX-16 | 463f1b3 | **major**：Markdown 流式增量——fence 感知 `splitStreamTail` + 单调 `freezeStreamPartition` + Block memo 化；e2e 钉住重解析量 <25% 且断言围栏/列表完整性 |
+| FX-15 | 0ebcec6 | **major**：Room 轮询空闲降频——task_detail/git-status/verification 空闲 8-10s（运行中 2s 跟手）、终端列表折叠 8s；sessionMessages 游标增量记遗留切片 |
+| FX-11 | ee41a4b | **major**：IPC 结构化错误——既有 `CommandError` 单点增强（穷尽稳定码 + UserFacing i18n 形状），**176 个包装签名全量迁移**；前端归位 ipc-error.ts + 5 行为断言；限流/泛型码按既有钉子合同对齐（9fe1d63） |
 
 ## 三、测试与验证（最终回归）
 
-- **cargo 全仓**：`evidence/final-cargo-test.log` —— **2322 通过 / 0 失败 / EXIT=0**（76 个测试二进制；基线为 1661 通过 / 1 环境性失败，该失败已由 FX-18 修复）。
+- **cargo 全仓**：`evidence/final-cargo-test3.log` —— **2332 通过 / 0 失败 / EXIT=0**（FX-08/11/15/16 之后的最终态；基线 1661/1，唯一失败为环境性 symlink 特权问题且已由 FX-18 修复）。workspace clippy `--all-targets` **0 warning / 0 error**（`-D warnings` 语义下安全，含本地 rustc 1.98 新 lint 的既有位点最小修复，见 68372a8）。
 - **过程中分项**：host lib 707/707、agent-worker 302/302、core 174+、store 519+、gateway 226/226、mcp 17/17、meta 测试 82/82、金集 fast 41/41。
 - **全仓 0 warning**（cargo check --workspace --all-targets；CI clippy -D warnings 可过）。
-- **前端**：tsc --noEmit 0 错误；build 验证 `evidence/final-frontend-build.log`（EXIT=0）；受影响测试文件（memory-ui 5/5、runs-panel-v2 4/4、codex-message-stream 3/3）绿。**全量 npm test 未在最终态重跑**（基线 249/304，53 个既有失败属用户 WIP 重构中源文件 + 本地 Playwright 超时，见 KNOWN-FAILURES.md；修复任务验收均以"不新增失败"为口径逐文件验证）。
+- **前端**：tsc --noEmit 0 错误；build 验证 `evidence/final-frontend-build2.log`（EXIT=0）；受影响测试文件（memory-ui 5/5、runs-panel-v2 4/4、codex-message-stream 3/3、structured-command-error 5/5、user-error-contract 3/3[顺修 Windows pathname 缺陷]、long-content-performance 8/8[含 FX-16 新断言]）绿。**全量 npm test 未在最终态重跑**（基线 249/304，53 个既有失败属用户 WIP 重构中源文件 + 本地 Playwright 超时，见 KNOWN-FAILURES.md；修复任务验收均以"不新增失败"为口径逐文件验证）。
 - **未跑**：三平台 CI（本地仅 Windows；linux-cfg lint 有既有记忆盲区）、真机 macOS。
 
 ## 四、遗留清单（如实声明）
 
-### 4.1 本次未执行的修复任务（大体量，设计已在 fix-plan 冻结）
+### 4.1 续期会话补交付（原遗留 → 已完成）
 
-| 任务 | 覆盖 findings | 未执行原因 | 就绪度 |
-| --- | --- | --- | --- |
-| FX-08 host 裸 SQL 收敛到 store | F-arch-02 (major) | ~20 处生产 SQL 逐点迁移为 repository 方法 + 语义钉住，体量 ≈ 数小时级专项；commands.rs 为 41k 行上帝模块，迁移即拆分 campaign 首期 | 设计+位点清单在 fix-plan/findings |
-| FX-11 IPC 结构化错误契约 | F-corr-07 (major) | 177 个 command 签名迁移 + 前端错误规范化联动，同上体量 | 同上 |
-| FX-15 Room 轮询降频 | F-perf-07 (major) | 行为变更面大（轮询语义测试敏感），且 RoomScene/Canvas 为用户 WIP 重构中文件，风险叠加 | 设计在 fix-plan |
-| FX-16 Markdown 增量解析 | F-perf-09 (major) | 算法改造 + 渲染一致性钉住难度高，独立专项 | 设计在 fix-plan |
+初版报告遗留的 FX-08/11/15/16 已在续期会话全部交付（见第二节新增四行）。FX-15 中仅
+「sessionMessages 游标增量读取」子项未做（需后端读契约扩展），Room 轮询降频主体已生效。
 
 ### 4.2 受外部约束的遗留（需 foritin/agent-contracts 子模块推送，超出本分支授权）
 

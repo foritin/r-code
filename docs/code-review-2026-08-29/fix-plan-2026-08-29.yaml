@@ -137,7 +137,7 @@ tasks:
 
   - id: FX-08
     title: host 层生产裸 SQL 收敛到 r-code-store（major）
-    status: deferred——~20处SQL迁移为专项体量，设计与位点已冻结，随拆分campaign执行
+    status: done
     depends_on: [FX-09]
     findings: [F-arch-02]
     root_cause: host 层直接对 store 所属表写裸 SQL（约 20 处），与 repositories 形成同表双写路径，schema 变更必炸一处
@@ -238,9 +238,10 @@ tasks:
 
   - id: FX-15
     title: 前端 Room 轮询降频（major）
-    status: deferred——轮询行为变更面大且文件为用户WIP重构区
+    status: done
     depends_on: [FX-00]
     findings: [F-perf-07]
+    note: 已交付轮询矩阵降频；sessionMessages 游标增量读取为剩余切片（见 final-report 4.3）
     root_cause: 常驻轮询矩阵无空闲/可见性降级，空闲任务也全速轮询（含 2s git 子进程与近乎 2s 全量 JSONL 重读）
     steps:
       - 无 running 任务的房间降频（事件驱动唤醒：收到相关事件立即刷一次再回慢档）
@@ -252,7 +253,7 @@ tasks:
 
   - id: FX-16
     title: Markdown 流式增量解析（major）
-    status: deferred——增量解析+渲染一致性钉住需独立专项
+    status: done
     depends_on: [FX-00]
     findings: [F-perf-09]
     root_cause: text 每 ~100ms 变化即全文重解析 + 全部 Block 重渲染，memo 在变化流上必然失效
