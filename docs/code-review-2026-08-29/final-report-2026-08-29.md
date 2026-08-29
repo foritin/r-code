@@ -82,10 +82,24 @@ F-robust-04（anthropic SSE watchdog）、F-robust-09（退避抖动）、F-corr
 
 F-arch-01/04/05（commands.rs/llm_runtime 拆分——FX-07 已交付首片）、F-maint-05（39 个超长函数）、F-obs-12（i18n 3557 条硬编码，基线锁防增量）、F-test-02（unwrap lint 门禁需先清 159 处生产 unwrap；锁中毒类已由 FX-04 消除）、F-corr-10（store 43 个 async fn 同步 IO spawn_blocking 化）、FX-06 目录 Arc 管线（Vec 返回的 trait 链 + 逐轮 policy 过滤依赖）、FX-07 的 plan_entry_commands↔commands CommandState 环（随拆分 campaign 解）。
 
-### 4.4 minor 未修清单
+### 4.4 minor 未修清单（本轮续期逐步清零）
 
-F-sec-02/04/05/06、F-perf-11/12/13/14/15(部分)、F-maint-06/08/09/11、F-maint-10（.gitignore 补漏已在 FX-18 完成；根目录 *.log 建议人工清理，未代删）、F-test-05/07/08/09、F-obs-03（锁串行化部分）/09。
+**已修（本轮）**：
+- **F-sec-02**：`cmd_reveal_local_path` 加固——canonicalize 归一 + 拒相对路径直通，仅经 `resolve_local_file_target` 产出的绝对引用交文件管理器（保留外部 file:// 引用合法功能）。
+- **F-perf-12**：Codex 投影器 `items` 由线性 Vec+find 改 HashMap 索引 + 有序 id 向量，每条 delta 查找 O(n)→O(1)，插入序语义保持。
+- **F-perf-14 部分**：见 FX-13（dev 级 redact 已归入日志上限/水合 tail）。
+- **F-maint-06**：`ConfigRow`/`ConfigBack` 抽到 `room/model-config-ui.tsx` 共享，两组件本地副本删除。
+- **F-maint-08**：`DEEPSEEK_RESPONSES_MODELS` 前端手写集合改由 `presetOf("deepseek")?.models` 派生（单一事实源在 provider_catalog）。
+- **F-maint-09**：`PLAN_TOOL_NAMES` 改为由 `TOOL_DISPLAY_NAMES` 派生（逐字一致，含 `plan_subagents` 排除语义钉住）。
+- **F-corr-10 热点切片**：`change_service::list_changes` 同步 SQLite 移入 spawn_blocking（Room usePoll 热路径）。
+- **F-test-05**：slow 档金集（3 条 sleep/退出码/管道语义）补入 CI Windows 腿门禁 + 检查器改 fast+slow 双门禁断言，本地 slow 3/3。
+- **F-test-08**：`companion.test.mjs`（纯静态源码断言）从 host-OS Windows 腿移出，改由 ubuntu 全量 npm test 覆盖。
 
+**仍延后（记录理由，非失败）**：
+- F-sec-04/05/06、F-test-07/09：威胁模型内小面 / 机制选择 / 测试基建温和加固（27 处 <300ms 固定 sleep，改动面广）。
+- F-perf-11/13/15（剩余）、F-obs-03（锁串行化部分）：设计权衡，收益不足以支撑改动风险。
+- F-maint-11：task/session/run 语义大改名，需专项。
+- F-maint-10 剩余：根目录 *.log 为工程资产级 untracked 清理（人工作业）。
 ## 五、Revert 指引
 
 - 分支整体未合并、未推送：`git checkout main` 即回到原状；工作树无游离改动（全部已提交在本分支）。
