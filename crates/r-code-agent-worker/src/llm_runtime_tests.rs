@@ -4999,7 +4999,37 @@ fn short_subagent_report_preserves_markdown_verbatim() {
     let report = "# 调查结论\n\n- [关键实现](src/lib.rs#L42)\n- 保留段落与列表\n";
     let messages = vec![Message::assistant_text(report)];
 
-    assert_eq!(final_subagent_report(&messages), report);
+    assert_eq!(final_subagent_report(&messages).as_deref(), Some(report));
+}
+
+#[test]
+fn subagent_report_falls_back_past_tool_call_only_turns() {
+    // 护栏刹停等场景下，canonical 历史末尾的 assistant 轮是纯 tool-call（无
+    // 正文）；报告必须向前回退，保住模型边干边写的中间汇报，而不是退化为
+    // 占位文案。
+    let tool_call_turn = Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: "call-1".to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({ "path": "src/lib.rs" }),
+        }],
+    };
+    let messages = vec![
+        Message::user_text("调查 src/lib.rs"),
+        Message::assistant_text("中途汇报：已确认调用链，还差入口分析。"),
+        tool_call_turn.clone(),
+        Message::user_text("[tool] ok"),
+    ];
+
+    assert_eq!(
+        final_subagent_report(&messages).as_deref(),
+        Some("中途汇报：已确认调用链，还差入口分析。")
+    );
+    // 没有任何带正文的 assistant 轮时，明确返回 None 交给调用方兜底。
+    let messages = vec![Message::user_text("goal"), tool_call_turn];
+    assert_eq!(final_subagent_report(&messages), None);
+    assert_eq!(final_subagent_report(&[]), None);
 }
 
 #[tokio::test]
@@ -5058,6 +5088,74 @@ async fn long_subagent_report_uses_a_tool_free_summary_turn() {
         .messages
         .iter()
         .any(|message| message.text_content().contains("ORIGINAL-REPORT-END")));
+}
+
+#[tokio::test]
+async fn guard_tripped_child_hands_over_partial_results_with_trip_annotation() {
+    let provider = MockProvider::new("mock");
+    provider.push_turn(failing_read_turn("a"));
+    provider.push_turn(failing_read_turn("b"));
+    provider.push_turn(failing_read_turn("c"));
+    provider.push_text_turn("部分成果：已定位缺陷在解析层，尚未写修复。", Usage::default());
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = SubagentSupervisor::new(
+        Arc::new(provider),
+        test_gateway(),
+        None,
+        event_tx,
+        "task-1".to_string(),
+        "parent-run".to_string(),
+        "mock-model".to_string(),
+        512,
+        None,
+        InferenceOptions::default(),
+        Arc::new(AtomicBool::new(false)),
+        None,
+        None,
+        Arc::new(AtomicBool::new(true)),
+        OrchestrationPolicy {
+            run_budget: RunBudgetPolicy {
+                same_error_limit: 3,
+                ..RunBudgetPolicy::default()
+            },
+            ..OrchestrationPolicy::default()
+        },
+        AgentPromptPolicy::default(),
+    );
+
+    let started = supervisor
+        .spawn(
+            SubagentBackend::RCode,
+            Some("护栏刹停交接".to_string()),
+            "反复读同一个不存在文件".to_string(),
+            SubagentAccessMode::ReadOnly,
+            None,
+            "测试护栏收尾总结".to_string(),
+        )
+        .await
+        .unwrap();
+    let child_id = serde_json::from_str::<serde_json::Value>(&started.content).unwrap()
+        ["subagent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let collected = supervisor.collect(Some(vec![child_id])).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&collected.content).unwrap();
+
+    assert_eq!(payload["subagents"][0]["status"], "completed");
+    let summary = payload["subagents"][0]["summary"].as_str().unwrap();
+    assert!(
+        summary.contains("[guard-trip]"),
+        "summary 应带护栏标注：{summary}"
+    );
+    assert!(
+        summary.contains("同一错误"),
+        "summary 应含跳闸原因：{summary}"
+    );
+    assert!(
+        summary.contains("部分成果"),
+        "护栏刹停后必须交接收尾总结而不是占位文案：{summary}"
+    );
 }
 
 #[tokio::test]

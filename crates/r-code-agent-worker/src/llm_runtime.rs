@@ -61,6 +61,9 @@ const TOOL_PROGRESS_CHECKPOINT_INTERVAL: usize = 8;
 const MAX_REQUIRED_CONTINUATION_REPROMPTS: usize = 3;
 const FINAL_SUMMARY_RECOVERY_PROMPT: &str = "[system] The previous model turn ended without a visible assistant answer after tool execution. This is the single final-summary recovery attempt. Do not call tools. Based only on the conversation and recorded tool results, provide a concise user-facing final summary of what was changed, what was verified, and any remaining risks. Do not claim work or verification that is not present in the recorded evidence.";
 const FINAL_SUMMARY_RECOVERY_FAILED: &str = "工具已经执行，但模型在一次恢复尝试后仍未生成最终总结。运行未完整成功；工作区若有修改，将保留并进入审核。";
+/// 子代理被护栏刹停后的无工具收尾总结提示。主 run_loop 跳闸后直接进 ReviewReady，
+/// 而子代理的报告是父代理唯一的信息信道，必须显式交接部分成果与跳闸原因。
+const GUARD_TRIP_FINAL_SUMMARY_PROMPT: &str = "[system] The host run guard stopped this subagent early (budget or stuck-signal limit reached). This is the single final-summary pass: do not call any tools. Based only on the conversation and recorded tool results, hand over to the parent agent a concise factual report: what was completed, what was still in progress when stopped, and any remaining risks. Do not claim work or verification that is not present in the recorded evidence.";
 /// Root is depth 0; native descendants may delegate through depth 2.
 pub const MAX_SUBAGENT_DEPTH: u8 = 2;
 /// Lifetime descendant budget for one root tree. The root itself is not counted.
@@ -9720,6 +9723,9 @@ impl SubagentExecutionContext {
         );
         let mut pending_compaction_hint: Option<String> = None;
         let mut terminal_error: Option<String> = None;
+        // 护栏跳闸记录：置位后 loop 只允许一次无工具收尾总结，随后结束；
+        // 跳闸原因最终必须进入回传主代理的报告（guard-trip 标注）。
+        let mut guard_trip: Option<GuardTrip> = None;
         let mut tool_iterations = 0usize;
         let mut active_hosted_tools = native_hosted_tools;
         let mut hosted_web_fallback_attempted = false;
@@ -9756,10 +9762,22 @@ impl SubagentExecutionContext {
                     &scope,
                     AgentEvent::GuardTrip {
                         reason: trip_reason_to_dto(trip.reason),
-                        detail: trip.detail,
+                        detail: trip.detail.clone(),
                     },
                 );
-                break;
+                emit_scoped(
+                    &self.event_tx,
+                    &scope,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Requesting,
+                        detail: Some("护栏触发，子代理正在进行无工具收尾总结…".to_string()),
+                    },
+                );
+                // 与主 run_loop 同语义：护栏触发后先做一次无工具收尾总结，
+                // 让模型交出部分成果，而不是静默丢弃已完成的工具工作。
+                guard_trip = Some(trip);
+                summary_recovery_pending = true;
+                continue;
             }
             emit_scoped(
                 &self.event_tx,
@@ -9960,10 +9978,18 @@ impl SubagentExecutionContext {
                 index
             });
             // 空最终轮恢复提示与主 run_loop 同一注入语义：仅本轮请求携带，
-            // 迭代结束即移除，不进入 canonical 历史。
+            // 迭代结束即移除，不进入 canonical 历史。护栏刹停的收尾总结使用
+            // 专用提示并携带跳闸原因，要求显式交接部分成果。
             let summary_recovery_index = summary_only.then(|| {
                 let index = messages.len();
-                messages.push(Message::user_text(FINAL_SUMMARY_RECOVERY_PROMPT));
+                let prompt = match &guard_trip {
+                    Some(trip) => format!(
+                        "{GUARD_TRIP_FINAL_SUMMARY_PROMPT}\n\nGuard trip reason: {}",
+                        trip.detail
+                    ),
+                    None => FINAL_SUMMARY_RECOVERY_PROMPT.to_string(),
+                };
+                messages.push(Message::user_text(prompt));
                 index
             });
             // P2-G：75% 档提示作为一次性瞬态消息注入本轮请求（索引最大，先移除，
@@ -10105,10 +10131,25 @@ impl SubagentExecutionContext {
                             &scope,
                             AgentEvent::GuardTrip {
                                 reason: trip_reason_to_dto(trip.reason),
-                                detail: trip.detail,
+                                detail: trip.detail.clone(),
                             },
                         );
-                        break;
+                        emit_scoped(
+                            &self.event_tx,
+                            &scope,
+                            AgentEvent::Activity {
+                                phase: AgentActivityPhase::Requesting,
+                                detail: Some(
+                                    "护栏触发，子代理正在进行无工具收尾总结…".to_string(),
+                                ),
+                            },
+                        );
+                        // 不再 break：跳闸时最后一条 assistant 几乎必然是纯
+                        // tool-call 轮，直接结束会丢掉全部可见报告（主代理
+                        // 只能收到占位文案）。改为一次无工具收尾总结交接成果。
+                        guard_trip = Some(trip);
+                        summary_recovery_pending = true;
+                        continue;
                     }
                     if outcome.hosted_web_failed
                         && !hosted_web_fallback_attempted
@@ -10162,6 +10203,12 @@ impl SubagentExecutionContext {
                             },
                         );
                         continue;
+                    }
+                    // 护栏刹停后的收尾总结已完成：立即结束，不收集下级子代理、
+                    // 不注入 peer 消息，也不进入 governor 完整化续轮（与主
+                    // run_loop 的跳闸收尾语义一致）。
+                    if guard_trip.is_some() {
+                        break;
                     }
                     let has_nested_children = if outcome.had_tool_call {
                         false
@@ -10232,6 +10279,14 @@ Synthesize their results before finishing.\n{}",
                         &scope.run_id,
                         Some(&scope.agent_id),
                     );
+                    // 护栏收尾总结请求失败：不再重试（重试轮会重新携带工具，而
+                    // 护栏已 tripped 无法再次刹车，存在失控风险），也不改判
+                    // Failed——已完成的工具工作保留在 canonical 历史，报告由
+                    // finish 侧的 guard-trip 标注兜底。主 run_loop 同语义：
+                    // 总结失败不阻塞收尾。
+                    if guard_trip.is_some() && summary_only {
+                        break;
+                    }
                     if should_fallback_from_deepseek_hosted_web(
                         native_provider.name(),
                         &active_hosted_tools,
@@ -10341,8 +10396,9 @@ Synthesize their results before finishing.\n{}",
             self.finish_child(&scope, SubagentState::Failed, error, result_tx);
             return;
         }
-        // canonical 完整历史不受投影折叠影响，最终报告仍从完整证据重建。
-        let report = final_subagent_report(&canonical_messages);
+        // canonical 完整历史不受投影折叠影响，最终报告仍从完整证据重建；纯
+        // tool-call 轮不构成报告，向前回退保住模型边干边写的中间汇报。
+        let report = final_subagent_report(&canonical_messages).unwrap_or_default();
         let summary = self
             .prepare_subagent_report(
                 &native_provider,
@@ -10354,6 +10410,21 @@ Synthesize their results before finishing.\n{}",
                 &abort,
             )
             .await;
+        // 护栏刹停是必须回传主代理的事实：在压缩之后拼接跳闸标注（长报告的
+        // LLM 压缩可能洗掉前缀标记），让父代理能区分「干完了」与「被预算/
+        // 信号刹停」，而不是把该子代理当作无信息量而跳过。
+        let summary = match &guard_trip {
+            Some(trip) if summary.trim().is_empty() => format!(
+                "[guard-trip] 子代理被宿主护栏提前停止：{}。收尾总结未能产出，本报告无正文内容；任务未按计划完成，可缩小范围后重新委派。",
+                trip.detail
+            ),
+            Some(trip) => format!(
+                "[guard-trip] 子代理被宿主护栏提前停止：{}。\n\n{summary}",
+                trip.detail
+            ),
+            None if summary.trim().is_empty() => "子代理未产生可见报告。".to_string(),
+            None => summary,
+        };
         if self.is_child_cancelled(&abort) {
             self.finish_child(
                 &scope,
@@ -10669,14 +10740,18 @@ async fn wait_for_subagent(handle: &SubagentHandle) -> SubagentResult {
     }
 }
 
-fn final_subagent_report(messages: &[Message]) -> String {
+/// 子代理最终报告取材：从完整 canonical 历史的末尾向前，取**最后一条有非空
+/// 正文**的 Assistant 消息。纯 tool-call 轮（无正文）不构成报告，直接跳过——
+/// 否则护栏刹停等场景会把模型边干边写的中间汇报一并丢弃，退化为占位文案。
+fn final_subagent_report(messages: &[Message]) -> Option<String> {
     messages
         .iter()
         .rev()
-        .find(|message| message.role == agent_contract::Role::Assistant)
+        .find(|message| {
+            message.role == agent_contract::Role::Assistant
+                && !message.text_content().trim().is_empty()
+        })
         .map(Message::text_content)
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or_else(|| "子代理未产生可见报告。".to_string())
 }
 
 fn fallback_subagent_report(report: &str, reason: &str) -> String {
