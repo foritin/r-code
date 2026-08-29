@@ -221,19 +221,18 @@ export function toolDisplayName(toolName: string, language: ToolDisplayLanguage)
   return mapped ? mapped[language] : toolName;
 }
 
-/** 计划编排工具应单独归组，避免掉进通用“正在使用工具”文案。 */
-const PLAN_TOOL_NAMES = new Set([
-  "enter_plan_mode",
-  "plan_publish",
-  "plan_item_update",
-  "request_user_input",
-  "request_scope_decision",
-  "plan_repair_projection",
-  "plan_retry_continuation",
-  "plan_retry_implementation",
-  "plan_approve",
-  "plan_cancel",
-]);
+/** 计划编排工具应单独归组，避免掉进通用“正在使用工具”文案。
+ *  F-maint-09：由 TOOL_DISPLAY_NAMES 派生，与展示表不再手写两份清单——
+ *  键清单与文案表必须逐字一致，新增工具时两者自动同步。 */
+const PLAN_TOOL_NAMES = new Set<string>(
+  Object.keys(TOOL_DISPLAY_NAMES).filter((name) => {
+    if (name === "enter_plan_mode") return true;
+    if (name === "plan_subagents") return false; // 子代理编排归"子代理"组，非计划组
+    if (name.startsWith("plan_")) return true;
+    // 计划编排的请求/范围决策工具也归属计划组（与原清单一致）。
+    return name === "request_user_input" || name === "request_scope_decision";
+  })
+);
 
 export function isPlanToolName(toolName: string): boolean {
   return PLAN_TOOL_NAMES.has(toolName);

@@ -1,4 +1,5 @@
 /** 会话级 Provider、模型与模型专属推理参数的紧凑配置入口。 */
+import { ConfigBack, ConfigRow } from "./model-config-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { providerBalance, taskSetInference, taskSetModel, taskSetProvider } from "../../lib/ipc";
 import { useAsyncAction } from "../../lib/hooks";
@@ -445,18 +446,4 @@ export function ModelSwitcher({
   );
 }
 
-function ConfigRow({ label, value, onSelect }: { label: string; value: string; onSelect: () => void }) {
-  return (
-    <button className="model-config-row ring-inset" type="button" onClick={onSelect}>
-      <span>{label}</span><strong title={value}>{value}</strong><span aria-hidden="true">›</span>
-    </button>
-  );
-}
 
-function ConfigBack({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <button className="model-config-back ring-inset" type="button" onClick={onBack}>
-      <span aria-hidden="true">←</span><strong>{title}</strong>
-    </button>
-  );
-}

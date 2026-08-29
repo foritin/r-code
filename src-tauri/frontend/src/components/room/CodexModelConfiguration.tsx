@@ -1,3 +1,4 @@
+import { ConfigBack, ConfigRow } from "./model-config-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { codexCliPreferences, codexSaveCliPreferences } from "../../lib/ipc";
 import type { CodexCliPreferences, CodexModelOption } from "../../lib/types";
@@ -237,18 +238,4 @@ export function CodexModelConfiguration({
   );
 }
 
-function ConfigRow({ label, value, onSelect }: { label: string; value: string; onSelect: () => void }) {
-  return (
-    <button className="model-config-row ring-inset" type="button" onClick={onSelect}>
-      <span>{label}</span><strong title={value}>{value}</strong><span aria-hidden="true">›</span>
-    </button>
-  );
-}
 
-function ConfigBack({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <button className="model-config-back ring-inset" type="button" onClick={onBack}>
-      <span aria-hidden="true">←</span><strong>{title}</strong>
-    </button>
-  );
-}

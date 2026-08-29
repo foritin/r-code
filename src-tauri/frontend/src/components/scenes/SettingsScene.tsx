@@ -167,7 +167,11 @@ const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {
   openai_responses: "OpenAI Responses",
 };
 
-const DEEPSEEK_RESPONSES_MODELS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+/** DeepSeek 预设声明的模型 id 集合（F-maint-08：单一事实源在 provider_catalog
+ * 目录，前端不再手写模型清单；模型集随目录下发而演进）。 */
+function deepSeekResponsesModels(): Set<string> {
+  return new Set((presetOf("deepseek")?.models ?? []).map((m) => m.id));
+}
 
 /** 按 category 分组，保持目录里的原始顺序。 */
 function groupByCategory(presets: ProviderPreset[]) {
@@ -1268,7 +1272,7 @@ function ProviderSection({
     activePreset?.id === "deepseek" &&
     normalizeUrl(fields.base_url) === normalizeUrl(activePreset.base_url) &&
     fields.protocol === "openai_responses" &&
-    !DEEPSEEK_RESPONSES_MODELS.has(fields.model.trim().toLowerCase());
+    !deepSeekResponsesModels().has(fields.model.trim().toLowerCase());
   const allowedProtocolOptions = allowedProtocols(activePreset, fields.base_url);
   const protocolMismatch = Boolean(
     allowedProtocolOptions && !allowedProtocolOptions.includes(fields.protocol)
