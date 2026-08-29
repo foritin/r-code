@@ -118,7 +118,10 @@ test("companion recovery tolerates only an exact legacy-host command mismatch", 
   assert.match(ipc, /LEGACY_COMPANION_ENSURE_MISSING_ERROR\s*=\s*\n\s*"Command cmd_companion_ensure not found"/);
   assert.match(ipc, /if \(!isLegacyCompanionEnsureMissing\(cause\)\) throw cause/);
   assert.match(ipc, /using its startup-created window/);
-  assert.match(commands, /get_webview_window\(crate::COMPANION_WINDOW_LABEL\)[\s\S]*?\.is_none\(\)[\s\S]*?tracing::warn![\s\S]*?return Err\("native companion window is unavailable"\.to_string\(\)\)/);
+  // FX-11 后命令错误经 CommandError 边界：Err(...) 后面从 `.to_string()`（String 时代）
+  // 变为 `.into()`（CommandError 从 String 构造）。断言加宽以同时覆盖两种合法形式，
+  // 错误分支语义（文案 + warn + 路径）不变。
+  assert.match(commands, /get_webview_window\(crate::COMPANION_WINDOW_LABEL\)[\s\S]*?\.is_none\(\)[\s\S]*?tracing::warn![\s\S]*?return Err\("native companion window is unavailable"\.(?:to_string\(\)|into\(\))\)/);
   assert.match(settings, /catch \(cause\)[\s\S]*?console\.warn\("Companion window could not be enabled\.", cause\)/);
   assert.doesNotMatch(settings, /详细信息已写入诊断日志/);
 });
