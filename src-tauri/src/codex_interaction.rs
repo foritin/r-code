@@ -515,8 +515,18 @@ struct CodexProjectedItem {
 
 /// 同一 run 内按 item 维护累计文本与完成状态。feed 顺序即事件顺序；
 /// 重复完成幂等（正常化层已拦截重复 completed，这里再防御一次）。
+///
+/// F-perf-12：`items` 由线性 Vec + `find` 改为 HashMap 索引 + 有序 id 向量。
+/// 顺序语义不变（`order` 保留插入序供 `last_sealed_text` 的反向查找与
+/// `finish_turn` 的封口顺序），每条 delta 的查找从 O(n) 降为 O(1)。
+/// 文本追加用 `Cow` 沿用原 `push_str`（借用 delta 无额外分配）；
+/// `item_id.to_string()` 在输出路径只做一次（构造 emission 时）。
 pub struct CodexAgentMessageProjector {
     items: Vec<CodexProjectedItem>,
+    /// item_id → `items` 下标（MAX_TRACKED_ITEMS 内单调，封口/截断随 retain 重建）。
+    index: HashMap<String, usize>,
+    /// 插入序（唯一顺序真相；`items` 的 push/retain 与其保持同步）。
+    order: Vec<String>,
     pub mismatch_count: u64,
     pub duplicate_seal_count: u64,
     pub late_delta_count: u64,
@@ -534,6 +544,8 @@ impl CodexAgentMessageProjector {
     pub fn new() -> Self {
         Self {
             items: Vec::new(),
+            index: HashMap::new(),
+            order: Vec::new(),
             mismatch_count: 0,
             duplicate_seal_count: 0,
             late_delta_count: 0,
@@ -576,9 +588,9 @@ impl CodexAgentMessageProjector {
             .map(|item| item.item_id.clone())
             .collect();
         for item_id in residuals {
-            if let Some(item) = self.items.iter_mut().find(|i| i.item_id == item_id) {
+            if let Some(item) = self.index.get(&item_id).and_then(|i| self.items.get_mut(*i)) {
                 item.sealed = true;
-                let text = item.text.clone();
+                let text = std::mem::take(&mut item.text);
                 let streamed = item.streamed;
                 let phase = match item.phase {
                     CodexAssistantPhase::FinalAnswer => CodexAssistantPhase::FinalAnswer,
@@ -600,35 +612,50 @@ impl CodexAgentMessageProjector {
     /// 最后一次封口的全文（CodexExecCompletion.summary 语义保持旧口径：
     /// 最后一条 agentMessage 文本）。
     pub fn last_sealed_text(&self) -> Option<&str> {
-        self.items
+        self.order
             .iter()
             .rev()
+            .filter_map(|id| self.index.get(id).and_then(|i| self.items.get(*i)))
             .find(|item| item.sealed && !item.text.trim().is_empty())
             .map(|item| item.text.as_str())
     }
 
     fn start_item(&mut self, item_id: String, phase: CodexAssistantPhase) {
-        if self.items.len() >= Self::MAX_TRACKED_ITEMS
-            && !self.items.iter().any(|i| i.item_id == item_id)
-        {
-            self.items.retain(|item| item.sealed);
-            self.items
-                .truncate(Self::MAX_TRACKED_ITEMS.saturating_sub(1));
+        let capacity_full = self.items.len() >= Self::MAX_TRACKED_ITEMS
+            && !self.index.contains_key(&item_id);
+        if capacity_full {
+            // 只保留已封口条目，腾出空间给新 item。retain 保持插入序。
+            let mut surviving = Vec::with_capacity(Self::MAX_TRACKED_ITEMS.saturating_sub(1));
+            let mut order = Vec::with_capacity(Self::MAX_TRACKED_ITEMS.saturating_sub(1));
+            let mut index = HashMap::with_capacity(Self::MAX_TRACKED_ITEMS.saturating_sub(1));
+            for (old_idx, item) in self.items.drain(..).enumerate() {
+                if item.sealed {
+                    index.insert(item.item_id.clone(), surviving.len());
+                    order.push(item.item_id.clone());
+                    surviving.push(item);
+                }
+                let _ = old_idx;
+            }
+            self.items = surviving;
+            self.index = index;
+            self.order = order;
         }
-        if let Some(item) = self.items.iter_mut().find(|i| i.item_id == item_id) {
+        if let Some(item) = self.index.get(&item_id).and_then(|i| self.items.get_mut(*i)) {
             item.phase = phase;
             item.sealed = false;
             item.streamed = false;
             item.text.clear();
             return;
         }
+        self.index.insert(item_id.clone(), self.items.len());
         self.items.push(CodexProjectedItem {
-            item_id,
+            item_id: item_id.clone(),
             phase,
             text: String::new(),
             sealed: false,
             streamed: false,
         });
+        self.order.push(item_id);
     }
 
     fn push_delta(
@@ -640,29 +667,36 @@ impl CodexAgentMessageProjector {
         // 终态墓碑：sealed 之后的迟到增量直接丢弃（§4.2），正文已按权威
         // 全文交付，追加会造成重复。
         if self
-            .items
-            .iter()
-            .any(|item| item.item_id == item_id && item.sealed)
+            .index
+            .get(item_id)
+            .and_then(|i| self.items.get(*i))
+            .is_some_and(|item| item.sealed)
         {
             self.late_delta_count += 1;
             return Vec::new();
         }
         let known_phase = phase != CodexAssistantPhase::Unknown;
-        match self.items.iter_mut().find(|i| i.item_id == item_id) {
-            Some(item) => {
+        match self.index.get(item_id).copied() {
+            Some(i) => {
+                let item = &mut self.items[i];
                 if known_phase {
                     item.phase = phase;
                 }
                 item.text.push_str(delta);
                 item.streamed = true;
             }
-            None => self.items.push(CodexProjectedItem {
-                item_id: item_id.to_string(),
-                phase,
-                text: delta.to_string(),
-                sealed: false,
-                streamed: true,
-            }),
+            None => {
+                let i = self.items.len();
+                self.index.insert(item_id.to_string(), i);
+                self.items.push(CodexProjectedItem {
+                    item_id: item_id.to_string(),
+                    phase,
+                    text: delta.to_string(),
+                    sealed: false,
+                    streamed: true,
+                });
+                self.order.push(item_id.to_string());
+            }
         }
         vec![CodexMessageEmission::Delta {
             item_id: item_id.to_string(),
@@ -677,8 +711,10 @@ impl CodexAgentMessageProjector {
         phase: CodexAssistantPhase,
         authoritative_text: String,
     ) -> Vec<CodexMessageEmission> {
-        let Some(item) = self.items.iter_mut().find(|i| i.item_id == item_id) else {
+        let Some(i) = self.index.get(item_id).copied() else {
             // 迟到/缺失 started 的完成帧：以权威全文一次性封口。
+            let i = self.items.len();
+            self.index.insert(item_id.to_string(), i);
             self.items.push(CodexProjectedItem {
                 item_id: item_id.to_string(),
                 phase,
@@ -686,6 +722,7 @@ impl CodexAgentMessageProjector {
                 sealed: true,
                 streamed: false,
             });
+            self.order.push(item_id.to_string());
             return vec![CodexMessageEmission::Sealed {
                 item_id: item_id.to_string(),
                 phase,
@@ -694,6 +731,7 @@ impl CodexAgentMessageProjector {
                 streamed: false,
             }];
         };
+        let item = &mut self.items[i];
         if item.sealed {
             // 幂等：重复完成帧不再产生事件（计数由 normalizer 诊断承担）。
             self.duplicate_seal_count += 1;
