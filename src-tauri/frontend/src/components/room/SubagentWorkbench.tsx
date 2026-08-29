@@ -384,6 +384,21 @@ function SubagentTabsHeader({
 }) {
   return (
     <header className="subagent-page-header workbench-head subagent-tabs-header">
+      {selectedSubagentId == null && (
+        // 列表模式缺"返回运行与子代理"入口：单详情有 onBack，但列表顶部只有
+        // 工具 tabs + 专注/隐藏图标，用户从 summary 进列表后无处返回。onHide
+        // 关闭子代理页（open:false）回到 summary 面板，这里给一个文字的明确入口。
+        <button
+          type="button"
+          className="subagent-detail-back subagent-page-back"
+          onClick={onHide}
+          aria-label="返回运行与子代理"
+          title="返回运行与子代理"
+        >
+          <IconChevronLeft width={14} height={14} aria-hidden="true" />
+          <span>运行与子代理</span>
+        </button>
+      )}
       <div className="workbench-tabs" role="tablist" aria-label="任务工作台标签" onKeyDown={handleWorkbenchTabListKeyDown}>
         {toolTabsBefore}
         <SubagentSessionTabs

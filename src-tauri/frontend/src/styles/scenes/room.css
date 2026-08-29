@@ -1786,6 +1786,9 @@
 }
 .subagent-detail-back svg { flex:none; }
 .subagent-detail-back span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 列表模式顶部的"返回运行与子代理"：标题栏是 flex（gap:9px），固定左对齐
+   并给右侧 tabs 留一点分隔，防溢出时被压缩。 */
+.subagent-page-back { flex:none; margin-right:2px; }
 .subagent-session { padding:14px 0 28px; }
 .subagent-session-summary {
   display:flex; align-items:center; width:100%; gap:7px; padding:0 0 11px; border:0; border-bottom:1px solid var(--border);
