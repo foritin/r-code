@@ -923,7 +923,10 @@ impl LlmProvider for ReportSummaryProvider {
         &self,
         request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
-        self.summary_requests.lock().unwrap().push(request.as_ref().clone());
+        self.summary_requests
+            .lock()
+            .unwrap()
+            .push(request.as_ref().clone());
         match self
             .summary
             .lock()
@@ -1731,7 +1734,10 @@ impl LlmProvider for ChildCompactionProvider {
         &self,
         request: Arc<CompletionRequest>,
     ) -> agent_error::Result<CompletionResponse> {
-        self.summary_requests.lock().unwrap().push(request.as_ref().clone());
+        self.summary_requests
+            .lock()
+            .unwrap()
+            .push(request.as_ref().clone());
         Ok(CompletionResponse {
             content: vec![ContentBlock::Text {
                 text: "CHILD-FOLD-SUMMARY".to_string(),
@@ -5096,7 +5102,10 @@ async fn guard_tripped_child_hands_over_partial_results_with_trip_annotation() {
     provider.push_turn(failing_read_turn("a"));
     provider.push_turn(failing_read_turn("b"));
     provider.push_turn(failing_read_turn("c"));
-    provider.push_text_turn("部分成果：已定位缺陷在解析层，尚未写修复。", Usage::default());
+    provider.push_text_turn(
+        "部分成果：已定位缺陷在解析层，尚未写修复。",
+        Usage::default(),
+    );
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     let supervisor = SubagentSupervisor::new(
         Arc::new(provider),

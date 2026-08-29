@@ -1637,6 +1637,9 @@ model = "claude-sonnet-4"
         std::fs::write(settings.config_path(), future).unwrap();
         let error = settings.load_global_unvalidated().unwrap_err();
         let text = error.to_string();
-        assert!(text.contains("newer than this build supports"), "got: {text}");
+        assert!(
+            text.contains("newer than this build supports"),
+            "got: {text}"
+        );
     }
 }

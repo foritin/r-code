@@ -119,7 +119,10 @@ impl LlmProvider for PrefixCacheMockProvider {
         ))
     }
 
-    async fn stream(&self, request: Arc<CompletionRequest>) -> Result<BoxStream<'static, StreamEvent>> {
+    async fn stream(
+        &self,
+        request: Arc<CompletionRequest>,
+    ) -> Result<BoxStream<'static, StreamEvent>> {
         let mut state = self.state.lock().unwrap();
 
         // 公共前缀推导（对齐 Reasonix commonPrefixMsgs + charsOf，

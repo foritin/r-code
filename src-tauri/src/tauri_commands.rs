@@ -2352,14 +2352,15 @@ pub async fn cmd_reveal_local_path(path: String) -> Result<(), CommandError> {
     // 应打开本会话 resolve_local_file_target 产出的真实引用，如外部 file://
     // 引用（产品合法功能），而非 WebView 任意拼的路径。归一后存在性仍由
     // reveal_in_file_manager 校验（best-effort）。
-    let normalized = std::path::PathBuf::from(path.clone()).canonicalize().map_err(|error| {
-        CommandError::from("cannot reveal path: ".to_string() + &error.to_string())
-    })?;
+    let normalized = std::path::PathBuf::from(path.clone())
+        .canonicalize()
+        .map_err(|error| {
+            CommandError::from("cannot reveal path: ".to_string() + &error.to_string())
+        })?;
     if !normalized.is_absolute() {
         return Err(CommandError::from("cannot reveal a relative path"));
     }
-    r_code_host::system_integration::reveal_in_file_manager(&normalized)
-        .map_err(CommandError::from)
+    r_code_host::system_integration::reveal_in_file_manager(&normalized).map_err(CommandError::from)
 }
 
 /// Make room for the docked workbench without granting window-mutation permissions to JS.

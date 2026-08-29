@@ -10139,9 +10139,7 @@ impl SubagentExecutionContext {
                             &scope,
                             AgentEvent::Activity {
                                 phase: AgentActivityPhase::Requesting,
-                                detail: Some(
-                                    "护栏触发，子代理正在进行无工具收尾总结…".to_string(),
-                                ),
+                                detail: Some("护栏触发，子代理正在进行无工具收尾总结…".to_string()),
                             },
                         );
                         // 不再 break：跳闸时最后一条 assistant 几乎必然是纯

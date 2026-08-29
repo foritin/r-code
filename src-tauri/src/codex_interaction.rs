@@ -588,7 +588,11 @@ impl CodexAgentMessageProjector {
             .map(|item| item.item_id.clone())
             .collect();
         for item_id in residuals {
-            if let Some(item) = self.index.get(&item_id).and_then(|i| self.items.get_mut(*i)) {
+            if let Some(item) = self
+                .index
+                .get(&item_id)
+                .and_then(|i| self.items.get_mut(*i))
+            {
                 item.sealed = true;
                 let text = std::mem::take(&mut item.text);
                 let streamed = item.streamed;
@@ -621,8 +625,8 @@ impl CodexAgentMessageProjector {
     }
 
     fn start_item(&mut self, item_id: String, phase: CodexAssistantPhase) {
-        let capacity_full = self.items.len() >= Self::MAX_TRACKED_ITEMS
-            && !self.index.contains_key(&item_id);
+        let capacity_full =
+            self.items.len() >= Self::MAX_TRACKED_ITEMS && !self.index.contains_key(&item_id);
         if capacity_full {
             // 只保留已封口条目，腾出空间给新 item。retain 保持插入序。
             let mut surviving = Vec::with_capacity(Self::MAX_TRACKED_ITEMS.saturating_sub(1));
@@ -640,7 +644,11 @@ impl CodexAgentMessageProjector {
             self.index = index;
             self.order = order;
         }
-        if let Some(item) = self.index.get(&item_id).and_then(|i| self.items.get_mut(*i)) {
+        if let Some(item) = self
+            .index
+            .get(&item_id)
+            .and_then(|i| self.items.get_mut(*i))
+        {
             item.phase = phase;
             item.sealed = false;
             item.streamed = false;
