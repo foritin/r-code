@@ -13,7 +13,7 @@ use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
     SessionBranch, Task, TaskMode, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
-use r_code_core::error::ProductError;
+use r_code_core::error::{ProductError, PROJECT_CONVERSATION_LIMIT_REACHED_CODE};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };
@@ -106,7 +106,7 @@ fn stable_code(error: &ProductError) -> &'static str {
         ProductError::IpcError(_) => "ipc_error",
         ProductError::SecretError(_) => "secret_error",
         ProductError::NotImplemented(_) => "not_implemented",
-        ProductError::Other(_) => "internal",
+        ProductError::Other(_) => "COMMAND_FAILED",
     }
 }
 
@@ -121,12 +121,15 @@ impl From<ProductError> for CommandError {
                 debug_detail: user_facing.debug_detail.clone(),
             };
         }
-        let limit = match &error {
-            ProductError::ProjectConversationLimitReached { limit } => Some(*limit),
-            _ => None,
+        let (code, limit) = match &error {
+            // 前端按此大写常量识别限流合同（user-error-contract 锁定）。
+            ProductError::ProjectConversationLimitReached { limit } => {
+                (PROJECT_CONVERSATION_LIMIT_REACHED_CODE, Some(*limit))
+            }
+            _ => (stable_code(&error), None),
         };
         Self {
-            code: stable_code(&error).to_string(),
+            code: code.to_string(),
             message: error.to_string(),
             limit,
             args: None,
