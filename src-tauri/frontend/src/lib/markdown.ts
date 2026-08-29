@@ -137,6 +137,101 @@ export function parseMarkdown(src: string): MdNode[] {
   return parseBlocks(lines, 0);
 }
 
+/* ---------------------------------------------------- 流式尾部切分（FX-16） */
+
+export interface StreamPartition {
+  /** 已完成的稳定前缀：块级解析结果可随内容记忆化。 */
+  stable: string;
+  /** 活跃尾块：流式期间唯一需要每个 delta 重解析的部分。 */
+  tail: string;
+}
+
+const STREAM_FENCE_RE = /^\s{0,3}(```|~~~)/;
+const STREAM_LIST_RE = /^\s{0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
+
+/**
+ * 流式渲染的尾部切分：把 text 切成「稳定前缀 + 活跃尾块」，保证
+ * `stable + tail === text` 且 stable 只含完整块（围栏必须成对闭合）。
+ *
+ * 边界只会落在围栏外的空行处；若该边界之后的第一条非空行是列表项，
+ * 则放弃该边界（避免把松散列表切成两个 <ul>）。找不到安全边界时
+ * 整段作为 tail 退回全量解析——正确性优先于优化幅度。
+ *
+ * 非流式渲染不应调用本函数：直接 parseMarkdown(全文) 一次即可。
+ */
+export function splitStreamTail(text: string): StreamPartition {
+  if (text.length === 0) return { stable: "", tail: "" };
+
+  // 单次行扫描：跟踪围栏状态，收集围栏外空行处的候选边界（该空行行首）。
+  const candidates: number[] = [];
+  let inFence = false;
+  let fenceMarker = "```";
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const lineEnd = text.indexOf("\n", lineStart);
+    const line = lineEnd === -1 ? text.slice(lineStart) : text.slice(lineStart, lineEnd);
+    if (inFence) {
+      if (line.trim() === fenceMarker) inFence = false;
+    } else {
+      const fence = STREAM_FENCE_RE.exec(line);
+      if (fence) {
+        inFence = true;
+        fenceMarker = fence[1];
+      } else if (isBlank(line)) {
+        // 空行本身就是候选边界（其行首即 stable 的末尾）。
+        candidates.push(lineStart);
+      }
+    }
+    if (lineEnd === -1) break;
+    lineStart = lineEnd + 1;
+  }
+
+  // 从最后一个候选向前找第一个安全边界：其后第一条非空行不能是列表项
+  //（否则松散列表会被切成两个列表）。stable 必须围栏平衡——空行只在
+  // 围栏外收集，天然满足。
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const boundary = candidates[i];
+    if (boundary === 0) continue; // 空文本前缀无意义
+    let nextStart = boundary;
+    let rejected = false;
+    while (nextStart < text.length) {
+      const end = text.indexOf("\n", nextStart);
+      const line = end === -1 ? text.slice(nextStart) : text.slice(nextStart, end);
+      if (!isBlank(line)) {
+        if (STREAM_LIST_RE.test(line)) {
+          // 列表延续：这个边界不安全，继续向前找。
+          rejected = true;
+        }
+        break;
+      }
+      if (end === -1) break;
+      nextStart = end + 1;
+    }
+    if (rejected) continue;
+    // 边界后只剩空行/文本结尾：安全，tail 为尾随空行或空串。
+    return { stable: text.slice(0, boundary), tail: text.slice(boundary) };
+  }
+  return { stable: "", tail: text };
+}
+
+/**
+ * 稳定前缀的单调冻结（与 [`splitStreamTail`] 配套，流式纯追加语义）：
+ * 已冻结边界在追加后的文本里恒为合法前缀。新边界更长才前进；新边界更短
+ * （列表等需要回退的结构）保持已冻结值不回退，回退结构整体留在尾块里
+ * 重解析——正确性优先，且不重复支付已解析块的解析成本。
+ * prev 不是 text 前缀（换了一条消息）时以 fresh 重置。
+ */
+export function freezeStreamPartition(
+  prev: string,
+  text: string,
+  fresh: StreamPartition
+): StreamPartition {
+  if (prev && text.startsWith(prev) && prev.length >= fresh.stable.length) {
+    return { stable: prev, tail: text.slice(prev.length) };
+  }
+  return fresh;
+}
+
 /* ------------------------------------------------------------ 行工具函数 */
 
 function isBlank(line: string): boolean {

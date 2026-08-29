@@ -545,6 +545,78 @@ test("long subagent transcripts are contained and unchanged polls preserve their
   }
 });
 
+test("streaming appends reparse only the live tail, never the stable prefix", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const result = await page.evaluate(async () => {
+    const md = await import("/src/lib/markdown.ts");
+    const stablePrefix = Array.from(
+      { length: 120 },
+      (_, index) => `段落 ${index}：稳定前缀内容。`
+    ).join("\n\n");
+    // 覆盖三类边界敏感结构：段落尾块、含空行的围栏代码块、松散列表。
+    const deltas = [
+      "\n```js",
+      "\n\n",
+      "const answer = 42;\n",
+      "```\n\n",
+      "- 第一项\n",
+      "\n- 第二项",
+    ];
+    let text = `${stablePrefix}\n\n结语：`;
+    const steps = [text, ...deltas.map((delta) => (text += delta))];
+
+    let naiveChars = 0;
+    let optimizedChars = 0;
+    let frozen = "";
+    const fenceLine = /^[ \t]{0,3}```/gm;
+    const listStart = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
+    for (const current of steps) {
+      naiveChars += current.length;
+      const fresh = md.splitStreamTail(current);
+      // 与组件同路径的单调冻结（真实生产函数，而非测试内模拟）。
+      const partition = md.freezeStreamPartition(frozen, current, fresh);
+      // 恒等式：切分不得丢字或重排。
+      if (partition.stable + partition.tail !== current) {
+        throw new Error("partition identity violated");
+      }
+      // 围栏平衡：稳定前缀里的 ``` 开闭行数必须是偶数（没有把围栏切进前缀）。
+      fenceLine.lastIndex = 0;
+      const fences = partition.stable.match(fenceLine) ?? [];
+      if (fences.length % 2 !== 0) {
+        throw new Error("stable prefix split inside a fenced code block");
+      }
+      // 列表完整性：列表项不得被切成两半——stable 以列表项结尾且 tail 以
+      // 列表项开头（会被解析成两个 <ul>）。边界本身在列表项之前是安全的
+      //（整个列表留在尾块里一起解析）。
+      if (partition.stable.length > 0) {
+        const after = partition.tail.replace(/^(?:[ \t]*\n)+/, "");
+        const stableLines = partition.stable.split("\n");
+        let lastLine = "";
+        for (let i = stableLines.length - 1; i >= 0; i -= 1) {
+          if (stableLines[i].trim()) {
+            lastLine = stableLines[i];
+            break;
+          }
+        }
+        if (listStart.test(after) && listStart.test(lastLine)) {
+          throw new Error("list items split across the stable/tail boundary");
+        }
+      }
+      optimizedChars += partition.stable.startsWith(frozen)
+        ? partition.stable.length - frozen.length
+        : partition.stable.length;
+      frozen = partition.stable;
+    }
+    return { naiveChars, optimizedChars };
+  });
+  assert.ok(
+    result.optimizedChars < result.naiveChars * 0.25,
+    `streaming reparses should stay under 25% of naive full-text parsing, got ${result.optimizedChars}/${result.naiveChars}`
+  );
+  await page.close();
+});
+
 test("browser mock cursors preserve the loaded history window across idle polls", async () => {
   const page = await browser.newPage();
   await page.goto(baseUrl, { waitUntil: "networkidle" });

@@ -12,6 +12,8 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { CSSProperties, ReactNode } from "react";
 import {
   parseMarkdown,
+  splitStreamTail,
+  freezeStreamPartition,
   inlineToText,
   isLocalResourceUrl,
   type MdCode,
@@ -47,7 +49,26 @@ export const Markdown = memo(function Markdown({
   taskId,
   workspacePath = null,
 }: MarkdownProps) {
-  const nodes = useMemo(() => parseMarkdown(text), [text]);
+  // FX-16：流式期间把文本切成「稳定前缀 + 活跃尾块」。前缀解析结果随内容
+  // 记忆化（partition.stable 不变 → stableNodes 引用不变 → memo 化的 Block
+  // 整体跳过重渲染），每个 delta 只重解析尾块，消除“每 100ms 全量重解析”
+  // 的 O(text²) 总解析量。非流式路径仍是一次全量解析，行为不变。
+  //
+  // 稳定前缀单调不回退（freezeStreamPartition）：流式是纯追加，已冻结的
+  // 边界恒为合法前缀；新边界更长才前进（如代码块闭合后）。列表等需要边界
+  // 回退的结构保持留在尾块里整体重解析——正确性优先，回退不重复支付
+  // 已解析块的解析成本。
+  const frozenStable = useRef("");
+  const partition = useMemo(() => {
+    const fresh = streaming ? splitStreamTail(text) : { stable: text, tail: "" };
+    return streaming ? freezeStreamPartition(frozenStable.current, text, fresh) : fresh;
+  }, [streaming, text]);
+  useEffect(() => {
+    frozenStable.current = partition.stable;
+  }, [partition.stable]);
+  const stableNodes = useMemo(() => parseMarkdown(partition.stable), [partition.stable]);
+  const tailNodes = useMemo(() => parseMarkdown(partition.tail), [partition.tail]);
+  const nodes = tailNodes.length > 0 ? [...stableNodes, ...tailNodes] : stableNodes;
   const context = useMemo<RenderContext>(() => ({ taskId, workspacePath }), [taskId, workspacePath]);
 
   const last = nodes.length - 1;
@@ -75,7 +96,8 @@ export const Markdown = memo(function Markdown({
 
 /* ------------------------------------------------------------------ 块级 */
 
-function Block({
+// memo：配合流式分区的稳定 node 引用，未变化的已完成块整体跳过重渲染。
+const Block = memo(function Block({
   node,
   caret = false,
   className,
@@ -125,7 +147,7 @@ function Block({
     case "table":
       return <Table node={node} className={className} context={context} />;
   }
-}
+});
 
 function List({
   node,
