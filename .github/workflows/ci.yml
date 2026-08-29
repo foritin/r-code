@@ -204,6 +204,11 @@ jobs:
       - name: Command corpus golden gate (fast, Windows)
         if: matrix.os == 'windows-latest'
         run: node scripts/windows-reliability/corpus-run.mjs --tier fast --tag ci --check dialect=git-bash --check thresholds
+      # F-test-05：慢档（sleep 语义/退出码/跨进程管道，3 条串行 < 2min）同样必须
+      # 在 CI 真实执行——此前仅 fast 档有门禁，慢档语义无覆盖。
+      - name: Command corpus golden gate (slow, Windows)
+        if: matrix.os == 'windows-latest'
+        run: node scripts/windows-reliability/corpus-run.mjs --tier slow --tag ci-slow --check dialect=git-bash --check thresholds --check no-mojibake
 
   audit:
     name: Security Audit
