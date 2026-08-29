@@ -58,35 +58,22 @@ impl RecoveryManager {
     /// Returns list of tasks that need recovery.
     pub async fn scan_interrupted(&self) -> Result<Vec<InterruptedTask>, ProductError> {
         let conn = self.connect()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT t.id, t.state, ar.id \
-                 FROM tasks t \
-                 JOIN agent_runs ar ON ar.task_id = t.id \
-                 WHERE t.state NOT IN ('idle', 'archived') AND ar.ended_at IS NULL \
-                 ORDER BY t.updated_at DESC",
-            )
-            .map_err(db_err)?;
-        let mut rows = stmt.query([]).map_err(db_err)?;
-
+        let rows = r_code_store::host_support::scan_interrupted_task_rows(&conn)?;
         let mut tasks = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        while let Some(row) = rows.next().map_err(db_err)? {
-            let task_id: String = row.get(0).map_err(db_err)?;
+        for (task_id, state_str, run_id) in rows {
             if !seen.insert(task_id.clone()) {
                 // 同一 task 的重复活跃 run（违反不变量时防御性去重）
                 continue;
             }
-            let state_str: String = row.get(1).map_err(db_err)?;
             let last_state = TaskState::try_from_str(&state_str).ok_or_else(|| {
                 ProductError::DatabaseError(format!("invalid task state: {state_str}"))
             })?;
-            let last_run_id: Option<String> = row.get(2).map_err(db_err)?;
             tasks.push(InterruptedTask {
                 task_id,
                 session_id: None,
                 last_state,
-                last_run_id,
+                last_run_id: Some(run_id),
             });
         }
         Ok(tasks)
@@ -122,14 +109,7 @@ impl RecoveryManager {
     /// 统计孤儿权限请求数量（不修改）。
     fn count_orphaned_permissions(&self) -> Result<u64, ProductError> {
         let conn = self.connect()?;
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM permission_requests WHERE decision = 'pending'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(db_err)?;
-        Ok(count.max(0) as u64)
+        r_code_store::host_support::count_pending_permissions(&conn)
     }
 }
 

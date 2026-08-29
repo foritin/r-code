@@ -113,22 +113,7 @@ impl ToolPolicyGuard for PlanExecutionToolGuard {
             return Ok(());
         }
         let conn = self.db.conn()?;
-        let paused: bool = conn
-            .query_row(
-                "SELECT EXISTS(
-                   SELECT 1 FROM plans plan
-                   WHERE plan.task_id = ?1 AND plan.state = 'executing'
-                     AND NOT EXISTS (
-                       SELECT 1 FROM plan_items item
-                       WHERE item.plan_id = plan.id
-                         AND item.revision = plan.approved_revision
-                         AND item.state = 'in_progress'
-                     )
-                 )",
-                rusqlite::params![context.task_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+        let paused = r_code_store::host_support::plan_execution_paused(&conn, &context.task_id)?;
         if paused {
             return Err(ProductError::PermissionError(
                 PLAN_EXECUTION_PAUSED.to_string(),

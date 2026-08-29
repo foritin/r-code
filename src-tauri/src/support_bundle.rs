@@ -211,10 +211,15 @@ impl SupportBundle {
                 }
             }
         };
+        let counts = r_code_store::host_support::table_row_counts(
+            &conn,
+            &["tasks", "agent_runs", "tool_calls"],
+        )
+        .unwrap_or_else(|_| vec![0, 0, 0]);
         DbStats {
-            task_count: count_rows(&conn, "tasks"),
-            run_count: count_rows(&conn, "agent_runs"),
-            tool_call_count: count_rows(&conn, "tool_calls"),
+            task_count: counts[0],
+            run_count: counts[1],
+            tool_call_count: counts[2],
         }
     }
 }
@@ -227,14 +232,6 @@ fn detect_default_provider() -> String {
         // 默认 provider 为 anthropic（无论 ANTHROPIC_API_KEY 是否设置）
         "anthropic".to_string()
     }
-}
-
-/// 统计表行数，失败返回 0。
-fn count_rows(conn: &Connection, table: &str) -> u64 {
-    let sql = format!("SELECT COUNT(*) FROM {table}");
-    conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
-        .map(|n| n.max(0) as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ pub mod change_service;
 pub mod database;
 pub mod document_store;
 pub mod git_service;
+pub mod host_support;
 pub mod lifecycle_purge;
 pub mod memory_store;
 pub mod migrations;

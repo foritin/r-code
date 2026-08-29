@@ -452,7 +452,6 @@ struct StartupRecoverySnapshot {
 struct StartupRecoveryRun {
     run_id: String,
     task_id: String,
-    branch_id: String,
 }
 
 /// 外部 CLI 子代理在当前进程内的取消注册表。
@@ -1103,17 +1102,9 @@ fn reconcile_durable_steer_queue_claims(
 
     let conn = db.conn()?;
     let now = chrono::Utc::now().to_rfc3339();
-    let mut reconciled = 0_u64;
-    for queue_id in accepted_queue_ids {
-        let changed = conn
-            .execute(
-                "UPDATE queued_messages SET state = 'sent', updated_at = ?1 \
-                 WHERE id = ?2 AND state IN ('dispatching', 'failed')",
-                rusqlite::params![now, queue_id],
-            )
-            .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
-        reconciled = reconciled.saturating_add(changed as u64);
-    }
+    let queue_ids: Vec<&str> = accepted_queue_ids.iter().map(String::as_str).collect();
+    let reconciled =
+        r_code_store::host_support::reconcile_queued_messages_sent(&conn, &queue_ids, &now)?;
     Ok(reconciled)
 }
 
@@ -1395,63 +1386,28 @@ impl CommandState {
 /// 这里只修正审计投影，不重放工具、不修改会话正文；仍在活跃 Run 下的调用不会匹配。
 fn reconcile_tool_calls_for_finished_runs(db: &Database) -> Result<u64, ProductError> {
     let conn = db.conn()?;
-    let repaired = conn
-        .execute(
-            "UPDATE tool_calls
-             SET status = 'error',
-                 output_json = COALESCE(output_json, ?1),
-                 ended_at = COALESCE(ended_at, ?2)
-             WHERE status = 'running'
-               AND EXISTS (
-                   SELECT 1 FROM agent_runs
-                   WHERE agent_runs.id = tool_calls.run_id
-                     AND agent_runs.ended_at IS NOT NULL
-               )",
-            rusqlite::params![
-                serde_json::json!({
-                    "error": "parent run ended before the tool result was recorded"
-                })
-                .to_string(),
-                chrono::Utc::now().to_rfc3339(),
-            ],
-        )
-        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
-    Ok(repaired as u64)
+    let tool_error = serde_json::json!({
+        "error": "parent run ended before the tool result was recorded"
+    })
+    .to_string();
+    let repaired = r_code_store::host_support::fail_running_tool_calls_with_ended_parent(
+        &conn,
+        &tool_error,
+        &chrono::Utc::now().to_rfc3339(),
+    )?;
+    Ok(repaired)
 }
 
 fn capture_startup_recovery(db: &Database) -> Result<StartupRecoverySnapshot, ProductError> {
     let conn = db.conn()?;
-    let mut run_stmt = conn
-        .prepare(
-            "SELECT ar.id, ar.task_id, ar.branch_id \
-         FROM agent_runs ar \
-         INNER JOIN tasks t ON t.id = ar.task_id \
-         WHERE ar.ended_at IS NULL AND t.state NOT IN ('idle', 'archived') \
-         ORDER BY ar.started_at ASC, ar.id ASC",
-        )
-        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
-    let runs = run_stmt
-        .query_map([], |row| {
-            Ok(StartupRecoveryRun {
-                run_id: row.get(0)?,
-                task_id: row.get(1)?,
-                branch_id: row.get(2)?,
-            })
+    let runs = r_code_store::host_support::list_startup_recovery_runs(&conn)?
+        .into_iter()
+        .map(|row| StartupRecoveryRun {
+            run_id: row.run_id,
+            task_id: row.task_id,
         })
-        .map_err(|error| ProductError::DatabaseError(error.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
-    drop(run_stmt);
-
-    let mut permission_stmt = conn.prepare(
-        "SELECT id FROM permission_requests WHERE decision = 'pending' ORDER BY created_at ASC, id ASC",
-    )
-    .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
-    let pending_permission_ids = permission_stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| ProductError::DatabaseError(error.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+        .collect::<Vec<_>>();
+    let pending_permission_ids = r_code_store::host_support::list_pending_permission_ids(&conn)?;
 
     Ok(StartupRecoverySnapshot {
         runs,
@@ -5285,24 +5241,25 @@ async fn ensure_real_runtime(
             let db = resolver_db.clone();
             let blobs_dir = resolver_blobs_dir.clone();
             Box::pin(async move {
-                let (task_id, blob_hash, name, media_type): (String, String, String, String) =
-                    db.conn()
-                        .map_err(|error| ProductError::DatabaseError(error.to_string()))?
-                        .query_row(
-                            "SELECT task_id, blob_hash, name, media_type FROM attachments WHERE id = ?1",
-                            rusqlite::params![attachment_id],
-                            |row| {
-                                Ok((
-                                    row.get(0)?,
-                                    row.get(1)?,
-                                    row.get(2)?,
-                                    row.get(3)?,
-                                ))
-                            },
+                let metadata = db
+                    .conn()
+                    .map_err(|error| ProductError::DatabaseError(error.to_string()))
+                    .and_then(|conn| {
+                        r_code_store::host_support::attachment_dispatch_metadata(
+                            &conn,
+                            &attachment_id,
                         )
-                        .map_err(|_| ProductError::AttachmentNotFound {
-                            attachment_id: attachment_id.clone(),
-                        })?;
+                    })
+                    .map_err(|_| ProductError::AttachmentNotFound {
+                        attachment_id: attachment_id.clone(),
+                    })?
+                    .ok_or_else(|| ProductError::AttachmentNotFound {
+                        attachment_id: attachment_id.clone(),
+                    })?;
+                let task_id = metadata.task_id;
+                let blob_hash = metadata.blob_hash;
+                let name = metadata.name;
+                let media_type = metadata.media_type;
                 let store = r_code_store::AttachmentStore::new(&db, blobs_dir);
                 let bytes = store.read_owned(&task_id, &attachment_id)?;
                 let _ = blob_hash;
@@ -5396,14 +5353,10 @@ const SUBAGENT_GOAL_PERSIST_CHARS: usize = 8_000;
 /// 外部路径合成锚点没有 goal 输入时回退 scope.goal 有界摘要。
 fn subagent_goal_text(db: &Database, scope: &AgentEventScope) -> Option<String> {
     if let Some(call_id) = scope.delegated_by_tool_call_id.as_deref() {
-        let input_json = db.conn().ok().and_then(|conn| {
-            conn.query_row(
-                "SELECT input_json FROM tool_calls WHERE id = ?1",
-                rusqlite::params![call_id],
-                |row| row.get::<_, String>(0),
-            )
+        let input_json = db
+            .conn()
             .ok()
-        });
+            .and_then(|conn| r_code_store::host_support::tool_call_input_json(&conn, call_id));
         let goal = input_json
             .as_deref()
             .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
@@ -5721,14 +5674,11 @@ fn ensure_subagent_run(
             let conn = db.conn()?;
             // F10：外部 callId 只在"当前父 run 下已存在真实记录"时才复用——
             // 跨任务/run 的全局匹配会让 child 审计挂到别的任务的 tool_calls 行上。
-            let count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM tool_calls WHERE id = ?1 AND run_id = ?2",
-                    rusqlite::params![external_call_id, parent_run_id],
-                    |row| row.get(0),
-                )
-                .map_err(|error| ProductError::DatabaseError(format!("database error: {error}")))?;
-            count > 0
+            r_code_store::host_support::tool_call_exists_in_run(
+                &conn,
+                external_call_id,
+                &parent_run_id,
+            )
         };
         if existing {
             Some(external_call_id.clone())
@@ -7459,17 +7409,16 @@ async fn migrate_queued_attachments_v1_to_v2(
     let updated = {
         let conn = db.conn().map_err(err_str)?;
         let original = payload.clone().unwrap_or_default();
-        conn.execute(
-            "UPDATE queued_messages SET attachments_json = ?2, updated_at = ?3 \
-             WHERE id = ?1 AND attachments_json IS ?4",
-            rusqlite::params![
-                queued.id,
-                v2_payload,
-                chrono::Utc::now().to_rfc3339(),
-                original
-            ],
+        usize::from(
+            r_code_store::host_support::set_queued_attachments_json_cas(
+                &conn,
+                &queued.id,
+                &v2_payload,
+                Some(original.as_str()),
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .map_err(err_str)?,
         )
-        .map_err(err_str)?
     };
     if updated == 0 {
         // CAS 失败：释放本次 staged 引用并重读当前行（另一写方已改写）。
@@ -10359,19 +10308,13 @@ async fn reconcile_legacy_task_changes_uncached(
     let mut raw_paths = Vec::new();
     {
         let conn = state.db.conn().map_err(err_str)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT input_json FROM tool_calls \
-                 WHERE task_id = ?1 AND status = 'ok' AND tool_name IN \
-                       ('create_file', 'edit', 'apply_patch', 'delete_file') \
-                 ORDER BY started_at ASC",
-            )
-            .map_err(err_str)?;
-        let rows = stmt
-            .query_map([task_id], |row| row.get::<_, String>(0))
-            .map_err(err_str)?;
-        for row in rows {
-            let input = row.map_err(err_str)?;
+        let inputs = r_code_store::host_support::list_tool_inputs_ok_for_tools(
+            &conn,
+            task_id,
+            &["create_file", "edit", "apply_patch", "delete_file"],
+        )
+        .map_err(err_str)?;
+        for input in inputs {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&input) {
                 collect_mutation_paths(&value, &mut raw_paths);
             }
@@ -12143,29 +12086,18 @@ fn startup_recovery_items(state: &CommandState) -> Result<StartupRecoverySnapsho
     }
 
     let conn = state.db.conn().map_err(err_str)?;
-    let mut run_stmt = conn
-        .prepare("SELECT EXISTS(SELECT 1 FROM agent_runs WHERE id = ?1 AND ended_at IS NULL)")
-        .map_err(err_str)?;
     let mut runs = Vec::new();
     for run in recorded.runs {
-        let is_still_active: i64 = run_stmt
-            .query_row([&run.run_id], |row| row.get(0))
-            .map_err(err_str)?;
-        if is_still_active != 0 {
+        if r_code_store::host_support::run_is_active(&conn, &run.run_id).map_err(err_str)? {
             runs.push(run);
         }
     }
-    drop(run_stmt);
 
-    let mut permission_stmt = conn
-        .prepare("SELECT EXISTS(SELECT 1 FROM permission_requests WHERE id = ?1 AND decision = 'pending')")
-        .map_err(err_str)?;
     let mut pending_permission_ids = Vec::new();
     for permission_id in recorded.pending_permission_ids {
-        let is_still_pending: i64 = permission_stmt
-            .query_row([&permission_id], |row| row.get(0))
-            .map_err(err_str)?;
-        if is_still_pending != 0 {
+        if r_code_store::host_support::permission_is_pending(&conn, &permission_id)
+            .map_err(err_str)?
+        {
             pending_permission_ids.push(permission_id);
         }
     }
@@ -12203,105 +12135,36 @@ fn cleanup_recovery_snapshot(
     tool_error: &str,
 ) -> Result<RecoveryCleanupResult, String> {
     let now = chrono::Utc::now().to_rfc3339();
-    let mut conn = state.db.conn().map_err(err_str)?;
-    let tx = conn.transaction().map_err(err_str)?;
-    let mut result = RecoveryCleanupResult::default();
-    let mut closed_runs = Vec::new();
-
-    for run in &snapshot.runs {
-        let closed = tx
-            .execute(
-                "UPDATE agent_runs
-                 SET review_state = CASE WHEN review_state = 'pending' THEN 'aborted' ELSE review_state END,
-                     ended_at = COALESCE(ended_at, ?1),
-                     summary = COALESCE(summary, ?2)
-                 WHERE id = ?3 AND ended_at IS NULL",
-                rusqlite::params![&now, run_summary, &run.run_id],
-            )
-            .map_err(err_str)?;
-        if closed == 0 {
-            continue;
-        }
-        result.runs_closed += closed as u64;
-        closed_runs.push(run.clone());
-        result.tool_calls_closed += tx
-            .execute(
-                "UPDATE tool_calls
-                 SET status = 'error',
-                     output_json = COALESCE(output_json, ?1),
-                     ended_at = COALESCE(ended_at, ?2)
-                 WHERE run_id = ?3 AND status = 'running'",
-                rusqlite::params![&tool_error, &now, &run.run_id],
-            )
-            .map_err(err_str)? as u64;
-    }
-
-    let interrupted_state = TaskState::Interrupted.to_string();
-    for task_id in closed_runs
+    let conn = state.db.conn().map_err(err_str)?;
+    // 事务边界在 store：关 run → 关工具调用 → 任务 Interrupted → 事件 → deny 权限。
+    let run_ids: Vec<&str> = snapshot
+        .runs
         .iter()
-        .map(|run| run.task_id.as_str())
-        .collect::<HashSet<_>>()
-    {
-        let updated = tx
-            .execute(
-                "UPDATE tasks
-                 SET state = ?1, updated_at = ?2
-                 WHERE id = ?3
-                   AND state NOT IN ('idle', 'archived', 'interrupted')
-                   AND NOT EXISTS (
-                       SELECT 1 FROM agent_runs AS live
-                       WHERE live.task_id = tasks.id AND live.ended_at IS NULL
-                   )",
-                rusqlite::params![&interrupted_state, &now, task_id],
-            )
-            .map_err(err_str)?;
-        if updated != 0 {
-            result.tasks_interrupted += updated as u64;
-        }
-    }
-
-    let event_branches = closed_runs
+        .map(|run| run.run_id.as_str())
+        .collect();
+    let permission_ids: Vec<&str> = snapshot
+        .pending_permission_ids
         .iter()
-        .map(|run| (run.task_id.clone(), run.branch_id.clone()))
-        .collect::<HashSet<_>>();
-    for (task_id, branch_id) in event_branches {
-        tx.execute(
-            "INSERT INTO task_events (task_id, branch_id, event_type, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
-                task_id,
-                branch_id,
-                TaskEventType::RunAborted.to_string(),
-                &now
-            ],
-        )
-        .map_err(err_str)?;
-        tx.execute(
-            "INSERT INTO task_events (task_id, branch_id, event_type, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
-                task_id,
-                branch_id,
-                TaskEventType::RunEnded.to_string(),
-                &now
-            ],
-        )
-        .map_err(err_str)?;
-    }
-
-    for permission_id in &snapshot.pending_permission_ids {
-        result.permissions_denied += tx
-            .execute(
-                "UPDATE permission_requests
-                 SET decision = 'deny', decided_at = COALESCE(decided_at, ?1)
-                 WHERE id = ?2 AND decision = 'pending'",
-                rusqlite::params![&now, permission_id],
-            )
-            .map_err(err_str)? as u64;
-    }
-
-    tx.commit().map_err(err_str)?;
-    Ok(result)
+        .map(String::as_str)
+        .collect();
+    let counts = r_code_store::host_support::apply_recovery_cleanup(
+        &conn,
+        &r_code_store::host_support::RecoveryCleanupInputs {
+            run_ids: &run_ids,
+            run_summary,
+            tool_error,
+            permission_ids: &permission_ids,
+            interrupted_state: &TaskState::Interrupted.to_string(),
+            now: &now,
+        },
+    )
+    .map_err(err_str)?;
+    Ok(RecoveryCleanupResult {
+        runs_closed: counts.runs_closed,
+        tasks_interrupted: counts.tasks_interrupted,
+        permissions_denied: counts.permissions_denied,
+        tool_calls_closed: counts.tool_calls_closed,
+    })
 }
 
 /// 只收束属于指定任务、且在当前应用启动前已经存在的遗留项。
@@ -12320,24 +12183,18 @@ fn cleanup_startup_recovery_task(
         .collect();
 
     let conn = state.db.conn().map_err(err_str)?;
-    let mut permission_stmt = conn
-        .prepare(
-            "SELECT EXISTS(
-                SELECT 1 FROM permission_requests
-                WHERE id = ?1 AND task_id = ?2 AND decision = 'pending'
-            )",
-        )
-        .map_err(err_str)?;
     let mut pending_permission_ids = Vec::new();
     for permission_id in snapshot.pending_permission_ids {
-        let belongs_to_task: i64 = permission_stmt
-            .query_row(rusqlite::params![&permission_id, task_id], |row| row.get(0))
-            .map_err(err_str)?;
-        if belongs_to_task != 0 {
+        if r_code_store::host_support::permission_is_pending_for_task(
+            &conn,
+            &permission_id,
+            task_id,
+        )
+        .map_err(err_str)?
+        {
             pending_permission_ids.push(permission_id);
         }
     }
-    drop(permission_stmt);
     drop(conn);
 
     let scoped = StartupRecoverySnapshot {
@@ -14759,14 +14616,11 @@ pub async fn file_write(
 
 pub async fn verification_output(state: &CommandState, id: &str) -> Result<String, String> {
     // 查记录的 output_blob_key（VerificationService 无单条查询，直接 SQL）
-    let blob_key: Option<String> = {
+    let blob_key = {
         let conn = state.db.conn().map_err(err_str)?;
-        conn.query_row(
-            "SELECT output_blob_key FROM verifications WHERE id = ?1",
-            rusqlite::params![id],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("verification not found: {id}: {e}"))?
+        r_code_store::host_support::verification_output_blob_key(&conn, id)
+            .map_err(|e| format!("verification not found: {id}: {e}"))?
+            .ok_or_else(|| format!("verification not found: {id}"))?
     };
     let Some(key) = blob_key else {
         return Ok(String::new());
