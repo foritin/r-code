@@ -1,14 +1,14 @@
 # 唯一恢复锚点。每完成一个可验证子步更新。
-phase: F            # final
-current_task: final-report + 收尾
-current_task_status: in_progress
+phase: DONE
+current_task: 无——全部完成
+current_task_status: done
 blocked: []
-last_completed: [FX-00, 基线修复, FX-18, style, FX-01, FX-02, FX-03, FX-09, FX-04, FX-05, FX-06, FX-07, FX-10, FX-12, FX-19, FX-20, FX-13, FX-14, FX-17]
-deferred: [FX-08(SQL迁移专项), FX-11(IPC错误契约专项), FX-15(轮询降频), FX-16(Markdown增量)]
-next_action: >
-  等 final-cargo-test.log 跑完 -> 结果写入 final-report 第三节 -> docs(review) 收尾提交 ->
-  交付最终回复。
+last_completed: [FX-00..FX-20 全部 21 项, 最终回归 2332:0, 终版报告 7208483]
+next_action: 无。分支 feat/code-review-2026-08-29 待用户审阅后合入 dev/main（合并前建议跑一次三平台 CI）。
 notes: >
-  final-report-2026-08-29.md 已写（发现统计/修复统计/测试验证/遗留清单/revert指引）。
-  前端 build EXIT=0。全量 cargo 回归后台运行中（evidence/final-cargo-test.log）。
-  若恢复时 cargo 未完：读该 log 的 EXIT= 与 test result 行补进报告即可，其余步骤不变。
+  续期交付：FX-08(15dfd2c) SQL收敛、FX-11(ee41a4b+9fe1d63) IPC结构化错误176签名、
+  FX-15(0ebcec6) 轮询降频、FX-16(463f1b3) Markdown增量、clippy清理(68372a8)。
+  最终回归：cargo workspace 2332 通过/0 失败 EXIT=0（evidence/final-cargo-test3.log）、
+  workspace clippy 0、前端 build EXIT=0、tsc 0。
+  FX-15 遗留子项：sessionMessages 游标增量读取（需后端读契约扩展）。
+  FX-11 遗留子项：commands.rs 内手工 JSON-in-String 的 UserFacing 站点收敛（通道已兼容）。
