@@ -853,7 +853,7 @@ test("CI authenticates every private agent-contracts checkout and covers Linux",
   );
   assert.match(
     workflow,
-    /name: Test Windows frontend \(host-OS contracts\)[\s\S]*npm test -- app-shell\.test\.mjs companion-window-ui\.test\.mjs companion\.test\.mjs/,
+    /name: Test Windows frontend \(host-OS contracts\)[\s\S]*npm test -- app-shell\.test\.mjs companion-window-ui\.test\.mjs/,
     "the Windows CI leg must keep proving host-OS browser contracts while ubuntu covers the full suite",
   );
   assert.match(

@@ -1,6 +1,9 @@
 //! Cross-platform process configuration shared by desktop-side command runners.
 
 use std::process::Command;
+// Duration 只在 Windows 树杀超时与测试断言中使用；Linux 生产编译不引用，
+// 故 cfg 门控避免 `-D warnings` 下的 unused-imports 失败。
+#[cfg(any(windows, test))]
 use std::time::Duration;
 
 /// Prevent a background console process from creating a visible terminal window.
