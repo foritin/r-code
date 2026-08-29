@@ -461,6 +461,7 @@ export function Canvas({
           toolTabsAfter={toolTabsAfterSubagents}
           onSelect={onInspectSubagent}
           onBack={onBackToSubagents}
+          onBackToSummary={onCloseSubagents}
           onCloseTab={onCloseSubagentTab}
           onOpenLauncher={openLauncher}
           onHide={hideWorkbenchPanel}

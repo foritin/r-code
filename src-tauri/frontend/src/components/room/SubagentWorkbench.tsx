@@ -26,7 +26,7 @@ import {
   IconTerminal,
 } from "../icons";
 import { Markdown } from "./Markdown";
-import { SubagentAvatar } from "./SubagentIdentity";
+import { SubagentAvatar, type SubagentAvatarStatus } from "./SubagentIdentity";
 import { ToolPayloadDetails } from "./ToolCard";
 import type { ToolState } from "./model";
 import {
@@ -54,6 +54,8 @@ interface Props {
   toolTabsAfter: ReactNode;
   onSelect: (subagentId: string) => void;
   onBack: () => void;
+  /** 从子代理列表/详情返回"运行与子代理"summary 面板（只关子代理页，不隐藏侧栏）。 */
+  onBackToSummary: () => void;
   onCloseTab: (subagentId: string) => void;
   onOpenLauncher: () => void;
   onHide: () => void;
@@ -274,6 +276,7 @@ export function SubagentWorkbench({
   toolTabsAfter,
   onSelect,
   onBack,
+  onBackToSummary,
   onCloseTab,
   onOpenLauncher,
   onHide,
@@ -327,6 +330,7 @@ export function SubagentWorkbench({
         onCloseTab={onCloseTab}
         onOpenLauncher={onOpenLauncher}
         onHide={onHide}
+        onBackToSummary={onBackToSummary}
         onToggleFocus={onToggleFocus}
         focused={focused}
       />
@@ -367,6 +371,7 @@ function SubagentTabsHeader({
   onCloseTab,
   onOpenLauncher,
   onHide,
+  onBackToSummary,
   onToggleFocus,
   focused,
 }: {
@@ -379,19 +384,21 @@ function SubagentTabsHeader({
   onCloseTab: (subagentId: string) => void;
   onOpenLauncher: () => void;
   onHide: () => void;
+  onBackToSummary: () => void;
   onToggleFocus: () => void;
   focused: boolean;
 }) {
   return (
     <header className="subagent-page-header workbench-head subagent-tabs-header">
       {selectedSubagentId == null && (
-        // 列表模式缺"返回运行与子代理"入口：单详情有 onBack，但列表顶部只有
-        // 工具 tabs + 专注/隐藏图标，用户从 summary 进列表后无处返回。onHide
-        // 关闭子代理页（open:false）回到 summary 面板，这里给一个文字的明确入口。
+        // 列表模式缺"返回运行与子代理"入口：单详情有 onBack（回列表），但列表
+        // 顶部只有工具 tabs + 专注/隐藏图标，用户从 summary 进列表后无处返回。
+        // 注意不能复用 onHide（隐藏工作台手风琴）——那会收起整个右侧边栏；这里
+        // 用 onBackToSummary（只关子代理页 open:false），回到"运行与子代理"面板。
         <button
           type="button"
           className="subagent-detail-back subagent-page-back"
-          onClick={onHide}
+          onClick={onBackToSummary}
           aria-label="返回运行与子代理"
           title="返回运行与子代理"
         >
@@ -692,7 +699,13 @@ function SubagentListSection({
                 }}
                 aria-label={`${child.label}，深度 ${node.depth}，${statusLabel(child.status)}${anomaly ? `，${anomaly}` : ""}`}
               >
-                <SubagentStateMark status={child.status} />
+                <SubagentAvatar
+                  index={indexById.get(child.id) ?? 0}
+                  identity={child.id}
+                  runtimeKind={child.runtimeKind}
+                  status={subagentStatusRing(child.status)}
+                  size="sm"
+                />
                 <span className="subagent-list-row-copy">
                   <strong title={child.label}>{child.label}</strong>
                   <small title={listObservation(child)}>{listObservation(child)}</small>
@@ -1946,6 +1959,14 @@ function treeFactsAriaLabel(node: SubagentTreeNode): string {
 
 function isActive(status: SubagentStatus): boolean {
   return status === "queued" || status === "running" || status === "waiting_permission";
+}
+
+/** ActivitySubagent.status → 头像状态环（与 summary squad 的 ring 语义一致）：
+ *  运行/等待 → run（呼吸灯脉冲）、completed → ok、其余（失败/取消/无产出）→ warn。 */
+function subagentStatusRing(status: SubagentStatus): SubagentAvatarStatus {
+  if (status === "completed") return "ok";
+  if (isActive(status)) return "run";
+  return "warn";
 }
 
 function runStatus(run: AgentRun): SubagentStatus {
