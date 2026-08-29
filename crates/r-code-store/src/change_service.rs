@@ -456,26 +456,35 @@ impl<'a> ChangeService<'a> {
     /// `run_id` 是从不可变的 snapshot 关联或 tool call 关联中投影出来的，不在
     /// `file_changes` 重复存储。旧版/工作区对账行保持 `None`。
     pub async fn list_changes(&self, task_id: &str) -> Result<Vec<FileChange>, ProductError> {
+        // F-corr-10：同步 SQLite 查询从 async 上下文移到 blocking 线程池，避免占用
+        // tokio worker 的转发时隙（本函数经 Room usePoll 热路径调用）。
         let conn = self.db.conn()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT fc.id, fc.task_id, fc.tool_call_id, fc.path, fc.change_type, \
-                        fc.before_hash, fc.after_hash, fc.old_path, fc.created_at, \
-                        COALESCE( \
-                            (SELECT rsc.run_id FROM run_snapshot_changes rsc \
-                             WHERE rsc.file_change_id = fc.id), \
-                            (SELECT tc.run_id FROM tool_calls tc WHERE tc.id = fc.tool_call_id) \
-                        ) \
-                 FROM file_changes fc WHERE fc.task_id = ?1 \
-                 ORDER BY fc.created_at ASC, fc.id ASC",
-            )
-            .map_err(db_err)?;
-        let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
-        let mut changes = Vec::new();
-        while let Some(row) = rows.next().map_err(db_err)? {
-            changes.push(row_to_change_with_run(row)?);
-        }
-        Ok(changes)
+        let task_id = task_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT fc.id, fc.task_id, fc.tool_call_id, fc.path, fc.change_type, \
+                            fc.before_hash, fc.after_hash, fc.old_path, fc.created_at, \
+                            COALESCE( \
+                                (SELECT rsc.run_id FROM run_snapshot_changes rsc \
+                                 WHERE rsc.file_change_id = fc.id), \
+                                (SELECT tc.run_id FROM tool_calls tc WHERE tc.id = fc.tool_call_id) \
+                            ) \
+                     FROM file_changes fc WHERE fc.task_id = ?1 \
+                     ORDER BY fc.created_at ASC, fc.id ASC",
+                )
+                .map_err(db_err)?;
+            let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
+            let mut changes = Vec::new();
+            while let Some(row) = rows.next().map_err(db_err)? {
+                changes.push(row_to_change_with_run(row)?);
+            }
+            Ok(changes)
+        })
+        .await
+        .map_err(|join| {
+            ProductError::DatabaseError(format!("change list task aborted: {join}"))
+        })?
     }
 
     /// 获取某一次运行产生的变更。snapshot 与 tool call 是权威归属，绝不按时间猜测。
