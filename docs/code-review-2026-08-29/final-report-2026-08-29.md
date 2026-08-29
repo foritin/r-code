@@ -61,7 +61,7 @@
 
 ## 三、测试与验证（最终回归）
 
-- **cargo 全仓**：`evidence/final-cargo-test3.log` —— **2332 通过 / 0 失败 / EXIT=0**（FX-08/11/15/16 之后的最终态；基线 1661/1，唯一失败为环境性 symlink 特权问题且已由 FX-18 修复）。workspace clippy `--all-targets` **0 warning / 0 error**（`-D warnings` 语义下安全，含本地 rustc 1.98 新 lint 的既有位点最小修复，见 68372a8）。
+- **cargo 全仓**：`evidence/final-cargo-test5.log` —— **2336 通过 / 0 失败 / EXIT=0**（含 vendor 子模块 agent-contracts 全量；基线 1661/1，唯一失败为环境性 symlink 特权问题且已由 FX-18 修复）。workspace clippy `--all-targets` **0 warning / 0 error**（`-D warnings` 语义下安全）。vendor 子模块 commit：87030cc（4 项健壮性修复）、6eb9271+459cb17（Arc 契约）、7e24fa3（config schema），每次均以 gitlink 成对记录且 `PIN_OK`。
 - **过程中分项**：host lib 707/707、agent-worker 302/302、core 174+、store 519+、gateway 226/226、mcp 17/17、meta 测试 82/82、金集 fast 41/41。
 - **全仓 0 warning**（cargo check --workspace --all-targets；CI clippy -D warnings 可过）。
 - **前端**：tsc --noEmit 0 错误；build 验证 `evidence/final-frontend-build2.log`（EXIT=0）；受影响测试文件（memory-ui 5/5、runs-panel-v2 4/4、codex-message-stream 3/3、structured-command-error 5/5、user-error-contract 3/3[顺修 Windows pathname 缺陷]、long-content-performance 8/8[含 FX-16 新断言]）绿。**全量 npm test 未在最终态重跑**（基线 249/304，53 个既有失败属用户 WIP 重构中源文件 + 本地 Playwright 超时，见 KNOWN-FAILURES.md；修复任务验收均以"不新增失败"为口径逐文件验证）。
@@ -73,10 +73,23 @@
 
 初版报告遗留的 FX-08/11/15/16 已在续期会话全部交付（见第二节新增四行）。FX-15 中仅
 「sessionMessages 游标增量读取」子项未做（需后端读契约扩展），Room 轮询降频主体已生效。
+后续续期又清零了 4.4 的小项与 4.2 的 vendor 项（详见 4.2/4.4）。
 
-### 4.2 受外部约束的遗留（需 foritin/agent-contracts 子模块推送，超出本分支授权）
+### 4.2 受外部约束的遗留 → 已全部处理（foritin/agent-contracts 子模块推进 + gitlink 记录）
 
-F-robust-04（anthropic SSE watchdog）、F-robust-09（退避抖动）、F-corr-05（dialect 双表）、F-corr-08（IPC u32 截断）、F-perf-05（SessionStore 逐事件落盘）、F-perf-02.vendor 部分（CompletionRequest 借用/Arc 接口）、FX-12 的 config 版本字段（agent-config::Config）。
+因 agent-contracts 子模块在仓库（`gh` 已认证为 foritin，可推送），以下 6 项全部在子模块内修复并对齐 gitlink（父指针 = 子模块 HEAD，CI submodule-pin 检查 `PIN_OK`）：
+
+| 项 | vendor commit | 交付 |
+| --- | --- | --- |
+| F-robust-04 anthropic SSE watchdog | 87030cc | anthropic 复用 openai 的 `watch_sse_idle`（120s 空闲即止） |
+| F-robust-09 退避抖动 | 87030cc | 指数退避 ±20% 抖动（纳秒时钟取模，无 rand 依赖） |
+| F-corr-05 dialect 双表 | 87030cc | dialect 不支持 kind 由 `unreachable!` panic 改可读错误 |
+| F-corr-08 IPC u32 截断 | 87030cc | 写帧显式拒绝 >16MiB（不再静默截断） |
+| F-perf-05 SessionStore 逐事件落盘 | 87030cc | 锁注册表容量阈值懒清理（不再每次 append 全表扫描） |
+| F-perf-02.vendor CompletionRequest Arc 接口 | 6eb9271+459cb17 | `LlmProvider::complete/stream` 收 `Arc<CompletionRequest>`，重试避免深拷贝；宿主 agent_loop/llm_runtime/commands/memory_runtime 同步适配 |
+| FX-12 config 版本字段 | 7e24fa3 | `Config::schema_version`（default=1 向后兼容）+ 宿主加载拒未来版本 + 钉子测试 |
+
+跨仓库一致性以「主仓 gitlink + 宿主适配」成对提交（d2b6a50、bc6c331），每次提交后验证 `PIN_OK`。
 
 ### 4.3 campaign 级遗留（按设计延后）
 
