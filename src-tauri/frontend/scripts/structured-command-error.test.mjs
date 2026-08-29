@@ -6,10 +6,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import process from "node:process";
 import test from "node:test";
 
-const scriptsDir = path.dirname(new URL(import.meta.url).pathname);
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendDir = path.resolve(scriptsDir, "..");
 
 async function loadIpcErrorModule() {

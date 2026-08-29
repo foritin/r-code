@@ -5,10 +5,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import ts from "typescript";
 
-const frontendDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function loadHealth() {
   const source = readFileSync(path.join(frontendDir, "src", "lib", "provider-health.ts"), "utf8");

@@ -9,9 +9,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const frontendDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const hostSrc = path.resolve(frontendDir, "..", "src");
 
 const FEATURES = ["browser", "automation", "worktree"];

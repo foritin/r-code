@@ -5,10 +5,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import net from "node:net";
 import test from "node:test";
 
-const frontendDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function freePort() {
   return new Promise((resolve) => {

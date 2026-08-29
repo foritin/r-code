@@ -11,8 +11,9 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import ts from "typescript";
+import { fileURLToPath } from "node:url";
 
-const frontendDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcDir = path.join(frontendDir, "src");
 
 const ALL_DISPLAY_STATES = [

@@ -5,9 +5,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const frontendDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const registry = JSON.parse(
   readFileSync(path.join(frontendDir, "src", "lib", "settings-pane-registry.json"), "utf8"),
 );
