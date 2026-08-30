@@ -4649,7 +4649,7 @@ test("subagents open in deduplicated tabs while the overview stays available", a
     "the close control must be a sibling instead of an interactive descendant of the tab",
   );
 
-  await workbench.getByRole("button", { name: "打开工具启动器", exact: true }).click();
+  await workbench.getByRole("button", { name: "打开任务工具", exact: true }).click();
   const launcher = workbench.getByRole("dialog", { name: "工作台工具启动器" });
   await launcher.waitFor({ state: "visible" });
   // Opening the launcher moves focus on the next animation frame. Wait for that accessibility
