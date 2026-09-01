@@ -1,0 +1,63 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M3-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T06:57:16.732Z",
+  "started_at": "2026-08-31T06:57:15.607Z",
+  "finished_at": "2026-08-31T06:57:16.732Z",
+  "duration_ms": 1125,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "307f01eae8209c2c66786b2d41f7ada86e1ccc6b5e0ee467387cfe316a8ebefa",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-02.A1",
+      "description": "白名单能力探测正确（默认全关、精确二元组匹配）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --lib -- deferred_tools::whitelist_tests",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --lib -- deferred_tools::whitelist_tests",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M3-02"
+    },
+    {
+      "id": "M3-02.A2",
+      "description": "cache_guard 新增用例：中途新增工具不击穿（tail_avg 阈值 + Tools 归因）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --test cache_guard",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --test cache_guard",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M3-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M3-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M3-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

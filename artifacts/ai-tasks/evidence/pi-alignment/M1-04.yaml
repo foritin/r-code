@@ -1,0 +1,64 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M1-04
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m1-04-costtiers-分层定价与-thinking_level_map
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M1-04.json
+
+deliverables:
+  - src-tauri/src/model_pricing.rs
+  - src-tauri/src/provider_decl.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/lib.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M1-04.json
+
+changed_paths:
+  - src-tauri/src/model_pricing.rs
+  - src-tauri/src/provider_decl.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M1-04.A1
+    passed: true
+    command: cargo test -p r-code-host --lib -- model_pricing::tests provider_decl::tests::cost_table_parses_tiers_and_level_map provider_decl::tests::negative_rates_rejected_at_load
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-04.json
+    note: "判据=input+cacheRead+cacheWrite（漏计 cacheWrite 会选错层有专项用例）；阈值≤判据的层中最高阈值胜出；整请求单层费率（不逐段拼装）；TOML 表键成层名、无 threshold=基础档；负费率 load 时报错不静默"
+  - id: M1-04.A2
+    passed: true
+    command: cargo test -p r-code-host --lib -- model_pricing::tests::thinking_level_map_three_states model_pricing::tests::cyclable_levels_skip_null_tiers
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-04.json
+    note: "三态：档位不在 map=省略（不发字段）/字符串（含重映射 medium→high）/hidden=null；cyclable_levels 剔除 null 档（UI 隐藏、切换跳过）"
+  - id: M1-04.A3
+    passed: true
+    command: cargo test -p r-code-host --lib -- commands::tests::native_usage_event_attributes_cost_from_declared_tiers commands::tests::native_usage_event_persists_to_main_and_subagent_runs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-04.json
+    note: "persist_native_usage_event 落库前按 run.model 匹配声明定价：判据选层→整套费率→cost_usd 覆盖式重算并入 usage_json；判据跨阈值时整套换档重算；无声明定价的模型 usage_json 原样透传（零行为变化，既有逐字节断言保持）"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M1-04 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-04.json
+
+decisions:
+  - DM22: 定价数据源 = provider-decls.toml 的 [decls.<name>.cost]（tier 表键成层名、费率平铺四桶、thinking_level_map+hidden_thinking_levels）——不硬编码不确定的厂商价格；目录预设无声明定价即无 cost_usd（不臆造）。PRD 决策空间"定价放 provider 模型描述"落为声明侧模型级配置。
+  - DM23: thinking_level_map 三态在 TOML 无 null 值的约束下拆成两个键：thinking_level_map（字符串映射；档位缺省=省略态）+ hidden_thinking_levels（null 档），语义与 PRD 一致。
+  - DM24: 归因接线点 = 原生线路 persist_native_usage_event（run.model → 声明匹配 → cost_usd 并入 usage_json 列）；Codex 线路模型不经声明目录，无定价不动（行为不变）。
+  - DM25: 无归因且无 retries 合并时 usage_json 原样透传——serde_json 无 preserve_order，重序列化会变键序破坏既有逐字节断言；"未启用零行为变化"原则优先。
+  - DM26: DeclCost 经 serde try_from=DeclCostRaw 在 load 时校验费率非负有限；ProviderDecl/DeclFile 因 f64 费率从 Eq 降为 PartialEq。
+
+external_gates_remaining: []
+notes:
+  - 定向测试 10/10（model_pricing 6 + provider_decl 2 + commands 2）。
+  - 成本归因展示（前端 runUsageLabel 呈现 cost_usd）不属本任务断言面；usage_json 键已就位，前端展示随后续 UI 任务按需消费。

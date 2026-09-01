@@ -326,6 +326,16 @@ jobs:
           }
           $config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "src-tauri/tauri.release-windows.conf.json" -Encoding utf8
 
+      # M8-04（R-DST-01）：externalBin 需要真实 r-code-tui 产物先于 Tauri 打包
+      # 就位（build.rs 的占位文件只服务本地存在性检查，发布前必须覆盖）。
+      - name: Build r-code-tui CLI for bundling
+        shell: bash
+        run: |
+          cargo build --release -p r-code-tui --bin r-code-tui --target ${{ matrix.rust-target }}
+          mkdir -p src-tauri/binaries
+          cp "target/${{ matrix.rust-target }}/release/r-code-tui$( [[ '${{ matrix.platform }}' == windows-* ]] && echo '.exe' )"              "src-tauri/binaries/r-code-tui-${{ matrix.rust-target }}$( [[ '${{ matrix.platform }}' == windows-* ]] && echo '.exe' )"
+          ls -la src-tauri/binaries/
+
       - name: Validate Apple signing and notarization secrets
         if: startsWith(matrix.platform, 'macos-') && needs.validate.outputs.apple_signed == 'true'
         shell: bash

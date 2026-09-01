@@ -57,6 +57,13 @@ pub struct ExecutionSettings {
     /// `Some(path)`=存在即用（缺失时执行报错，不静默回落）。
     #[serde(default)]
     pub bash_shell_path: Option<String>,
+    /// 容器执行后端（pi-alignment M7-02 / R-SBX-02）：`None`/空 = 默认本地
+    /// 后端（零行为变化）；`Some(image)` = 命令经 DockerBackend 在容器内执行。
+    /// **仅全局**：与 bash_shell_path 同文件（config_dir/execution.toml），
+    /// 工作区级配置不可注入（启用后 Host 侧审批矩阵/风险分级/审计不变——
+    /// backend 只换执行载体，审批仍在 ToolGateway）。
+    #[serde(default)]
+    pub container: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -575,6 +582,21 @@ impl SettingsService {
                 agent_config::CONFIG_SCHEMA_VERSION
             )));
         }
+        // 声明式端点（M1-02）在 env 覆盖之前合成：声明相当于配置文件层，
+        // `R_CODE_PROVIDER_<NAME>_API_KEY` 等环境变量仍握有最高优先级。
+        // sidecar 文件级解析失败降级为空声明集（M1-03：错误进快照的
+        // composition_errors 诊断，不拖垮整个设置加载）；声明内联的明文
+        // api_key 仍由 apply_decls 硬错误拒绝。
+        let decls = match crate::provider_decl::load_decls(&self.config_dir) {
+            Ok(decls) => decls,
+            Err(error) => {
+                tracing::warn!("provider-decls.toml 加载失败，按空声明集降级：{error}");
+                Default::default()
+            }
+        };
+        crate::provider_decl::apply_decls(&mut config, &decls, &|account| {
+            self.provider_secret(account)
+        })?;
         // Environment credentials have the highest runtime priority. Apply them before the
         // persisted-credential fallback so an explicitly supplied key never causes an unnecessary
         // platform store read.
@@ -626,6 +648,20 @@ impl SettingsService {
         let mut config: Config = toml::from_str(&merged_str)
             .map_err(|e| ProductError::ConfigError(format!("deserialize merged: {e}")))?;
 
+        // 3.5 声明式端点（M1-02，全局 sidecar，workspace 不可注入——与
+        // F-sec-03 网络面剥离同防线）在 env 覆盖之前合成；sidecar 文件级
+        // 解析失败降级为空声明集（诊断走 M1-03 快照），明文 key 仍硬错误。
+        let decls = match crate::provider_decl::load_decls(&self.config_dir) {
+            Ok(decls) => decls,
+            Err(error) => {
+                tracing::warn!("provider-decls.toml 加载失败，按空声明集降级：{error}");
+                Default::default()
+            }
+        };
+        crate::provider_decl::apply_decls(&mut config, &decls, &|account| {
+            self.provider_secret(account)
+        })?;
+
         // 4. 环境变量覆盖（最高优先级，仅次于显式参数）。先应用环境凭据可避免
         // 已明确提供 key 时仍访问持久化凭据。
         apply_env(&mut config);
@@ -644,11 +680,22 @@ impl SettingsService {
     pub fn save_global(&self, config: &Config) -> Result<(), ProductError> {
         // 先写入平台凭据后端，再落无密钥的 TOML。顺序不能反过来，否则持久化
         // 失败时会把用户唯一的凭据静默抹掉。环境变量只影响本次进程，不应被复制落盘。
+        // 声明式端点（M1-02）：引用解析值与内存 key 一致时，声明文件仍是真值
+        // 来源，不再复制一份到 provider:<name> 凭据位。
+        let decls = crate::provider_decl::load_decls(&self.config_dir).unwrap_or_default();
         for (name, provider) in &config.providers {
             if !provider.api_key.trim().is_empty() {
                 if provider_env_value(name, provider.provider_kind.as_deref()).as_deref()
                     == Some(provider.api_key.as_str())
                 {
+                    continue;
+                }
+                if crate::provider_decl::decl_covers_secret(
+                    &decls,
+                    name,
+                    &provider.api_key,
+                    &|account| self.provider_secret(account),
+                ) {
                     continue;
                 }
                 self.set_provider_secret(name, &provider.api_key)?;
@@ -894,7 +941,9 @@ pub(crate) fn provider_env_value(name: &str, provider_kind: Option<&str>) -> Opt
 
 /// Environment credentials override persisted credentials without touching the platform store.
 /// Only existing provider entries are modified.
-fn apply_env(config: &mut Config) {
+///
+/// pub(crate)：provider_decl 的合成次序测试（声明在 env 之前应用）需要直接调用。
+pub(crate) fn apply_env(config: &mut Config) {
     for (name, provider) in &mut config.providers {
         if let Some(key) = provider_env_value(name, provider.provider_kind.as_deref()) {
             provider.api_key = key;
@@ -976,6 +1025,7 @@ mod tests {
             .save_execution_settings(&ExecutionHostSettings {
                 execution: ExecutionSettings {
                     bash_shell_path: Some(String::new()),
+                    container: None,
                 },
                 codex: CodexExecutionSettings {
                     subagent_reasoning_effort: Some("high".to_string()),
@@ -1007,6 +1057,7 @@ mod tests {
             .save_execution_settings(&ExecutionHostSettings {
                 execution: ExecutionSettings {
                     bash_shell_path: Some("relative/bash.exe".to_string()),
+                    container: None,
                 },
                 codex: CodexExecutionSettings::default(),
             })

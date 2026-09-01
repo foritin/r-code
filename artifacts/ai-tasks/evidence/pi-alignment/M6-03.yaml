@@ -1,0 +1,36 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M6-03
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m6-03-adapter-一致性测试
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M6-03.json
+
+deliverables:
+  - crates/r-code-core/src/telemetry.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M6-03.json
+changed_paths:
+  - crates/r-code-core/src/telemetry.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M6-03.A1
+    passed: true
+    command: cargo test -p r-code-core --lib -- telemetry::adapter_consistency_tests
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-03.json
+    note: "三语义各有用例：原子性（未 end 不入账）、状态合并（end 覆盖运行中同键、异键保留）、嵌套父子（完成序子先父后、各自完整）"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M6-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-03.json
+
+decisions:
+  - DM69: 一致性套件复用 InMemory（PRD 决策空间）；三语义同时是未来第三方 Adapter 的验收基准（接入方跑同一套即可自证）。
+external_gates_remaining: []

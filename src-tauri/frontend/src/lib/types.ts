@@ -1344,6 +1344,32 @@ export interface ProviderModelsResponse {
   models: string[];
 }
 
+/** pi-alignment M1-03：三态快照的单个 (provider, model) 条目。 */
+export interface ModelAvailabilityEntry {
+  provider: string;
+  model: string;
+  /** decl / catalog / config */
+  source: string;
+  has_auth: boolean;
+}
+
+/** pi-alignment M1-03：组装失败诊断条目（不含密钥材料）。 */
+export interface ModelCompositionError {
+  provider: string;
+  model?: string | null;
+  reason: string;
+}
+
+/**
+ * pi-alignment M1-03：all ⊇ available；composition_errors 单列组装失败。
+ * 模型选择面只渲染 available；缺鉴权条目在 all 不在 available。
+ */
+export interface ModelAvailabilitySnapshot {
+  all: ModelAvailabilityEntry[];
+  available: ModelAvailabilityEntry[];
+  composition_errors: ModelCompositionError[];
+}
+
 export interface ProviderStatus {
   configured: boolean;
   ready: boolean;

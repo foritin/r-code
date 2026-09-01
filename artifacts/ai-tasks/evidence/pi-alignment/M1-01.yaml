@@ -1,0 +1,60 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M1-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m1-01-providercompat-声明式兼容层与两级合成
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M1-01.json
+
+deliverables:
+  - src-tauri/src/provider_compat.rs
+  - src-tauri/src/model_capabilities.rs
+  - src-tauri/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M1-01.json
+
+changed_paths:
+  - src-tauri/src/provider_compat.rs
+  - src-tauri/src/model_capabilities.rs
+  - src-tauri/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M1-01.A1
+    passed: true
+    command: cargo test -p r-code-host --lib -- provider_compat::tests::struct_field_set_complete_and_roundtrips
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-01.json
+    note: "七字段全部可声明且 serde 往返一致；两个枚举（SessionAffinityFormat/ThinkingTokenBudgetField）snake_case 序列化"
+  - id: M1-01.A2
+    passed: true
+    command: cargo test -p r-code-host --lib -- provider_compat::tests::model_level_overrides_provider_level_and_none_inherits provider_compat::tests::effective_composition_orders_builtin_provider_model
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-01.json
+    note: "merge 语义唯一（model 覆盖 provider、None 继承）；三层合成次序 builtin→provider→model 稳定；未知 kind 返回全空通用行为"
+  - id: M1-01.A3
+    passed: true
+    command: cargo test -p r-code-host --lib -- provider_compat::tests::deepseek_prompt_caching_survives_user_override provider_compat::tests::vendor_direct_protection_still_fills_gaps provider_compat::tests::custom_kinds_are_freely_overridable model_capabilities::tests::resolved_capabilities_carry_builtin_compat
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-01.json
+    note: "protected_merge 挡翻转不挡补空白；非厂商直连 kind 可自由覆盖；能力快照（model_capabilities::resolve 唯一能力入口）携带厂商直连 compat 事实，合成点接线验证通过"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M1-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-01.json
+
+decisions:
+  - DM4: ProviderCompat 落在 src-tauri（r-code-host）而非 r-code-core —— 能力解析唯一入口 model_capabilities 与 dialect 合成消费方 provider_support 都在 src-tauri，DTO 跟随唯一消费点；PRD 决策空间允许按仓库分层决定。
+  - DM5: 字段集裁剪为 7 个（五布尔 + 两枚举），对齐 R-Code 实际 provider 面（deepseek/kimi_coding/ark_*），不照搬 Pi 全量；builtin_compat 事实从 vendor agent-llm dialect.rs 的线路行为推导，不动 vendor。
+  - DM6: 用户 provider/model 级覆盖的配置面属于 M1-02 声明式端点范围；本任务 effective_compat 接口已就绪，当前喂空层（= 纯硬编码默认），ResolvedModelCapabilities.compat 随快照一次性冻结。
+
+external_gates_remaining: []
+notes:
+  - 定向测试：cargo test -p r-code-host --lib -- provider_compat model_capabilities → 11 passed / 0 failed（日志 artifacts/ai-tasks/pi-alignment-m101-test.log）。

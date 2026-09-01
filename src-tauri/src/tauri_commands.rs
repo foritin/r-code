@@ -1868,6 +1868,26 @@ pub async fn cmd_settings_get(
         .map_err(CommandError::from)
 }
 
+/// M4-04 热重载：清技能目录缓存并重扫，返回最新清单（/reload 与设置页共用入口）。
+#[tauri::command]
+pub async fn cmd_skills_reload(
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::skills_reload(&state)
+        .await
+        .map_err(CommandError::from)
+}
+
+/// ModelAvailability 三态快照（all/available/composition_errors），不含密钥材料。
+#[tauri::command]
+pub async fn cmd_model_availability(
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, CommandError> {
+    r_code_host::commands::model_availability(&state)
+        .await
+        .map_err(CommandError::from)
+}
+
 /// 读取经过脱敏的 MCP 配置与实时状态；不会因查看设置页而启动第三方进程。
 #[tauri::command]
 pub async fn cmd_mcp_snapshot(

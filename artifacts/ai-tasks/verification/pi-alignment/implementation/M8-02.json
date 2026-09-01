@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M8-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:51:23.032Z",
+  "started_at": "2026-08-31T11:51:21.068Z",
+  "finished_at": "2026-08-31T11:51:23.032Z",
+  "duration_ms": 1964,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "26f23db64cb7e70107bbf7a969d4687413e4d1b97de2645eb15adb7239a25600",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M8-02.A1",
+      "description": "内联审批 + 风险分级同源（分类器同一函数；AllowAlways 精确目标）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib -- interaction::tests::approval_card_uses_gateway_classifier approval::tests::decisions_resolve_cards",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib -- interaction::tests::approval_card_uses_gateway_classifier approval::tests::decisions_resolve_cards",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M8-02"
+    },
+    {
+      "id": "M8-02.A2",
+      "description": "snapshot 权威 vs 事件瞬时（权威重建与事件视图一致）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib -- snapshot::tests::live_view_matches_authoritative_rebuild",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib -- snapshot::tests::live_view_matches_authoritative_rebuild",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M8-02"
+    },
+    {
+      "id": "M8-02.A3",
+      "description": "turn 级窗口化（窗口边界在 turn 边界、放大零丢失）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib -- window::tests::turn_windowing_keeps_recent_turns_whole window::tests::leading_rows_form_own_turn",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib -- window::tests::turn_windowing_keeps_recent_turns_whole window::tests::leading_rows_form_own_turn",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M8-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M8-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M8-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

@@ -913,7 +913,9 @@ impl AgentRuntimePool {
         self.real_mode.store(true, Ordering::Release);
     }
 
-    async fn bridge_for(&self, task_id: &str) -> Arc<tokio::sync::Mutex<AgentBridge>> {
+    /// 取（或惰性创建）任务专属 bridge。pub 供评估 harness（M2-01
+    /// install_mock_scenario）与宿主同一条会话通道访问。
+    pub async fn bridge_for(&self, task_id: &str) -> Arc<tokio::sync::Mutex<AgentBridge>> {
         let mut bridges = self.bridges.lock().await;
         bridges
             .entry(task_id.to_string())
@@ -2313,7 +2315,26 @@ fn render_host_task_context_from_store(
 }
 
 fn render_host_task_context(state: &CommandState, task: &Task) -> Result<String, String> {
-    render_host_task_context_from_store(&state.plan_store, task)
+    let mut context = render_host_task_context_from_store(&state.plan_store, task)?;
+    // M4-02 技能渐进式披露：随宿主渲染的信任上下文以尾部节注入（名称 + 一行
+    // 描述；所选工具集无读取能力或无技能时为零字节——不影响既有请求字节）。
+    let tool_specs = state.tool_gateway.tool_specs();
+    let tool_names: Vec<&str> = tool_specs.iter().map(|spec| spec.name.as_str()).collect();
+    let global_root = crate::skill_resources::global_skills_dir(&state.config_dir);
+    let workspace_root = task
+        .workspace_path
+        .as_deref()
+        .map(std::path::Path::new)
+        .map(crate::skill_resources::project_skills_dir);
+    let disclosure = crate::skill_resources::render_skills_disclosure(
+        &crate::skill_resources::scan_skills(&global_root, workspace_root.as_deref()),
+        &tool_names,
+    );
+    if !disclosure.is_empty() {
+        context.push_str("\n\n");
+        context.push_str(&disclosure);
+    }
+    Ok(context)
 }
 
 pub(crate) async fn refresh_runtime_task_context_if_present(
@@ -4066,6 +4087,27 @@ fn validated_inference(mut inference: InferenceOptions) -> Result<InferenceOptio
     Ok(inference)
 }
 
+/// 向任务的 Mock runtime 注入一段脚本化场景（行为评估 / M2-01 用）。
+///
+/// 只对 Mock runtime 生效（返回 false = 当前任务是真实线路，拒绝脚本化——
+/// 评估 harness 据此硬失败，绝不静默改写真实 provider 行为）。注入走
+/// `agent_send` 之前的 prepare 阶段：场景作为下一次 run 的事件脚本被
+/// `start_run_with_message` 消费，完整经过 drain 循环（与生产同一条链路）。
+pub async fn install_mock_scenario(
+    state: &CommandState,
+    task_id: &str,
+    scenario: Vec<AgentEvent>,
+) -> Result<bool, String> {
+    let bridge = state.agent.bridge_for(task_id).await;
+    let mut bridge = bridge.lock().await;
+    if let AgentRuntimeKind::Mock(runtime) = &mut bridge.kind {
+        runtime.push_scenario(scenario);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// 更新空闲会话的模型专属推理参数。未提供的字段继续使用服务默认值。
 pub async fn task_set_inference(
     state: &CommandState,
@@ -5554,7 +5596,14 @@ fn usage_json_map(json: &str) -> serde_json::Map<String, serde_json::Value> {
 /// P0-B：原生线路的 token 用量事件写库。带 scope 的事件属于子代理运行，否则
 /// 属于主运行；usage_json 键与 Codex 路径写入同一列的 JSON 形状一致（含
 /// cache_read_tokens/cache_write_tokens），前端 runUsageLabel 直接解析。
-fn persist_native_usage_event(db: &Database, main_run_id: &str, event: &AgentEvent) {
+/// M1-04：写入前按 run 的模型匹配 provider 声明的分层定价，`cost_usd` 并入
+/// usage_json（无声明定价的模型不动 map，行为不变）。
+fn persist_native_usage_event(
+    db: &Database,
+    config_dir: &std::path::Path,
+    main_run_id: &str,
+    event: &AgentEvent,
+) {
     let (scope, inner) = split_scoped_event(event);
     let AgentEvent::Usage { usage_json } = inner else {
         return;
@@ -5563,24 +5612,58 @@ fn persist_native_usage_event(db: &Database, main_run_id: &str, event: &AgentEve
         .map(|value| value.run_id.as_str())
         .unwrap_or(main_run_id);
     let repo = AgentRunRepository::new(db);
+    let existing = repo.get(run_id).ok().flatten();
     // P1-E §8：同一轮内 StreamReplay 先于 Usage 落库，覆盖式写入会丢掉
     // stream_retries 键；保留已有重试计数（run 级累计，跨轮不递减）。
-    let preserved_retries = repo
-        .get(run_id)
-        .ok()
-        .flatten()
-        .and_then(|run| run.usage_json)
-        .map(|json| usage_json_map(&json))
+    let preserved_retries = existing
+        .as_ref()
+        .and_then(|run| run.usage_json.as_deref())
+        .map(usage_json_map)
         .and_then(|map| map.get("stream_retries").cloned());
-    let payload = match preserved_retries {
-        Some(retries) => {
-            let mut merged = usage_json_map(usage_json);
-            merged.insert("stream_retries".to_string(), retries);
-            serde_json::to_string(&merged).unwrap_or_else(|_| usage_json.clone())
-        }
-        None => usage_json.clone(),
-    };
+    // M1-04：判据（input+cacheRead+cacheWrite）→ 选层（最高阈值胜出）→ 整套
+    // 费率 → cost_usd 覆盖式重算（usage 是 run 级累计值）。无声明定价的模型
+    // 不引入重序列化（usage_json 原样透传，键序与字节保持既有行为）。
+    let priced = existing
+        .as_ref()
+        .map(|run| run.model.as_str())
+        .and_then(|model| {
+            crate::provider_decl::load_decls(config_dir)
+                .ok()
+                .and_then(|decls| {
+                    decls
+                        .values()
+                        .find(|decl| decl.models.iter().any(|entry| entry == model))
+                        .map(|decl| decl.cost.clone())
+                })
+        })
+        .filter(|cost| !cost.is_empty());
+    if preserved_retries.is_none() && priced.is_none() {
+        let _ = repo.set_usage(run_id, usage_json);
+        return;
+    }
+    let mut map = usage_json_map(usage_json);
+    if let Some(retries) = preserved_retries {
+        map.insert("stream_retries".to_string(), retries);
+    }
+    if let Some(cost) = priced {
+        crate::model_pricing::attribute_cost(&mut map, &cost);
+    }
+    let payload = serde_json::to_string(&map).unwrap_or_else(|_| usage_json.to_string());
     let _ = repo.set_usage(run_id, &payload);
+    // M6-02：原生引擎统一打点——usage 归因键从 Span 提取（NOOP 默认零开销；
+    // model/provider 取 run 行，engine=native 与 Codex 侧同构）。
+    if !r_code_core::telemetry::NOOP.is_noop() {
+        let mut span = r_code_core::telemetry::ai_request_span(
+            &r_code_core::telemetry::NOOP,
+            r_code_core::telemetry::EngineKind::Native,
+            "native",
+            existing
+                .as_ref()
+                .map(|run| run.model.as_str())
+                .unwrap_or_default(),
+        );
+        span.end_with(r_code_core::telemetry::usage_end_attributes(&payload));
+    }
 }
 
 /// P1-E §8：流恢复重放计数写库，在 agent 层统计；vendor 连接层重试不在 agent
@@ -8877,7 +8960,7 @@ fn spawn_drain_loop_with_resources(
                 // 不写会话 JSONL、不转发 WebView——前端从 usage_json 列读取
                 // （Timeline runUsageLabel 解析 cache_read_tokens/cache_write_tokens）。
                 if matches!(split_scoped_event(event).1, AgentEvent::Usage { .. }) {
-                    persist_native_usage_event(&db, &active.run_id, event);
+                    persist_native_usage_event(&db, &config_dir, &active.run_id, event);
                     continue;
                 }
                 // P1-E §8：流恢复重放计数与 Usage 同深度——累计进 usage_json 的
@@ -15013,6 +15096,34 @@ pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, Str
     }))
 }
 
+/// M4-04 热重载：清技能目录缓存重扫（/reload 与设置页共用）。
+pub async fn skills_reload(state: &CommandState) -> Result<serde_json::Value, String> {
+    let global_root = crate::skill_resources::global_skills_dir(&state.config_dir);
+    // 技能目录缓存按调用重建（全局目录唯一；项目级随 workspace 每次传入）。
+    let catalog = crate::skill_resources::SkillCatalog::new(global_root, None);
+    let skills = catalog.reload();
+    serde_json::to_value(skills).map_err(err_str)
+}
+
+/// ModelAvailability 三态快照（pi-alignment M1-03）：模型选择面只渲染
+/// available；composition_errors 供设置页展开诊断。运行时口径：hydrate 后
+/// api_key 非空即有鉴权；声明文件级解析失败降级为 composition_error。
+pub async fn model_availability(state: &CommandState) -> Result<serde_json::Value, String> {
+    let settings = SettingsService::new(state.config_dir.clone());
+    let config = settings.load_global_unvalidated().map_err(err_str)?;
+    let (decls, decls_error) = match crate::provider_decl::load_decls(&state.config_dir) {
+        Ok(decls) => (decls, None),
+        Err(error) => (std::collections::BTreeMap::new(), Some(error.to_string())),
+    };
+    let snapshot = crate::model_availability::build_snapshot(
+        &config,
+        &decls,
+        decls_error,
+        &crate::model_availability::runtime_has_auth,
+    );
+    serde_json::to_value(snapshot).map_err(err_str)
+}
+
 // ============================================================================
 // MCP / native web management
 // ============================================================================
@@ -18830,6 +18941,17 @@ impl RCodeCodexSubagentRunner {
         });
         let repository = AgentRunRepository::new(&self.db);
         let _ = repository.set_usage(run_id, &usage_json);
+        // M6-02：Codex 引擎同构打点——与原生 persist_native_usage_event 同一
+        // Span 名与字段面（engine=codex），usage 归因键同源提取。
+        if !r_code_core::telemetry::NOOP.is_noop() {
+            let mut span = r_code_core::telemetry::ai_request_span(
+                &r_code_core::telemetry::NOOP,
+                r_code_core::telemetry::EngineKind::Codex,
+                "codex",
+                thread_id.unwrap_or(""),
+            );
+            span.end_with(r_code_core::telemetry::usage_end_attributes(&usage_json));
+        }
         if let Some(thread_id) = thread_id {
             // child run 由另一个 drain task 根据先前的 Running 事件建表。极快的 CLI
             // 可能先返回 thread id；短暂等待该有序事件落库，避免 UPDATE 0 行后永久
@@ -23787,7 +23909,9 @@ fn codex_app_server_starts_tool(value: &serde_json::Value) -> bool {
 
 /// 用 App Server 执行一轮 Codex 子代理。只在 `请求批准` 预设下使用；其他预设
 /// 继续走轻量的 `codex exec --json` 路径。
-#[cfg(all(test, windows))]
+/// 生产路径走 `run_codex_app_server_process_with_images*`；这个零图包装只剩
+/// e2e 在用（跨平台 fixture 已由 write_codex_app_server_fixture 保证）。
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 async fn run_codex_app_server_process(
     workspace: &Path,
@@ -26164,23 +26288,44 @@ mod tests {
     #[cfg(windows)]
     const CODEX_APP_SERVER_FIXTURE_TIMEOUT: Duration = Duration::from_secs(30);
 
-    #[cfg(windows)]
+    #[cfg(not(windows))]
+    const CODEX_APP_SERVER_FIXTURE_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// 写出可执行的 Codex App Server fixture shim。Windows 用 `.cmd` 批处理包装
+    /// `node.exe`；Unix 用 `#!/bin/sh` 脚本并 chmod +x。共用 e2e 断言不得因平台
+    /// 差异被 cfg 门控（m4-02-cross-platform 门禁），平台差异只允许出现在这里。
     fn write_codex_app_server_fixture(
         directory: &Path,
         name: &str,
         source: &str,
     ) -> Option<PathBuf> {
-        let node = executable_paths(&["node.exe"]).into_iter().next()?;
-        windows_cmd_safe_path(&node).expect("Node.js test executable path must be cmd-safe");
         let script = directory.join(format!("{name}.js"));
-        let shim = directory.join(format!("{name}.cmd"));
         std::fs::write(&script, source).unwrap();
-        std::fs::write(
-            &shim,
-            format!("@echo off\r\n\"{}\" \"%~dp0{name}.js\"\r\n", node.display()),
-        )
-        .unwrap();
-        Some(shim)
+        #[cfg(windows)]
+        {
+            let node = executable_paths(&["node.exe"]).into_iter().next()?;
+            windows_cmd_safe_path(&node).expect("Node.js test executable path must be cmd-safe");
+            let shim = directory.join(format!("{name}.cmd"));
+            std::fs::write(
+                &shim,
+                format!("@echo off\r\n\"{}\" \"%~dp0{name}.js\"\r\n", node.display()),
+            )
+            .unwrap();
+            Some(shim)
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let node = executable_paths(&["node"]).into_iter().next()?;
+            let shim = directory.join(name);
+            std::fs::write(
+                &shim,
+                format!("#!/bin/sh\nexec {:?} {:?} \"$@\"\n", node, script),
+            )
+            .unwrap();
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Some(shim)
+        }
     }
 
     /// 创建测试状态。
@@ -28447,8 +28592,11 @@ input.on('line', (line) => {
         let usage = r#"{"input_tokens":120,"output_tokens":30,"cache_read_tokens":80,"cache_write_tokens":40}"#;
 
         // P0-B：无 scope 的 Usage 事件写入主运行 usage_json（与 Codex 路径同一列）。
+        let empty_config = std::env::temp_dir().join(format!("m104-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&empty_config).unwrap();
         persist_native_usage_event(
             &state.db,
+            &empty_config,
             &parent.id,
             &AgentEvent::Usage {
                 usage_json: usage.to_string(),
@@ -28480,6 +28628,7 @@ input.on('line', (line) => {
         };
         persist_native_usage_event(
             &state.db,
+            &empty_config,
             &parent.id,
             &AgentEvent::Scoped {
                 scope,
@@ -28500,6 +28649,91 @@ input.on('line', (line) => {
         assert_eq!(fetched_parent.usage_json.as_deref(), Some(usage));
     }
 
+    /// M1-04.A3：分层定价接入 usage_json 成本归因——声明了 cost.tiers 的模型，
+    /// Usage 事件落库时按"判据选层、整套费率"写入 cost_usd；tier 切换点随
+    /// 判据跨过阈值整套生效。
+    #[tokio::test]
+    async fn native_usage_event_attributes_cost_from_declared_tiers() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "priced-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+
+        let config_dir = std::env::temp_dir().join(format!("m104-priced-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join(crate::provider_decl::DECL_FILE_NAME),
+            r#"
+[decls.priced-relay]
+base_url = "https://relay.example.com/v1"
+api = "openai_chat"
+api_key = "$ENV:M104_PRICED_KEY"
+models = ["priced-model"]
+
+[decls.priced-relay.cost.tiers.base]
+input_per_mtok = 1.0
+cache_read_per_mtok = 0.0
+cache_write_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[decls.priced-relay.cost.tiers.long]
+threshold_tokens = 200
+input_per_mtok = 3.0
+cache_read_per_mtok = 0.0
+cache_write_per_mtok = 0.0
+output_per_mtok = 0.0
+"#,
+        )
+        .unwrap();
+
+        // 判据 = 90+60+30 = 180 < 200 → 基础档（1 USD/Mtok）：cost = 90/1e6。
+        persist_native_usage_event(
+            &state.db,
+            &config_dir,
+            &parent.id,
+            &AgentEvent::Usage {
+                usage_json: r#"{"input_tokens":90,"cache_read_tokens":60,"cache_write_tokens":30,"output_tokens":10}"#.to_string(),
+            },
+        );
+        let fetched: serde_json::Value = serde_json::from_str(
+            AgentRunRepository::new(&state.db)
+                .get(&parent.id)
+                .unwrap()
+                .unwrap()
+                .usage_json
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fetched["cost_usd"].as_f64().unwrap(), 90.0 / 1_000_000.0);
+
+        // 判据跨过 200（input 累计 180 + read 60 + write 30 = 270）→ 高档整套
+        // 生效：90*3/1e6（历史 input 也按高档费率整请求重算）。
+        persist_native_usage_event(
+            &state.db,
+            &config_dir,
+            &parent.id,
+            &AgentEvent::Usage {
+                usage_json: r#"{"input_tokens":180,"cache_read_tokens":60,"cache_write_tokens":30,"output_tokens":10}"#.to_string(),
+            },
+        );
+        let fetched: serde_json::Value = serde_json::from_str(
+            AgentRunRepository::new(&state.db)
+                .get(&parent.id)
+                .unwrap()
+                .unwrap()
+                .usage_json
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fetched["cost_usd"].as_f64().unwrap(), 540.0 / 1_000_000.0);
+    }
+
     #[tokio::test]
     async fn native_stream_replay_event_accumulates_and_survives_usage_overwrite() {
         let (_dir, state) = setup_state();
@@ -28509,6 +28743,8 @@ input.on('line', (line) => {
             .unwrap();
         let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
         AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        let empty_config = std::env::temp_dir().join(format!("m104-replay-{}", std::process::id()));
+        std::fs::create_dir_all(&empty_config).unwrap();
 
         // P1-E §8：每次 StreamReplay 事件把 usage_json 的 stream_retries 键加一
         // （run 级累计）；事件的 attempt 载荷是本轮序号，不影响累计语义。
@@ -28531,6 +28767,7 @@ input.on('line', (line) => {
         // 同一轮内 Usage 事件后写：覆盖 usage 键但保留 stream_retries 计数。
         persist_native_usage_event(
             &state.db,
+            &empty_config,
             &parent.id,
             &AgentEvent::Usage {
                 usage_json: r#"{"input_tokens":120,"output_tokens":30}"#.to_string(),
@@ -38408,7 +38645,6 @@ input.on('line', (line) => {
     // （失败状态 + exit code 与输出一致）。
     // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
     // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
-    #[cfg(windows)]
     #[tokio::test]
     async fn m2_01_a2_codex_app_server_tool_lifecycle_streams_bounded_output() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38524,7 +38760,6 @@ input.on('line', (line) => {
     // 绝不伪装成 agent 消息。
     // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
     // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
-    #[cfg(windows)]
     #[tokio::test]
     async fn m2_02_a1_codex_app_server_context_events_are_not_agent_messages() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38647,7 +38882,6 @@ input.on('line', (line) => {
     // M3-01.A1：合法单/多题答案按 question id 返回，Codex 随后继续并完成 turn。
     // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
     // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
-    #[cfg(windows)]
     #[tokio::test]
     async fn m3_01_a1_codex_app_server_user_input_answers_resume_the_turn() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -38939,7 +39173,6 @@ input.on('line', (line) => {
     // requestUserInput（含 secret）→ 回答 → final，一个 turn 内闭环。
     // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
     // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
-    #[cfg(windows)]
     #[tokio::test]
     async fn m4_02_a2_codex_app_server_full_rich_interaction_flow() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
@@ -39304,7 +39537,6 @@ input.on('line', (line) => {
     // UI 终态；迟到答案被拒绝。
     // fixture 机制（write_codex_app_server_fixture/.cmd shim）为 Windows 专用；
     // 契约本身由 codex_app_server.rs 的跨平台 node fixture 覆盖。
-    #[cfg(windows)]
     #[tokio::test]
     async fn m3_03_a1_timeout_and_resolved_races_have_single_terminals() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;

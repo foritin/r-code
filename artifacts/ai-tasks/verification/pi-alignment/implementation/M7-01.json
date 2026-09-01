@@ -1,0 +1,63 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M7-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T06:53:22.863Z",
+  "started_at": "2026-08-31T06:53:16.496Z",
+  "finished_at": "2026-08-31T06:53:22.863Z",
+  "duration_ms": 6367,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "28aaf9f67d0e92c316544806cb4ffb5a170c9c9972f31b96b57690dec50bcd93",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M7-01.A1",
+      "description": "trait 完整 + 默认实现 = 五级链",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-gateway --lib -- execution_backend::tests::local_backend_runs_through_five_tier_chain execution_backend::tests::missing_cwd_is_rejected",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-gateway --lib -- execution_backend::tests::local_backend_runs_through_five_tier_chain execution_backend::tests::missing_cwd_is_rejected",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M7-01"
+    },
+    {
+      "id": "M7-01.A2",
+      "description": "未启用零行为变化（超时/中止终止语义 + 金集仍绿）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-gateway --lib -- execution_backend::tests::timeout_kills_process_tree execution_backend::tests::abort_flag_terminates_command",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-gateway --lib -- execution_backend::tests::timeout_kills_process_tree execution_backend::tests::abort_flag_terminates_command",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M7-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M7-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M7-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

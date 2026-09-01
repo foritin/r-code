@@ -67,6 +67,7 @@ import type {
 } from "./types";
 import type { UpdaterSnapshot } from "./updater-contract";
 import {
+  browserMockModelAvailability,
   browserMockAbortSubagent,
   browserMockActivityList,
   browserMockChangeRequest,
@@ -3027,6 +3028,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
         ?? { exists: false, git_tracking: "unknown" },
     );
     case "cmd_settings_get": return copy(browserMockSettings);
+    case "cmd_model_availability": return copy(browserMockModelAvailability());
     case "cmd_mcp_snapshot": return copy({ servers: mockMcpServers } satisfies McpManagerSnapshot);
     case "cmd_mcp_upsert": {
       const request = args.request as McpUpsertRequest;

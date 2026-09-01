@@ -1,0 +1,65 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M1-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m1-02-声明式端点接入与值解析
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M1-02.json
+
+deliverables:
+  - src-tauri/src/provider_decl.rs
+  - src-tauri/src/settings.rs
+  - src-tauri/src/main.rs
+  - docs/pi-alignment/examples/provider-decls.toml
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M1-02.json
+
+changed_paths:
+  - src-tauri/src/provider_decl.rs
+  - src-tauri/src/settings.rs
+  - src-tauri/src/main.rs
+  - src-tauri/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+  - docs/pi-alignment/examples/provider-decls.toml
+
+assertions:
+  - id: M1-02.A1
+    passed: true
+    command: cargo test -p r-code-host --lib -- provider_decl::tests::minimal_decl_enters_model_listing && cargo build -p r-code-host --bin r-code-host && r-code-host list-models --config-dir <fixture>
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-02.json
+    note: "真实 CLI 端到端：fixture 仅含 provider-decls.toml（config.toml 不存在的纯声明接入），输出 my-relay\\trelay-alpha/beta，exit 0；--provider 过滤与用法错误 exit 2 均手工复验"
+  - id: M1-02.A2
+    passed: true
+    command: cargo test -p r-code-host --lib -- provider_decl::tests::value_resolution_refs_only_no_plaintext
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-02.json
+    note: "$ENV 解析/未设置报错；credential 引用解析/account 缺失报错；字面量 api_key 拒绝（错误信息点名明文）；sidecar 序列化断言不含 sk- 真值；decl_covers_secret 防重复落凭据"
+  - id: M1-02.A3
+    passed: true
+    command: cargo test -p r-code-host --lib -- provider_decl::tests::provider_kind_stable_across_rename_and_url_change provider_decl::tests::env_override_still_wins_over_decl
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-02.json
+    note: "显式 provider_kind 与表键名/base_url 解耦；合成进 config 后落入 ProviderConfig.provider_kind；decl 在 apply_env 之前应用，R_CODE_PROVIDER_<NAME>_API_KEY 仍最高优先"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M1-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-02.json
+
+decisions:
+  - DM11: 声明式扩展放 sidecar 文件 provider-decls.toml 而非 config.toml 新表 —— vendor Config 的 save_global 每次全量序列化会丢弃未知表；sidecar 由 R-Code 独占读写，round-trip 无损。
+  - DM12: 值引用语法 $ENV:VAR 与 credential:<account>；字面量 api_key 拒绝加载（不落明文优先，宁可报错）。credential account 复用设置页同一 provider:<name> 命名空间（ProviderCredentialBackend.get 按名取）。
+  - DM13: list-models 做成 r-code-host 的离线只读子命令（沿用 mcp-server 的手写参数解析模式）：只解析两个 TOML，不初始化 Tauri/凭据后端/网络，密钥引用一律不解析。
+  - DM14: save_global 对 decl 覆盖的 key 跳过凭据复制（decl_covers_secret），声明文件保持真值来源；引用本次解析失败时保守落凭据，不静默抹钥。
+  - DM15: workspace .r-code/config.toml 不可注入声明（sidecar 只在全局 config_dir 读取），与 F-sec-03 网络面剥离同一防线。
+
+external_gates_remaining: []
+notes:
+  - settings 模块回归：cargo test -p r-code-host --lib -- settings:: → 24 passed / 0 failed（pi-alignment-m102-settings-regression.log）。
+  - 现有持久化合同不变：config.toml 中 api_key 恒为空串，密钥真值仍在平台凭据后端；声明式接入只新增"引用"这一合法值形态。

@@ -1,0 +1,52 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M3-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m3-02-能力探测白名单与-cache_guard-扩展
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M3-02.json
+
+deliverables:
+  - crates/r-code-agent-worker/src/deferred_tools.rs
+  - crates/r-code-agent-worker/tests/cache_guard.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M3-02.json
+
+changed_paths:
+  - crates/r-code-agent-worker/src/deferred_tools.rs
+  - crates/r-code-agent-worker/tests/cache_guard.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M3-02.A1
+    passed: true
+    command: cargo test -p r-code-agent-worker --lib -- deferred_tools::whitelist_tests
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M3-02.json
+    note: "tool_reference_enabled 白名单当前为空（无线路经实机核实）：deepseek/kimi/custom 全部不启用、精确 provider+model 二元组匹配语义锁定"
+  - id: M3-02.A2
+    passed: true
+    command: R_CODE_CACHE_GUARD=1 cargo test -p r-code-agent-worker --test cache_guard
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M3-02.json
+    note: "新用例 cache_guard_midrun_tool_addition：负向对照（不分流 → compare 报 Tools）+ 正向（分流 → CacheChangeCause::None、tools_prefix_stable、老工具 schema 字节不变）；既有 tail_avg 用例同跑不回归"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M3-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M3-02.json
+
+decisions:
+  - DM52: 能力探测落 R-Code 自有代码（deferred_tools::tool_reference_enabled）而非 vendor dialect——vendor/agent-contracts 是固定 commit 子模块不可改；探测形状为 provider_kind+model 精确二元组白名单。
+  - DM53: 白名单当前为空：真实残缺端点/DeepSeek 的 tool reference 实测属 §11.3 外部放行；空表 + 恒 false 是"默认关闭、白名单开启"的诚实起点，不臆造未核实的线路。
+  - DM54: cache_guard 新用例断言两层：PrefixShape.compare 归因（Tools vs None）与 tools_prefix_stable（老工具保序）——mock provider 的 token 数学不含 tools，字节断言由 cache_shape 承载（PRD"有 cache_guard 字节断言"的落点）。
+
+external_gates_remaining:
+  - 真实 Provider 复测（deferred-tools 在真实端点的行为验证）
+notes:
+  - 定向测试：deferred_tools 8/8（含 whitelist 2）+ cache_guard 2/2（env 开启）。

@@ -1,0 +1,42 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M5-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m5-02-retained_tail-自包含检查点
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M5-02.json
+
+deliverables:
+  - crates/r-code-agent-worker/tests/retained_tail.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M5-02.json
+changed_paths:
+  - crates/r-code-agent-worker/tests/retained_tail.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M5-02.A1
+    passed: true
+    command: cargo test -p r-code-agent-worker --test retained_tail new_compaction_writes_materialized_retained_tail
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-02.json
+    note: "压缩安装投影 = SessionEvent::ModelProjection{messages:Some}（物化保留消息）；JSONL 行含消息正文、无 firstKeptEntryId 指针字段；canonical 全量不受压缩影响"
+  - id: M5-02.A2
+    passed: true
+    command: cargo test -p r-code-agent-worker --test retained_tail legacy_pointer_free_format_reads_as_none
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-02.json
+    note: "旧格式（无投影行）加载投影为 None（canonical 兜底，等价加载时迁移）；显式写 None 同样合法（回退 canonical）"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M5-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-02.json
+
+decisions:
+  - DM65: R-Code 的 retained_tail 等价物 = ModelProjection 物化消息（既有实现，PRD 的 firstKeptEntryId 指针形态在本仓库不存在）——任务落为验证既有写路径的自包含性 + 旧格式兼容读的固化测试，不引入第二种检查点格式。
+external_gates_remaining: []

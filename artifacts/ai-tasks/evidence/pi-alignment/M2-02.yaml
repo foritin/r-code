@@ -1,0 +1,54 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M2-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m2-02-judge-抽象与确定性-judge
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M2-02.json
+
+deliverables:
+  - crates/r-code-evals/src/judge.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M2-02.json
+
+changed_paths:
+  - crates/r-code-evals/src/judge.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M2-02.A1
+    passed: true
+    command: cargo test -p r-code-evals --lib -- judge::tests::verdicts_accumulate_failures
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-02.json
+    note: "JudgeVerdict{score ∈[0,1] 钳制, rationale, failures[]}；from_failures 按检查总数算分，失败原因全部进 rationale（累积非折叠单布尔）"
+  - id: M2-02.A2
+    passed: true
+    command: cargo test -p r-code-evals --lib -- judge::tests::test_pass_judge_is_deterministic judge::tests::focus_judge_flags_out_of_scope_changes judge::tests::integrity_judge_protects_test_files
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-02.json
+    note: "三个内置确定性 Judge：TestPass（verify.mjs exit 0 + 收敛；无脚本判不可打分不臆造通过）/Focus（改动面越界逐条累积）/Integrity（测试文件删改指名道姓）；同一输入两次打分逐字节一致"
+  - id: M2-02.A3
+    passed: true
+    command: cargo test -p r-code-evals --lib -- judge::tests::llm_judge_extension_point_signature
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-02.json
+    note: "create_judge(name, ScoringFn)——LLM Judge 以同签名评分函数注入（Arc<dyn Fn(&JudgeInput)->JudgeVerdict>），默认不接真实模型"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M2-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-02.json
+
+decisions:
+  - DM32: TestPassJudge 沿用 plan_eval 金集约定（工作区 verify.mjs）作为"测试通过率"的可执行载体；工作区无 verify.mjs 判失败（score<1）而非跳过——区分"没测"与"通过"。
+  - DM33: FocusJudge 的 changed_paths 用文件大小指纹（BTreeMap 键序稳定）做改动面初判——完整字节对比由 IntegrityJudge 对测试文件单独做，兼顾确定性与成本。
+
+external_gates_remaining: []
+notes:
+  - 确定性 Judge 全部纯函数（文件系统读取 + node 子进程），无随机源。

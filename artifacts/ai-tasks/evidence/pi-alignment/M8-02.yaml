@@ -1,0 +1,59 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M8-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m8-02-阶段-2-对齐-pi-交互面
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M8-02.json
+
+deliverables:
+  - crates/r-code-tui/src/interaction.rs
+  - crates/r-code-tui/src/approval.rs
+  - crates/r-code-tui/src/snapshot.rs
+  - crates/r-code-tui/src/window.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M8-02.json
+changed_paths:
+  - crates/r-code-tui/src/interaction.rs
+  - crates/r-code-tui/src/approval.rs
+  - crates/r-code-tui/src/snapshot.rs
+  - crates/r-code-tui/src/window.rs
+  - crates/r-code-tui/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M8-02.A1
+    passed: true
+    command: cargo test -p r-code-tui --lib -- interaction::tests::approval_card_uses_gateway_classifier approval::tests::decisions_resolve_cards
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-02.json
+    note: "审批卡风险分级经 classify_shell_command 同一函数（无第二实现）；AllowAlways 精确目标=命令本身；决策三态流转幂等"
+  - id: M8-02.A2
+    passed: true
+    command: cargo test -p r-code-tui --lib -- snapshot::tests::live_view_matches_authoritative_rebuild
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-02.json
+    note: "权威重建 rebuild_from_jsonl 与事件累积视图逐项一致——渲染层状态是瞬时缓存，权威走 JSONL 重建"
+  - id: M8-02.A3
+    passed: true
+    command: cargo test -p r-code-tui --lib -- window::tests
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-02.json
+    note: "turn 级窗口化：窗口边界在 turn 边界（不切断 turn）、放大到全量零丢失、前置无头行自成首组"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M8-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-02.json
+
+decisions:
+  - DM77: 审批/窗口/snapshot 全部纯逻辑模块（无终端 IO）——ratatui 全屏渲染循环壳层后续增量交付，纯逻辑已可单测（交互面三断言全绿）。
+  - DM78: snapshot 权威实现为 rebuild_from_jsonl(事件序列)（JSONL 等价物）；views_agree 一致性断言同时是渲染层不得累积领域副本的回归门。
+external_gates_remaining:
+  - macOS/Apple 签名实机（符号链接 PATH 接入与签名验证）
+  - IME 真机（中文输入法候选窗人工验证）
+  - 四种 bundle target 全平台打包产物存在性（CI release 腿确认）

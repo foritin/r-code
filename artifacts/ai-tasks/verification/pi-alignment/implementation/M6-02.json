@@ -1,0 +1,58 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M6-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:35:10.751Z",
+  "started_at": "2026-08-31T11:35:09.535Z",
+  "finished_at": "2026-08-31T11:35:10.751Z",
+  "duration_ms": 1216,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "f74698e1f4fdd6c8c42a72bff01bec7bffc83cda0de89a25c0d1a1dadaa2c2e7",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M6-02.A1",
+      "description": "两条 Span 双引擎同构（ai.request + harness.run；engine/provider/model 字段面一致）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-core --lib -- telemetry::engine_span_tests::both_engines_emit_isomorphic_spans",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-core --lib -- telemetry::engine_span_tests::both_engines_emit_isomorphic_spans",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M6-02"
+    },
+    {
+      "id": "M6-02.A2",
+      "description": "usage_json 从 Span 提取（归因键 end attrs；宿主双引擎打点接线）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "nativeWired": true,
+        "codexWired": true,
+        "unitExit": 0
+      },
+      "task": "M6-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M6-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M6-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

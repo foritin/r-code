@@ -3,6 +3,8 @@
  * 仅在非 Tauri 环境启用：桌面应用里不会用它掩盖真实 IPC 错误。
  */
 import type {
+  ModelAvailabilityEntry,
+  ModelAvailabilitySnapshot,
   DashboardAttentionItem,
   DashboardTaskSummary,
   CodexCliPreferences,
@@ -333,6 +335,14 @@ export const browserMockSettings: SettingsResponse = {
         provider_kind: "deepseek",
         protocol: "openai_chat",
       },
+      // M1-03 演示夹具：配置解析但缺鉴权的服务——进 all 不进 available，
+      // 模型选择面（ModelSwitcher）不展示，设置页可展开诊断。
+      "relay-nokey": {
+        base_url: "https://relay.invalid/v1",
+        model: "relay-alpha",
+        provider_kind: "relay-nokey",
+        protocol: "openai_chat",
+      },
     },
     log_level: "info",
     planning: {
@@ -378,8 +388,50 @@ export const browserMockSettings: SettingsResponse = {
       source: "environment",
       effective_protocol: "openai_chat",
     },
+    "relay-nokey": {
+      configured: false,
+      ready: false,
+      source: "missing",
+      effective_protocol: "openai_chat",
+    },
   },
 };
+
+/**
+ * M1-03 三态快照的浏览器演示值：与 browserMockSettings 保持一致——
+ * source 为 missing 的服务进 all 不进 available；另附一条声明级组装错误，
+ * 让设置页诊断区有可展开的演示内容。
+ */
+export function browserMockModelAvailability(): ModelAvailabilitySnapshot {
+  const providers = browserMockSettings.config.providers ?? {};
+  const status = browserMockSettings.provider_status ?? {};
+  const all: ModelAvailabilityEntry[] = [];
+  const available: ModelAvailabilityEntry[] = [];
+  for (const [name, config] of Object.entries(providers)) {
+    const hasAuth =
+      Boolean(status[name]?.configured) && status[name]?.source !== "missing";
+    const entry: ModelAvailabilityEntry = {
+      provider: name,
+      model: config.model || name,
+      source: "config",
+      has_auth: hasAuth,
+    };
+    all.push(entry);
+    if (hasAuth) available.push(entry);
+  }
+  return {
+    all,
+    available,
+    composition_errors: [
+      {
+        provider: "demo-broken-decl",
+        model: null,
+        reason:
+          "api 'bogus_proto' 不是受支持的协议 slug（anthropic_messages / openai_chat / openai_responses）",
+      },
+    ],
+  };
+}
 
 let browserMockCodexInstalled = false;
 let browserMockCodexAuthenticated = false;

@@ -1,0 +1,23 @@
+# provider-decls.toml —— 声明式 Provider 端点示例（M1-02 / R-PRV-02）
+#
+# 位置：与 config.toml 同目录（<config_dir>/provider-decls.toml）。
+# 该文件由 R-Code 自有解析器（src-tauri/src/provider_decl.rs）读取；
+# vendor Config 的 TOML round-trip 不涉及本文件。
+#
+# 值解析规则：
+#   "$ENV:VAR"            进程环境变量
+#   "credential:<account>" 平台凭据后端 account（与设置页保存同命名空间）
+#   字面量                 仅 base_url 允许；api_key 字面量明文会被拒绝加载
+#
+# provider_kind 是稳定身份：显式声明后，改显示名（表键）/改 base_url 都不会
+# 改变它；缺省 = 首次接入时的表键名。
+
+[decls.my-relay]
+base_url = "https://relay.example.com/v1"
+api = "openai_chat"              # anthropic_messages / openai_chat / openai_responses
+api_key = "$ENV:RELAY_API_KEY"   # 或 "credential:my-relay"
+models = ["relay-alpha", "relay-beta"]
+provider_kind = "my-relay-stable"
+
+# 验收：r-code-host list-models [--config-dir <path>] [--provider my-relay]
+# 输出：my-relay\trelay-alpha / my-relay\trelay-beta（离线、不解析密钥）。

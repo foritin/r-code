@@ -215,7 +215,7 @@ impl ShellDialect {
 
 /// 已解析的 shell 调用方式。
 #[derive(Debug)]
-enum ShellPlan {
+pub(crate) enum ShellPlan {
     /// 直接把命令作为单个 argv 传给解释器（Unix execve / Windows Git Bash `-c`，
     /// 均无二次解析）。
     Inline {
@@ -239,17 +239,17 @@ enum ShellPlan {
 }
 
 impl ShellPlan {
-    fn program(&self) -> &str {
+    pub(crate) fn program(&self) -> &str {
         match self {
             Self::Inline { program, .. } | Self::Script { program, .. } => program.as_str(),
         }
     }
-    fn dialect(&self) -> ShellDialect {
+    pub(crate) fn dialect(&self) -> ShellDialect {
         match self {
             Self::Inline { dialect, .. } | Self::Script { dialect, .. } => *dialect,
         }
     }
-    fn cleanup(&self) {
+    pub(crate) fn cleanup(&self) {
         if let Self::Script { script_path, .. } = self {
             let _ = std::fs::remove_file(script_path);
         }
@@ -280,7 +280,10 @@ pub fn current_shell_dialect() -> ShellDialect {
 
 /// 选择解释器并准备调用方式（Windows：方言 + 暂存方案由五级解析结果决定）。
 #[cfg(windows)]
-fn plan_shell(command: &str, override_path: Option<&str>) -> Result<ShellPlan, ProductError> {
+pub(crate) fn plan_shell(
+    command: &str,
+    override_path: Option<&str>,
+) -> Result<ShellPlan, ProductError> {
     let resolved = crate::win_shell::resolve_windows_shell(override_path)?;
     match resolved.dialect {
         // Git Bash 档：`bash -c <command>` 单 argv 直传——不经临时脚本、不加载
@@ -342,7 +345,10 @@ if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}\n"
 
 /// 选择解释器并准备调用方式。
 #[cfg(not(windows))]
-fn plan_shell(command: &str, override_path: Option<&str>) -> Result<ShellPlan, ProductError> {
+pub(crate) fn plan_shell(
+    command: &str,
+    override_path: Option<&str>,
+) -> Result<ShellPlan, ProductError> {
     // override 是 Windows 专属语义（execution.bash_shell_path），Unix 忽略。
     let _ = override_path;
     // `-c` 而非 `-lc`：不加载登录配置，避免用户 profile 改写 PATH / 别名

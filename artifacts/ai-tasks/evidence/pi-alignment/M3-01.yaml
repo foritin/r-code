@@ -1,0 +1,52 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M3-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m3-01-deferred-tools-分流
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M3-01.json
+
+deliverables:
+  - crates/r-code-agent-worker/src/deferred_tools.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M3-01.json
+changed_paths:
+  - crates/r-code-agent-worker/src/deferred_tools.rs
+  - crates/r-code-agent-worker/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M3-01.A1
+    passed: true
+    command: cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::split_defers_newly_added_tools_only deferred_tools::tests::disabled_by_default_is_noop deferred_tools::tests::deferred_note_renders_names_and_descriptions
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M3-01.json
+    note: "新增工具（上一 run 未见）deferred 并以名称+一行描述注入 transcript 尾；老工具保序保留（gateway.tool_specs 名字排序语义）；enable=false 零行为变化"
+  - id: M3-01.A2
+    passed: true
+    command: cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::called_tools_are_never_deferred
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M3-01.json
+    note: "called_tools 谓词判定的工具（调用历史里的 tool_use 引用）即使新增也留在 tools——请求合法性优先于缓存"
+  - id: M3-01.A3
+    passed: true
+    command: cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::all_deferred_falls_back_to_immediate deferred_tools::tests::specs_lookup_by_names
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M3-01.json
+    note: "所有工具被判 deferred 时无条件回退 immediate（fell_back_to_immediate 标记）；空 tools 等于模型裸跑，正确性优先"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M3-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M3-01.json
+
+decisions:
+  - DM40: split_deferred_tools 是纯函数（previous/current 工具集 + called 谓词 + enable 开关）；请求组装接线与白名单在 M3-02——默认 enable=false 全量 immediate，主 run 循环行为零变化。
+  - DM41: "中途新增"的判定基准 = 上一 run 的工具集（MCP catalog 惰性发现使跨 run 工具面可增；PRD 决策空间的 addedToolNames 等价信号）。
+  - DM42: deferred 注入文案只含名称+描述（渐进披露对齐 M4-02），schema 在工具真正进 tools 时模型才需要。
+external_gates_remaining: []
+

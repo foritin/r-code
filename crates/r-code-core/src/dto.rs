@@ -1943,6 +1943,43 @@ impl VerificationRecord {
     }
 }
 
+// ============================================================================
+// Model Availability DTO（pi-alignment M1-03 / R-PRV-03）
+// ============================================================================
+
+/// 单个 (provider, model) 条目的可用性。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelAvailabilityEntry {
+    /// 配置里的 provider key（profile 名）。
+    pub provider: String,
+    pub model: String,
+    /// 模型清单来源：decl（声明式端点）/ catalog（目录预设）/ config（单 model 字段）。
+    pub source: String,
+    /// 是否持有可用鉴权（加载链路合成后 api_key 非空）。
+    pub has_auth: bool,
+}
+
+/// 组装失败条目：声明/配置无法组装成可用 provider 配置的原因。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelCompositionError {
+    /// 涉事 provider（声明文件级错误用 "<decls-file>"）。
+    pub provider: String,
+    /// 涉事模型（provider 级错误为 None）。
+    pub model: Option<String>,
+    /// 人可读诊断文案（不含密钥材料）。
+    pub reason: String,
+}
+
+/// 三态快照：all（加载成功）⊇ available（有鉴权可用）；composition_errors
+/// 单列组装失败原因。模型选择面只渲染 available；诊断面渲染
+/// composition_errors。"配置解析但缺鉴权"在 all 不在 available。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelAvailabilitySnapshot {
+    pub all: Vec<ModelAvailabilityEntry>,
+    pub available: Vec<ModelAvailabilityEntry>,
+    pub composition_errors: Vec<ModelCompositionError>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

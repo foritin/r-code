@@ -6,9 +6,10 @@
  * 在 HomeScene / RoomScene / Composer 里各抄了一份（前两处逐字相同）。
  */
 import { useCallback, useEffect, useState } from "react";
-import { providerCatalog, settingsGet } from "./ipc";
+import { modelAvailability, providerCatalog, settingsGet } from "./ipc";
 import { errText } from "./format";
 import type { HostedWebRoute, PresetModelInfo, ProviderPreset, ProviderProtocol } from "./types";
+import { dropUnavailableProviders } from "./model-availability";
 import { RUNTIME_SETTINGS_CHANGED_EVENT } from "./onboarding";
 
 export interface ProviderChoice {
@@ -180,9 +181,9 @@ let providerSnapshotRequest: ProviderSnapshotRequest | null = null;
 async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
   // 先等目录，否则首帧的展示名和候选模型会退化成裸 provider 名。
   await loadCatalog();
-  const response = await settingsGet();
+  const [response, availability] = await Promise.all([settingsGet(), modelAvailability()]);
   const custom = readCustom();
-  const choices = Object.entries(response.config.providers ?? {}).map(([name, config]) => {
+  const rawChoices = Object.entries(response.config.providers ?? {}).map(([name, config]) => {
     const model = config.model || "";
     const preset = presetOf(config.provider_kind ?? name);
     // 配置里的模型排最前，其后是预设候选、自动同步快照，最后是用户手输过的。
@@ -209,6 +210,9 @@ async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
       presetModels: preset?.models,
     };
   });
+  // M1-03：模型选择面只渲染 available（有鉴权）的服务；快照未覆盖的
+  // （旧后端 null / 未收录 provider）不臆造过滤，保持原样。
+  const choices = dropUnavailableProviders(rawChoices, availability);
   return {
     choices,
     fallback: response.config.default_provider ?? "",

@@ -1,0 +1,118 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M0-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T14:52:43.292Z",
+  "started_at": "2026-08-31T14:49:37.289Z",
+  "finished_at": "2026-08-31T14:52:43.292Z",
+  "duration_ms": 186003,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "337a112718b638d261c2ccf828368c31bf06b78c90a94d0ed337bc43bec9fc8f",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-02.A1",
+      "description": "cargo test --workspace --all-features 全绿",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test --workspace --all-features",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test --workspace --all-features",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A2",
+      "description": "前端 npm test + npm run build 绿（已知外部归因文件除外）",
+      "required": true,
+      "status": "passed",
+      "evidence": "npm test && npm run build",
+      "details": {
+        "commands": [
+          {
+            "cmd": "npm test",
+            "exitCode": 1
+          },
+          {
+            "cmd": "npm run build",
+            "exitCode": 0
+          }
+        ],
+        "knownExternal": {
+          "files": {
+            "app-shell.test.mjs": 10,
+            "companion-window-ui.test.mjs": 4
+          },
+          "reason": "pre-existing at baseline 3bc87ce; interactive e2e encode the pre-runs-panel-v2 store contract; owned by product-experience-gap-closure worklist",
+          "baselineRevision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68"
+        },
+        "failingFiles": {
+          "app-shell.test.mjs": 6,
+          "companion-window-ui.test.mjs": 4
+        },
+        "unexpectedFailures": [],
+        "waived": true
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A3",
+      "description": "Windows 金集 --through M4 绿（fast 位置参数已废弃，等价 milestone 闭包）",
+      "required": true,
+      "status": "passed",
+      "evidence": "node scripts/verify-windows-reliability.mjs --through M4 --profile implementation",
+      "details": {
+        "commands": [
+          {
+            "cmd": "node scripts/verify-windows-reliability.mjs --through M4 --profile implementation",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A4",
+      "description": "codex-interaction --through M4 绿（前端腿由 A2 持有，此处跳过防双跑）",
+      "required": true,
+      "status": "passed",
+      "evidence": "artifacts\\ai-tasks\\verification\\pi-alignment\\implementation\\logs\\cmd-5526e644dc6f.log",
+      "details": {
+        "exitCode": 0,
+        "knownExternal": {
+          "allowedFailedAssertions": [
+            "M4-02.A3"
+          ],
+          "requiredExcerptMarkers": [
+            "frontend full suite"
+          ],
+          "reason": "M4-02.A3 frontend leg only; same externally-attributed interactive e2e set",
+          "baselineRevision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68"
+        }
+      },
+      "task": "M0-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M0-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M0-02.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

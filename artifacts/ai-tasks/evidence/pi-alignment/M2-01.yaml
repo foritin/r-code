@@ -1,0 +1,64 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M2-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m2-01-harness-抽象与-creatercodeharness
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M2-01.json
+
+deliverables:
+  - crates/r-code-evals/Cargo.toml
+  - crates/r-code-evals/src/lib.rs
+  - src-tauri/src/commands.rs
+  - Cargo.toml
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M2-01.json
+
+changed_paths:
+  - crates/r-code-evals/Cargo.toml
+  - crates/r-code-evals/src/lib.rs
+  - src-tauri/src/commands.rs
+  - Cargo.toml
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M2-01.A1
+    passed: true
+    command: cargo test -p r-code-evals --lib -- tests::harness_trait_surface_is_complete
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-01.json
+    note: "Harness trait = name + run(EvalInput) -> EvalRunResult{output, usage_json, timings, events, stop_reason, workspace}；EvalInput 三件套（id/prompt/fixture）"
+  - id: M2-01.A2
+    passed: true
+    command: cargo test -p r-code-evals --lib -- tests::end_to_end_mock_run_settles_with_events_and_thinking_off tests::eval_config_is_empty
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-01.json
+    note: "端到端：隔离临时 env（config/db/sessions/blobs/project）→ CommandState::new_with_planning_release_control 同源装配 → task_set_inference(thinking=disabled) → install_mock_scenario → agent_send → 收敛 → 事件/输出收集全链路"
+  - id: M2-01.A3
+    passed: true
+    command: cargo test -p r-code-evals --lib -- tests::isolation_checks_fail_closed
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-01.json
+    note: "隔离硬断言：enabled MCP server / config 目录逃逸 env 根 / config.toml 出现 [providers] 任一违例即 Err（fail-closed，不降级扣分）"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M2-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-01.json
+
+decisions:
+  - DM27: 评估框架落独立 crate r-code-evals（PRD 决策空间选项一）——plan_eval 是 Plan 三臂专用 bin（含 preregistration/成本审计等重型合同），通用行为评估复用其模式而非其本体。
+  - DM28: 同源工厂 = CommandState::new_with_planning_release_control（与桌面/plan_eval 同一装配入口）；驱动链 = task_create → task_set_inference → install_mock_scenario → agent_send → 轮询 settle → task_detail（全部既有 pub API，仅 bridge_for 改 pub + 新增 install_mock_scenario 一个注入点）。
+  - DM29: 可复现性用 Mock runtime + 脚本化场景（ScenarioSource）——评估的确定性等价物仍走完整 host 管线（drain 循环、事件 sink、usage 落库）；真实模型运行属外部放行（§11.3）。install_mock_scenario 对真实线路返回 false（拒绝脚本化），harness 据此硬失败。
+  - DM30: 隔离检查的 MCP 判据 = "无 enabled server"而非"零 server"——McpSettingsService.load 的 reconcile_builtin 会无条件补回内置 r-code-research（禁用态、不拉进程），禁用内置条目不构成隔离破坏；eval config 显式写 disabled 条目使状态稳定。
+  - DM31: 事件捕获用 CommandState.agent_event_sink（emit_agent_event 广播面）而非 poll 竞争——与宿主观测同一条链路。
+
+external_gates_remaining:
+  - 真实模型评估（M2 评估用真实 Provider 跑确认 Pass Rate 口径）
+notes:
+  - 定向测试 15/15（r-code-evals lib 全量）。

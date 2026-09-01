@@ -16,6 +16,7 @@ use agent_contract::VisionBudgetProfile;
 use r_code_core::dto::AgentEngine;
 
 use crate::provider_catalog::{self, Preset};
+use crate::provider_compat::{self, ProviderCompat};
 
 /// 能力三态真值（§2.1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,10 @@ pub struct ResolvedModelCapabilities {
     pub provider_max_output_tokens: Option<u32>,
     /// 命中的目录预设（地址未被改写时 Some）。
     pub matched_preset: Option<&'static Preset>,
+    /// 声明式兼容层快照（PRD pi-alignment M1-01）：硬编码厂商事实经
+    /// `provider_compat::effective_compat` 合成；用户 provider/model 级覆盖
+    /// 随声明式端点配置（M1-02）接入，当前喂空层（= 纯硬编码默认）。
+    pub compat: ProviderCompat,
 }
 
 /// 按配置解析任务主模型的能力。`provider_name`/`model_override` 为任务绑定值；
@@ -70,6 +75,8 @@ pub fn resolve(
             context_window_tokens: None,
             provider_max_output_tokens: None,
             matched_preset: None,
+            // codex 非目录厂商身份：无硬编码事实，全空（通用行为）。
+            compat: ProviderCompat::default(),
         };
     }
     let provider_name = provider_name
@@ -101,11 +108,18 @@ pub fn resolve(
         })
         .unwrap_or_else(|| "openai_chat".to_string());
 
+    let provider_kind = provider
+        .and_then(|provider| provider.provider_kind.clone())
+        .unwrap_or_default();
+    // 合成点：compat 随能力快照一次性冻结（用户层暂空，M1-02 接入声明式端点）。
+    let compat = provider_compat::effective_compat(
+        &provider_kind,
+        &ProviderCompat::default(),
+        &ProviderCompat::default(),
+    );
     let mut resolved = ResolvedModelCapabilities {
         provider_name,
-        provider_kind: provider
-            .and_then(|provider| provider.provider_kind.clone())
-            .unwrap_or_default(),
+        provider_kind,
         model_id,
         protocol,
         vision: CapabilityTruth::Unknown,
@@ -114,6 +128,7 @@ pub fn resolve(
         context_window_tokens: None,
         provider_max_output_tokens: None,
         matched_preset: None,
+        compat,
     };
     let Some(provider) = provider else {
         return resolved;
@@ -439,6 +454,39 @@ mod tests {
         assert_eq!(
             resolve_image_delivery_route(&unknown, &config, true).unwrap_err(),
             ImageRouteError::UnknownCapabilityUnconfigured
+        );
+    }
+
+    /// M1-01 合成点接线：能力快照携带厂商直连 compat 事实（DeepSeek 自动
+    /// 前缀缓存、无 reasoning_effort）；目录外 kind 为全空通用行为。
+    #[test]
+    fn resolved_capabilities_carry_builtin_compat() {
+        let config = deepseek_config("deepseek-v4-flash", "https://api.deepseek.com");
+        let resolved = resolve(&config, AgentEngine::RCode, None, None);
+        assert_eq!(resolved.compat.supports_prompt_caching, Some(true));
+        assert_eq!(resolved.compat.supports_reasoning_effort, Some(false));
+        assert_eq!(
+            resolved.compat.session_affinity_format,
+            Some(crate::provider_compat::SessionAffinityFormat::Implicit)
+        );
+
+        let mut relay = deepseek_config("some-model", "https://relay.example.com/v1");
+        relay
+            .providers
+            .get_mut("deepseek-main")
+            .unwrap()
+            .provider_kind = None;
+        let resolved = resolve(&relay, AgentEngine::RCode, None, None);
+        assert_eq!(
+            resolved.compat,
+            crate::provider_compat::ProviderCompat::default(),
+            "unknown kind yields empty (generic) compat"
+        );
+
+        let codex = resolve(&Config::default(), AgentEngine::Codex, None, None);
+        assert_eq!(
+            codex.compat,
+            crate::provider_compat::ProviderCompat::default()
         );
     }
 

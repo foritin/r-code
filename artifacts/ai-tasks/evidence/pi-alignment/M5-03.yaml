@@ -1,0 +1,36 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M5-03
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m5-03-自包含恢复
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M5-03.json
+
+deliverables:
+  - crates/r-code-agent-worker/tests/retained_tail.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M5-03.json
+changed_paths:
+  - crates/r-code-agent-worker/tests/retained_tail.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M5-03.A1
+    passed: true
+    command: cargo test -p r-code-agent-worker --test retained_tail self_contained_recovery_matches_full_replay_byte_for_byte
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-03.json
+    note: "两轮压缩后从最后投影恢复 vs canonical 回溯重建：serde_json 规范化字节逐一致；最终投影生效（非首轮）"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M5-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-03.json
+
+decisions:
+  - DM66: 一致性判据 = serde_json 规范化字节比较（to_vec 相等），比结构等价更强且与 JSONL 落盘形态同基。
+external_gates_remaining: []

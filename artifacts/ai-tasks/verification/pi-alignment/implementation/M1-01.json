@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M1-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-30T16:24:02.920Z",
+  "started_at": "2026-08-30T16:24:00.466Z",
+  "finished_at": "2026-08-30T16:24:02.920Z",
+  "duration_ms": 2454,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "18501b004024bee80f8d5724f1ef4231496c7d8f2351f5629980390e1b1a500d",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-01.A1",
+      "description": "ProviderCompat 结构体与七字段集完整（序列化往返）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_compat::tests::struct_field_set_complete_and_roundtrips",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_compat::tests::struct_field_set_complete_and_roundtrips",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A2",
+      "description": "provider/model 两级合并与三层合成次序单测通过",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_compat::tests::model_level_overrides_provider_level_and_none_inherits provider_compat::tests::effective_composition_orders_builtin_provider_model",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_compat::tests::model_level_overrides_provider_level_and_none_inherits provider_compat::tests::effective_composition_orders_builtin_provider_model",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A3",
+      "description": "DeepSeek supports_prompt_caching 厂商直连事实不被用户 compat 覆盖（含能力快照合成点接线）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_compat::tests::deepseek_prompt_caching_survives_user_override provider_compat::tests::vendor_direct_protection_still_fills_gaps provider_compat::tests::custom_kinds_are_freely_overridable model_capabilities::tests::resolved_capabilities_carry_builtin_compat",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_compat::tests::deepseek_prompt_caching_survives_user_override provider_compat::tests::vendor_direct_protection_still_fills_gaps provider_compat::tests::custom_kinds_are_freely_overridable model_capabilities::tests::resolved_capabilities_carry_builtin_compat",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M1-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { announceRuntimeSettingsChanged } from "./onboarding";
 import type {
+  ModelAvailabilitySnapshot,
   AgentEvent,
   AgentEventEnvelope,
   AgentRun,
@@ -1158,6 +1159,19 @@ export const providerCatalog = async () => {
 /** 从当前服务实时读取模型目录；失败时由设置页保留预设和手动输入兜底。 */
 export const providerModels = (request: ProviderModelsInput) =>
   ipc<ProviderModelsResponse>("cmd_provider_models", { request });
+
+/**
+ * ModelAvailability 三态快照（pi-alignment M1-03）。旧后端没有这条命令时
+ * 返回 null，调用方跳过可用性过滤（降级为不过滤）。
+ */
+export const modelAvailability = async (): Promise<ModelAvailabilitySnapshot | null> => {
+  try {
+    return await ipc<ModelAvailabilitySnapshot>("cmd_model_availability");
+  } catch (error) {
+    if (!shouldUseBrowserMock()) return null;
+    throw error;
+  }
+};
 
 /** 模型胶囊悬停时按需读取 DeepSeek 官方账户余额。 */
 export const providerBalance = (request: ProviderBalanceInput) =>

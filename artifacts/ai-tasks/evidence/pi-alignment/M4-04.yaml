@@ -1,0 +1,49 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M4-04
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m4-04-热重载
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M4-04.json
+
+deliverables:
+  - src-tauri/src/skill_resources.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/tauri_commands.rs
+  - src-tauri/src/main.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M4-04.json
+changed_paths:
+  - src-tauri/src/skill_resources.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/tauri_commands.rs
+  - src-tauri/src/main.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M4-04.A1
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M4-04 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-04.json
+    note: "cmd_skills_reload IPC 命令（tauri_commands + main 注册 + commands::skills_reload → catalog.reload()）；/reload 与设置页共用入口"
+  - id: M4-04.A2
+    passed: true
+    command: cargo test -p r-code-host --lib -- skill_resources::tests::catalog_cache_and_reload_see_fresh_content
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-04.json
+    note: "磁盘更新后 cached 返回旧值（缓存语义）、reload 拿到最新（v2 + 新增技能）、reload 后 cached 一致"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M4-04 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-04.json
+
+decisions:
+  - DM61: 热重载 = SkillCatalog 缓存 + reload 清缓存重扫；缓存的意义是同 run 多次披露渲染不吃磁盘，reload 是显式失效点。
+  - DM62: IPC 面 cmd_skills_reload 每次 load 全局目录（skill 扫描本身无持久模块缓存——真正的缓存是披露渲染时的 catalog）；入口先行，/reload 斜杠命令接入由前端后续消费。
+external_gates_remaining: []

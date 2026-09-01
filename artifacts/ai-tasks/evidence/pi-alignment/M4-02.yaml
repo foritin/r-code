@@ -1,0 +1,51 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M4-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m4-02-技能渐进式披露
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M4-02.json
+
+deliverables:
+  - src-tauri/src/skill_resources.rs
+  - src-tauri/src/commands.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M4-02.json
+
+changed_paths:
+  - src-tauri/src/skill_resources.rs
+  - src-tauri/src/commands.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M4-02.A1
+    passed: true
+    command: cargo test -p r-code-host --lib -- skill_resources::tests::disclosure_renders_name_and_one_line_description_only
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-02.json
+    note: "披露只含 名称: 一行描述；SKILL.md 正文不进披露；空描述退化为只列名"
+  - id: M4-02.A2
+    passed: true
+    command: cargo test -p r-code-host --lib -- skill_resources::tests::disclosure_skipped_without_read_tool
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-02.json
+    note: "所选工具集无 read_file/load_skill 时零字节（不注入）；空技能清单同样零字节"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M4-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-02.json
+
+decisions:
+  - DM55: 注入点 = render_host_task_context（宿主渲染的信任上下文，尾部 user 消息通道）而非 worker 系统提示词常量——skills 在 src-tauri 扫描，worker crate 不可见；task_context 每轮由宿主刷新，披露随技能目录变化自然更新。
+  - DM56: 披露非空才追加（无技能/无读取工具 → 上下文字节与改造前逐字节一致）；r-code-host lib 全量 739/739 无回归验证零行为变化。
+  - DM57: 读取能力判定 = read_file 或 load_skill 在场（load_skill 是按需加载全文的通道，Pi 语义的 read 等价物）。
+
+external_gates_remaining: []
+notes:
+  - 定向测试 skill_resources 7/7；r-code-host lib 全量 739/739。

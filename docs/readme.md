@@ -23,13 +23,13 @@
 
 | 文档 | 状态 |
 | --- | --- |
-| [产品体验重构 PRD / AI 实施清单](./product-experience-redesign/r-code-experience-redesign-prd.md) | `frozen`，42/42 已实施闭环；唯一状态源是 [`worklist-gate.json`](./product-experience-redesign/worklist-gate.json)（`--update-freeze` 重刷），本表不再手写进度 |
+| [Pi 对齐 + TUI 方案 PRD / AI 实施清单](./pi-alignment/pi-alignment-and-tui-prd.md) | `frozen`，28/28 任务待执行；唯一状态源是本文 §8 主 Checklist（`verify-ai-worklist.mjs` 重刷） |
 | [Codex 主代理丰富交互历史合同](./support/contracts/codex-rich-interaction-prd.md) | 特定 2026-08-25 revision 的 `38/38` 历史证据已通过；当前 dirty `dev` 仍需新清单 M0-02 回归 |
 | [Windows 命令可靠性历史合同](./support/contracts/windows-command-reliability-prd.md) | 已完成 revision 的冻结合同；当前位置仅作维护与追溯，不是新的待办状态源 |
 
 ## UI 参考图
 
-- [本次产品体验原型](./product-experience-redesign/)：可点击 HTML、关键状态截图、设计说明与当前实施合同。
+- [产品体验重构原型（已归档）](./support/archive/product-experience-redesign/)：可点击 HTML、关键状态截图、设计说明（`frozen`，42/42 已实施闭环）。
 - [`support/ui-reference/legacy/light/`](./support/ui-reference/legacy/light/)：历史亮色 UI 参考图。
 - [`support/ui-reference/legacy/dark/`](./support/ui-reference/legacy/dark/)：历史暗色 UI 参考图。
 

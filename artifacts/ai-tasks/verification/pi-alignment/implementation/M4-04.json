@@ -1,0 +1,58 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-04",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T07:14:16.583Z",
+  "started_at": "2026-08-31T07:13:46.173Z",
+  "finished_at": "2026-08-31T07:14:16.583Z",
+  "duration_ms": 30410,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "01cf1e6c0df95e6b2fdbd240c3c7faf7f12ff0ab099d17b2208a8f73d1116ecf",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-04.A1",
+      "description": "reload 触发清缓存重载（cmd_skills_reload IPC 入口存在）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "ipcCommand": true,
+        "registered": true,
+        "hostFn": true
+      },
+      "task": "M4-04"
+    },
+    {
+      "id": "M4-04.A2",
+      "description": "重载后拿到最新内容（缓存不吃磁盘、reload 见 v2+新增）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- skill_resources::tests::catalog_cache_and_reload_see_fresh_content",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- skill_resources::tests::catalog_cache_and_reload_see_fresh_content",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-04",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M4-04.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

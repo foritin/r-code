@@ -1,0 +1,66 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M8-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T17:16:06.397Z",
+  "started_at": "2026-08-31T17:16:03.955Z",
+  "finished_at": "2026-08-31T17:16:06.397Z",
+  "duration_ms": 2442,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "01999658024801b159d4699078a053dc132e229bf30664ef8bf23bdc9a81c933",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M8-01.A1",
+      "description": "独立 bin 复用 Host 编排不启动 WebView（同源工厂 + 事件桥）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "noTauri": true,
+        "usesHost": true,
+        "standaloneBin": true
+      },
+      "task": "M8-01"
+    },
+    {
+      "id": "M8-01.A2",
+      "description": "阶段 1 最小对话（消息流/流式 assistant/工具卡折叠/输入/发送/steer/abort 交互循环）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "hasRenderLoop": true,
+        "hasSendSteerAbort": true,
+        "hasTuiDispatch": true,
+        "unit": 0,
+        "build": 0
+      },
+      "task": "M8-01"
+    },
+    {
+      "id": "M8-01.A3",
+      "description": "共享 data-dir（JSONL 会话落盘，GUI 可 resume TUI 会话）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "sessionFiles": 1,
+        "markerFound": true
+      },
+      "task": "M8-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M8-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M8-01.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

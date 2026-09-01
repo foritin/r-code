@@ -1,6 +1,6 @@
 {
   "schema_version": "codex-interaction-verification.v1",
-  "generated_at": "2026-08-27T11:29:15.107Z",
+  "generated_at": "2026-08-31T15:07:34.662Z",
   "mode": {
     "kind": "through",
     "id": "M4",
@@ -21,21 +21,21 @@
     "profile": "implementation"
   },
   "revision": {
-    "git_revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+    "git_revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
     "branch": "main",
-    "worktree_digest": "1bb15e5c292c643fa09e6474b57b9f7512779d540ab908885e55270488ee3fbe"
+    "worktree_digest": "a8089ab7372b84d1042b74fc7f1c6493b7d0a9f97a6d8c4cc1d61a0b45ebf575"
   },
   "fixture_schema_version": "0.145.0",
   "platform": {
-    "node": "v24.16.0",
-    "os": "linux",
+    "node": "v24.9.0",
+    "os": "win32",
     "arch": "x64"
   },
-  "exit_code": 1,
+  "exit_code": 0,
   "summary": {
     "total": 38,
-    "passed": 2,
-    "failed": 36,
+    "passed": 38,
+    "failed": 0,
     "not_implemented": 0,
     "external_pending": 0
   },
@@ -51,15 +51,15 @@
       "note": "runner 自测：未知 task、缺失 required 断言、失败子命令、报告脱敏",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/verify-codex-interaction.test.mjs"
       ],
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 348,
-      "output_sha256": "1e5363031851f867b1124a86e3a0811da38bf9245430acc77d17e23b65118ac3",
+      "duration_ms": 1204,
+      "output_sha256": "b2140a1a2cd845b4ca992e02ba6e427a40943958b55c27b0c4fe2d59b7c057ee",
       "failure_excerpt": null
     },
     {
@@ -73,14 +73,14 @@
       "note": "0.145.0 requestUserInput fixture 离线一致性",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/check-protocol-fixture.mjs",
         "fixtures/codex-interaction/protocol-0.145.0.json"
       ],
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 25,
+      "duration_ms": 49,
       "output_sha256": "47c9fb991d8905b84a624662f43b16bcdfa77ec2b601803c6224dd2900d08816",
       "failure_excerpt": null
     },
@@ -95,15 +95,15 @@
       "note": "Harness 编排 ≥1 Rust + ≥1 前端测试并产出无 secret JSON 索引",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/smoke-orchestration.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 303269,
-      "output_sha256": "18d59f3fea2c307e3751d10134f2c1c7eb235f2c0cf4f496752219dc1ed05a1a",
-      "failure_excerpt": "verification task M0-01-smoke [implementation]: 0/2 passed, exit=1\n  FAILED M0-01-smoke.R1 (failed)\n  FAILED M0-01-smoke.R2 (error): spawnSync /root/.nvm/versions/node/v24.16.0/bin/node ETIMEDOUT\nreport: artifacts/ai-tasks/verification/codex-rich-interaction/implementation/M0-01-smoke.json\n\nnested harness run exited 1\nsmoke-orchestration FAILED: rust orchestration assertion not passed: \"failed\"\nsmoke-orchestration FAILED: frontend orchestration assertion not passed: \"error\"\nsmoke-orchestration FAILED: assertion missing output_sha256 (stdout must be digested, never stored)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4620,
+      "output_sha256": "4d2d25343cea9657147fca682a86366397b8db6a45d073adbd13cf96f0884e86",
+      "failure_excerpt": null
     },
     {
       "id": "M0-02.A1",
@@ -126,12 +126,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 1339,
-      "output_sha256": "bda0fc80867eb0cce1f339934b1d704faf4af264d53e1726f94dc6b991ee94b0",
-      "failure_excerpt": "  pkg-config output:\n    Package dbus-1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `dbus-1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'dbus-1', required by 'virtual:world', not found\n    Package 'dbus-1', required by 'virtual:world', not found\n\n  The system library `dbus-1` required by crate `libdbus-sys` was not found.\n  The file `dbus-1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `dbus-1.pc`.\n\n  One possible solution is to check whether packages\n  'libdbus-1-dev' and 'pkg-config' are installed:\n  On Ubuntu:\n  sudo apt install libdbus-1-dev pkg-config\n  On Fedora:\n  sudo dnf install dbus-devel pkgconf-pkg-config\n\n\n  thread 'main' (2531568) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libdbus-sys-0.2.7/build.rs:25:9:\n  explicit panic\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nwarning: build failed, waiting for other jobs to finish..."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 479,
+      "output_sha256": "32a4cbfeb9f4fb871ac00fac27e91b8aa79c61edc766687c3c3587a41e535fb2",
+      "failure_excerpt": null
     },
     {
       "id": "M0-02.A2",
@@ -154,12 +154,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 1803,
-      "output_sha256": "57dba759c54525d66ca16546578629f3567bfc553638e32e4dde257dbcf7afae",
-      "failure_excerpt": "  pkg-config output:\n    Package dbus-1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `dbus-1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'dbus-1', required by 'virtual:world', not found\n    Package 'dbus-1', required by 'virtual:world', not found\n\n  The system library `dbus-1` required by crate `libdbus-sys` was not found.\n  The file `dbus-1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `dbus-1.pc`.\n\n  One possible solution is to check whether packages\n  'libdbus-1-dev' and 'pkg-config' are installed:\n  On Ubuntu:\n  sudo apt install libdbus-1-dev pkg-config\n  On Fedora:\n  sudo dnf install dbus-devel pkgconf-pkg-config\n\n\n  thread 'main' (2531868) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libdbus-sys-0.2.7/build.rs:25:9:\n  explicit panic\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nwarning: build failed, waiting for other jobs to finish..."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 468,
+      "output_sha256": "caa73baa3cc2c95dcd45796e7e5a9da5d0fe6393dad6fc4acfa519d003ed893a",
+      "failure_excerpt": null
     },
     {
       "id": "M0-02.A3",
@@ -182,12 +182,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 1223,
-      "output_sha256": "c88d035a02fffc74300f8484448cb8a2a7a97d3677be05c6753c54c7b6cf61f8",
-      "failure_excerpt": "  pkg-config output:\n    Package dbus-1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `dbus-1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'dbus-1', required by 'virtual:world', not found\n    Package 'dbus-1', required by 'virtual:world', not found\n\n  The system library `dbus-1` required by crate `libdbus-sys` was not found.\n  The file `dbus-1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `dbus-1.pc`.\n\n  One possible solution is to check whether packages\n  'libdbus-1-dev' and 'pkg-config' are installed:\n  On Ubuntu:\n  sudo apt install libdbus-1-dev pkg-config\n  On Fedora:\n  sudo dnf install dbus-devel pkgconf-pkg-config\n\n\n  thread 'main' (2532187) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libdbus-sys-0.2.7/build.rs:25:9:\n  explicit panic\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nwarning: build failed, waiting for other jobs to finish..."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 480,
+      "output_sha256": "3274b36c2cc41987aeb9a3d17882d8342c31c6cbc4ecb0e6281fd89d1de87bae",
+      "failure_excerpt": null
     },
     {
       "id": "M0-02.A4",
@@ -210,12 +210,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 1173,
-      "output_sha256": "56ed5308a39b900daef6ab9917ec1ce0398955cd1604fa555757c28869ca6b6a",
-      "failure_excerpt": "  pkg-config output:\n    Package dbus-1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `dbus-1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'dbus-1', required by 'virtual:world', not found\n    Package 'dbus-1', required by 'virtual:world', not found\n\n  The system library `dbus-1` required by crate `libdbus-sys` was not found.\n  The file `dbus-1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `dbus-1.pc`.\n\n  One possible solution is to check whether packages\n  'libdbus-1-dev' and 'pkg-config' are installed:\n  On Ubuntu:\n  sudo apt install libdbus-1-dev pkg-config\n  On Fedora:\n  sudo dnf install dbus-devel pkgconf-pkg-config\n\n\n  thread 'main' (2532521) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libdbus-sys-0.2.7/build.rs:25:9:\n  explicit panic\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nwarning: build failed, waiting for other jobs to finish..."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 454,
+      "output_sha256": "6db685446497c1b8392999e7289a27239e39c31e4255a4d5a740da3e442d3535",
+      "failure_excerpt": null
     },
     {
       "id": "M1-01.A1",
@@ -238,12 +238,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 1871,
-      "output_sha256": "673bd7bafffba4b743b2b3ab2c6a689dffc51e58a9c2c6c78f01fe200521d721",
-      "failure_excerpt": "  pkg-config output:\n    Package dbus-1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `dbus-1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'dbus-1', required by 'virtual:world', not found\n    Package 'dbus-1', required by 'virtual:world', not found\n\n  The system library `dbus-1` required by crate `libdbus-sys` was not found.\n  The file `dbus-1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `dbus-1.pc`.\n\n  One possible solution is to check whether packages\n  'libdbus-1-dev' and 'pkg-config' are installed:\n  On Ubuntu:\n  sudo apt install libdbus-1-dev pkg-config\n  On Fedora:\n  sudo dnf install dbus-devel pkgconf-pkg-config\n\n\n  thread 'main' (2532899) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libdbus-sys-0.2.7/build.rs:25:9:\n  explicit panic\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nwarning: build failed, waiting for other jobs to finish..."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 790,
+      "output_sha256": "bb8c3e2174140709fc8bec0dcceda3aedd38bc1c4de76974fbd7effd0a6ed25b",
+      "failure_excerpt": null
     },
     {
       "id": "M1-01.A2",
@@ -266,12 +266,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 266,
-      "output_sha256": "d3b403540ff64dcef97a44e371b03a5a30e7e26f99e81492a8ef3c6a7da4cb1f",
-      "failure_excerpt": "SROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 784,
+      "output_sha256": "962b3aafc2be2a607316c7e43edf4b3dd305d349f6c998b3f43da475a7c467ad",
+      "failure_excerpt": null
     },
     {
       "id": "M1-01.A3",
@@ -284,15 +284,15 @@
       "note": "既有 Codex final / 原生 R-Code / 子代理消息测试回归",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m1-01-regression.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 14798,
-      "output_sha256": "e8eff48e3fd72ad462e41bde5c6ebd3621b04e0ca0249352ffd981629477c00b",
-      "failure_excerpt": "ode-mcp)\n   Compiling miniz_oxide v0.8.9\n   Compiling grep-regex v0.1.14\n   Compiling ignore v0.4.31\n   Compiling flate2 v1.1.9\n   Compiling agent-store v1.0.0 (/root/project/r-code/vendor/agent-contracts/crates/agent-store)\n   Compiling encoding_rs_io v0.1.7\n   Compiling grep-searcher v0.1.17\n   Compiling fs-set-times v0.20.3\n   Compiling rustix-linux-procfs v0.1.1\n   Compiling tempfile v3.27.0\n   Compiling cap-primitives v4.0.2\n   Compiling cap-std v4.0.2\n   Compiling r-code-core v1.0.0 (/root/project/r-code/crates/r-code-core)\n   Compiling r-code-gateway v1.0.0 (/root/project/r-code/crates/r-code-gateway)\n   Compiling r-code-agent-worker v1.0.0 (/root/project/r-code/crates/r-code-agent-worker)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.30s\n     Running unittests src/lib.rs (target/debug/deps/r_code_agent_worker-21facf750503861e)\n     Running tests/cache_guard.rs (target/debug/deps/cache_guard-f811ed0f61555c07)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src/lib.rs (target/debug/deps/r_code_agent_worker-21facf750503861e)\n     Running tests/cache_guard.rs (target/debug/deps/cache_guard-f811ed0f61555c07)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 16741,
+      "output_sha256": "3f0feed31257f52b2965ffcbaf6206a282c6ea8afd60f9e9a9d5ceb8aa4d9fbb",
+      "failure_excerpt": null
     },
     {
       "id": "M1-02.A1",
@@ -315,12 +315,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 281,
-      "output_sha256": "a2d2df9f2929259792b811f8418b291043f5c8aa4661d1a785b43f786bfb4893",
-      "failure_excerpt": "CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 454,
+      "output_sha256": "da2963a92729212ea2c889955a5a74582419cd89935a31d32fdd77b18fde7052",
+      "failure_excerpt": null
     },
     {
       "id": "M1-02.A2",
@@ -343,12 +343,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 273,
-      "output_sha256": "d1775b75ae03c7b5db96c84dec85c39c0ed5c4f3cb9cff79da06a635a2b537df",
-      "failure_excerpt": "CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 452,
+      "output_sha256": "cb68077b60de80a080295e76eb8c78d2f7fb0c1d4421acfac54a57c286ebf4c6",
+      "failure_excerpt": null
     },
     {
       "id": "M1-02.A3",
@@ -361,15 +361,15 @@
       "note": "原生/Codex 共享语义（core+worker+host）且无重复合同",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m1-02-regression.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 10163,
-      "output_sha256": "2fd4a5c3f391f1be848c9407c1f12622cde59266d203e0a6ef7d66dc1094f7f8",
-      "failure_excerpt": "v-changed=PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`.\n\n[m1-02-regression] FAILED: codex subagent concise-delivery boundary (exit 101)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1236,
+      "output_sha256": "8119e3c16b918fe2feea3428473e9b65c6b8c7754c1a8181f65af2cf951d5572",
+      "failure_excerpt": null
     },
     {
       "id": "M1-03.A1",
@@ -382,18 +382,18 @@
       "note": "10k delta 单节点、全文完整、可见刷新 ≤10Hz",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-message-stream.test.mjs",
         "--test-name-pattern",
         "m1_03_a1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 427,
-      "output_sha256": "5ff730e2b5ecd2887659eceff76db9c8eafa3176abe1284ba56eccfa5bc4ac81",
-      "failure_excerpt": "═══╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-message-stream.test.mjs:85:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-message-stream.test.mjs:235:1\n✖ m1_03_a3 real Timeline renders layered commentary/final without horizontal overflow (0.048436ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-message-stream.test.mjs:85:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3602,
+      "output_sha256": "599646d56383b3438af62b8ec1026f3f5ec8dcd7ab8a551001da18ee391adc1b",
+      "failure_excerpt": null
     },
     {
       "id": "M1-03.A2",
@@ -406,18 +406,18 @@
       "note": "live 应用序列与历史重建结构/顺序/phase 一致",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-message-stream.test.mjs",
         "--test-name-pattern",
         "m1_03_a2"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 1258,
-      "output_sha256": "ecba896d3740b8201b588f5245254b9cf36e717d0428aba93d19bb4bb72c068f",
-      "failure_excerpt": "════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-message-stream.test.mjs:85:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-message-stream.test.mjs:235:1\n✖ m1_03_a3 real Timeline renders layered commentary/final without horizontal overflow (0.05184ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-message-stream.test.mjs:85:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3606,
+      "output_sha256": "59cc533e6a041096c933943a7125e24c6e3cd01c0db71f65b5a7702ccb5b533c",
+      "failure_excerpt": null
     },
     {
       "id": "M1-03.A3",
@@ -430,18 +430,18 @@
       "note": "真实 Timeline 分层渲染 + 1280×800 无横向溢出",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-message-stream.test.mjs",
         "--test-name-pattern",
         "m1_03_a3"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 408,
-      "output_sha256": "efdc98801225b4e4a9d6e1f2f392df468e8126ea4ca51a387e534b2e73bda385",
-      "failure_excerpt": "════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-message-stream.test.mjs:85:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-message-stream.test.mjs:235:1\n✖ m1_03_a3 real Timeline renders layered commentary/final without horizontal overflow (0.04607ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-message-stream.test.mjs:85:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3604,
+      "output_sha256": "927611302ee91fd9dfdcc1422715040590c6a0a95356f88a690f1b81292089a9",
+      "failure_excerpt": null
     },
     {
       "id": "M2-01.A1",
@@ -464,12 +464,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 268,
-      "output_sha256": "aaa80273746012fcf29572e36f2d83c39f8cdd71c4a91a8d45a86117d3480d66",
-      "failure_excerpt": "SROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 470,
+      "output_sha256": "fe165145c9da3a2caf2dfe312c009d8786276b15d0dd2658b3033f44164239b7",
+      "failure_excerpt": null
     },
     {
       "id": "M2-01.A2",
@@ -482,15 +482,15 @@
       "note": "命令输出按序/可展开/截断可见 + 失败与 exit code 一致（rust e2e + 前端）",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m2-01-integration.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 689,
-      "output_sha256": "ff0c9c7ca90031aae9e611637ed126af0c5b1678f9d411439dfc4ef995a743b2",
-      "failure_excerpt": "anged=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`.\n\n[m2-01-integration] FAILED: rust e2e tool lifecycle (exit 101)\n[m2-01-integration] FAILED: frontend tool output accumulation (exit 1)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3579,
+      "output_sha256": "d78cae35bbb83834ba79370afc92341dc7a40eb35a73fbcbe072f2e11cef2abe",
+      "failure_excerpt": null
     },
     {
       "id": "M2-01.A3",
@@ -503,15 +503,15 @@
       "note": "超大/高频输出有界 + 迟到输出丢弃 + 终态不丢",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m2-01-reliability.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 682,
-      "output_sha256": "c55e1a9a02b10752b18d6be6a2fb09727fc29a24c05f29b25314f69910e9fd28",
-      "failure_excerpt": "env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`.\n\n[m2-01-reliability] FAILED: rust output buffer bounds (exit 101)\n[m2-01-reliability] FAILED: frontend late output drop (exit 1)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3312,
+      "output_sha256": "a1d381bbe2185a395867a3ecf8b2b3b8ab3a4c38ae93b2d871d6680e0214e2c4",
+      "failure_excerpt": null
     },
     {
       "id": "M2-02.A1",
@@ -534,12 +534,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 266,
-      "output_sha256": "e767b950bfaeb0ec187e247df5a7e13631184e6a419f653336b529f6a5f81a90",
-      "failure_excerpt": "SROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 791,
+      "output_sha256": "e93580590f8c6cd9630ce6ed893801ba9af9d5c380e0cc240ab4aaf1ff65ba1c",
+      "failure_excerpt": null
     },
     {
       "id": "M2-02.A2",
@@ -552,18 +552,18 @@
       "note": "重复 plan 幂等；live/历史重建结构一致",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-context-events.test.mjs",
         "--test-name-pattern",
         "m2_02_a2"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 406,
-      "output_sha256": "1ec56f3fa8541aa8dc961ed6417148c7ca8ea4fb7e9600f46459dbe2d994c04d",
-      "failure_excerpt": "═════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-context-events.test.mjs:84:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-context-events.test.mjs:149:1\n✖ m2_02_a3 context rows stay compact and long diffs never overflow the timeline (0.337711ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-context-events.test.mjs:84:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2882,
+      "output_sha256": "f7aba23a1ddd5fd541598b076c499ab6b3e6f343e8375de9cd1bdf58e523c138",
+      "failure_excerpt": null
     },
     {
       "id": "M2-02.A3",
@@ -576,18 +576,18 @@
       "note": "紧凑上下文行 + 长 diff 截断 + 无横向溢出",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-context-events.test.mjs",
         "--test-name-pattern",
         "m2_02_a3"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 1249,
-      "output_sha256": "dfecfece48736a226c28a37a9a0b41cf2dc1ecba9df727f8b020f93e0ab67ed6",
-      "failure_excerpt": "═════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-context-events.test.mjs:84:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-context-events.test.mjs:149:1\n✖ m2_02_a3 context rows stay compact and long diffs never overflow the timeline (0.335944ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-context-events.test.mjs:84:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2941,
+      "output_sha256": "d6214fbb29b6e081cf13a8f6ebe4197c8a9616ca2f416dfab86e89acb41d055f",
+      "failure_excerpt": null
     },
     {
       "id": "M3-01.A1",
@@ -610,12 +610,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 271,
-      "output_sha256": "0f2f7ee9e9c8b447526658298a9e200a0590dcfe523ed19c727e5686f66e116d",
-      "failure_excerpt": "SROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 769,
+      "output_sha256": "5432ef705bf61d1cdf5ff81dd210f9be0c70c1942f6bb54b3e9b79e048aa08b0",
+      "failure_excerpt": null
     },
     {
       "id": "M3-01.A2",
@@ -638,12 +638,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 269,
-      "output_sha256": "bd9c1d6d8dc5a2d0655d3c6a1f7dacdb08bcdf1e4c32bb86dab32cf824a7f536",
-      "failure_excerpt": "CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 905,
+      "output_sha256": "24f51c78723bace6f5140209bd8ab5ea9b1d6b4d934c69d84f34d6e314578dcb",
+      "failure_excerpt": null
     },
     {
       "id": "M3-01.A3",
@@ -666,12 +666,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 268,
-      "output_sha256": "4ef73429fd6e7e1d81e976d0a1d0506b21c1f2edab67875db487334a5fc9c17e",
-      "failure_excerpt": "SROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 849,
+      "output_sha256": "689d780ea58a98559ab106e6a98e8d2a3a81302536e6650f0a5f1ef3e72e83ae",
+      "failure_excerpt": null
     },
     {
       "id": "M3-02.A1",
@@ -684,18 +684,18 @@
       "note": "选项/其他/secret 编码正确；secret 不回显",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-question-card.test.mjs",
         "--test-name-pattern",
         "m3_02_a1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 423,
-      "output_sha256": "13231032d764e8d7e9037f3711843517f5e2f444671e6a505535a3f84fce8b6e",
-      "failure_excerpt": "════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-question-card.test.mjs:133:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-question-card.test.mjs:293:1\n✖ m3_03_a3 history rebuild keeps live pending answerable and expired read-only (0.02316ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-question-card.test.mjs:133:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4298,
+      "output_sha256": "9a0dc1d774c69d465a3e5ec43beda6d6ae45ff2f4fab1fd0cd5d7d41139323d3",
+      "failure_excerpt": null
     },
     {
       "id": "M3-02.A2",
@@ -708,18 +708,18 @@
       "note": "仅键盘完成提交；resolved 后同 turn 继续",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-question-card.test.mjs",
         "--test-name-pattern",
         "m3_02_a2"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 404,
-      "output_sha256": "675c05e376544356e8ec9851d54f34650b69decef08e33c189cd6d9ed54394a8",
-      "failure_excerpt": "═══════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-question-card.test.mjs:133:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-question-card.test.mjs:293:1\n✖ m3_03_a3 history rebuild keeps live pending answerable and expired read-only (0.026412ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-question-card.test.mjs:133:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4301,
+      "output_sha256": "610d13d87b75fd3faa951f17013585b479245cfe4055c3d8ce8280509fa71293",
+      "failure_excerpt": null
     },
     {
       "id": "M3-02.A3",
@@ -732,18 +732,18 @@
       "note": "1280×800/390×844 无溢出 + aria-live",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-question-card.test.mjs",
         "--test-name-pattern",
         "m3_02_a3"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 499,
-      "output_sha256": "b0b7319ca64e2245e63d7930d015f1ff7b4b600146da422cdd882481827acb5e",
-      "failure_excerpt": "═══════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-question-card.test.mjs:133:28) {\n    name: 'Error'\n  }\n\ntest at scripts/codex-question-card.test.mjs:293:1\n✖ m3_03_a3 history rebuild keeps live pending answerable and expired read-only (0.025497ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-question-card.test.mjs:133:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4281,
+      "output_sha256": "c02806f7777fffc32b43e96ca989f0ca08bbff37c4c3faabf73c2ef938d87283",
+      "failure_excerpt": null
     },
     {
       "id": "M3-03.A1",
@@ -766,12 +766,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 263,
-      "output_sha256": "bfc97544f9854724a0e5d56039b40a444257af4c5ecab62ddb6ed29dfb3da406",
-      "failure_excerpt": "SROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1110,
+      "output_sha256": "1889afe383990ccce4619aad3059709a050d1c387ab77346c9e843a472745980",
+      "failure_excerpt": null
     },
     {
       "id": "M3-03.A2",
@@ -794,12 +794,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 263,
-      "output_sha256": "5a8d558d347a5abae4e24005b4ed6e2eaebd03c3daf7fec7784ddbe7ca68a544",
-      "failure_excerpt": "CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 851,
+      "output_sha256": "a8782e95b5782a7da5fec2172c5e59716ad3a7f54ef004825ba2f361d672bb0b",
+      "failure_excerpt": null
     },
     {
       "id": "M3-03.A3",
@@ -812,15 +812,15 @@
       "note": "reload 保留 pending；restart 后 expired 只读、迟到提交拒绝",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m3-03-recovery.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 690,
-      "output_sha256": "9288cbcaa3a6a9aab52dd6973efe975c3e3c4a91c987417f9147f26df8469fd3",
-      "failure_excerpt": " cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`.\n\n[m3-03-recovery] FAILED: rust pending-question marker merge (exit 101)\n[m3-03-recovery] FAILED: frontend rebuild pending/expired (exit 1)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4892,
+      "output_sha256": "b7341dd16ac9874fcf919765db44d1fe6ef4d1a2c29cc57396a6913d51a930ee",
+      "failure_excerpt": null
     },
     {
       "id": "M4-01.A1",
@@ -833,15 +833,15 @@
       "note": "raw reasoning/secret/凭据在投影与持久化 oracle 中 0 命中",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m4-01-security.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 553,
-      "output_sha256": "69ef146a9b4176869a2ffcefb45a5314326325fabd10097a8f469ee7076d7141",
-      "failure_excerpt": "DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`.\n\n[m4-01-security] FAILED: persistence security oracle (e2e secret scan) (exit 101)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1414,
+      "output_sha256": "1b5bbc3b79d5e99bc5aa87b5ac47ee2c322536da260f75ade80176e900d5e6b7",
+      "failure_excerpt": null
     },
     {
       "id": "M4-01.A2",
@@ -864,12 +864,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 270,
-      "output_sha256": "130205d29d56c927ec9eff235f8a6e1ec6c16033ed155d53c49797eb9e037829",
-      "failure_excerpt": "SROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags javascriptcoregtk-4.1 'javascriptcoregtk-4.1 >= 2.38'\n\n  pkg-config output:\n    Package javascriptcoregtk-4.1 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `javascriptcoregtk-4.1.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n    Package 'javascriptcoregtk-4.1', required by 'virtual:world', not found\n\n  The system library `javascriptcoregtk-4.1` required by crate `javascriptcore-rs-sys` was not found.\n  The file `javascriptcoregtk-4.1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `javascriptcoregtk-4.1.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 489,
+      "output_sha256": "34dea9edced2b77138e266c534463e0c70a20ce3fd2facb2fa349b2f763b8498",
+      "failure_excerpt": null
     },
     {
       "id": "M4-01.A3",
@@ -892,12 +892,12 @@
         "--",
         "--test-threads=1"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 101,
-      "duration_ms": 270,
-      "output_sha256": "236e4ad8613e4fa6a3fb1f3abf78009395cd2e02d0b1e206957d8b7cb8485b2e",
-      "failure_excerpt": "CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu\n  cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR\n  cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR\n  cargo:warning=\n  pkg-config exited with status code 1\n  > PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`."
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 476,
+      "output_sha256": "e31db421ebd4bd109c38069e204e50d3b7f3b8ec8f3b5b45c14ef41e119691b0",
+      "failure_excerpt": null
     },
     {
       "id": "M4-01.A4",
@@ -910,16 +910,16 @@
       "note": "§6 延迟/密度/有界指标 + 机器可读 performance.json",
       "evidence_path": "artifacts/ai-tasks/verification/codex-rich-interaction/implementation/performance.json",
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-performance.test.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 414,
-      "output_sha256": "428ecb5eb43ef530e1965fcdfc916e89c0b2058df5e6ab04015764dd8ecf0291",
-      "failure_excerpt": "performance metrics exist and pass thresholds (122.165344ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 392.052938\n\n✖ failing tests:\n\ntest at scripts/codex-performance.test.mjs:109:1\n✖ m4_01_a4 §6 performance metrics exist and pass thresholds (122.165344ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-performance.test.mjs:96:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 4710,
+      "output_sha256": "142186c405c9de5ae424aaf7f3787662b1bd11be9232f5ce9a5115797bee2d98",
+      "failure_excerpt": null
     },
     {
       "id": "M4-02.A1",
@@ -932,15 +932,15 @@
       "note": "共用断言本机全绿 + 无平台 cfg 分叉 + CI 三平台矩阵覆盖",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m4-02-cross-platform.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 552,
-      "output_sha256": "95594cdfb7ac9358bf72ea13685cf386699352fb7bcdbd74f4d03e3b9d71880f",
-      "failure_excerpt": "LAGS=1 pkg-config --libs --cflags libsoup-3.0 'libsoup-3.0 >= 3.0'\n\n  pkg-config output:\n    Package libsoup-3.0 was not found in the pkg-config search path.\n    Perhaps you should add the directory containing `libsoup-3.0.pc'\n    to the PKG_CONFIG_PATH environment variable\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n    Package 'libsoup-3.0', required by 'virtual:world', not found\n\n  The system library `libsoup-3.0` required by crate `soup3-sys` was not found.\n  The file `libsoup-3.0.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.\n  The PKG_CONFIG_PATH environment variable is not set.\n\n  HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `libsoup-3.0.pc`.\n\n[m4-02-cross-platform] FAILED: shared e2e suite exited 101\n[m4-02-cross-platform] FAILED: shared e2e m2_01_a2_ is platform-gated\n[m4-02-cross-platform] FAILED: shared e2e m2_02_a1_ is platform-gated\n[m4-02-cross-platform] FAILED: shared e2e m3_01_a1_ is platform-gated\n[m4-02-cross-platform] FAILED: shared e2e m3_03_a1_ is platform-gated\n[m4-02-cross-platform] FAILED: shared e2e m4_02_a2_ is platform-gated"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 1052,
+      "output_sha256": "79092da6b878395c1701c01ecb0415f8e9f396938ac4369c6f92efb1a0ffca6b",
+      "failure_excerpt": null
     },
     {
       "id": "M4-02.A2",
@@ -953,16 +953,16 @@
       "note": "完整 commentary→tool→question→answer→final 亮/暗视觉证据（Rust 侧闭环见 m4_02_a2 e2e）",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "--test",
         "scripts/codex-full-flow-visual.test.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 410,
-      "output_sha256": "707bcbbae971531eb02a0fe501e2573f85fea06869d3d40d79cf8389a109441d",
-      "failure_excerpt": "t and dark themes (122.978872ms)\nℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 389.102308\n\n✖ failing tests:\n\ntest at scripts/codex-full-flow-visual.test.mjs:164:1\n✖ m4_02_a2 full flow timeline renders ordered layers in light and dark themes (122.978872ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/codex-full-flow-visual.test.mjs:82:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 2224,
+      "output_sha256": "e2633fbf8f2e4fa738c547669cb83e84436cf03567e46eed507041e6905353f1",
+      "failure_excerpt": null
     },
     {
       "id": "M4-02.A3",
@@ -975,15 +975,15 @@
       "note": "workspace/frontend 回归 + 文档一致性门禁",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/codex-interaction/m4-02-regression.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 34927,
-      "output_sha256": "8f9c020e0abc431d67100eefa9e5676831833131247ba4a9004e7e04c80eac70",
-      "failure_excerpt": "b8cf26.rlib --extern r_code_mcp=/root/project/r-code/target/debug/deps/libr_code_mcp-1eadbb36a262318f.rlib --extern serde=/root/project/r-code/target/debug/deps/libserde-b4232b0484473dc6.rlib --extern serde_json=/root/project/r-code/target/debug/deps/libserde_json-5f8ed4822cf193d6.rlib --extern sha2=/root/project/r-code/target/debug/deps/libsha2-9772533f5abdf09c.rlib --extern tempfile=/root/project/r-code/target/debug/deps/libtempfile-47f791380f22cb45.rlib --extern thiserror=/root/project/r-code/target/debug/deps/libthiserror-fcedd4d4b2500c30.rlib --extern tokio=/root/project/r-code/target/debug/deps/libtokio-2886978cd1d491fe.rlib --extern tracing=/root/project/r-code/target/debug/deps/libtracing-18fbe2641d0f53e1.rlib --extern uuid=/root/project/r-code/target/debug/deps/libuuid-c1c7052ca8ce49bb.rlib -L dependency=/root/project/r-code/target/debug/deps -C embed-bitcode=no --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' --error-format human` (exit status: 1)\nnote: test exited abnormally; to see the full output pass --no-capture to the harness.\n[m4-02-regression] FAILED: core + agent-worker regression (exit 1)\n[m4-02-regression] FAILED: frontend full suite (exit 1)"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 10048,
+      "output_sha256": "f504f31cccf63d9a7466acd99461cc7ca38c4d1acb350d1a349ccdafa405f468",
+      "failure_excerpt": null
     }
   ],
   "evidence_index": {

@@ -32,7 +32,14 @@ run(
 );
 
 // 2) 前端全量套件（直调内部 runner，避开 npm shim 在 spawnSync 下的信号问题）。
-run("frontend full suite", process.execPath, ["scripts/run-tests.mjs"], frontendDir, 40 * 60 * 1000);
+//    R_CODE_SKIP_FRONTEND_SUITE=1：调用方（pi-alignment 收口门禁）已自行跑过
+//    同一套件并按文件白名单豁免时的跳过开关——避免同一 12 分钟套件在一次
+//    累计门禁里跑两遍。独立执行本脚本（无该 env）行为不变。
+if (process.env.R_CODE_SKIP_FRONTEND_SUITE === "1") {
+  console.log("[m4-02-regression] frontend full suite: skipped (R_CODE_SKIP_FRONTEND_SUITE=1; caller owns this leg)");
+} else {
+  run("frontend full suite", process.execPath, ["scripts/run-tests.mjs"], frontendDir, 40 * 60 * 1000);
+}
 
 // 3) 文档一致性：架构文档引用的脚本与 fixture 存在；evidence 文件与 §9 对齐。
 const problems = [];

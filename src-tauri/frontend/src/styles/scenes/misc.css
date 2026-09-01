@@ -1048,6 +1048,13 @@
 .section-heading .desc { margin-bottom:0; max-width:570px; }
 /* 名册：扁平行 + hover 浮现动作；编辑面收进右侧抽屉（components/ui/Drawer.tsx）。 */
 .provider-roster { display:grid; }
+/* M1-03：组装失败诊断（composition_errors）默认折叠，展开逐条列 provider/model/reason。 */
+.composition-diagnostics { margin-bottom:var(--sp-4); padding:var(--sp-3) var(--sp-4); border:1px solid var(--border); border-radius:var(--radius-sm); }
+.composition-diagnostics > summary { cursor:pointer; color:var(--fg-muted); font-size:var(--text-sm); }
+.composition-diagnostics > summary:hover { color:var(--fg); }
+.composition-diagnostics ul { margin:var(--sp-3) 0 0; padding-left:var(--sp-6); display:grid; gap:var(--sp-2); }
+.composition-diagnostics li { color:var(--fg-muted); font-size:var(--text-meta); line-height:1.55; }
+.composition-diagnostics li strong { color:var(--fg); font-weight:600; }
 .provider-empty { padding:var(--sp-4) var(--sp-4); color:var(--fg-faint); font-size:var(--text-meta); line-height:1.55; }
 .provider-item { display:flex; align-items:center; gap:var(--sp-4); padding:var(--sp-3) var(--sp-4); border-bottom:1px solid var(--border); }
 .provider-item:last-child { border-bottom:0; }

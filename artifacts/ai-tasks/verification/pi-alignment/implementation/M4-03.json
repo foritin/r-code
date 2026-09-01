@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-03",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T07:09:57.815Z",
+  "started_at": "2026-08-31T07:09:55.945Z",
+  "finished_at": "2026-08-31T07:09:57.815Z",
+  "duration_ms": 1870,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "8e8c019f07986c4d72ac0d0645c4487caae93901142075a325020205bce32913",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-03.A1",
+      "description": "事件面完整（session_start/tool_before/tool_after/agent_settled 派生分发）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- extensions::tests::lifecycle_events_derive_and_dispatch",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- extensions::tests::lifecycle_events_derive_and_dispatch",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-03"
+    },
+    {
+      "id": "M4-03.A2",
+      "description": "工具经 Gateway 同源注册（guard 生命周期 + 冲突拒绝 + 同一 tool_specs 面）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- extensions::tests::extension_tools_register_through_gateway",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- extensions::tests::extension_tools_register_through_gateway",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-03"
+    },
+    {
+      "id": "M4-03.A3",
+      "description": "R3/R4 不绕过（审批矩阵拦截直连执行；分类器红线不变）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- extensions::tests::extension_tools_go_through_approval_matrix",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- extensions::tests::extension_tools_go_through_approval_matrix",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-03",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M4-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

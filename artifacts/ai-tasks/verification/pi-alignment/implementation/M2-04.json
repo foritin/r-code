@@ -1,0 +1,75 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-04",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T12:53:50.850Z",
+  "started_at": "2026-08-31T12:52:49.259Z",
+  "finished_at": "2026-08-31T12:53:50.850Z",
+  "duration_ms": 61591,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "eb3af7dd209d5595a4c0c84f666e58c9b93dd492a24178b32619f0897eeb94f2",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-04.A1",
+      "description": "配对评估可本地一键复跑并输出 Lift + 差值（corpus-paired-eval bin）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "liftReported": true,
+        "deterministic": true,
+        "reports": 1
+      },
+      "task": "M2-04"
+    },
+    {
+      "id": "M2-04.A2",
+      "description": "安全红线硬断言触发即 fail（policy 未拦截整场失败 + 观察缺失即违例）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- corpus::tests::safety_redline_blocks_unblocked_policy_command",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- corpus::tests::safety_redline_blocks_unblocked_policy_command",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-04"
+    },
+    {
+      "id": "M2-04.A3",
+      "description": "会话 JSONL + 报告可回放（逐行 rows/observations 落盘 + 语义单测）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- corpus::tests::corpus_loads_forty_four_unique_entries corpus::tests::paired_rows_lift_arithmetic corpus::tests::compute_met_matches_corpus_semantics corpus::tests::dialect_signature_detection",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- corpus::tests::corpus_loads_forty_four_unique_entries corpus::tests::paired_rows_lift_arithmetic corpus::tests::compute_met_matches_corpus_semantics corpus::tests::dialect_signature_detection",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-04",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M2-04.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

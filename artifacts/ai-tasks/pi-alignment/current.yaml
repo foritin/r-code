@@ -1,0 +1,33 @@
+schema_version: ai-task-packet.v1
+project_id: pi-alignment
+# 根 artifacts/ai-tasks/current.yaml 属于 product-experience-gap-closure worklist
+# 的活跃资产（M0-01 证据 DM1）；本清单项目内偏移到此文件。
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  freeze: docs/pi-alignment/pi-alignment-and-tui-freeze.yaml
+
+status: in_progress
+progress:
+  completed: 4
+  total: 28
+  current_task: M1-03
+  next_task: M1-04
+
+milestone_state:
+  M0: done          # M0-01/M0-02 均通过
+  M1: in_progress   # M1-01/M1-02 done
+  M2: pending
+  M3: pending
+  M4: pending
+  M5: pending
+  M6: pending
+  M7: pending
+  M8: pending
+
+verification:
+  harness: scripts/verify-r-code-alignment.mjs
+  profile: implementation
+  reports: artifacts/ai-tasks/verification/pi-alignment/implementation/
+  evidence_dir: artifacts/ai-tasks/evidence/pi-alignment/
+
+last_updated: "2026-08-31"

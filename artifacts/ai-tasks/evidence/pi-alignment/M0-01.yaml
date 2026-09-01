@@ -1,0 +1,56 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M0-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m0-01-建立统一验收-harness-与文档门禁
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M0-01.json
+
+deliverables:
+  - scripts/verify-r-code-alignment.mjs
+  - docs/pi-alignment/pi-alignment-and-tui-freeze.yaml
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/worklist-gate.json
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M0-01.json
+
+changed_paths:
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M0-01.A1
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M0-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M0-01.json
+    note: "A1 自检：无参数 exit 2、--task 缺 --profile exit 2、未知任务 exit 2（profile 为必填参数，无隐式默认）"
+  - id: M0-01.A2
+    passed: true
+    command: node scripts/verify-ai-worklist.mjs --document docs/pi-alignment/pi-alignment-and-tui-prd.md --freeze docs/pi-alignment/pi-alignment-and-tui-freeze.yaml --report artifacts/ai-tasks/verification/pi-alignment/implementation/worklist-gate.json --mode check
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/worklist-gate.json
+    note: "freeze 由先期 --mode compute 固化（用户资产）；blocking=0、major=0、digest 一致"
+  - id: M0-01.A3
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M0-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M0-01.json
+    note: "报告含 revision / worktree_digest / failed_assertions / assertions 字段"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M0-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M0-01.json
+
+decisions:
+  - DM1: 任务包路径使用 artifacts/ai-tasks/pi-alignment/current.yaml —— 根 current.yaml 是另一 worklist（product-experience-gap-closure）的活跃资产，不得覆盖；PRD 假设的"尚无 current.yaml"与实际工作区不符，按用户资产保护原则项目内偏移。
+  - DM2: 验收 Harness 不用 shell:true —— 执行环境（ZCode 沙箱）子进程可能看不到 cmd.exe（spawn cmd.exe ENOENT）；node/npm 用绝对入口（process.execPath / npm-cli.js），cargo/git 走 PATH 直查 exe。
+  - DM3: --profile 为必填（缺省 exit 2），符合 A1"缺参 exit 2"且避免静默走错 profile 目录。
+
+external_gates_remaining: []
+notes:
+  - freeze.yaml 在任务开始前已由用户以 compute 模式固化（status: frozen），M0-01 只做 check 验证，不重算 digest。

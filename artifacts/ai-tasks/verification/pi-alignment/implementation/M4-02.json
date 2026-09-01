@@ -1,0 +1,63 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T07:03:16.801Z",
+  "started_at": "2026-08-31T07:03:15.378Z",
+  "finished_at": "2026-08-31T07:03:16.801Z",
+  "duration_ms": 1423,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "b0cafe97a6d5865df63dce33ca6abe7488ebf02b2a7bb3266bf91427544dd993",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-02.A1",
+      "description": "只注入名称 + 一行描述（正文不进披露）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- skill_resources::tests::disclosure_renders_name_and_one_line_description_only",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- skill_resources::tests::disclosure_renders_name_and_one_line_description_only",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-02"
+    },
+    {
+      "id": "M4-02.A2",
+      "description": "无 read 工具不注入（load_skill 也算读取通道）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- skill_resources::tests::disclosure_skipped_without_read_tool",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- skill_resources::tests::disclosure_skipped_without_read_tool",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M4-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

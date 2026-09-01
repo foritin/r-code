@@ -1,0 +1,52 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M4-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m4-01-skill-资源扫描
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M4-01.json
+
+deliverables:
+  - src-tauri/src/skill_resources.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M4-01.json
+changed_paths:
+  - src-tauri/src/skill_resources.rs
+  - src-tauri/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M4-01.A1
+    passed: true
+    command: cargo test -p r-code-host --lib -- skill_resources::tests::two_level_scan_with_project_override skill_resources::tests::directory_conventions
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-01.json
+    note: "全局 data_dir/skills + 项目 workspace/.r-code/skills 两级；项目级同名覆盖全局（就近优先）；按名稳定排序"
+  - id: M4-01.A2
+    passed: true
+    command: cargo test -p r-code-host --lib -- skill_resources::tests::frontmatter_parsing skill_resources::tests::broken_files_are_skipped_silently
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-01.json
+    note: "frontmatter 解析（平铺键 + | 多行块收敛单行 + BOM 容忍 + 引号剥离）；坏文件静默跳过（Pi 发现规则）"
+  - id: M4-01.A3
+    passed: true
+    command: cargo test -p r-code-host --lib -- skill_resources::tests::agents_skills_frontmatter_is_parseable
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-01.json
+    note: ".agents/skills 构建期资产可被同一解析器消费（submodule 未初始化时 skip 不 fail）"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M4-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-01.json
+
+decisions:
+  - DM43: frontmatter 手写解析（不引 serde_yaml）：SKILL.md 实际使用的子集 = 平铺 name/description + | 多行块；未知键容忍、非键值行判坏。
+  - DM44: 扫描器落 src-tauri skill_resources.rs（消费 data_dir 与 workspace 路径解析）；skills.rs（Codex 安装）与 workflow_skills.rs（设置内自建）语义不同，不合并。
+  - DM45: 项目级覆盖全局级用 BTreeMap 后写覆盖实现；返回按 name 排序保证清单稳定（注入顺序确定性）。
+external_gates_remaining: []
+

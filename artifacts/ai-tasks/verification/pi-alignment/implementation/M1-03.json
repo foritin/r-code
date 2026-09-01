@@ -1,0 +1,76 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M1-03",
+  "profile": "implementation",
+  "generated_at": "2026-08-30T18:29:41.014Z",
+  "started_at": "2026-08-30T18:29:08.830Z",
+  "finished_at": "2026-08-30T18:29:41.014Z",
+  "duration_ms": 32184,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "17234f5086db48d93ade70eff7aea1bf60c07558a4c4da4fa4dc50b1cd830f91",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-03.A1",
+      "description": "三态快照结构完整（all ⊇ available、composition_errors 独立、字段合同）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- model_availability::tests::snapshot_three_state_structure model_availability::tests::composition_failures_are_diagnosed model_availability::tests::decls_file_level_error_is_surfaced",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- model_availability::tests::snapshot_three_state_structure model_availability::tests::composition_failures_are_diagnosed model_availability::tests::decls_file_level_error_is_surfaced",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-03.A2",
+      "description": "缺鉴权在 all 不在 available；list-models CLI 只列 available",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "noKeyListed": false,
+        "withKeyListed": true,
+        "noKeyExit": 0,
+        "withKeyExit": 0
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-03.A3",
+      "description": "设置页/模型选择面只渲染 available 且组装诊断可展开",
+      "required": true,
+      "status": "passed",
+      "evidence": "node --test scripts/m1-03-model-availability.test.mjs",
+      "details": {
+        "commands": [
+          {
+            "cmd": "node --test scripts/m1-03-model-availability.test.mjs",
+            "cwd": "src-tauri\\frontend",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M1-03",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

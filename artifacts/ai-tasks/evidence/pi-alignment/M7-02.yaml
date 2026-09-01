@@ -1,0 +1,58 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M7-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m7-02-dockerbackend-与设置项
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M7-02.json
+
+deliverables:
+  - crates/r-code-gateway/src/execution_backend.rs
+  - src-tauri/src/settings.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M7-02.json
+
+changed_paths:
+  - crates/r-code-gateway/src/execution_backend.rs
+  - src-tauri/src/settings.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M7-02.A1
+    passed: true
+    command: cargo test -p r-code-gateway --lib -- execution_backend::tests::docker_backend_routes_to_docker_run execution_backend::tests::docker_args_sandbox_the_command
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M7-02.json
+    note: "DockerBackend 经 docker run 执行（--rm/--network none/--memory 512m/--cpus 1/工作区只读挂载/-w /workspace）；docker 缺席环境失败信息证明路由（docker spawn 错误）"
+  - id: M7-02.A2
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M7-02 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M7-02.json
+    note: "execution.container 落 config_dir/execution.toml（与 bash_shell_path 同文件同加载函数 load_execution_settings——全局配置面，工作区级配置不可注入执行键）"
+  - id: M7-02.A3
+    passed: true
+    command: cargo test -p r-code-gateway --lib -- execution_backend::tests::docker_backend_does_not_touch_approval_semantics
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M7-02.json
+    note: "backend 类型系统与分类器无交集（无跳过审批入口）；sudo 恒 R4、ls 非 R3/R4；审批矩阵在 ToolGateway 不随后端变化"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M7-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M7-02.json
+
+decisions:
+  - DM70: DockerBackend 收尾复用 LocalShellBackend::collect（超时/中止 kill_tree 语义同源）；容器内解释器固定 sh -c（镜像侧提供，Host 五级解析不适用容器）。
+  - DM71: execution.container 复用既有 execution.toml 全局面（与 bash_shell_path 同文件）——满足"仅全局"约束且不加新配置文件；默认 None 零行为变化。
+  - DM72: 沙箱参数硬编码安全默认（network none/内存 CPU 限额/只读挂载）——无网络沙箱与 R-EVL-04 评估红线同一原则；真实容器端到端属外部放行。
+
+external_gates_remaining:
+  - 真实容器环境（真实 Docker 端到端验证）
+notes:
+  - 定向测试 execution_backend 7/7（含 M7-01 的 4 项不回归）。

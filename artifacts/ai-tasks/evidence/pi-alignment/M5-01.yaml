@@ -1,0 +1,44 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M5-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m5-01-上下文正交标记
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M5-01.json
+
+deliverables:
+  - crates/r-code-core/src/context_inclusion.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M5-01.json
+changed_paths:
+  - crates/r-code-core/src/context_inclusion.rs
+  - crates/r-code-core/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M5-01.A1
+    passed: true
+    command: cargo test -p r-code-core --lib -- context_inclusion::tests::every_variant_has_explicit_classification
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-01.json
+    note: "ContextInclusion 二值归类穷举全部 SessionEvent 变体（Message/快照/投影=Context；RequestHeader/Usage/工具审计副本/System/Meta=AuditOnly）——新增变体未归类即编译失败"
+  - id: M5-01.A2
+    passed: true
+    command: cargo test -p r-code-core --lib -- context_inclusion::tests::audit_only_entries_never_reach_context
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-01.json
+    note: "纯 UI/审计 entry（Usage/独立工具审计副本/ui.* System 事件）全部 AuditOnly；durable_user_message（含 legacy 名）细分进 Context"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M5-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M5-01.json
+
+decisions:
+  - DM63: 归类面 = r-code-core context_inclusion::classify（穷举 match）+ classify_system（durable user message 细分）——与 agent-store 回放 no-op 语义逐变体对齐，把"已由穷举 match 固化的约束"提升为可断言的类型面。
+  - DM64: 不给 SessionEvent 加标记字段——vendor 是固定 commit 子模块；穷举 match 的编译期强度等价于类型层显式区分（PRD 决策空间选改动面最小者）。
+external_gates_remaining: []

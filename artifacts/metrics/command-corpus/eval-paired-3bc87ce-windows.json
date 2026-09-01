@@ -1,0 +1,510 @@
+{
+  "deterministic_across_repetitions": true,
+  "observations": [
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "chain-and-echo",
+      "output": "$ true && echo chained-ok\nexit: 0\n\n--- stdout ---\nchained-ok\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "chain-cmd-subst-len",
+      "output": "$ val=$(pwd); echo \"len:${#val}\"\nexit: 0\n\n--- stdout ---\nlen:15\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "chain-for-loop",
+      "output": "$ for i in 1 2 3; do echo \"i=$i\"; done\nexit: 0\n[提示] 这条命令串联了约 3 个步骤；后续建议拆分为多次调用、逐步检查输出，避免单次长时间等待且失败时难以定位。\n\n--- stdout ---\ni=1\ni=2\ni=3\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "chain-or-fallback",
+      "output": "$ test -f no-such-file || echo fallback-ran\nexit: 0\n\n--- stdout ---\nfallback-ran\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "chain-test-dir",
+      "output": "$ test -d . && echo cwd-is-dir\nexit: 0\n\n--- stdout ---\ncwd-is-dir\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "chain-var-assign",
+      "output": "$ name=r-code; echo \"hello $name\"\nexit: 0\n\n--- stdout ---\nhello r-code\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "enc-csv-roundtrip",
+      "output": "$ printf '名字,值\\nalpha,1\\n' > enc.csv && cat enc.csv\nexit: 0\n\n--- stdout ---\n名字,值\nalpha,1\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "enc-echo-cn",
+      "output": "$ echo \"中文输出-编码测试\"\nexit: 0\n\n--- stdout ---\n中文输出-编码测试\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "enc-emoji",
+      "output": "$ echo \"emoji-🚢-utf8\"\nexit: 0\n\n--- stdout ---\nemoji-🚢-utf8\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "enc-printf-cn",
+      "output": "$ printf '值=%s\\n' 42\nexit: 0\n\n--- stdout ---\n值=42\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "env-export-roundtrip",
+      "output": "$ export CORPUS_T=1; echo \"t=$CORPUS_T\"\nexit: 0\n\n--- stdout ---\nt=1\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "env-inline-assign",
+      "output": "$ CORPUS_MARKER=abc printenv CORPUS_MARKER\nexit: 0\n\n--- stdout ---\nabc\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "env-listing",
+      "output": "$ env | wc -l\nexit: 0\n\n--- stdout ---\n118\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "env-tmpdir-default",
+      "output": "$ echo \"tmp=${TMPDIR:-unset}\"\nexit: 0\n\n--- stdout ---\ntmp=unset\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 42,
+      "id": "exit-42",
+      "output": "$ exit 42\nexit: 42（非零，命令失败）\n(无输出)\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "exit-capture",
+      "output": "$ sh -c 'exit 7'; echo \"rc=$?\"\nexit: 0\n\n--- stdout ---\nrc=7\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "exit-false-or",
+      "output": "$ false || echo \"fallback-ran\"\nexit: 0\n\n--- stdout ---\nfallback-ran\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "exit-zero",
+      "output": "$ exit 0\nexit: 0\n(无输出)\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "path-ls-wc",
+      "output": "$ ls -1 | wc -l\nexit: 0\n\n--- stdout ---\n3\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 127,
+      "id": "path-missing-exe",
+      "output": "$ ./no-such-tool.exe --version\nexit: 127（非零，命令失败）\n\n--- stderr ---\n/usr/bin/bash: line 1: ./no-such-tool.exe: No such file or directory\n\n[诊断] 相对路径可执行文件在 bash 语法下用 `./tool.exe` 形式调用即可；若文件确实存在仍报错，检查文件名拼写与所在目录。PowerShell 回落档则需要 `&` 调用操作符：`& .\\tool.exe`。\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 127,
+      "id": "path-missing-exe-2",
+      "output": "$ ./missing-beta.exe run\nexit: 127（非零，命令失败）\n\n--- stderr ---\n/usr/bin/bash: line 1: ./missing-beta.exe: No such file or directory\n\n[诊断] 相对路径可执行文件在 bash 语法下用 `./tool.exe` 形式调用即可；若文件确实存在仍报错，检查文件名拼写与所在目录。PowerShell 回落档则需要 `&` 调用操作符：`& .\\tool.exe`。\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "path-msys-literal",
+      "output": "$ echo /c/windows-marker | head -c 2\nexit: 0\n\n--- stdout ---\n/c\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "path-pwd-tr",
+      "output": "$ pwd | tr -d '\\n'\nexit: 0\n\n--- stdout ---\n/tmp/.tmpM4czDF\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "path-realpath",
+      "output": "$ realpath .\nexit: 0\n\n--- stdout ---\n/tmp/.tmpM4czDF\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "path-relative-script",
+      "output": "$ printf '#!/bin/sh\\necho script-ok\\n' > s.sh && chmod +x s.sh && ./s.sh\nexit: 0\n[提示] 这条命令串联了约 3 个步骤；后续建议拆分为多次调用、逐步检查输出，避免单次长时间等待且失败时难以定位。\n\n--- stdout ---\nscript-ok\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "path-spaces-file",
+      "output": "$ mkdir -p \"dir with spaces\" && echo content > \"dir with spaces/file.txt\" && cat \"dir with spaces/file.txt\"\nexit: 0\n[提示] 这条命令串联了约 3 个步骤；后续建议拆分为多次调用、逐步检查输出，避免单次长时间等待且失败时难以定位。\n\n--- stdout ---\ncontent\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "pipe-both-cat",
+      "output": "$ echo pipe-both | cat\nexit: 0\n\n--- stdout ---\npipe-both\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "pipe-heredoc",
+      "output": "$ cat <<'EOF'\nheredoc-line\nEOF\nexit: 0\n\n--- stdout ---\nheredoc-line\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "pipe-seq-tail",
+      "output": "$ seq 1 5 | tail -3\nexit: 0\n\n--- stdout ---\n3\n4\n5\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "pipe-tr-head",
+      "output": "$ echo 'x,y,z' | tr ',' '\\n' | head -2\nexit: 0\n[提示] 这条命令串联了约 3 个步骤；后续建议拆分为多次调用、逐步检查输出，避免单次长时间等待且失败时难以定位。\n\n--- stdout ---\nx\ny\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "pipe-wc-lines",
+      "output": "$ printf 'a\\nb\\nc\\n' | wc -l\nexit: 0\n\n--- stdout ---\n3\n"
+    },
+    {
+      "blocked": true,
+      "error": false,
+      "exit_code": null,
+      "id": "policy-curl-pipe-sh",
+      "output": "permission error: tool not found: bash"
+    },
+    {
+      "blocked": true,
+      "error": false,
+      "exit_code": null,
+      "id": "policy-push-blocked",
+      "output": "permission error: tool not found: bash"
+    },
+    {
+      "blocked": true,
+      "error": false,
+      "exit_code": null,
+      "id": "policy-smoke-allowed",
+      "output": "permission error: tool not found: bash"
+    },
+    {
+      "blocked": true,
+      "error": false,
+      "exit_code": null,
+      "id": "policy-sudo-blocked",
+      "output": "permission error: tool not found: bash"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "quote-double",
+      "output": "$ echo \"double quoted value\"\nexit: 0\n\n--- stdout ---\ndouble quoted value\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "quote-nested",
+      "output": "$ echo \"outer 'inner' quotes\"\nexit: 0\n\n--- stdout ---\nouter 'inner' quotes\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "quote-printf-format",
+      "output": "$ printf '%s|%s\\n' alpha beta\nexit: 0\n\n--- stdout ---\nalpha|beta\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "quote-single",
+      "output": "$ echo 'single quoted value'\nexit: 0\n\n--- stdout ---\nsingle quoted value\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "quote-splice-forensic",
+      "output": "$ p='corpus'; echo \"v='\"$p\"'\"\nexit: 0\n\n--- stdout ---\nv='corpus'\n"
+    },
+    {
+      "blocked": false,
+      "error": false,
+      "exit_code": 0,
+      "id": "quote-var-in-quotes",
+      "output": "$ msg=\"quoted 'value'\"; echo \"$msg\"\nexit: 0\n\n--- stdout ---\nquoted 'value'\n"
+    }
+  ],
+  "platform": "windows",
+  "repetitions": 3,
+  "rows": [
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "chain-var-assign"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "chain-for-loop"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "chain-cmd-subst-len"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "chain-and-echo"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "chain-test-dir"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "chain-or-fallback"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "env-tmpdir-default"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "env-inline-assign"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "env-export-roundtrip"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "env-listing"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "quote-double"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "quote-single"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "quote-nested"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "quote-splice-forensic"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "quote-printf-format"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "quote-var-in-quotes"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "enc-echo-cn"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "enc-printf-cn"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "enc-emoji"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "enc-csv-roundtrip"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-spaces-file"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-pwd-tr"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-ls-wc"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-msys-literal"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-relative-script"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-realpath"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-missing-exe"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "path-missing-exe-2"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "pipe-wc-lines"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "pipe-tr-head"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "pipe-heredoc"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "pipe-seq-tail"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "pipe-both-cat"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "exit-zero"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "exit-42"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "exit-capture"
+    },
+    {
+      "baseline_met": true,
+      "candidate_met": true,
+      "id": "exit-false-or"
+    },
+    {
+      "baseline_met": false,
+      "candidate_met": false,
+      "id": "policy-smoke-allowed"
+    },
+    {
+      "baseline_met": false,
+      "candidate_met": false,
+      "id": "policy-sudo-blocked"
+    },
+    {
+      "baseline_met": false,
+      "candidate_met": false,
+      "id": "policy-push-blocked"
+    },
+    {
+      "baseline_met": false,
+      "candidate_met": false,
+      "id": "policy-curl-pipe-sh"
+    }
+  ],
+  "schema": "r-code-corpus-paired-eval/v1",
+  "summary": {
+    "baseline_met": 37,
+    "baseline_rate": 0.9024390243902439,
+    "candidate_met": 37,
+    "candidate_rate": 0.9024390243902439,
+    "entries": 41,
+    "pass_rate_lift": 0.0
+  }
+}

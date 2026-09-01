@@ -1,0 +1,382 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "milestone",
+  "scope_id": "M1",
+  "profile": "implementation",
+  "generated_at": "2026-08-30T19:29:40.657Z",
+  "started_at": "2026-08-30T18:55:22.991Z",
+  "finished_at": "2026-08-30T19:29:40.657Z",
+  "duration_ms": 2057666,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "d4f511b2e801f21c41dff40337b3d3646228adb0cb386adf0944f03bf1800847",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 19,
+    "passed": 19,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "description": "Harness 三参数解析、缺参 exit 2",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "noArgs": 2,
+        "missingProfile": 2,
+        "unknownTask": 2
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-01.A2",
+      "description": "文档门禁 check 通过：freeze digest 一致、blocking=0、major=0",
+      "required": true,
+      "status": "passed",
+      "evidence": "artifacts\\ai-tasks\\verification\\pi-alignment\\implementation\\logs\\cmd-cc53509234bb.log",
+      "details": {
+        "exitCode": 0,
+        "gatePassed": true
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-01.A3",
+      "description": "报告含 revision/worktree digest 与失败断言列表",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "report_fields": [
+          "revision",
+          "worktree_digest",
+          "failed_assertions",
+          "assertions"
+        ]
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-02.A1",
+      "description": "cargo test --workspace --all-features 全绿",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test --workspace --all-features",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test --workspace --all-features",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A2",
+      "description": "前端 npm test + npm run build 绿（已知外部归因文件除外）",
+      "required": true,
+      "status": "passed",
+      "evidence": "npm test && npm run build",
+      "details": {
+        "commands": [
+          {
+            "cmd": "npm test",
+            "exitCode": 1
+          },
+          {
+            "cmd": "npm run build",
+            "exitCode": 0
+          }
+        ],
+        "knownExternal": {
+          "files": {
+            "app-shell.test.mjs": 10,
+            "companion-window-ui.test.mjs": 4
+          },
+          "reason": "pre-existing at baseline 3bc87ce; interactive e2e encode the pre-runs-panel-v2 store contract; owned by product-experience-gap-closure worklist",
+          "baselineRevision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68"
+        },
+        "failingFiles": {
+          "app-shell.test.mjs": 6,
+          "companion-window-ui.test.mjs": 4
+        },
+        "unexpectedFailures": [],
+        "waived": true
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A3",
+      "description": "Windows 金集 --through M4 绿（fast 位置参数已废弃，等价 milestone 闭包）",
+      "required": true,
+      "status": "passed",
+      "evidence": "node scripts/verify-windows-reliability.mjs --through M4 --profile implementation",
+      "details": {
+        "commands": [
+          {
+            "cmd": "node scripts/verify-windows-reliability.mjs --through M4 --profile implementation",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A4",
+      "description": "codex-interaction --through M4 绿（已知外部归因腿除外）",
+      "required": true,
+      "status": "passed",
+      "evidence": "artifacts\\ai-tasks\\verification\\pi-alignment\\implementation\\logs\\cmd-68b480224b52.log",
+      "details": {
+        "exitCode": 1,
+        "knownExternal": {
+          "allowedFailedAssertions": [
+            "M4-02.A3"
+          ],
+          "requiredExcerptMarkers": [
+            "frontend full suite"
+          ],
+          "reason": "M4-02.A3 frontend leg only; same externally-attributed interactive e2e set",
+          "baselineRevision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68"
+        },
+        "failedAssertions": [
+          "M4-02.A3"
+        ],
+        "waived": true
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M1-01.A1",
+      "description": "ProviderCompat 结构体与七字段集完整（序列化往返）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_compat::tests::struct_field_set_complete_and_roundtrips",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_compat::tests::struct_field_set_complete_and_roundtrips",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A2",
+      "description": "provider/model 两级合并与三层合成次序单测通过",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_compat::tests::model_level_overrides_provider_level_and_none_inherits provider_compat::tests::effective_composition_orders_builtin_provider_model",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_compat::tests::model_level_overrides_provider_level_and_none_inherits provider_compat::tests::effective_composition_orders_builtin_provider_model",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A3",
+      "description": "DeepSeek supports_prompt_caching 厂商直连事实不被用户 compat 覆盖（含能力快照合成点接线）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_compat::tests::deepseek_prompt_caching_survives_user_override provider_compat::tests::vendor_direct_protection_still_fills_gaps provider_compat::tests::custom_kinds_are_freely_overridable model_capabilities::tests::resolved_capabilities_carry_builtin_compat",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_compat::tests::deepseek_prompt_caching_survives_user_override provider_compat::tests::vendor_direct_protection_still_fills_gaps provider_compat::tests::custom_kinds_are_freely_overridable model_capabilities::tests::resolved_capabilities_carry_builtin_compat",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-02.A1",
+      "description": "最小声明式配置接入后 r-code-host list-models 列出声明模型",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "cliExit": 0,
+        "listed": true,
+        "noSecrets": true,
+        "output": "m102-relay\tm102-alpha\nm102-relay\tm102-beta\n"
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-02.A2",
+      "description": "值解析 $ENV/credential 引用且无明文落盘（字面量密钥拒绝加载）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_decl::tests::value_resolution_refs_only_no_plaintext",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_decl::tests::value_resolution_refs_only_no_plaintext",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-02.A3",
+      "description": "provider_kind 改名/改 URL 不变；env 覆盖优先级保持",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_decl::tests::provider_kind_stable_across_rename_and_url_change provider_decl::tests::env_override_still_wins_over_decl",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_decl::tests::provider_kind_stable_across_rename_and_url_change provider_decl::tests::env_override_still_wins_over_decl",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-03.A1",
+      "description": "三态快照结构完整（all ⊇ available、composition_errors 独立、字段合同）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- model_availability::tests::snapshot_three_state_structure model_availability::tests::composition_failures_are_diagnosed model_availability::tests::decls_file_level_error_is_surfaced",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- model_availability::tests::snapshot_three_state_structure model_availability::tests::composition_failures_are_diagnosed model_availability::tests::decls_file_level_error_is_surfaced",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-03.A2",
+      "description": "缺鉴权在 all 不在 available；list-models CLI 只列 available",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "noKeyListed": false,
+        "withKeyListed": true,
+        "noKeyExit": 0,
+        "withKeyExit": 0
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-03.A3",
+      "description": "设置页/模型选择面只渲染 available 且组装诊断可展开",
+      "required": true,
+      "status": "passed",
+      "evidence": "node --test scripts/m1-03-model-availability.test.mjs",
+      "details": {
+        "commands": [
+          {
+            "cmd": "node --test scripts/m1-03-model-availability.test.mjs",
+            "cwd": "src-tauri\\frontend",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-04.A1",
+      "description": "tier 语义：判据 input+cacheRead+cacheWrite、最高阈值胜出、整套替换",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- model_pricing::tests::highest_applicable_threshold_wins model_pricing::tests::whole_request_uses_single_tier_rates model_pricing::tests::criterion_counts_cache_write_not_input_only model_pricing::tests::attribute_cost_merges_into_usage_map provider_decl::tests::cost_table_parses_tiers_and_level_map provider_decl::tests::negative_rates_rejected_at_load",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- model_pricing::tests::highest_applicable_threshold_wins model_pricing::tests::whole_request_uses_single_tier_rates model_pricing::tests::criterion_counts_cache_write_not_input_only model_pricing::tests::attribute_cost_merges_into_usage_map provider_decl::tests::cost_table_parses_tiers_and_level_map provider_decl::tests::negative_rates_rejected_at_load",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-04"
+    },
+    {
+      "id": "M1-04.A2",
+      "description": "thinking_level_map 三态（省略/字符串/null），null 档隐藏切换跳过",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- model_pricing::tests::thinking_level_map_three_states model_pricing::tests::cyclable_levels_skip_null_tiers",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- model_pricing::tests::thinking_level_map_three_states model_pricing::tests::cyclable_levels_skip_null_tiers",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-04"
+    },
+    {
+      "id": "M1-04.A3",
+      "description": "成本归因接入 usage_json（声明定价 → cost_usd 并入 run 用量）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- commands::tests::native_usage_event_attributes_cost_from_declared_tiers commands::tests::native_usage_event_persists_to_main_and_subagent_runs",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- commands::tests::native_usage_event_attributes_cost_from_declared_tiers commands::tests::native_usage_event_persists_to_main_and_subagent_runs",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M0-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M0-01.yaml",
+      "exists": true
+    },
+    {
+      "task": "M0-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M0-02.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-01.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-02.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-03",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-03.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-04",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-04.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

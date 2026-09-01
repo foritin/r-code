@@ -18,6 +18,8 @@ members = [
     "crates/r-code-mcp",
     "crates/r-code-terminal",
     "crates/r-code-agent-worker",
+    "crates/r-code-evals",
+    "crates/r-code-tui",
     "installer",
     "src-tauri",
 ]
@@ -53,6 +55,10 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+
+# TUI（pi-alignment M8：r-code-tui 独立 bin 的终端 UI 层）
+ratatui = "0.30"
+crossterm = "0.29"
 
 # 通用工具
 chrono = { version = "0.4", features = ["serde"] }

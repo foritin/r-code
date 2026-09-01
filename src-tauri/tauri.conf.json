@@ -71,7 +71,10 @@
         "uninstallerIcon": "../icons/icon.ico",
         "installerHooks": "installer-hooks.nsh"
       }
-    }
+    },
+    "externalBin": [
+      "binaries/r-code-tui"
+    ]
   },
   "plugins": {
     "updater": {

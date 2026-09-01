@@ -1,0 +1,52 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M6-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m6-01-telemetrycontext-契约
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M6-01.json
+
+deliverables:
+  - crates/r-code-core/src/telemetry.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M6-01.json
+changed_paths:
+  - crates/r-code-core/src/telemetry.rs
+  - crates/r-code-core/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M6-01.A1
+    passed: true
+    command: cargo test -p r-code-core --lib -- telemetry::tests::span_carries_full_contract_surface
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-01.json
+    note: "Span + start/end attributes + set_attribute/add_event/set_status 全合同；end 覆盖动态覆盖 start 的属性查找语义"
+  - id: M6-01.A2
+    passed: true
+    command: cargo test -p r-code-core --lib -- telemetry::tests::in_memory_records_in_end_order telemetry::tests::clone_shares_sink_or_stays_noop
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-01.json
+    note: "InMemory 按结束顺序记录、重复 end 不重复入账、clone 共享 sink"
+  - id: M6-01.A3
+    passed: true
+    command: cargo test -p r-code-core --lib -- telemetry::tests::noop_default_is_silent_and_detectable
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-01.json
+    note: "默认 NOOP：span() 返回空 Span（record=None 无分配）、is_noop() 可判、方法全 no-op"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M6-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-01.json
+
+decisions:
+  - DM46: 契约零依赖（不引 opentelemetry）——未来接 OTLP 时实现导出型 Context，消费方（M6-02 双引擎打点）不感知。
+  - DM47: Span 不在 Drop 自动 end——请求路径漏 end 是 bug，InMemory 断言会暴露而非默默丢数据；重复 end 是 no-op。
+  - DM48: NOOP 是 static 常量 + 无分支方法体（内联零开销）；is_noop() 让调用方可跳过属性构造成本。
+external_gates_remaining: []
+

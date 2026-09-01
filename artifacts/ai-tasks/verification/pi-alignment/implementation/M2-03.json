@@ -1,0 +1,97 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-03",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T05:54:56.803Z",
+  "started_at": "2026-08-31T05:54:54.426Z",
+  "finished_at": "2026-08-31T05:54:56.803Z",
+  "duration_ms": 2377,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "964e1aff47a41fae314b33b1a08b6d269a0454360c721d2527b4980894c9306c",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-03.A1",
+      "description": "groupKey 规则正确（input.id 优先，否则规范化 JSON SHA-256）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- table::tests::group_key_prefers_id_else_stable_hash",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- table::tests::group_key_prefers_id_else_stable_hash",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-03.A2",
+      "description": "Pass Rate Lift 计算正确（配对矩阵 8 行 4 对）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- table::tests::pass_rate_lift_arithmetic",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- table::tests::pass_rate_lift_arithmetic",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-03.A3",
+      "description": "配对差值缺失跳过非 0（单侧 usage 缺失 → 指标跳过）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- table::tests::paired_diffs_skip_missing_metrics table::tests::one_sided_usage_skips_token_delta",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- table::tests::paired_diffs_skip_missing_metrics table::tests::one_sided_usage_skips_token_delta",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-03.A4",
+      "description": "五类诊断单独列出（harness 错/不可打分各归各类）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- table::tests::five_diagnostics_are_separated",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- table::tests::five_diagnostics_are_separated",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-03",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M2-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

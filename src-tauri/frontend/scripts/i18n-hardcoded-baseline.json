@@ -148,8 +148,8 @@
     "sha256": "973170eebacfbf0c6a9a197f2dc769c2db6ffa8defca057108940c139ae10913"
   },
   "src/components/room/SubagentWorkbench.tsx": {
-    "count": 104,
-    "sha256": "1258ef72cd8f18b87d39b4c0d7f9561756a12499a2b4158556b9df92ffc681dc"
+    "count": 110,
+    "sha256": "dc3e078157d59b585bbd3e5272585ae51683db26569699da36899049c86a5451"
   },
   "src/components/room/Timeline.tsx": {
     "count": 89,
@@ -224,8 +224,8 @@
     "sha256": "d268094ae6ed8a655a1db6f75d9c1a361b14526bd965c2f83e56c2b5cd6783cb"
   },
   "src/components/scenes/SettingsScene.tsx": {
-    "count": 509,
-    "sha256": "a9fb64f8a5f327c5741e9b5b8a8b5bd398d6968566df064187a93ad137271fe5"
+    "count": 511,
+    "sha256": "8dea1c2f4c30852d053c146d24e3d348b2032ca4db44447a04afce616591753c"
   },
   "src/components/scenes/SubagentProvidersPanel.tsx": {
     "count": 94,

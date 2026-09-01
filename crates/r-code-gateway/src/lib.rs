@@ -12,6 +12,7 @@
 
 pub mod classifier;
 pub mod diagnosis;
+pub mod execution_backend;
 pub mod gateway;
 pub mod permission;
 pub mod tools;
@@ -29,8 +30,8 @@ pub use diagnosis::{
     reset_diagnosis_counters, DiagnosisKind,
 };
 pub use gateway::{
-    subagent_read_only_tool_allowed, tool_outcome_directive, PathArity, PathBinding, Tool,
-    ToolExecutionContext, ToolExecutionDirective, ToolExecutionResult, ToolGateway,
+    subagent_read_only_tool_allowed, tool_outcome_directive, EffectGuard, PathArity, PathBinding,
+    Tool, ToolExecutionContext, ToolExecutionDirective, ToolExecutionResult, ToolGateway,
     ToolOutcomeMetadata, ToolPolicyGuard,
 };
 pub use permission::{PermissionCheckResult, PermissionEngine, StandingRuleKey};

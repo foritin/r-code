@@ -1,0 +1,18 @@
+{
+  "schema_version": "ai-worklist-gate.v1",
+  "mode": "check",
+  "document": "docs/pi-alignment/pi-alignment-and-tui-prd.md",
+  "freeze": "docs/pi-alignment/pi-alignment-and-tui-freeze.yaml",
+  "passed": true,
+  "counts": {
+    "requirements": 33,
+    "checklist_tasks": 28,
+    "task_cards": 28,
+    "assertions": 75
+  },
+  "digests": {
+    "normative": "a5d29bc62975b14107be484554e0abf3e6b436d18c5c935150f4c99518cab50b",
+    "worklist": "18ff0a4a2184196a457ce3a027dcc7481bb9b6940371f2547b7fc45e29fe136c"
+  },
+  "issues": []
+}

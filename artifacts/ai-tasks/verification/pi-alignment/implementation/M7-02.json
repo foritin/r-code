@@ -1,0 +1,74 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M7-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:39:19.595Z",
+  "started_at": "2026-08-31T11:39:18.504Z",
+  "finished_at": "2026-08-31T11:39:19.595Z",
+  "duration_ms": 1091,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "cf2e1731a3a898f1e5a181fc19b7f9c151735e3d95f59f7efe9048771053943a",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M7-02.A1",
+      "description": "DockerBackend 路由进容器（docker run argv + 沙箱参数）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-gateway --lib -- execution_backend::tests::docker_backend_routes_to_docker_run execution_backend::tests::docker_args_sandbox_the_command",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-gateway --lib -- execution_backend::tests::docker_backend_routes_to_docker_run execution_backend::tests::docker_args_sandbox_the_command",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M7-02"
+    },
+    {
+      "id": "M7-02.A2",
+      "description": "execution.container 仅全局（config_dir/execution.toml 键，工作区不可注入）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "inExecutionToml": true,
+        "loadFn": true
+      },
+      "task": "M7-02"
+    },
+    {
+      "id": "M7-02.A3",
+      "description": "启用后审批/风险/审计不变（backend 与分类器无交集；红线恒 R4）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-gateway --lib -- execution_backend::tests::docker_backend_does_not_touch_approval_semantics",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-gateway --lib -- execution_backend::tests::docker_backend_does_not_touch_approval_semantics",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M7-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M7-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M7-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

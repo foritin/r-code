@@ -23,17 +23,17 @@ This directory holds the current documentation that can be previewed directly on
 
 | Document | Status |
 | --- | --- |
-| [Product-experience redesign PRD and AI worklist](./product-experience-redesign/r-code-experience-redesign-prd.md) | Frozen; progress is `1/42`. This delivery completes the prototype and execution contract, not the product implementation |
+| [Pi-alignment + TUI plan PRD / AI worklist](./pi-alignment/pi-alignment-and-tui-prd.md) | `frozen`; 28/28 tasks pending. §8 checklist is the single status source (`verify-ai-worklist.mjs`) |
 | [Historical Codex rich-interaction contract](./support/contracts/codex-rich-interaction-prd.md) | Its `38/38` evidence applies to a specific 2026-08-25 revision; the current dirty `dev` must be revalidated by M0-02 |
 | [Historical Windows command-reliability contract](./support/contracts/windows-command-reliability-prd.md) | Frozen contract for its completed revision; retained for maintenance and traceability, not as a new todo source |
 
 ## UI Reference Images
 
-- [Current product-experience prototype](./product-experience-redesign/): clickable HTML, key-state images, design notes, and the active worklist.
+- [Product-experience redesign prototype (archived)](./support/archive/product-experience-redesign/): clickable HTML, key-state images, design notes (frozen, 42/42 closed).
 - [`support/ui-reference/legacy/light/`](./support/ui-reference/legacy/light/): historical light-mode UI references.
 - [`support/ui-reference/legacy/dark/`](./support/ui-reference/legacy/dark/): historical dark-mode UI references.
 
-Legacy images are comparison material, not proof of the current implementation. The executable prototype and capture script live only in the current product-experience directory.
+Legacy images are comparison material, not proof of the current implementation. The executable prototype and capture script live under the archived `product-experience-redesign` directory.
 
 ## Historical Archive
 

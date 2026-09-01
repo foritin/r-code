@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M3-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T06:53:13.141Z",
+  "started_at": "2026-08-31T06:53:02.755Z",
+  "finished_at": "2026-08-31T06:53:13.141Z",
+  "duration_ms": 10386,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "28aaf9f67d0e92c316544806cb4ffb5a170c9c9972f31b96b57690dec50bcd93",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-01.A1",
+      "description": "分流逻辑正确：新增工具 deferred、老工具保留",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::split_defers_newly_added_tools_only deferred_tools::tests::disabled_by_default_is_noop deferred_tools::tests::deferred_note_renders_names_and_descriptions",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::split_defers_newly_added_tools_only deferred_tools::tests::disabled_by_default_is_noop deferred_tools::tests::deferred_note_renders_names_and_descriptions",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M3-01"
+    },
+    {
+      "id": "M3-01.A2",
+      "description": "已调用工具不搬移",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::called_tools_are_never_deferred",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::called_tools_are_never_deferred",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M3-01"
+    },
+    {
+      "id": "M3-01.A3",
+      "description": "空 immediate 无条件回退",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::all_deferred_falls_back_to_immediate deferred_tools::tests::specs_lookup_by_names",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --lib -- deferred_tools::tests::all_deferred_falls_back_to_immediate deferred_tools::tests::specs_lookup_by_names",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M3-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M3-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M3-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

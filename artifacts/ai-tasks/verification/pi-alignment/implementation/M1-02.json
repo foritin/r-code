@@ -1,0 +1,76 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M1-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-30T18:29:55.988Z",
+  "started_at": "2026-08-30T18:29:54.601Z",
+  "finished_at": "2026-08-30T18:29:55.988Z",
+  "duration_ms": 1387,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "17234f5086db48d93ade70eff7aea1bf60c07558a4c4da4fa4dc50b1cd830f91",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-02.A1",
+      "description": "最小声明式配置接入后 r-code-host list-models 列出声明模型",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "cliExit": 0,
+        "listed": true,
+        "noSecrets": true,
+        "output": "m102-relay\tm102-alpha\nm102-relay\tm102-beta\n"
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-02.A2",
+      "description": "值解析 $ENV/credential 引用且无明文落盘（字面量密钥拒绝加载）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_decl::tests::value_resolution_refs_only_no_plaintext",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_decl::tests::value_resolution_refs_only_no_plaintext",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-02.A3",
+      "description": "provider_kind 改名/改 URL 不变；env 覆盖优先级保持",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- provider_decl::tests::provider_kind_stable_across_rename_and_url_change provider_decl::tests::env_override_still_wins_over_decl",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- provider_decl::tests::provider_kind_stable_across_rename_and_url_change provider_decl::tests::env_override_still_wins_over_decl",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M1-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-02.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

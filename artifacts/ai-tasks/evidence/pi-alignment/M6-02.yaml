@@ -1,0 +1,45 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M6-02
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m6-02-双引擎统一打点
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M6-02.json
+
+deliverables:
+  - crates/r-code-core/src/telemetry.rs
+  - src-tauri/src/commands.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M6-02.json
+changed_paths:
+  - crates/r-code-core/src/telemetry.rs
+  - src-tauri/src/commands.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M6-02.A1
+    passed: true
+    command: cargo test -p r-code-core --lib -- telemetry::engine_span_tests::both_engines_emit_isomorphic_spans
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-02.json
+    note: "r_code.ai.request 与 r_code.harness.run 两条 Span；native/codex 同名字段面（engine/provider/model；run 另含 run_id）"
+  - id: M6-02.A2
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M6-02 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-02.json
+    note: "usage_end_attributes 提取四桶 token + cost_usd（缺键跳过）；宿主双引擎打点接线：原生 persist_native_usage_event（engine=native）与 Codex persist_runtime_metrics（engine=codex）同构打点"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M6-02 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M6-02.json
+
+decisions:
+  - DM67: 打点位置 = 两引擎的 usage 归因落库点（persist_native_usage_event / persist_runtime_metrics）——宿主侧壳层接线，不改 LlmAgentRuntime 内核循环（PRD §2.2 内核零改动）；NOOP is_noop() 前置判断使默认路径零开销。
+  - DM68: 双引擎同构字段由 telemetry::ai_request_span/harness_run_span 单点保证（engine 枚举 + 固定字段集）；Codex 侧 provider 标识用 "codex"（thread_id 进 model 槽位的语义差异在 evidence 记录，不冒充模型名时置空）。
+external_gates_remaining: []

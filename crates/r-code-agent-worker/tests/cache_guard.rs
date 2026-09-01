@@ -397,3 +397,59 @@ initial instruction that builds cacheable history. "
         }
     }
 }
+
+/// M3-02（R-CCH-02）：中途新增工具不击穿前缀缓存——deferred 分流启用时，
+/// 新工具不进 tools 数组，PrefixShape.compare 不报 Tools 变化；未启用时
+/// （负向对照）compare 必须报 Tools。
+#[test]
+fn cache_guard_midrun_tool_addition() {
+    if std::env::var("R_CODE_CACHE_GUARD").as_deref() != Ok("1") {
+        eprintln!("[cache_guard] 跳过（midrun tool addition）：R_CODE_CACHE_GUARD=1 启用");
+        return;
+    }
+    use r_code_agent_worker::deferred_tools::{
+        split_deferred_tools, tool_reference_enabled, tools_prefix_stable,
+    };
+
+    let echo = ToolSpec {
+        name: "echo".to_string(),
+        description: "echo back".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+        source: ToolSource::Builtin,
+        requires_confirmation: false,
+    };
+    let late_tool = ToolSpec {
+        name: "late_tool".to_string(),
+        description: "registered mid-run".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+        source: ToolSource::Builtin,
+        requires_confirmation: false,
+    };
+
+    // 白名单默认空 → 深度语义：探测决定启用，当前恒关闭（能力探测正确性）。
+    assert!(!tool_reference_enabled("deepseek", "deepseek-v4"));
+
+    // 负向对照：不启用分流，中途新增工具 → PrefixShape 报 Tools。
+    let before = capture(SYSTEM_PROMPT, std::slice::from_ref(&echo), 1, 0);
+    let grown = capture(SYSTEM_PROMPT, &[echo.clone(), late_tool.clone()], 1, 0);
+    assert_eq!(compare(&before, &grown), CacheChangeCause::Tools);
+
+    // 启用分流：新增工具被 deferred，immediate 与上一轮一致 → 不报 Tools。
+    let never_called = |_: &str| false;
+    let previous_tools = std::slice::from_ref(&echo);
+    let current_tools = vec![echo.clone(), late_tool];
+    let split = split_deferred_tools(previous_tools, &current_tools, &never_called, true);
+    assert_eq!(split.deferred, vec!["late_tool".to_string()]);
+    let after = capture(SYSTEM_PROMPT, &split.immediate, 1, 0);
+    assert_eq!(
+        compare(&before, &after),
+        CacheChangeCause::None,
+        "分流后 tools 前缀必须字节稳定"
+    );
+    assert!(tools_prefix_stable(&[echo], &split.immediate));
+
+    // 老工具在 immediate 中保持 schema 不变（字节稳定的另一面）。
+    let split_specs = split.immediate;
+    assert_eq!(split_specs.len(), 1);
+    assert_eq!(split_specs[0].name, "echo");
+}

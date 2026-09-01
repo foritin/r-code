@@ -1,0 +1,46 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M5-03",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:27:13.149Z",
+  "started_at": "2026-08-31T11:27:12.217Z",
+  "finished_at": "2026-08-31T11:27:13.149Z",
+  "duration_ms": 932,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "22f1f40d76effab8193f6f79ab47f8958c232f95916b0f046fd16c63be6f0a85",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M5-03.A1",
+      "description": "自包含恢复与回溯逐字节一致",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --test retained_tail self_contained_recovery_matches_full_replay_byte_for_byte",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --test retained_tail self_contained_recovery_matches_full_replay_byte_for_byte",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M5-03",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M5-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

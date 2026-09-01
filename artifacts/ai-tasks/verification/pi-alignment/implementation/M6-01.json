@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M6-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T06:53:16.426Z",
+  "started_at": "2026-08-31T06:53:15.123Z",
+  "finished_at": "2026-08-31T06:53:16.426Z",
+  "duration_ms": 1303,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "28aaf9f67d0e92c316544806cb4ffb5a170c9c9972f31b96b57690dec50bcd93",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M6-01.A1",
+      "description": "契约完整（Span + start/end attributes + 属性/事件/状态）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-core --lib -- telemetry::tests::span_carries_full_contract_surface",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-core --lib -- telemetry::tests::span_carries_full_contract_surface",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M6-01"
+    },
+    {
+      "id": "M6-01.A2",
+      "description": "NOOP + InMemory 实现",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-core --lib -- telemetry::tests::in_memory_records_in_end_order telemetry::tests::clone_shares_sink_or_stays_noop",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-core --lib -- telemetry::tests::in_memory_records_in_end_order telemetry::tests::clone_shares_sink_or_stays_noop",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M6-01"
+    },
+    {
+      "id": "M6-01.A3",
+      "description": "默认 NOOP 零开销",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-core --lib -- telemetry::tests::noop_default_is_silent_and_detectable",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-core --lib -- telemetry::tests::noop_default_is_silent_and_detectable",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M6-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M6-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M6-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

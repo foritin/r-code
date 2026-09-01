@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M1-04",
+  "profile": "implementation",
+  "generated_at": "2026-08-30T18:41:35.759Z",
+  "started_at": "2026-08-30T18:41:33.847Z",
+  "finished_at": "2026-08-30T18:41:35.758Z",
+  "duration_ms": 1911,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "f03fcd75802820e46ed1795bd7730e4d67bd86cf699fe69b82eb960ddc3bba7d",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-04.A1",
+      "description": "tier 语义：判据 input+cacheRead+cacheWrite、最高阈值胜出、整套替换",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- model_pricing::tests::highest_applicable_threshold_wins model_pricing::tests::whole_request_uses_single_tier_rates model_pricing::tests::criterion_counts_cache_write_not_input_only model_pricing::tests::attribute_cost_merges_into_usage_map provider_decl::tests::cost_table_parses_tiers_and_level_map provider_decl::tests::negative_rates_rejected_at_load",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- model_pricing::tests::highest_applicable_threshold_wins model_pricing::tests::whole_request_uses_single_tier_rates model_pricing::tests::criterion_counts_cache_write_not_input_only model_pricing::tests::attribute_cost_merges_into_usage_map provider_decl::tests::cost_table_parses_tiers_and_level_map provider_decl::tests::negative_rates_rejected_at_load",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-04"
+    },
+    {
+      "id": "M1-04.A2",
+      "description": "thinking_level_map 三态（省略/字符串/null），null 档隐藏切换跳过",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- model_pricing::tests::thinking_level_map_three_states model_pricing::tests::cyclable_levels_skip_null_tiers",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- model_pricing::tests::thinking_level_map_three_states model_pricing::tests::cyclable_levels_skip_null_tiers",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-04"
+    },
+    {
+      "id": "M1-04.A3",
+      "description": "成本归因接入 usage_json（声明定价 → cost_usd 并入 run 用量）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- commands::tests::native_usage_event_attributes_cost_from_declared_tiers commands::tests::native_usage_event_persists_to_main_and_subagent_runs",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- commands::tests::native_usage_event_attributes_cost_from_declared_tiers commands::tests::native_usage_event_persists_to_main_and_subagent_runs",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M1-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M1-04",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M1-04.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

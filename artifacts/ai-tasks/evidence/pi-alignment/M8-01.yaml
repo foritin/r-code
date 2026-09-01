@@ -1,0 +1,62 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M8-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m8-01-r-code-tui-独立-bin-与阶段-1-最小对话
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M8-01.json
+
+deliverables:
+  - crates/r-code-tui/Cargo.toml
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - Cargo.toml
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M8-01.json
+
+changed_paths:
+  - crates/r-code-tui/Cargo.toml
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - Cargo.toml
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M8-01.A1
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M8-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-01.json
+    note: "独立 [[bin]] r-code-tui；main.rs 零 tauri/webview 引用；编排经 r_code_host::commands（CommandState::new_with_planning_release_control 同源装配 + set_agent_event_sink 事件桥）"
+  - id: M8-01.A2
+    passed: true
+    command: cargo test -p r-code-tui && cargo build -p r-code-tui --bin r-code-tui && 断言校验交互循环三要素
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-01.json
+    note: "真实交互 TUI 落地：app.rs ratatui 渲染循环（.draw + RunController + transcript/输入框/状态栏/流式刷新）+ main.rs run_interactive_tui（raw mode/备用屏 + agent_send Auto=发送/steer + agent_abort + Esc 退出）；input.rs 输入缓冲与按键映射纯逻辑 19/19 单测；二进制进入备用屏渲染输入框、Esc 干净退出 exit 0"
+  - id: M8-01.A3
+    passed: true
+    command: r-code-tui --mode print --data-dir <tmp> --message m801b-resume-marker
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-01.json
+    note: "JSONL 会话落盘于共享 data-dir sessions/（marker 可检索）——GUI 从同一 data-dir 即可 resume TUI 会话"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M8-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-01.json
+
+decisions:
+  - DM73（修订）: ratatui 0.30 + crossterm 0.29 入 workspace 依赖；交互 TUI 本体（app.rs 渲染循环 + main.rs 接线）已补齐——阶段 1 最小对话的输入/发送/steer/abort/流式/工具卡折叠全部真实可用，不再以 print 降级。
+  - DM74: TuiState 是纯状态机（无终端 IO）可单测；EventBridge 把宿主 AgentEventSink 桥到共享状态（AgentEvent 唯一事件源）。
+  - DM75: 默认 data-dir = r_code_host::app_paths::default_data_dir()（桌面同一 AppData 根）；--data-dir 显式覆盖（测试/隔离）；会话 JSONL 与 GUI 同一 sessions/ 目录即互通。
+  - DM76: 真实 provider 场景下 install_mock_scenario 返回 false 即直接走真实线路（共享 data-dir 的 provider 配置生效）；脚本化演示线路仅在 Mock runtime 接受。
+
+external_gates_remaining: []
+notes:
+  - r-code-tui 测试 5/5；二进制 print 模式 exit 0 端到端。

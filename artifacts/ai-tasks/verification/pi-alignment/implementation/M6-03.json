@@ -1,0 +1,46 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M6-03",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:34:42.994Z",
+  "started_at": "2026-08-31T11:34:42.120Z",
+  "finished_at": "2026-08-31T11:34:42.993Z",
+  "duration_ms": 873,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "f74698e1f4fdd6c8c42a72bff01bec7bffc83cda0de89a25c0d1a1dadaa2c2e7",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M6-03.A1",
+      "description": "三语义一致性测试（原子性/状态合并/嵌套父子）通过",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-core --lib -- telemetry::adapter_consistency_tests",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-core --lib -- telemetry::adapter_consistency_tests",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M6-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M6-03",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M6-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

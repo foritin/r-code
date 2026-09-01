@@ -12,6 +12,7 @@
 #![allow(clippy::doc_nested_refdefs)]
 
 pub mod automation;
+pub mod context_inclusion;
 pub mod dto;
 pub mod error;
 pub mod ids;
@@ -26,6 +27,7 @@ pub mod security;
 pub mod state;
 pub mod sync_util;
 pub mod task_status;
+pub mod telemetry;
 pub mod user_error;
 #[cfg(windows)]
 pub mod win_env;

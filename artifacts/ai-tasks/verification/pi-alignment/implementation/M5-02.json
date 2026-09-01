@@ -1,0 +1,63 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M5-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:27:12.111Z",
+  "started_at": "2026-08-31T11:27:10.245Z",
+  "finished_at": "2026-08-31T11:27:12.111Z",
+  "duration_ms": 1866,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "22f1f40d76effab8193f6f79ab47f8958c232f95916b0f046fd16c63be6f0a85",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M5-02.A1",
+      "description": "新压缩写 retained_tail（物化 ModelProjection，非指针）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --test retained_tail new_compaction_writes_materialized_retained_tail",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --test retained_tail new_compaction_writes_materialized_retained_tail",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    },
+    {
+      "id": "M5-02.A2",
+      "description": "旧格式兼容读（无投影行 → None，canonical 兜底）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-agent-worker --test retained_tail legacy_pointer_free_format_reads_as_none",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-agent-worker --test retained_tail legacy_pointer_free_format_reads_as_none",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M5-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M5-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

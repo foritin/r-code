@@ -1,0 +1,58 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M8-03
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m8-03-阶段-3-fullscreen-与-ime
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M8-03.json
+
+deliverables:
+  - crates/r-code-tui/src/ime.rs
+  - crates/r-code-tui/src/fullscreen.rs
+  - crates/r-code-tui/src/bang_command.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M8-03.json
+changed_paths:
+  - crates/r-code-tui/src/ime.rs
+  - crates/r-code-tui/src/fullscreen.rs
+  - crates/r-code-tui/src/bang_command.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M8-03.A1
+    passed: true
+    command: cargo test -p r-code-tui --lib -- ime::
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-03.json
+    note: "IME 定位链：焦点容器树传播（任意深度判定输入框焦点）→ 假光标行列（含折行）→ 硬件光标同步/失焦隐藏；真机候选窗验证列外部放行"
+  - id: M8-03.A2
+    passed: true
+    command: cargo test -p r-code-tui --lib -- fullscreen::
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-03.json
+    note: "fullscreen/regular 状态机（默认 regular 不打破 scrollback；退出关搜索；regular 态搜索无效）；备用屏 VStack 主区 + HStack 输入区布局无重叠无遗漏、搜索让行"
+  - id: M8-03.A3
+    passed: true
+    command: cargo test -p r-code-tui --lib -- bang_command::
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-03.json
+    note: "!command 识别（裸!不算）与剥离；ShellRow（OSC 133 prompt/output 段）与 ToolCard 类型层互斥——shell 输出与工具输出区分"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M8-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-03.json
+
+decisions:
+  - DM79: IME/布局/!command 均为纯逻辑（坐标计算/状态机/解析），crossterm 侧翻译在壳层；IME 真机人工验证属外部放行（§11.3）。
+  - DM80: TranscriptRow 扩展 Shell(ShellRow) 变体承载 OSC 133 语义三段——print 模式渲染分支同步穷举。
+external_gates_remaining:
+  - macOS/Apple 签名实机（符号链接 PATH 接入与签名验证）
+  - IME 真机（中文输入法候选窗人工验证）
+  - 四种 bundle target 全平台打包产物存在性（CI release 腿确认）

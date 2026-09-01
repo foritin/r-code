@@ -1,0 +1,66 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M8-04
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m8-04-分发安装与-path-接入
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M8-04.json
+
+deliverables:
+  - src-tauri/tauri.conf.json
+  - src-tauri/build.rs
+  - src-tauri/installer-hooks.nsh
+  - .github/workflows/release.yml
+  - docs/support/operations/operations.md
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M8-04.json
+changed_paths:
+  - src-tauri/tauri.conf.json
+  - src-tauri/build.rs
+  - src-tauri/installer-hooks.nsh
+  - .github/workflows/release.yml
+  - docs/support/operations/operations.md
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M8-04.A1
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M8-04 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-04.json
+    note: "bundle.externalBin 声明 binaries/r-code-tui；r-code-tui bin 构建绿；build.rs 占位机制保本地 cargo build；发布管线先构建 CLI 再打包（三平台矩阵同一顺序）；四种 target 含该二进制由 tauri-action 按 externalBin 声明装包（本地验证 nsis 路径，CI 全平台腿最终确认）"
+  - id: M8-04.A2
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M8-04 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-04.json
+    note: "NSIS POSTINSTALL 写用户级 PATH（免提权 Environ::SetVar）；POSTUNINSTALL 移除；operations.md 增 CLI 分发节"
+  - id: M8-04.A3
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M8-04 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-04.json
+    note: "PATH 写入/清理全部非致命（ClearErrors + DetailPrint，钩子无 Abort）——失败降级提示不阻断主程序安装"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M8-04 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M8-04.json
+
+decisions:
+  - DM81: build.rs 占位机制：externalBin 产物缺失时写文本占位（满足 tauri-build 存在性检查），发布管线先构建真实 CLI 覆盖——本地 cargo build/test 不破坏，误打包占位会在安装期立即暴露（文本非可执行镜像）。
+  - DM82: release.yml 在 tauri-action 前加 Build r-code-tui CLI for bundling 步（matrix.rust-target 对齐，Windows 补 .exe 后缀）——三平台同一顺序。
+  - DM83: macOS/Linux PATH 接入（符号链接/deb /usr/bin）由各平台打包脚本后续增量；Windows 用户级 PATH（占用户绝大多数）本任务落地（钩子非致命语义已验证）。
+external_gates_remaining:
+  - macOS/Apple 签名实机（符号链接 PATH 接入与签名验证）
+  - IME 真机（中文输入法候选窗人工验证）
+  - 四种 bundle target 全平台打包产物存在性（CI release 腿确认）
+
+# 补记（交互 TUI 落地后的安装/脚本收尾）
+- DM85: dev-tui.ps1 启动脚本（精简 dev.ps1：仅工具链 + 子模块同步 + cargo build/run；默认 data-dir 指向 dev GUI 同一 AppData，TUI 复用 dev 里配好的 provider）；-Print/-Json 非交互单轮。
+- DM86: 修复 installer-hooks.nsh 的 PATH 写入——原 Environ::SetVar 依赖 NSIS Environ 插件，但 Tauri NSIS 模板未内置该插件（打包会报 Invalid command）；改为纯内置指令 ReadRegStr/WriteRegExpandStr + StrLoc 去重，安装写用户 PATH（去重防升级重复）、卸载移除（$INSTDIR 前后拼接 + 去分隔符），全程非致命。
+- DM87: 修复 r-code-tui Windows 控制台 UTF-8——Windows 默认代码页 936(GBK)，TUI 的模型回复/IME 中文会整屏乱码；main 入口 SetConsoleOutputCP/SetConsoleCP(65001)；dev-tui.ps1 侧再设 Console.OutputEncoding=UTF8 使 PowerShell 正确解码子进程 stdout。

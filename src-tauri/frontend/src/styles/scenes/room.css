@@ -1954,7 +1954,7 @@
 }
 .sum-live-top { display:flex; align-items:center; gap:7px; }
 .sum-live-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); animation:pulse 1.6s infinite; }
-.sum-live-tag { font-family:var(--font-mono); font-size:9.5px; letter-spacing:.16em; color:var(--accent); }
+.sum-live-tag { font-family:var(--font-mono); font-size:11px; letter-spacing:.16em; color:var(--accent); }
 .sum-live-elapsed { margin-left:auto; color:var(--accent); font:600 var(--text-sm) var(--font-mono); font-variant-numeric:tabular-nums; }
 .sum-live-action { margin-top:7px; overflow:hidden; color:var(--fg); font-size:var(--text-sm); text-overflow:ellipsis; white-space:nowrap; }
 .sum-live-bar { margin-top:9px; height:3px; overflow:hidden; border-radius:2px; background:var(--bg-inset); }
@@ -1970,7 +1970,7 @@
 }
 .sum-perm-top { display:flex; align-items:center; gap:8px; font-size:var(--text-meta); }
 .sum-perm-top b { color:var(--warning); font-weight:600; }
-.sum-perm-risk { margin-left:auto; padding:1px 8px; border:1px solid var(--edge-warning); border-radius:var(--radius-pill); color:var(--warning); font-size:10px; }
+.sum-perm-risk { margin-left:auto; padding:1px 8px; border:1px solid var(--edge-warning); border-radius:var(--radius-pill); color:var(--warning); font-size:11px; }
 .sum-perm-cmd {
   margin-top:8px; padding:6px 9px; overflow:hidden; border:1px solid var(--border); border-radius:7px 7px 3px 7px;
   background:var(--bg-inset); color:var(--fg); font:var(--text-meta) var(--font-mono); text-overflow:ellipsis; white-space:nowrap;
@@ -2001,7 +2001,7 @@
 .sum-oc-v.warn { color:var(--warning); }
 .sum-oc-v.bad { color:var(--danger); }
 .sum-oc-v.dim { padding-top:2px; color:var(--fg-faint); font-size:var(--text-sm); }
-.sum-oc-k { margin-top:2px; color:var(--fg-faint); font-size:10.5px; }
+.sum-oc-k { margin-top:2px; color:var(--fg-faint); font-size:11px; }
 .sum-brief-activity { padding:9px 12px 10px; border-top:1px solid var(--border); }
 .sum-bar { display:flex; gap:2px; height:5px; }
 .sum-bar span { border-radius:2.5px; }
@@ -2010,7 +2010,7 @@
 .sum-bar .b-search { background:var(--accent-2); }
 .sum-bar .b-write { background:var(--success); }
 .sum-bar .b-other { background:var(--border-strong); }
-.sum-legend { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; margin-top:8px; color:var(--fg-muted); font-size:10.5px; }
+.sum-legend { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; margin-top:8px; color:var(--fg-muted); font-size:11px; }
 .sum-legend i { display:inline-block; width:6px; height:6px; margin-right:4px; border-radius:2px; vertical-align:1px; }
 .sum-legend .d-read { background:color-mix(in srgb,var(--fg-faint) 55%,transparent); }
 .sum-legend .d-cmd { background:var(--accent); }
@@ -2033,7 +2033,7 @@
 .sum-sq-top { display:flex; align-items:baseline; gap:8px; }
 .sum-sq-top b { min-width:0; overflow:hidden; color:var(--fg); font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .sum-sq-top em { flex:none; margin-left:auto; color:var(--fg-faint); font:10px var(--font-mono); font-style:normal; font-variant-numeric:tabular-nums; }
-.sum-sq-sub { display:block; margin-top:3px; overflow:hidden; color:var(--fg-muted); font-size:10.8px; text-overflow:ellipsis; white-space:nowrap; }
+.sum-sq-sub { display:block; margin-top:3px; overflow:hidden; color:var(--fg-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .sum-sq-sub.ok { color:var(--success); }
 .sum-sq-sub.warn { color:var(--warning); }
 .sum-sq-sub.live { color:var(--accent); }
@@ -2055,7 +2055,7 @@
 .sum-tl-top b { min-width:0; overflow:hidden; color:var(--fg); font:550 11.8px var(--font-mono); text-overflow:ellipsis; white-space:nowrap; }
 .sum-tl-top b.plain { font-family:var(--font-ui); }
 .sum-tl-top em { flex:none; margin-left:auto; color:var(--fg-faint); font:10px var(--font-mono); font-style:normal; }
-.sum-tl-sub { margin-top:2px; overflow:hidden; color:var(--fg-muted); font-size:10.8px; text-overflow:ellipsis; white-space:nowrap; }
+.sum-tl-sub { margin-top:2px; overflow:hidden; color:var(--fg-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .sum-tl-row.is-fail .sum-tl-sub { color:var(--danger); }
 .sum-tl-row.is-wait .sum-tl-sub { color:var(--warning); }
 
@@ -2066,7 +2066,7 @@
   color:var(--fg-muted); font-size:var(--text-meta); cursor:pointer; transition:background .15s;
 }
 .sum-audit-toggle:hover,.sum-audit-toggle:focus-visible { background:var(--bg-hover); }
-.sum-audit-toggle .tri { color:var(--accent-2); font-size:9px; }
+.sum-audit-toggle .tri { color:var(--accent-2); font-size:11px; }
 .sum-audit-toggle em { margin-left:auto; color:var(--fg-faint); font:10px var(--font-mono); font-style:normal; }
 .sum-empty { margin:0 0 var(--sp-6); padding:var(--sp-4) var(--sp-1); color:var(--fg-faint); font-size:var(--text-meta); }
 

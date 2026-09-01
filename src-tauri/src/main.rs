@@ -292,6 +292,18 @@ fn main() {
         }
     }
 
+    // `list-models`（M1-02 声明式端点的验收面）是离线只读子命令：只解析
+    // config.toml 与 provider-decls.toml，不初始化 Tauri、不访问凭据后端、
+    // 不触网。必须抢在任何运行时初始化之前返回。
+    match list_models_args() {
+        Ok(Some(args)) => std::process::exit(run_list_models(args)),
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    }
+
     // Finder/Dock 启动的 macOS GUI 不会读取用户的登录 shell 配置。Codex、Node、
     // npm 和项目工具常由 Homebrew/nvm 安装；在任何 CLI 探测前恢复同一份 PATH。
     // 失败不阻断 R-Code 启动，设置页的诊断仍会给出具体的 CLI 缺失提示。
@@ -947,6 +959,8 @@ fn main() {
             tauri_commands::cmd_legacy_memory_status,
             tauri_commands::cmd_logs_tail,
             tauri_commands::cmd_settings_get,
+            tauri_commands::cmd_model_availability,
+            tauri_commands::cmd_skills_reload,
             tauri_commands::cmd_mcp_snapshot,
             tauri_commands::cmd_mcp_upsert,
             tauri_commands::cmd_mcp_remove,
@@ -1054,6 +1068,64 @@ fn mcp_server_data_dir_from_args() -> Result<Option<Option<PathBuf>>, String> {
         }
     }
     Ok(Some(data_dir))
+}
+
+struct ListModelsArgs {
+    config_dir: Option<PathBuf>,
+    provider: Option<String>,
+}
+
+/// `r-code-host list-models [--config-dir <path>] [--provider <name>]`。
+fn list_models_args() -> Result<Option<ListModelsArgs>, String> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(OsStr::new("list-models")) {
+        return Ok(None);
+    }
+    let mut parsed = ListModelsArgs {
+        config_dir: None,
+        provider: None,
+    };
+    while let Some(argument) = args.next() {
+        if argument == OsStr::new("--config-dir") {
+            let path = args
+                .next()
+                .ok_or_else(|| "--config-dir requires a path".to_string())?;
+            if parsed.config_dir.replace(PathBuf::from(path)).is_some() {
+                return Err("--config-dir can only be specified once".to_string());
+            }
+        } else if argument == OsStr::new("--provider") {
+            let name = args
+                .next()
+                .ok_or_else(|| "--provider requires a name".to_string())?;
+            let name = name
+                .to_str()
+                .ok_or_else(|| "--provider name must be valid UTF-8".to_string())?
+                .to_string();
+            if parsed.provider.replace(name).is_some() {
+                return Err("--provider can only be specified once".to_string());
+            }
+        } else {
+            return Err(
+                "usage: r-code-host list-models [--config-dir <path>] [--provider <name>]"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(Some(parsed))
+}
+
+fn run_list_models(args: ListModelsArgs) -> i32 {
+    let config_dir = match args.config_dir {
+        Some(dir) => dir,
+        None => match r_code_host::app_paths::default_data_dir() {
+            Some(base) => base.join("config"),
+            None => {
+                eprintln!("list-models: cannot resolve the default config dir; pass --config-dir");
+                return 2;
+            }
+        },
+    };
+    r_code_host::model_availability::list_models_cli(&config_dir, args.provider.as_deref())
 }
 
 /// 启动后台 IPC server（保留 P0 行为：内存 SQLite + ping / task.create）。

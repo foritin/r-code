@@ -17,7 +17,7 @@
 
 - [文档导航](../readme.md) / [English](../readme.en.md)
 - [当前架构](../architecture.md)
-- [产品体验重构原型与实施合同](../product-experience-redesign/)
+- [Pi 对齐 + TUI 方案 PRD / AI 实施清单](../pi-alignment/pi-alignment-and-tui-prd.md)
 
 ## 旧路径迁移
 
@@ -48,4 +48,4 @@ OCR 单测原来从 `docs/ui` 编译图片。该资产已按相同字节和 SHA-
 
 ## Archive 可执行性说明
 
-`archive/` 中的 HTML 和脚本默认是历史快照。仍保留的原型截图脚本已更新为新目录；它们不属于当前产品体验原型的验收入口。当前可复现原型只使用 [`../product-experience-redesign/`](../product-experience-redesign/) 中的 HTML、脚本和截图。
+`archive/` 中的 HTML 和脚本默认是历史快照。仍保留的原型截图脚本已更新为新目录；它们不属于当前产品体验原型的验收入口。产品体验重构（含可点击 HTML、截图与脚本）已归档至 [`archive/product-experience-redesign/`](./archive/product-experience-redesign/)。

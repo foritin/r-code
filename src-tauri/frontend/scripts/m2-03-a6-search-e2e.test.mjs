@@ -3,12 +3,31 @@
 
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// 与 onboarding-campaign / app-shell 同一套候选：CI(linux) 用 /usr/bin/chromium，
+// 本地 Windows/macOS 落到 Chrome/Edge，CHROMIUM_PATH 仍可显式覆盖。
+function browserExecutable() {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  const candidates = [
+    path.join(process.env.PROGRAMFILES ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(process.env["PROGRAMFILES(X86)"] ?? "", "Microsoft", "Edge", "Application", "msedge.exe"),
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+  const found = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+  if (!found) throw new Error("no Chromium-compatible browser found; set CHROMIUM_PATH");
+  return found;
+}
 
 function freePort() {
   return new Promise((resolve) => {
@@ -36,7 +55,7 @@ test.before(async () => {
   await new Promise((resolve) => setTimeout(resolve, 4000));
   browser = await chromium.launch({
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH ?? "/usr/bin/chromium",
+    executablePath: browserExecutable(),
   });
 });
 

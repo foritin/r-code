@@ -1,6 +1,6 @@
 {
   "schema_version": "windows-reliability-verification.v1",
-  "generated_at": "2026-08-25T18:39:58.690Z",
+  "generated_at": "2026-08-31T15:05:58.808Z",
   "mode": {
     "kind": "through",
     "id": "M4",
@@ -20,9 +20,9 @@
     "profile": "implementation"
   },
   "revision": {
-    "git_revision": "69ab1637c1ea346e0241a52ba4d939626dce9958",
-    "branch": "feat/windows-command-reliability",
-    "worktree_digest": "14da11957bc47db4c62b0be51a8524928f2260e8b8ffd1df474c2b1ce5ce3b5c"
+    "git_revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+    "branch": "main",
+    "worktree_digest": "a8089ab7372b84d1042b74fc7f1c6493b7d0a9f97a6d8c4cc1d61a0b45ebf575"
   },
   "corpus_schema_version": "command-corpus.v1",
   "platform": {
@@ -57,8 +57,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 1854,
-      "output_sha256": "f34a3c6750e0f5e0363a9e71778cd5cdd9fa3afbfc52a3e57ed1adb7b08a6818",
+      "duration_ms": 1424,
+      "output_sha256": "90dadf6afb5b98e8d4d441fc15c5de69cfcd36578900fe0b398b109e03f4fa60",
       "failure_excerpt": null
     },
     {
@@ -78,7 +78,7 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 51,
+      "duration_ms": 45,
       "output_sha256": "48322b663cb635a4ebe6ceb7055331233e6ce0dc11727379f800b3311afa30ae",
       "failure_excerpt": null
     },
@@ -107,8 +107,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 5455,
-      "output_sha256": "9e286dfc5932fe29c52269f6b5e8657eeb915d3395b0f328d0540c175d90132c",
+      "duration_ms": 2676,
+      "output_sha256": "425aeb6d7dc608f51764206f4f02f6c18cb71593522f3d43eeedc19fe7509b9a",
       "failure_excerpt": null
     },
     {
@@ -134,7 +134,7 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 59,
+      "duration_ms": 49,
       "output_sha256": "3b232924fc08c8d06a88a8b2cc901ec2de9e0bcecafbec0c92b113d8fbe4d8e4",
       "failure_excerpt": null
     },
@@ -155,7 +155,7 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 61,
+      "duration_ms": 58,
       "output_sha256": "1347266466e78ec8308ccdcea379a0ea6e8c3095297e16e36f6d4f2ad35e0d95",
       "failure_excerpt": null
     },
@@ -179,8 +179,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 1353,
-      "output_sha256": "11e3a85dd5b3eae91ccb7c3f16f815d62da1cab8a34abe81680e35fb818729e2",
+      "duration_ms": 307,
+      "output_sha256": "68b08690b07000b8d52db73c948159413e4d8f08a8abe859f9a7e5c06dfa3c0e",
       "failure_excerpt": null
     },
     {
@@ -203,8 +203,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 346,
-      "output_sha256": "78156fbebb0b4c19e473a0ade7898cb26cd7d5240a29afa379bf425844f3c391",
+      "duration_ms": 279,
+      "output_sha256": "cc4040ad1f929bf1830a6af46891edceb831b1378250ae38f2aaa683005d73d8",
       "failure_excerpt": null
     },
     {
@@ -232,8 +232,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 3471,
-      "output_sha256": "87e92383a7009c323e83aa08d8909cadacd80cefe6734600b57a92fa845da7a3",
+      "duration_ms": 2658,
+      "output_sha256": "8f87f40906c4462c74da655da57a015a47a5ac8270e715e2a1c0369e6de61277",
       "failure_excerpt": null
     },
     {
@@ -256,8 +256,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 393,
-      "output_sha256": "71077bef369b4175f751ecb7ca95451c66954323a5a9a3cad4eff91444ce4ca7",
+      "duration_ms": 346,
+      "output_sha256": "b199e3e7a923f59d202a99d200221fb6971ad576e096fe3e22c051437b69fcdc",
       "failure_excerpt": null
     },
     {
@@ -280,8 +280,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 352,
-      "output_sha256": "9ce3baf38a99891676c3ba287a4563589874336ed77af48b0c311bd333ba7007",
+      "duration_ms": 311,
+      "output_sha256": "95b6904b140801a56400b6906210a7325343fef89b11cd1d5680e2bce262df41",
       "failure_excerpt": null
     },
     {
@@ -304,8 +304,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 318,
-      "output_sha256": "f2866c9d059939d63060da8e7eeba2bcfd20f6ce1610060f71ed9f2409433cae",
+      "duration_ms": 291,
+      "output_sha256": "87893e98f47b9b658f3b7c391d2023c6341e486a057624ef0eb1ffcb88d196d0",
       "failure_excerpt": null
     },
     {
@@ -333,8 +333,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 3452,
-      "output_sha256": "cad035c50996cc491f2c0d85a7f931d236f2a97921136a8e7777260aaf54ea9e",
+      "duration_ms": 2733,
+      "output_sha256": "76a56f3824791cd0b6e3f75e42c837ed0581490b4e7854e7f015c439d6a675b9",
       "failure_excerpt": null
     },
     {
@@ -357,8 +357,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 433,
-      "output_sha256": "2989b8527ca7ba6133410755507f02ad20ca9a2d73259ebd019df50ba063f5cf",
+      "duration_ms": 423,
+      "output_sha256": "4efd9611be45b5aae90215d1863999eecfa3467e6963c0a074b4689bf57d5de3",
       "failure_excerpt": null
     },
     {
@@ -383,8 +383,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 30071,
-      "output_sha256": "cd2cb5d37e0031d19f8d3e0db3fa27f1fd556052250e192784584958e0c37fb5",
+      "duration_ms": 8492,
+      "output_sha256": "48637b9c5189c0c6cce9c5615abf40b1bc0fce8386c83582193e41130ed14c54",
       "failure_excerpt": null
     },
     {
@@ -407,8 +407,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 2482,
-      "output_sha256": "a90df34839980e333ad87ea7e13566b6a3dfd982d640249210762f90fb974ea1",
+      "duration_ms": 407,
+      "output_sha256": "9a206b13ccd2d6498f0634c85635303e94ebd9cf960e6bc53766bf787bac7051",
       "failure_excerpt": null
     },
     {
@@ -428,7 +428,7 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 255,
+      "duration_ms": 162,
       "output_sha256": "0d845c68aa12b5d63b0847ef02054e99ebd913c6e7428cf1e0613c0ba52d2c0d",
       "failure_excerpt": null
     },
@@ -452,8 +452,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 468,
-      "output_sha256": "2b08640a2bb64bc550b634f10506613b4e804e992d646c028b2e666ecc49df2c",
+      "duration_ms": 286,
+      "output_sha256": "3247b44f5608175cbbcf8e7905af04a1160fefe021ea72b3d7a1336b0e76d1da",
       "failure_excerpt": null
     },
     {
@@ -476,8 +476,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 398,
-      "output_sha256": "595507b7baa25768e49a24a5aee26edd5fe504c1b4b03cf9ef047208e85f11ae",
+      "duration_ms": 286,
+      "output_sha256": "17a899dd9dc5608e49b1a9a9c9668f84ba22052a1a58ec182775649e657fa469",
       "failure_excerpt": null
     },
     {
@@ -500,8 +500,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 996,
-      "output_sha256": "3ecf41f60d4dbc14239ce86cc3eac410a419954cf564d8691d149e124e8be9d8",
+      "duration_ms": 714,
+      "output_sha256": "a8c0af2cdc984854698d60a4fce014709b35793a6d7325a2b94ea66784a94e46",
       "failure_excerpt": null
     },
     {
@@ -524,8 +524,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 425,
-      "output_sha256": "2396466287af4c61875f6d569077db83d1e7561d9a9e0bb43b682e0d24e9f485",
+      "duration_ms": 290,
+      "output_sha256": "c370da6dedc51a036fc6ffff71763a7bee9da370e5427c94e9b89075db2cbee8",
       "failure_excerpt": null
     },
     {
@@ -548,8 +548,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 938,
-      "output_sha256": "1538614a0e0642a4417da7848a44afa36417c6d9f1a91496ea7f207c838015bd",
+      "duration_ms": 695,
+      "output_sha256": "22914a96f565b0e23bb87efb69bfeabe38fcae753590707c6e154a9d5761eb79",
       "failure_excerpt": null
     },
     {
@@ -572,8 +572,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 1098,
-      "output_sha256": "638b97b3fb3371c55c3365ad7e946276d9e7668a580a2ae29f8945a15d717d6b",
+      "duration_ms": 712,
+      "output_sha256": "952a0772f2b15efe795a5e81257bb48c72f900e45afcadd9de667bce2be2be00",
       "failure_excerpt": null
     },
     {
@@ -596,8 +596,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 1039,
-      "output_sha256": "8404d24a5f68dbfe5b3434c1fd2084ec4f9e0248eff81a609bf5b61dbea19239",
+      "duration_ms": 707,
+      "output_sha256": "e2f8b5d3f69b6a7c4352fb8ec765732e8293dc9138e82428940fa7d3bf8d58a1",
       "failure_excerpt": null
     },
     {
@@ -620,8 +620,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 7481,
-      "output_sha256": "1a457aa5d0580f9f57141500db969f32967bcbdfe5d8f166dcc2fc2d76b2c01b",
+      "duration_ms": 362,
+      "output_sha256": "bff98e1d2f58c95be8227a6bd1aa071ecf9b3639e645b0250412605163eb792b",
       "failure_excerpt": null
     },
     {
@@ -644,8 +644,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 922,
-      "output_sha256": "0c470073f2b8242b440d3dbfb84cdc7858274dd1a58fa45817a20670264c7466",
+      "duration_ms": 718,
+      "output_sha256": "89cb66383a81ecb10cd2755c3ecc3273878624c9e7c05f36ac9eca6059a0f841",
       "failure_excerpt": null
     },
     {
@@ -668,8 +668,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 788,
-      "output_sha256": "297f36c531510f2f1c132371792e0a44a17d94113bc029b3e312703c6f537ff6",
+      "duration_ms": 694,
+      "output_sha256": "2b538bded890462d06e1d337f44ab54fab8bbb38f3cdd50bca4fdb118fb4fe2c",
       "failure_excerpt": null
     },
     {
@@ -692,8 +692,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 355,
-      "output_sha256": "35e4fd6e7460af47eb6b35594d206253949fae3cb3e25a6575d0baba47790af4",
+      "duration_ms": 293,
+      "output_sha256": "614175831c4dc5d3530b45aa92ce522fad2ef0dcc80dc4767d13d23a2d750feb",
       "failure_excerpt": null
     },
     {
@@ -716,8 +716,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 353,
-      "output_sha256": "6d3a34d3705d6e93912edaae5d6b1fed25c8eb8a20e60bf517f306bda50f0b96",
+      "duration_ms": 279,
+      "output_sha256": "9c40273aab0b73ca21b9c9477081a472b7764e7a50a119e3737a3fb937a0799e",
       "failure_excerpt": null
     },
     {
@@ -740,8 +740,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 355,
-      "output_sha256": "bf16fb045ce7071e41305c2b4e34407d943f549ffba29c92fda5756122067aaf",
+      "duration_ms": 294,
+      "output_sha256": "e5ed75cc6c1b502f68a879d30d26af41d601a993f2fc95eb8e4012ed967ead28",
       "failure_excerpt": null
     },
     {
@@ -767,8 +767,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 9812,
-      "output_sha256": "72b4a22ab4c47ca45da793923b43a2bbae60a68ddf25b6172967a888b0de31b8",
+      "duration_ms": 8062,
+      "output_sha256": "9ceeccf603eb62b9ee07387a392969e884abbadb9f93f8254babe312832aea25",
       "failure_excerpt": null
     },
     {
@@ -788,8 +788,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 67,
-      "output_sha256": "579dad01c63a8675715bf560cd9c911801ea0ffe379c4d78a3e101c39f3ea30c",
+      "duration_ms": 43,
+      "output_sha256": "2ae22de6001cf05e83afbdafde83d97424623de35ea709c3382966114a832fab",
       "failure_excerpt": null
     },
     {
@@ -810,8 +810,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 366,
-      "output_sha256": "631aabfd61e1e1184244b3b59fd80a26f6749580d19ee005919f0a9200583f5c",
+      "duration_ms": 335,
+      "output_sha256": "aa838210f114d25f6815bd4cda807b0d6d051b88fa3a7ceee506739e41c4abb3",
       "failure_excerpt": null
     },
     {
@@ -834,8 +834,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 735,
-      "output_sha256": "509e31905430c27fe7afb5f7f782556ae13917a2dfcc933bad5a0b10eae3a502",
+      "duration_ms": 712,
+      "output_sha256": "0ca3df02a80a521e802b8145b8733870b31f1795ab8718b49b8830fbbe9b35ed",
       "failure_excerpt": null
     },
     {
@@ -856,8 +856,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 3690,
-      "output_sha256": "4d21b667b7311ddd0a5097d74827cbfff9be50b103fc26a0e208a45518fd34c4",
+      "duration_ms": 3200,
+      "output_sha256": "331da16439bb6cf63a5d48fc75ba061e137101c4b116cd493bad3511768dae02",
       "failure_excerpt": null
     },
     {
@@ -877,7 +877,7 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 64,
+      "duration_ms": 47,
       "output_sha256": "cf627d61eac3591884f9be19e4f02a71117cc11c9b99736308e66b88f61692d7",
       "failure_excerpt": null
     }

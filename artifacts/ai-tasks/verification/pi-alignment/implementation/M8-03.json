@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M8-03",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:53:47.045Z",
+  "started_at": "2026-08-31T11:53:45.062Z",
+  "finished_at": "2026-08-31T11:53:47.045Z",
+  "duration_ms": 1983,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "26f23db64cb7e70107bbf7a969d4687413e4d1b97de2645eb15adb7239a25600",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M8-03.A1",
+      "description": "IME 候选窗定位 + 焦点传播（假光标坐标计算 + 焦点容器树）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib -- ime::",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib -- ime::",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M8-03"
+    },
+    {
+      "id": "M8-03.A2",
+      "description": "fullscreen/regular 切换（双态布局 + 状态机）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib -- fullscreen::",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib -- fullscreen::",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M8-03"
+    },
+    {
+      "id": "M8-03.A3",
+      "description": "!command 输出与工具输出区分（OSC 133 语义等价的分区标记）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib -- bang_command::",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib -- bang_command::",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M8-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M8-03",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M8-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

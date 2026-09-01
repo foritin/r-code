@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T06:53:15.045Z",
+  "started_at": "2026-08-31T06:53:13.216Z",
+  "finished_at": "2026-08-31T06:53:15.045Z",
+  "duration_ms": 1829,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "28aaf9f67d0e92c316544806cb4ffb5a170c9c9972f31b96b57690dec50bcd93",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-01.A1",
+      "description": "两级扫描正确：global + project、就近覆盖、稳定排序",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- skill_resources::tests::two_level_scan_with_project_override skill_resources::tests::directory_conventions",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- skill_resources::tests::two_level_scan_with_project_override skill_resources::tests::directory_conventions",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-01"
+    },
+    {
+      "id": "M4-01.A2",
+      "description": "frontmatter 解析正确（平铺 + 多行块 + 坏文件）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- skill_resources::tests::frontmatter_parsing skill_resources::tests::broken_files_are_skipped_silently",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- skill_resources::tests::frontmatter_parsing skill_resources::tests::broken_files_are_skipped_silently",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-01"
+    },
+    {
+      "id": "M4-01.A3",
+      "description": "与 .agents/skills 语义统一（同一解析器消费构建期资产）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-host --lib -- skill_resources::tests::agents_skills_frontmatter_is_parseable",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-host --lib -- skill_resources::tests::agents_skills_frontmatter_is_parseable",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M4-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M4-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

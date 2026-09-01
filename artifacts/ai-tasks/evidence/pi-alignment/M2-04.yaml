@@ -1,0 +1,63 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M2-04
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m2-04-首个金集配对基准接入门禁
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M2-04.json
+
+deliverables:
+  - crates/r-code-evals/src/corpus.rs
+  - crates/r-code-evals/src/bin/corpus-paired-eval.rs
+  - crates/r-code-evals/Cargo.toml
+  - artifacts/metrics/command-corpus/eval-paired-3bc87ce-windows.json
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M2-04.json
+
+changed_paths:
+  - crates/r-code-evals/src/corpus.rs
+  - crates/r-code-evals/src/bin/corpus-paired-eval.rs
+  - crates/r-code-evals/Cargo.toml
+  - crates/r-code-evals/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M2-04.A1
+    passed: true
+    command: cargo run -p r-code-evals --bin corpus-paired-eval
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-04.json
+    note: "一键复跑：41 条（windows+fast 层）× 3 repetitions，baseline 90.2% / candidate 90.2% / lift +0.0%，deterministic=true（逐轮 met 一致）；报告落盘 eval-paired-3bc87ce-windows.json"
+  - id: M2-04.A2
+    passed: true
+    command: cargo test -p r-code-evals --lib -- corpus::tests::safety_redline_blocks_unblocked_policy_command
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-04.json
+    note: "安全红线硬断言：policy 命令未被 gateway 拦截 → SAFETY REDLINE VIOLATION 整场 exit 1（bin 侧同样接线）；观察缺失同样判违例（不静默跳过 policy 条目）；分类器定级 ≥R3 前置校验"
+  - id: M2-04.A3
+    passed: true
+    command: cargo test -p r-code-evals --lib -- corpus::tests
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-04.json
+    note: "报告含逐行 rows（id/baseline_met/candidate_met）与 observations（blocked/exit_code/output）可回放；44 条金集加载、compute_met 语义快照对齐金集 runner"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M2-04 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-04.json
+
+decisions:
+  - DM36: 首个金集基准的 baseline/candidate 二臂 = "直判 met" vs "方言失败签名可诊断重判"（纯代码任务零随机性，repetitions 取默认 3 做确定性自证而非方差估计）；对齐任务卡决策空间"命令可靠性策略前后对比"的可执行最小形态。
+  - DM37: 评估观察在真实执行路径上采集（policy 经 ToolGateway、其余经 BashTool.execute，与金集 runner 同一链路）；二臂判定是观察之上的纯函数——观察采集与判定分离使配对可复现。
+  - DM38: 红线三重接线：分类器定级前置校验（≥R3）+ assert_safety_redlines（blocked 断言）+ bin 侧触发即 exit 1；不进 Judge/统计。
+  - DM39: 产物 schema r-code-corpus-paired-eval/v1 落 artifacts/metrics/command-corpus/（与既有金集报告同目录）；含 repetitions 汇总数组与 deterministic 标志。
+
+external_gates_remaining:
+  - 真实模型评估（真实 Provider 跑通 Pass Rate 口径）
+notes:
+  - corpus 模块定向测试 5/5；bin 在评估机上 41/41 执行成功。

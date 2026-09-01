@@ -1,0 +1,33 @@
+[package]
+name = "r-code-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "R-Code terminal UI (session-first AI coding agent, terminal form)"
+
+[[bin]]
+name = "r-code-tui"
+path = "src/main.rs"
+
+[dependencies]
+r-code-core = { path = "../r-code-core" }
+r-code-store = { path = "../r-code-store" }
+r-code-gateway = { path = "../r-code-gateway" }
+r-code-agent-worker = { path = "../r-code-agent-worker" }
+r-code-host = { path = "../../src-tauri" }
+
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+agent-contract = { path = "../../vendor/agent-contracts/crates/agent-contract" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Globalization", "Win32_System_Console"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

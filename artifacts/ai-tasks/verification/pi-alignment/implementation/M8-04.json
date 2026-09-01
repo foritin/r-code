@@ -1,0 +1,63 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M8-04",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:59:56.633Z",
+  "started_at": "2026-08-31T11:59:42.378Z",
+  "finished_at": "2026-08-31T11:59:56.633Z",
+  "duration_ms": 14255,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "ebb423aafa3293c803b09cc69c1ce14933acfd615e71c39ba420fc9e7a757ccf",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M8-04.A1",
+      "description": "externalBin 声明 r-code-tui（tauri.conf.json + bin 产物存在）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "declared": true,
+        "declaredTui": true,
+        "build": 0
+      },
+      "task": "M8-04"
+    },
+    {
+      "id": "M8-04.A2",
+      "description": "分平台 PATH 接入 + 卸载清理（NSIS POSTINSTALL/POSTUNINSTALL 钩子）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "pathWrite": true,
+        "cleanup": true
+      },
+      "task": "M8-04"
+    },
+    {
+      "id": "M8-04.A3",
+      "description": "PATH 失败降级不阻断安装（NSIS 钩子非致命语义）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "nonFatal": true,
+        "noAbortOnPath": true
+      },
+      "task": "M8-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M8-04",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M8-04.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

@@ -77,7 +77,11 @@ test("companion is a separate native-window entry with a narrow capability", () 
   assert.match(rustMain, /cmd_companion_ensure/);
   assert.match(rustMain, /is_companion_window/);
   assert.match(rustMain, /RunEvent::Reopen/);
-  assert.match(rustMain, /_window\.app_handle\(\)\.exit\(0\)/);
+  // 关闭决策的 Quit 路径必须真正终止进程：Windows 走统一生命周期动作（内部
+  // app.exit(0)），非 Windows 直接退出。原链式 `_window.app_handle().exit(0)`
+  // 已随 close-gate 生命周期重构拆开。
+  assert.match(rustMain, /WindowsLifecycleAction::Quit/);
+  assert.match(rustMain, /app\.exit\(0\)/);
   assert.deepEqual(capability.windows, ["companion"]);
   assert.ok(capability.permissions.includes("core:window:allow-start-dragging"));
   assert.ok(capability.permissions.includes("core:menu:allow-popup"));

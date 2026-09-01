@@ -17,6 +17,7 @@
 pub mod agent_loop;
 pub mod cache_shape;
 mod checkpoint;
+pub mod deferred_tools;
 mod delegation_tree;
 pub mod llm_runtime;
 pub mod mock_runtime;

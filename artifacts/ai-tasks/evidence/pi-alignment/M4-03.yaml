@@ -1,0 +1,53 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M4-03
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m4-03-extension-事件面与工具注册
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M4-03.json
+
+deliverables:
+  - src-tauri/src/extensions.rs
+  - crates/r-code-gateway/src/lib.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M4-03.json
+changed_paths:
+  - src-tauri/src/extensions.rs
+  - src-tauri/src/lib.rs
+  - crates/r-code-gateway/src/lib.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M4-03.A1
+    passed: true
+    command: cargo test -p r-code-host --lib -- extensions::tests::lifecycle_events_derive_and_dispatch
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-03.json
+    note: "四生命周期钩子（SessionStart/ToolBefore/ToolAfter/AgentSettled）从 AgentEvent 派生分发；不可派生变体静默不分发"
+  - id: M4-03.A2
+    passed: true
+    command: cargo test -p r-code-host --lib -- extensions::tests::extension_tools_register_through_gateway
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-03.json
+    note: "register_tool 经 register_guarded 同源入口；EffectGuard 生命周期（持有即注册、drop 即注销）；同名冲突拒绝；注册后进同一 tool_specs 模型可见目录"
+  - id: M4-03.A3
+    passed: true
+    command: cargo test -p r-code-host --lib -- extensions::tests::extension_tools_go_through_approval_matrix
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-03.json
+    note: "R3 扩展工具在未授权引擎上 execute_call 返回权限错误（审批矩阵拦截直连）；sudo 分类恒 R4 不因扩展注册改变"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M4-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M4-03.json
+
+decisions:
+  - DM58: 事件面从 AgentEvent 派生而非新事件源（PRD 决策空间）；生命周期锚点 = Activity{Requesting}/ToolCall/ToolResult/State{Idle|ReviewReady}（TaskEventType 的 RunStarted 在 task 事件流，不在 AgentEvent 订阅面）。
+  - DM59: register_tool 返回 EffectGuard 由调用方持有——guarded 注册的 scope 语义（drop 即注销）正好承载扩展卸载；同名冲突返回 None（无劫持通道）。
+  - DM60: 安全负向落在"未授权引擎上执行 R3 扩展工具必须 Err"——审批矩阵是唯一执行通路的设计本身杜绝绕过。
+external_gates_remaining: []

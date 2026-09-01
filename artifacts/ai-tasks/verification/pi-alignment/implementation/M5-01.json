@@ -1,0 +1,63 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M5-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T11:27:10.136Z",
+  "started_at": "2026-08-31T11:27:07.850Z",
+  "finished_at": "2026-08-31T11:27:10.136Z",
+  "duration_ms": 2286,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "22f1f40d76effab8193f6f79ab47f8958c232f95916b0f046fd16c63be6f0a85",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M5-01.A1",
+      "description": "类型层区分显式（ContextInclusion 穷举归类，与回放行为对齐）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-core --lib -- context_inclusion::tests::every_variant_has_explicit_classification",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-core --lib -- context_inclusion::tests::every_variant_has_explicit_classification",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-01"
+    },
+    {
+      "id": "M5-01.A2",
+      "description": "编译期/单测杜绝纯 UI/审计 entry 误发 LLM",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-core --lib -- context_inclusion::tests::audit_only_entries_never_reach_context",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-core --lib -- context_inclusion::tests::audit_only_entries_never_reach_context",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M5-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M5-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

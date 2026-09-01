@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-01",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T05:54:54.351Z",
+  "started_at": "2026-08-31T05:54:51.268Z",
+  "finished_at": "2026-08-31T05:54:54.351Z",
+  "duration_ms": 3083,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "964e1aff47a41fae314b33b1a08b6d269a0454360c721d2527b4980894c9306c",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-01.A1",
+      "description": "Harness 抽象签名完整（name + run -> output/usage/timings/events）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- tests::harness_trait_surface_is_complete",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- tests::harness_trait_surface_is_complete",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-01"
+    },
+    {
+      "id": "M2-01.A2",
+      "description": "隔离 workspace + thinkingLevel off + 同源工厂（端到端 mock run）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- tests::end_to_end_mock_run_settles_with_events_and_thinking_off tests::eval_config_is_empty",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- tests::end_to_end_mock_run_settles_with_events_and_thinking_off tests::eval_config_is_empty",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-01"
+    },
+    {
+      "id": "M2-01.A3",
+      "description": "隔离检查硬断言触发即 throw（MCP 加载/目录逃逸/provider 泄漏 fail-closed）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- tests::isolation_checks_fail_closed",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- tests::isolation_checks_fail_closed",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-01",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M2-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

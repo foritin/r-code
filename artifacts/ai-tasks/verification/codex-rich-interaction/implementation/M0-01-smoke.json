@@ -1,6 +1,6 @@
 {
   "schema_version": "codex-interaction-verification.v1",
-  "generated_at": "2026-08-27T12:19:02.098Z",
+  "generated_at": "2026-08-31T15:06:04.706Z",
   "mode": {
     "kind": "task",
     "id": "M0-01-smoke",
@@ -10,21 +10,21 @@
     "profile": "implementation"
   },
   "revision": {
-    "git_revision": "82c8c5c6f04b0f646f694e9929017eb527432e2b",
+    "git_revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
     "branch": "main",
-    "worktree_digest": "1112584f5fbf29a0a518bb79893f9936fc922b7eeb35a0968c5c260f93284fbc"
+    "worktree_digest": "a8089ab7372b84d1042b74fc7f1c6493b7d0a9f97a6d8c4cc1d61a0b45ebf575"
   },
   "fixture_schema_version": "0.145.0",
   "platform": {
-    "node": "v24.16.0",
-    "os": "linux",
+    "node": "v24.9.0",
+    "os": "win32",
     "arch": "x64"
   },
-  "exit_code": 1,
+  "exit_code": 0,
   "summary": {
     "total": 2,
-    "passed": 1,
-    "failed": 1,
+    "passed": 2,
+    "failed": 0,
     "not_implemented": 0,
     "external_pending": 0
   },
@@ -52,8 +52,8 @@
       "status": "passed",
       "passed": true,
       "exit_code": 0,
-      "duration_ms": 3277,
-      "output_sha256": "3583b92311359705ea65e94586b24724fc8b32406cf8176a1cdccdf5e4f3e27f",
+      "duration_ms": 714,
+      "output_sha256": "fd495b9969fee6182c8a71d804f082f10228c129a82045c161c75aedb14b2412",
       "failure_excerpt": null
     },
     {
@@ -67,16 +67,16 @@
       "note": "前端编排冒烟：node:test 子集",
       "evidence_path": null,
       "command": [
-        "/root/.nvm/versions/node/v24.16.0/bin/node",
+        "C:\\Program Files\\nodejs\\node.exe",
         "scripts/run-tests.mjs",
         "usage-label.test.mjs"
       ],
-      "status": "failed",
-      "passed": false,
-      "exit_code": 1,
-      "duration_ms": 548,
-      "output_sha256": "01750c87ad89f371b04e74620fd6a878754c2fd795f035cfcf8fb5d8a34e3c3a",
-      "failure_excerpt": "═══════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/usage-label.test.mjs:82:28) {\n    name: 'Error'\n  }\n\ntest at scripts/usage-label.test.mjs:152:1\n✖ runStreamRetriesLabel shows retry count only when replays happened (0.058247ms)\n  browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium_headless_shell-1181/chrome-linux/headless_shell\n  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║ Looks like Playwright Test or Playwright was just installed or updated. ║\n  ║ Please run the following command to download new browsers:              ║\n  ║                                                                         ║\n  ║     npx playwright install                                              ║\n  ║                                                                         ║\n  ║ <3 Playwright Team                                                      ║\n  ╚═════════════════════════════════════════════════════════════════════════╝\n      at TestContext.<anonymous> (/root/project/r-code/src-tauri/frontend/scripts/usage-label.test.mjs:82:28) {\n    name: 'Error'\n  }"
+      "status": "passed",
+      "passed": true,
+      "exit_code": 0,
+      "duration_ms": 3654,
+      "output_sha256": "bf47d91e22ab4a628df95b7419799bbfbbe24da46c03ad01c94c3349f69f4bb8",
+      "failure_excerpt": null
     }
   ],
   "evidence_index": {

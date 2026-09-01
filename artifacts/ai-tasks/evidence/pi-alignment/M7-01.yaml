@@ -1,0 +1,47 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M7-01
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m7-01-commandexecutionbackend-trait
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M7-01.json
+
+deliverables:
+  - crates/r-code-gateway/src/execution_backend.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M7-01.json
+changed_paths:
+  - crates/r-code-gateway/src/execution_backend.rs
+  - crates/r-code-gateway/src/lib.rs
+  - crates/r-code-gateway/src/tools_command.rs
+  - scripts/verify-r-code-alignment.mjs
+assertions:
+  - id: M7-01.A1
+    passed: true
+    command: cargo test -p r-code-gateway --lib -- execution_backend::tests::local_backend_runs_through_five_tier_chain execution_backend::tests::missing_cwd_is_rejected
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M7-01.json
+    note: "trait = backend_id/spawn/collect；LocalShellBackend 默认实现经 plan_shell 五级链执行（与 BashTool 同一解析与 spawn 语义）"
+  - id: M7-01.A2
+    passed: true
+    command: cargo test -p r-code-gateway --lib -- execution_backend::tests::timeout_kills_process_tree execution_backend::tests::abort_flag_terminates_command
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M7-01.json
+    note: "超时/中止都走 kill_tree（进程组）；既有 BashTool 路径不经过本抽象（未启用零行为变化），金集门禁在 M7 累计验证复核"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M7-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M7-01.json
+
+decisions:
+  - DM49: backend 只负责"怎么执行"，"能不能执行"永远在 ToolGateway 审批——trait 文档与实现都不触碰审批矩阵（M7-02 安全负向的前置）。
+  - DM50: LocalShellBackend 复用 tools_command::plan_shell（pub(crate) 化，行为零变化）；BashTool 主路径不改道——Docker 后端接入时再切抽象层。
+  - DM51: collect 轮询 try_wait + 25ms 中止检查（复用 BashTool 的轮询模式而非 select! 重构，降低行为漂移面）。
+external_gates_remaining: []
+

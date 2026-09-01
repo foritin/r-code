@@ -1,0 +1,88 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M1-03
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m1-03-modelavailability-三态快照与设置页暴露
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M1-03.json
+
+deliverables:
+  - src-tauri/src/model_availability.rs
+  - crates/r-code-core/src/dto.rs
+  - src-tauri/src/tauri_commands.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/main.rs
+  - src-tauri/src/lib.rs
+  - src-tauri/frontend/src/lib/model-availability.ts
+  - src-tauri/frontend/src/lib/provider.ts
+  - src-tauri/frontend/src/lib/ipc.ts
+  - src-tauri/frontend/src/lib/types.ts
+  - src-tauri/frontend/src/lib/mock-data.ts
+  - src-tauri/frontend/src/lib/browser-mock-runtime.ts
+  - src-tauri/frontend/src/components/scenes/SettingsScene.tsx
+  - src-tauri/frontend/src/styles/scenes/misc.css
+  - src-tauri/frontend/scripts/m1-03-model-availability.test.mjs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M1-03.json
+
+changed_paths:
+  - src-tauri/src/model_availability.rs
+  - crates/r-code-core/src/dto.rs
+  - src-tauri/src/tauri_commands.rs
+  - src-tauri/src/commands.rs
+  - src-tauri/src/main.rs
+  - src-tauri/src/lib.rs
+  - src-tauri/frontend/src/lib/model-availability.ts
+  - src-tauri/frontend/src/lib/provider.ts
+  - src-tauri/frontend/src/lib/ipc.ts
+  - src-tauri/frontend/src/lib/types.ts
+  - src-tauri/frontend/src/lib/mock-data.ts
+  - src-tauri/frontend/src/lib/browser-mock-runtime.ts
+  - src-tauri/frontend/src/components/scenes/SettingsScene.tsx
+  - src-tauri/frontend/src/styles/scenes/misc.css
+  - src-tauri/frontend/scripts/m1-03-model-availability.test.mjs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M1-03.A1
+    passed: true
+    command: cargo test -p r-code-host --lib -- model_availability::tests::snapshot_three_state_structure model_availability::tests::composition_failures_are_diagnosed model_availability::tests::decls_file_level_error_is_surfaced
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-03.json
+    note: "all ⊇ available 结构、composition_errors（协议 slug 非法/base_url 未解析/无模型）与声明文件级错误各有单测；快照序列化字段（all/available/composition_errors/has_auth/source）合同验证"
+  - id: M1-03.A2
+    passed: true
+    command: node scripts/verify-r-code-alignment.mjs --task M1-03 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-03.json
+    note: "单测：配置解析但缺鉴权（$ENV 未设）→ 在 all 不在 available；CLI e2e：同一声明无密钥不列出、设密钥后列出（r-code-host list-models 只列 available）"
+  - id: M1-03.A3
+    passed: true
+    command: cd src-tauri/frontend && node --test scripts/m1-03-model-availability.test.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-03.json
+    note: "模型选择面（provider.ts 快照）只渲染 available，快照未覆盖（旧后端 null）不臆造过滤；SettingsScene providers 面板 composition-diagnostics <details> 可展开诊断；npx tsc --noEmit 0 错误；既有 m2-03-a2-provider-snapshot e2e 不受影响"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M1-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M1-03.json
+
+decisions:
+  - DM16: 快照 DTO（ModelAvailabilitySnapshot/Entry/CompositionError）落 r-code-core dto.rs（IPC 合同单一来源）；构建逻辑落 src-tauri model_availability.rs（消费 provider_catalog + provider_decl + settings 凭据后端）。
+  - DM17: "设置页只展示 available"落在模型选择面（provider.ts 共享快照 → Home/Room/Composer 选择器）而非 provider 名册——设置页名册是修配置的地方，隐藏缺鉴权服务会让它无法修复；缺鉴权/组装失败经由可展开诊断区（<details className=composition-diagnostics>）呈现。
+  - DM18: 过滤纯逻辑独立成 lib/model-availability.ts（零副作用、只依赖 types），node --test 按 provider-health.ts 模式直接转译加载；快照未覆盖的 provider 保持展示（缺数据不静默清空选择面）。
+  - DM19: 前一会话中断于 provider.ts 编辑中途（availableProviders/coveredProviders 已声明未使用、choices 未过滤）；本会话接管后抽出纯模块补完过滤并接通 SettingsScene 诊断区（跨会话续跑，§0.2）。
+  - DM20: M1-03 把 list-models 改为只列 available 后，M1-02.A1 的 CLI 断言（无密钥也列出）与新语义冲突——spawnRaw 增加 env 注入，A1 改为设密钥必须列出（加强而非放宽），并用 --assertions M1-02.A1 定向复跑合并报告 3/3。
+  - DM21: 用户 WIP（write_codex_app_server_fixture 跨平台化）使 run_codex_app_server_process 在非测试构建成为 dead_code（lib 构建告警）——补 #[cfg(test)] 门控（保留其跨平台测试意图，生产路径 _with_images* 不受影响），非回滚用户资产。
+
+external_gates_remaining: []
+notes:
+  - 定向测试：model_availability 4 单测 + m1-03 前端 4 测 + tsc 0 错误 + m2-03-a2 e2e 1/1。
+  - 浏览器演示夹具：mock-data.ts 增 relay-nokey（进 all 不进 available）+ 一条声明级组装错误，诊断区有可展开演示内容。
+  - 诊断区新增 2 条 zh-first 文案使 i18n-hardcoded 基线（SettingsScene 509→511）漂移，按既有 --print-baseline 机制重生成（同 M0-02 DM8 先例）；全量前端 305/318，失败全部落在已知外部归因白名单内（app-shell 6≤10、companion 4≤4）。

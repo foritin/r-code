@@ -1,0 +1,80 @@
+{
+  "schema_version": "r-code-alignment-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-02",
+  "profile": "implementation",
+  "generated_at": "2026-08-31T05:54:40.284Z",
+  "started_at": "2026-08-31T05:54:38.369Z",
+  "finished_at": "2026-08-31T05:54:40.284Z",
+  "duration_ms": 1915,
+  "revision": "3bc87ce87f4d8ee408ada59a076a35ff02ee0a68",
+  "worktree_digest": "964e1aff47a41fae314b33b1a08b6d269a0454360c721d2527b4980894c9306c",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-02.A1",
+      "description": "score 0..1 + rationale + 失败累积",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- judge::tests::verdicts_accumulate_failures",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- judge::tests::verdicts_accumulate_failures",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-02"
+    },
+    {
+      "id": "M2-02.A2",
+      "description": "TestPassJudge 确定性可复现；Focus/Integrity 确定性规则",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- judge::tests::test_pass_judge_is_deterministic judge::tests::focus_judge_flags_out_of_scope_changes judge::tests::integrity_judge_protects_test_files",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- judge::tests::test_pass_judge_is_deterministic judge::tests::focus_judge_flags_out_of_scope_changes judge::tests::integrity_judge_protects_test_files",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-02"
+    },
+    {
+      "id": "M2-02.A3",
+      "description": "LLM Judge 扩展点存在（create_judge 接受任意同签名评分函数）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-evals --lib -- judge::tests::llm_judge_extension_point_signature",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-evals --lib -- judge::tests::llm_judge_extension_point_signature",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M2-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\pi-alignment\\M2-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

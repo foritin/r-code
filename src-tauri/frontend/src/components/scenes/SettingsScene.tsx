@@ -16,6 +16,7 @@ import {
   codexSyncCli,
   companionEnsure,
   logsTail,
+  modelAvailability,
   providerModels,
   settingsDeleteProvider,
   settingsGet,
@@ -39,6 +40,7 @@ import type {
   CodexModelOption,
   HostedWebRoute,
   LogEntry,
+  ModelAvailabilitySnapshot,
   OrchestrationConfig,
   ProviderCategory,
   ProviderConfig,
@@ -48,6 +50,7 @@ import type {
   RunBudgetConfig,
   SupportBundlePreview,
 } from "../../lib/types";
+import { compositionDiagnostics } from "../../lib/model-availability";
 import { clockTime } from "../../lib/format";
 import {
   catalogHostedWebRoutes,
@@ -573,6 +576,9 @@ export function SettingsScene() {
   const [configErr, setConfigErr] = useState<string | null>(null);
   const [validation, setValidation] = useState<string | null>(null);
   const [providerStatus, setProviderStatus] = useState<Record<string, ProviderStatus>>({});
+  // M1-03：三态快照（all/available/composition_errors），设置页诊断区数据源。
+  const [modelAvailabilitySnapshot, setModelAvailabilitySnapshot] =
+    useState<ModelAvailabilitySnapshot | null>(null);
   const [openGuide, setOpenGuide] = useState<GuideId | null>(null);
   // 手册页脚动作请求的跨页定位目标（如诊断页的审计卡）：页签渲染完成后闪烁并聚焦。
   const pendingPaneFocus = useRef<string | null>(null);
@@ -623,6 +629,9 @@ export function SettingsScene() {
     } catch (e) {
       setConfigErr(errText(e));
     }
+    // M1-03：三态快照与配置并行读取；失败（旧后端无此命令）降级为 null——
+    // 诊断区不渲染，不阻断设置页其余功能。
+    setModelAvailabilitySnapshot(await modelAvailability().catch(() => null));
   }, []);
 
   useEffect(() => {
@@ -770,7 +779,7 @@ export function SettingsScene() {
               <div className="settings-sheet">
                 {config ? (
                   <>
-                    <ProviderSection config={config} providerStatus={providerStatus} reload={loadConfig} onOpenGuide={setOpenGuide} />
+                    <ProviderSection config={config} providerStatus={providerStatus} availability={modelAvailabilitySnapshot} reload={loadConfig} onOpenGuide={setOpenGuide} />
                     <ImageUnderstandingSection config={config} providerStatus={providerStatus} reload={loadConfig} onOpenGuide={setOpenGuide} />
                   </>
                 ) : (
@@ -866,11 +875,14 @@ export function SettingsScene() {
 function ProviderSection({
   config,
   providerStatus,
+  availability,
   reload,
   onOpenGuide,
 }: {
   config: AppConfig;
   providerStatus: Record<string, ProviderStatus>;
+  /** M1-03：三态快照；null（旧后端/读取失败）时诊断区不渲染。 */
+  availability: ModelAvailabilitySnapshot | null;
   reload: () => Promise<void>;
   onOpenGuide: (id: GuideId) => void;
 }) {
@@ -1327,6 +1339,23 @@ function ProviderSection({
 
       {err && <div className="errbar" role="alert">{err}</div>}
       {saved && <div className="okbar" role="status">{saved}</div>}
+
+      {/* M1-03：组装失败诊断（composition_errors）可展开；不含密钥材料。 */}
+      {compositionDiagnostics(availability).length > 0 && (
+        <details className="composition-diagnostics">
+          <summary>
+            组装诊断（{compositionDiagnostics(availability).length} 条无法组装的服务声明）
+          </summary>
+          <ul aria-label="模型服务组装失败诊断">
+            {compositionDiagnostics(availability).map((item) => (
+              <li key={`${item.provider}:${item.model ?? ""}`}>
+                <strong>{item.provider}</strong>
+                {item.model ? `（${item.model}）` : ""}：{item.reason}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       <div className="provider-roster" aria-label="已保存的模型服务">
         {names.length === 0 && !drafting ? (

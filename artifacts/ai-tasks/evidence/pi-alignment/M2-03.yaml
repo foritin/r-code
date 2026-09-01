@@ -1,0 +1,60 @@
+schema_version: ai-task-evidence.v1
+project_id: pi-alignment
+task_id: M2-03
+status: passed
+
+source:
+  document: docs/pi-alignment/pi-alignment-and-tui-prd.md
+  refs:
+    - docs/pi-alignment/pi-alignment-and-tui-prd.md#m2-03-evalharnesstable-配对统计
+
+revision:
+  git_revision: 3bc87ce87f4d8ee408ada59a076a35ff02ee0a68
+  worktree_digest: recorded-in-report-M2-03.json
+
+deliverables:
+  - crates/r-code-evals/src/table.rs
+  - artifacts/ai-tasks/verification/pi-alignment/implementation/M2-03.json
+
+changed_paths:
+  - crates/r-code-evals/src/table.rs
+  - scripts/verify-r-code-alignment.mjs
+
+assertions:
+  - id: M2-03.A1
+    passed: true
+    command: cargo test -p r-code-evals --lib -- table::tests::group_key_prefers_id_else_stable_hash
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-03.json
+    note: "groupKey = input.id（trim 后非空优先）否则规范化 JSON（键序稳定+路径分隔符归一）SHA-256；同输入同摘要、异输入异摘要"
+  - id: M2-03.A2
+    passed: true
+    command: cargo test -p r-code-evals --lib -- table::tests::pass_rate_lift_arithmetic
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-03.json
+    note: "2 臂 × 2 输入 × 2 轮 = 8 行；lift = candidate 通过率 − baseline 通过率；4 对配对差值 wall_ms_delta=+20"
+  - id: M2-03.A3
+    passed: true
+    command: cargo test -p r-code-evals --lib -- table::tests::paired_diffs_skip_missing_metrics table::tests::one_sided_usage_skips_token_delta
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-03.json
+    note: "配对差值逐对计算：单侧 usage 缺失 → 该对 token_delta=None（跳过非 0）；cost_usd 缺键同理；两侧都没有 usage 时全部指标跳过"
+  - id: M2-03.A4
+    passed: true
+    command: cargo test -p r-code-evals --lib -- table::tests::five_diagnostics_are_separated
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-03.json
+    note: "五类诊断独立分类：missing/duplicates/harness_errors/unscored/unscorable；harness 错行标 harness_errors（candidate/i1#1）、越界分标 unscorable（baseline/i1#1）不混算，且不进配对"
+
+cumulative_verification:
+  command: node scripts/verify-r-code-alignment.mjs --task M2-03 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/pi-alignment/implementation/M2-03.json
+
+decisions:
+  - DM34: 配对差值三指标 = token_delta（usage 四桶和）/wall_ms_delta（恒有）/cost_usd_delta（M1-04 归因键）；两臂都成功的 (group, repetition) 才成对，单指标缺失跳过（Option 语义）。
+  - DM35: pass 判据 = score >= 1 且 stopReason 收敛（R-EVL-03 固定）；通过率分母 = 各臂成功行数（harness 错行不进分母，避免把基础设施故障伪装成质量下降）。
+
+external_gates_remaining: []
+notes:
+  - 统计逻辑全部纯函数 + BTreeMap 确定性排序，报告可复现。
