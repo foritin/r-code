@@ -113,6 +113,8 @@ impl CommandExecutionBackend for LocalShellBackend {
     ) -> Result<CommandHandle, ProductError> {
         use std::process::Stdio;
         use tokio::process::Command;
+        #[cfg(unix)]
+        use std::os::unix::process::CommandExt;
 
         let plan = crate::tools_command::plan_shell(&spec.command, self.shell_override.as_deref())?;
         let mut cmd = Command::new(plan.program());

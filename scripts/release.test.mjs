@@ -271,6 +271,16 @@ test("development launch and updater stay isolated from production", () => {
   assert.match(manifest, /custom-protocol\s*=\s*\["tauri\/custom-protocol"\]/);
   assert.match(windowsLauncher, /cargo tauri dev --config "src-tauri\/tauri\.dev\.conf\.json"/);
   assert.match(unixLauncher, /cargo tauri dev --config "\$repo_root\/src-tauri\/tauri\.dev\.conf\.json"/);
+
+  // The TUI launchers must pin the Development data-dir (so the terminal UI
+  // reuses the provider/key configured through the dev GUI), never production.
+  const windowsTuiLauncher = fs.readFileSync(path.join(repoRoot, "dev-tui.ps1"), "utf8");
+  const unixTuiLauncher = fs.readFileSync(path.join(repoRoot, "dev-tui.sh"), "utf8");
+  assert.match(windowsTuiLauncher, /com\.r-code\.app\.dev\\r-code/);
+  assert.doesNotMatch(windowsTuiLauncher, /com\.r-code\.app\\r-code(?![.\w])/);
+  assert.match(unixTuiLauncher, /com\.r-code\.app\.dev/);
+  assert.match(unixTuiLauncher, /com\.rcode\.desktop\.dev/);
+  assert.doesNotMatch(unixTuiLauncher, /"com\.r-code\.app"(?!\.dev)/);
 });
 
 test("release workflow falls back per platform while preserving explicit unsigned prereleases", () => {

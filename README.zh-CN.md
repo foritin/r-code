@@ -89,6 +89,31 @@ cargo tauri dev --config src-tauri/tauri.dev.conf.json
 Dev identifier，绝不会打开正式版数据。开发版更新器只读取独立的
 `dev-latest.json` 通道，代码修改仍由 Vite/Tauri 自动热更新。
 
+### 终端界面（TUI）
+
+`r-code-tui` 是独立的终端客户端（ratatui + crossterm），复用同一套宿主编排
+但不启动 WebView，因此只需 Rust 工具链和 `agent-contracts` 子模块——无需前端
+依赖或 Tauri CLI。
+
+```powershell
+# Windows：交互式会话
+./dev-tui.ps1
+
+# 非交互单轮（脚本/管道）
+./dev-tui.ps1 -Print -Message "总结这个文件"
+```
+
+```bash
+# macOS / Linux：交互式会话
+bash ./dev-tui.sh
+
+# 非交互单轮（脚本/管道）
+bash ./dev-tui.sh --print --message "总结这个文件"
+```
+
+两个启动脚本都把 `--data-dir` 指向 dev GUI 的 `R-Code Dev` 命名空间，因此 TUI
+能复用通过 `dev.sh` / `dev.ps1` 配置好的 provider 与密钥。
+
 只手动初始化产品构建所需子模块时：
 
 ```bash

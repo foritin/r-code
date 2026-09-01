@@ -91,6 +91,32 @@ production data. The development updater reads only the separate
 `dev-latest.json` channel; source changes continue to hot reload through
 Vite/Tauri.
 
+### Terminal UI (TUI)
+
+The `r-code-tui` binary is a standalone terminal client (ratatui + crossterm)
+that drives the same host orchestration without a WebView, so it needs only the
+Rust toolchain and the `agent-contracts` submodule — no frontend dependencies or
+Tauri CLI.
+
+```powershell
+# Windows: interactive session
+./dev-tui.ps1
+
+# Single non-interactive turn (script/pipeline)
+./dev-tui.ps1 -Print -Message "summarize this file"
+```
+
+```bash
+# macOS / Linux: interactive session
+bash ./dev-tui.sh
+
+# Single non-interactive turn (script/pipeline)
+bash ./dev-tui.sh --print --message "summarize this file"
+```
+
+Both launchers point `--data-dir` at the dev GUI's `R-Code Dev` namespace, so the
+TUI reuses the provider and keys configured through `dev.sh` / `dev.ps1`.
+
 Initialize only the required product submodule manually with:
 
 ```bash
