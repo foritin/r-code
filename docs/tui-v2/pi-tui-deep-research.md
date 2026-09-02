@@ -187,18 +187,18 @@ settings.json 中与模型/思考直接相关的字段：
 **红线（用户拍板）**：
 - R1 禁止 mock 模式：TUI 装配即 `enable_real_agent_mode()`；无 provider 配置 → 首屏引导（指向桌面设置页或配置文件路径），不降级、不回放演示场景；`push_demo_scenario` 的隐式调用点（`commands.rs:14228`）改为仅显式 `--mock`（评估线路）时可达，或彻底移除交互路径。
 - R2 provider 不可用必须显式报错 + 可操作指引（对齐 pi auth-guidance）。
-- R3（2026-09-02 拍板）产品定位为 **r-code cli**：r-code-tui 即 cli 本体（`--mode tui|print|json` 已具备 cli 的三种形态），可考虑 bin 更名/别名 `r-code`；交互形态 **默认 inline 滚动式（pi regular，claude code 同款语义）+ F10 可切 fullscreen（alt-screen）**，模式记忆对齐 pi `tuiMode` 设置。
+- R3（2026-09-02 拍板）产品定位为 **r-code cli**：r-code-tui 即 cli 本体（`--mode tui|print|json` 已具备 cli 的三种形态），可考虑 bin 更名/别名 `r-code`；交互形态 **默认 inline 滚动式（pi regular，claude code 同款语义）**，**不做独立 fullscreen 模式**——"全屏"语义由 ctrl+t transcript 浮层覆盖（2026-09-02 二次拍板，取代本条早先的 F10 切换方案）。
 
 **里程碑草案**：
 - **M1 真实化**：enable_real_agent_mode + agent_send 错误进 transcript（System 行）+ KeyEventKind 过滤 + 无配置首屏引导。完成后 TUI 第一次"说真话"。
 - **M2 模型/思考三角**：Ctrl+P 循环（读 config.providers 健康集）+ Ctrl+L 模型选择器 overlay + Shift+Tab 思考级别循环（写 `task_set_inference`，per-task 记忆对齐 pi 的 modelThinkingLevels）+ footer 右侧 `(provider) model • thinking`。
 - **M3 footer 完整化**：token/上下文统计（宿主 usage 投影已有数据源）+ 变色阈值 + `(auto)` compaction 标记。
 - **M4 编辑器与键位**：多行 + undo + 词导航 + 粘贴标记 + Ctrl+G 外编 + 键位表（Windows 变体）+ Ctrl+T/Ctrl+O 折叠。
-- **M5 inline 模式（已定案为默认形态）**：行差分渲染 + 同步输出包裹（CSI ?2026），历史进终端 scrollback、编辑器/footer 贴底；fullscreen（alt-screen）保留为 F10 可切模式（对齐 pi `tuiMode`）。这是渲染层的最大单项，需评估 ratatui InlineViewport 与自研行差分两条路线。
+- **M5 inline 模式（已定案为默认且唯一形态）**：行差分渲染 + 同步输出包裹（CSI ?2026），历史进终端 scrollback、编辑器/footer 贴底；不做独立 fullscreen 模式，大段历史/输出查看由 ctrl+t transcript 浮层承担。这是渲染层的最大单项，需评估 ratatui InlineViewport 与自研行差分两条路线。
 - **M6 会话管理**：resume 列表（共享 data-dir 的 tasks/sessions）、重命名、树视图。
 
 **技术取舍提示**：
-- M5 已定案默认 inline + 可切 fullscreen。pi 的行差分 + scrollback 方案在 Rust 侧无现成等价物（ratatui InlineViewport 接近但语义不同：它仍是 viewport 内重绘）。建议 M1-M4 先在现有 alt-screen 上完成（用户价值最快兑现），M5 单独立项做渲染层 PoC 对比（ratatui InlineViewport vs 自研行差分）。
+- M5 已定案默认 inline 且不做独立 fullscreen。pi 的行差分 + scrollback 方案在 Rust 侧无现成等价物（ratatui InlineViewport 接近但语义不同：它仍是 viewport 内重绘）。建议 M1-M4 先在现有 alt-screen 上完成（用户价值最快兑现），M5 单独立项做渲染层 PoC 对比（ratatui InlineViewport vs 自研行差分）。
 - per-model thinking 记忆：R-Code 的自然落点是 task.inference（已有持久化），全局默认 + per-provider 预设可挂到 config.json（宿主 SettingsService），不必新建文件。
 
 ## 6. pi 调研小结
@@ -258,7 +258,8 @@ settings.json 中与模型/思考直接相关的字段：
 ## 9. 交付物索引
 
 - 本报告：`docs/tui-v2/pi-tui-deep-research.md`
-- 交互原型 **v4**（codex 风，当前 `tui-v2-prototype.html`，见 §10/§11）；v3（claude code 风）留档：`docs/tui-v2/tui-v3-claude-style-prototype.html`
+- 交互原型 **v4**（codex 风，`docs/tui-v2/tui-v4-prototype.html`，见 §10/§11）；2026-09-02 拍板为唯一保留原型，v3（claude code 风）留档已删除
+- **TUI v2 / R-Code CLI PRD（AI 实施清单）**：`docs/tui-v2/r-code-cli-prd.md`（2026-09-02 依据本报告 §4/§5 + §7–§11 定案产出；fullscreen 待拍板点已按"不做独立 fullscreen、ctrl+t 浮层覆盖"收口）
 - v1 PRD 归档：`docs/support/archive/pi-alignment/`
 
 ## 10. Codex CLI 深度调研（2026-09-01，openai/codex 源码 + insta 快照取证）
@@ -360,4 +361,4 @@ codex 胜出的决定性因素：快照文件提供了可机验的渲染基准�
 - `?` 总览开合；ctrl+t transcript（`T R A N S C R I P T` 顶行）开合（q/esc）。
 - **已知边界**：IAB 字体把 CJK 渲成 ~1.77× 拉丁宽（非 2×），字符框内若放中文会微偏——真实终端 CJK 严格 2 列，且当前框内纯 ASCII，无影响；终端实现按 vw=2 即可。
 
-**采用 vs 适配决策**：r-code MODES 四档映射 codex 权限预设（Ask before edits / Plan mode / Workspace Write (auto) / Full Access (YOLO)）；占位文案用 `Ask R-Code to do anything`；codex 无 pi 式 F10 全屏切换——全屏能力由 transcript 浮层（ctrl+t）承担，与此前"inline + 可切全屏"决策的差异点：**默认 inline 不变，"全屏"语义改由 transcript/编辑器浮层覆盖**（待用户拍板是否仍要独立 fullscreen 模式）。
+**采用 vs 适配决策**：r-code MODES 四档映射 codex 权限预设（Ask before edits / Plan mode / Workspace Write (auto) / Full Access (YOLO)）；占位文案用 `Ask R-Code to do anything`；codex 无 pi 式 F10 全屏切换——全屏能力由 transcript 浮层（ctrl+t）承担，**2026-09-02 拍板：默认 inline 不变，不做独立 fullscreen 模式**，"全屏"语义由 transcript/编辑器浮层覆盖。
