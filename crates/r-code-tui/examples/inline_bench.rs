@@ -13,6 +13,7 @@ fn main() {
 
     let mut history: Vec<String> = (0..20).map(width_line).collect();
     let mut diff = InlineRenderer::new();
+    let mut diff_committed = 0usize;
     let mut diff_bytes = 0usize;
     let mut naive_bytes = 0usize;
     let mut viewport_bytes = 0usize;
@@ -32,8 +33,15 @@ fn main() {
             lines.push("› ask anything".to_string());
             lines
         };
-        // 路线 A：自研行差分（真实核心）。
-        diff_bytes += diff.update(&next).len();
+        // 路线 A：commit/live 渲染（真实核心）——历史 commit 一次，
+        // live 区（spinner+输入）每帧重绘。
+        let (tail, live): (Vec<String>, Vec<String>) = {
+            let split = next.len().saturating_sub(2);
+            (next[..split].to_vec(), next[split..].to_vec())
+        };
+        let new_commit: Vec<String> = tail[diff_committed..].to_vec();
+        diff_committed = tail.len();
+        diff_bytes += diff.frame(&new_commit, &live).len();
         // 路线 B：朴素全量重绘（基线下界对照）。
         naive_bytes += next.iter().map(|l| l.len() + 2).sum::<usize>() + 8;
         // 路线 C：ratatui InlineViewport 语义 = 视口内全量重绘（高 ≤10 行，

@@ -1,107 +1,75 @@
-//! 自研 inline 行差分渲染核心（M5-01 PoC / M5-02 落地基座）。
+//! inline 渲染器（commit/live 双区模型，2026-09-03 重构）。
 //!
-//! 渲染单位 = 行数组（pi 同款前提）。每次 update 产出一段 ANSI 序列：
-//! 整体包在 CSI ?2026 同步输出里防闪烁；仅重写 first_changed..last_changed；
-//! append-only 尾部直接续写（历史行自然滚入终端 scrollback——退出即保留）。
-//! 纯逻辑无终端 IO：单测与基准共用同一差分引擎。
+//! 架构（pi / codex cli 同款）：
+//! - **scrollback 区**：transcript 历史行**只打印一次**（append-only），自然滚入
+//!   终端 scrollback，永不重写、不参与任何光标算术——退出终端后历史保留。
+//! - **live 区**：屏幕底部活动块（流式预览/浮层/状态/输入行），每帧原位重绘：
+//!   cursor-up 到块首 → 逐行清写 → `ED` 清残留。
+//!
+//! 为什么不用全量行差分：历史超过一屏后，写入 `\r\n` 使终端滚动、块顶滚出
+//! 屏幕，`\x1b[{n}A` 的"光标在块尾"前提失效——光标落到任意位置重写，整屏
+//! 撕裂（2026-09-03 用户实测截图根因）。commit/live 分区从结构上消除该类
+//! 错误：commit 行永不回访，live 区高度恒小于一屏且由调用方截断保证每行
+//! 恰占一物理行。
 
-/// 行差分渲染器。
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct InlineRenderer {
-    prev: Vec<String>,
-}
-
-/// CSI ?2026 同步输出包裹。
+/// CSI ?2026 同步输出包裹（防闪烁）。
 const SYNC_BEGIN: &str = "\x1b[?2026h";
 const SYNC_END: &str = "\x1b[?2026l";
+
+/// commit/live 双区渲染器。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct InlineRenderer {
+    /// 上一帧 live 区占用的物理行数（0 = 尚未绘制/已失效）。
+    live_height: usize,
+}
 
 impl InlineRenderer {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 上一帧行数（光标复位基准；测试与基准用）。
-    pub fn previous_height(&self) -> usize {
-        self.prev.len()
-    }
-
-    /// 产出下一帧的 ANSI 写入序列（写完光标停在新块首行行首）。
-    pub fn update(&mut self, next: &[String]) -> String {
+    /// 渲染一帧。
+    ///
+    /// - `commit`：新增 transcript 行——在 live 区上方打印一次（进入
+    ///   scrollback，永不重写）。允许自然折行（超宽由终端 wrap，无回访）。
+    /// - `live`：底部活动块行——原位重绘。调用方必须保证每行不含 `\n` 且
+    ///   可视宽度 ≤ 终端宽（每行恰占一物理行，光标算术才成立）。
+    pub fn frame(&mut self, commit: &[String], live: &[String]) -> String {
         let mut out = String::from(SYNC_BEGIN);
-        // 公共前后缀求差分区间。
-        let prefix = self
-            .prev
-            .iter()
-            .zip(next.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-        let suffix = self
-            .prev
-            .iter()
-            .rev()
-            .zip(next.iter().rev())
-            .take_while(|(a, b)| a == b)
-            .count()
-            .min(self.prev.len().saturating_sub(prefix))
-            .min(next.len().saturating_sub(prefix));
-        let prev_len = self.prev.len();
-        let first_changed = prefix;
-        let last_changed = next.len().saturating_sub(suffix);
-
-        if next.len() >= prev_len && prefix >= prev_len {
-            // append-only：光标已在块尾，直接续写新行。
-            for line in &next[prev_len..] {
-                out.push_str(line);
-                out.push_str("\r\n");
-            }
-        } else if next.is_empty() {
-            // 清空块：上移整块并清除。
-            if prev_len > 0 {
-                out.push_str(&cursor_up(prev_len));
-            }
-            out.push_str("\x1b[J");
-        } else if next.len() < prev_len {
-            // 行数减少（如浮层/菜单收起）：上移到块首后，重写所有剩余行，
-            // 并清除比新块多的旧尾行（ED），否则残留叠加成错位。
-            out.push_str(&cursor_up(prev_len));
-            for line in next.iter() {
-                out.push_str("\x1b[2K");
-                out.push_str(line);
-                out.push_str("\r\n");
-            }
-            out.push_str("\x1b[J"); // 清掉旧块多出的尾行
-                                    // 回到块首（下一帧基准）。
-            if !next.is_empty() {
-                out.push_str(&cursor_up(next.len()));
-            }
-        } else {
-            // 行内变化：上移到块首，重写差分区间，其余行跳过（↓）。
-            out.push_str(&cursor_up(prev_len));
-            for (index, line) in next.iter().enumerate() {
-                if index < first_changed || index >= last_changed {
-                    out.push_str("\x1b[1B"); // 未变行：下移跳过（不重写）
-                } else {
-                    out.push_str("\x1b[2K"); // 清行后重写
-                    out.push_str(line);
-                    out.push_str("\x1b[1B\r");
-                }
-            }
-            // 回到块首（下一帧基准）。
-            if !next.is_empty() {
-                out.push_str(&cursor_up(next.len()));
-            }
+        // 1) 光标回到 live 区块首（上一帧画完后光标停在块尾下一行）。
+        if self.live_height > 0 {
+            out.push_str(&format!("\x1b[{}A\r", self.live_height));
         }
+        // 2) 新历史行打印一次。写在旧 live 区顶部：旧 live 是 stale 内容，
+        //    下面的 live 重绘 + ED 会清理。终端按需滚动，行进 scrollback。
+        for line in commit {
+            out.push_str(line);
+            out.push_str("\r\n");
+        }
+        // 3) live 区原位重写 + ED 清掉收缩残留。
+        for line in live {
+            out.push_str("\x1b[2K");
+            out.push_str(line);
+            out.push_str("\r\n");
+        }
+        out.push_str("\x1b[J");
+        self.live_height = live.len();
         out.push_str(SYNC_END);
-        self.prev = next.to_vec();
         out
     }
-}
 
-fn cursor_up(lines: usize) -> String {
-    if lines == 0 {
-        String::new()
-    } else {
-        format!("\x1b[{lines}A\r")
+    /// 硬件光标放回 live 区行（`row_from_bottom`：0 = 最后一行）的 `col` 列，
+    /// 供 IME 候选窗跟随/输入定位。
+    pub fn cursor_to_live(&self, row_from_bottom: usize, col: usize) -> String {
+        // 画完帧后光标在块尾下一行：上移 row_from_bottom + 1 行到达目标行。
+        let up = row_from_bottom + 1;
+        format!("\x1b[{up}A\x1b[{col}G")
+    }
+
+    /// 终端尺寸变化：live 区几何失效（旧行位置不可信）。下一帧从当前光标处
+    /// 起一块新 live 区，旧内容随滚动自然让位。
+    pub fn invalidate(&mut self) {
+        self.live_height = 0;
     }
 }
 
@@ -109,66 +77,69 @@ fn cursor_up(lines: usize) -> String {
 mod tests {
     use super::*;
 
-    /// 首帧全量；CSI ?2026 全程包裹。
+    /// 首帧：无光标上移；commit 行 + live 行按序写入；CSI 2026 包裹。
     #[test]
-    fn first_frame_writes_all_wrapped_in_sync() {
-        let mut renderer = InlineRenderer::new();
-        let out = renderer.update(&["a".into(), "b".into()]);
+    fn first_frame_prints_commit_then_live() {
+        let mut r = InlineRenderer::new();
+        let out = r.frame(&["h1".into()], &["› input".into()]);
         assert!(out.starts_with("\x1b[?2026h"), "{out:?}");
-        assert!(out.ends_with("\x1b[?2026l"), "{out:?}");
-        assert!(out.contains("a") && out.contains("b"));
-        assert!(!out.contains("\x1b[1A"), "首帧无光标上移：{out:?}");
+        assert!(out.contains("h1\r\n"), "{out:?}");
+        assert!(out.contains("\x1b[2K› input\r\n"), "live 行清写：{out:?}");
+        assert!(out.ends_with("\x1b[J\x1b[?2026l"), "{out:?}");
     }
 
-    /// append-only：只写新增行（历史滚入 scrollback），无整块重绘。
+    /// 第二帧无新历史：只重绘 live 区（cursor-up = 上帧 live 高度）。
     #[test]
-    fn append_only_writes_new_lines_without_repaint() {
-        let mut renderer = InlineRenderer::new();
-        renderer.update(&["h1".into(), "spinner".into()]);
-        let out = renderer.update(&["h1".into(), "spinner".into(), "h2".into()]);
-        assert!(out.contains("h2"), "{out:?}");
-        assert!(!out.contains("h1"), "未变历史行不得重写：{out:?}");
-        assert!(!out.contains("\x1b[1A"), "append-only 无光标上移：{out:?}");
-        assert!(out.contains("\x1b[?2026h"), "同步输出包裹：{out:?}");
+    fn live_only_frame_moves_up_by_previous_height() {
+        let mut r = InlineRenderer::new();
+        r.frame(&["h1".into()], &["a".into(), "b".into()]);
+        let out = r.frame(&[], &["a".into(), "b2".into()]);
+        assert!(out.contains("\x1b[2A\r"), "上移 2 行到块首：{out:?}");
+        assert!(out.contains("\x1b[2Kb2"), "变化行清写：{out:?}");
+        assert!(!out.contains("h1"), "历史行永不重写：{out:?}");
     }
 
-    /// 行内变化（spinner）：仅重写该行（清行 + 内容），未变行只跳过。
+    /// live 收缩：ED 清掉残留尾行。
     #[test]
-    fn spinner_change_rewrites_only_that_line() {
-        let mut renderer = InlineRenderer::new();
-        renderer.update(&["h1".into(), "h2".into(), "⠋ working".into(), "input".into()]);
-        let out = renderer.update(&["h1".into(), "h2".into(), "⠙ working".into(), "input".into()]);
-        assert!(out.contains("⠙"), "{out:?}");
+    fn shrink_clears_tail() {
+        let mut r = InlineRenderer::new();
+        r.frame(&[], &["a".into(), "b".into(), "c".into()]);
+        let out = r.frame(&[], &["a".into()]);
+        assert!(out.contains("\x1b[3A\r"), "{out:?}");
+        assert!(out.ends_with("\x1b[J\x1b[?2026l"), "ED 清残留：{out:?}");
+    }
+
+    /// 历史提交：commit 行打印一次后不再出现在后续帧。
+    #[test]
+    fn committed_lines_never_rewritten() {
+        let mut r = InlineRenderer::new();
+        r.frame(&["h1".into(), "h2".into()], &["› x".into()]);
+        let out = r.frame(&["h3".into()], &["› xy".into()]);
+        // 上移 1 行（live 高度）→ 打印 h3 → live 重绘。
+        assert!(out.contains("\x1b[1A\r"), "{out:?}");
+        assert!(out.contains("h3\r\n"), "{out:?}");
         assert!(
-            !out.contains("h1") && !out.contains("input\r"),
-            "未变行不重写：{out:?}"
+            !out.contains("h1") && !out.contains("h2"),
+            "旧历史不重写：{out:?}"
         );
-        assert!(out.contains("\x1b[4A"), "上移整块 4 行：{out:?}");
-        assert!(out.contains("\x1b[2K"), "清行重写：{out:?}");
     }
 
-    /// M6-03 修复：行数减少（浮层收起）时清除旧的多余尾行，不残留。
+    /// 光标定位：画完 3 行 live 块后，row_from_bottom=0 → 上移 1 行。
     #[test]
-    fn shrink_clears_old_tail_lines() {
-        let mut renderer = InlineRenderer::new();
-        renderer.update(&["h1".into(), "h2".into(), "h3".into(), "h4".into()]);
-        let out = renderer.update(&["h1".into(), "h2".into()]);
-        // 上移 4 行 + 重写 2 行 + ED 清除残留尾行。
-        assert!(out.contains("\x1b[4A"), "上移整块：{out:?}");
-        assert!(out.contains("\x1b[J"), "清掉旧尾行：{out:?}");
-        assert!(out.contains("h1") && out.contains("h2"), "{out:?}");
-        // 再恢复 append：行数变多时仍走差分。
-        let out2 = renderer.update(&["h1".into(), "h2".into(), "h3".into()]);
-        assert!(out2.contains("h3"), "恢复后 append：{out2:?}");
+    fn cursor_to_live_rows_from_bottom() {
+        let mut r = InlineRenderer::new();
+        r.frame(&[], &["a".into(), "b".into(), "c".into()]);
+        assert_eq!(r.cursor_to_live(0, 5), "\x1b[1A\x1b[5G");
+        assert_eq!(r.cursor_to_live(2, 0), "\x1b[3A\x1b[0G");
     }
 
-    /// 块清空：上移 + ED 清除。
+    /// invalidate：live 高度归零，下一帧无光标上移。
     #[test]
-    fn clearing_wipes_block() {
-        let mut renderer = InlineRenderer::new();
-        renderer.update(&["a".into(), "b".into()]);
-        let out = renderer.update(&[]);
-        assert!(out.contains("\x1b[2A") && out.contains("\x1b[J"), "{out:?}");
-        assert_eq!(renderer.previous_height(), 0);
+    fn invalidate_resets_live_height() {
+        let mut r = InlineRenderer::new();
+        r.frame(&[], &["a".into(), "b".into()]);
+        r.invalidate();
+        let out = r.frame(&[], &["a".into()]);
+        assert!(!out.contains("\x1b[2A"), "失效后不上移：{out:?}");
     }
 }

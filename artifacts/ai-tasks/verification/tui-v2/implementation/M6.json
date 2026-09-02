@@ -3,12 +3,12 @@
   "scope": "milestone",
   "scope_id": "M6",
   "profile": "implementation",
-  "generated_at": "2026-09-02T07:49:28.316Z",
-  "started_at": "2026-09-02T07:48:45.848Z",
-  "finished_at": "2026-09-02T07:49:28.316Z",
-  "duration_ms": 42468,
-  "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
-  "worktree_digest": "c4525d4aa54d2324123569ae3bd6a2eea38574ec987e96d76097f85cf597ac84",
+  "generated_at": "2026-09-02T08:40:58.031Z",
+  "started_at": "2026-09-02T08:40:15.279Z",
+  "finished_at": "2026-09-02T08:40:58.031Z",
+  "duration_ms": 42752,
+  "revision": "f92f40ad2c2119a66daf2aac910b35031c577d8d",
+  "worktree_digest": "96ebee070f9dac980450d4cb5605844437d27b87d8362443bdd65d64b68fe970",
   "worktree_dirty": true,
   "summary": {
     "total": 78,
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
+        "revision": "f92f40ad2c2119a66daf2aac910b35031c577d8d",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-37bf2ce2ce85.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-f5d9ecb6d7bf.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-754e8105d7ed.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-551cad739c98.log"
       },
       "task": "M1-01"
     },

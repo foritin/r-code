@@ -139,6 +139,11 @@ impl TuiState {
         }
     }
 
+    /// 流式预览（未收口 assistant 缓冲；live 区呈现，收口后整行 commit）。
+    pub fn streaming_preview(&self) -> Option<&str> {
+        self.streaming.as_deref()
+    }
+
     /// 流式缓冲刷屏（渲染前调用：未收口的 assistant 也可见）。
     pub fn flush_streaming(&mut self) {
         if let Some(text) = self.streaming.take() {

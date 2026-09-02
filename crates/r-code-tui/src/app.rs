@@ -102,13 +102,16 @@ pub async fn run_interactive(
     let mut history = crate::history::History::new();
     let mut transcript_view = crate::transcript_view::TranscriptView::new();
 
-    // M5-02：inline 行差分渲染（历史进终端 scrollback；CSI ?2026 防闪烁）。
+    // M5-02（2026-09-03 重构）：commit/live 双区渲染——历史行只打印一次进
+    // scrollback（永不重写），live 区（流式预览/浮层/输入）每帧原位重绘。
+    // 全量行差分在历史超过一屏后光标算术必然失准（终端滚动），已废弃。
     let mut renderer = crate::inline_render::InlineRenderer::new();
-    let mut last_width = crossterm::terminal::size()
-        .map(|(w, _)| w as usize)
-        .unwrap_or(80);
+    let mut committed = 0usize;
+    let mut last_live: Vec<String> = Vec::new();
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
     loop {
-        {
+        let (commit, live, caret_col, rows_len) = {
             let (
                 rows,
                 running,
@@ -118,8 +121,10 @@ pub async fn run_interactive(
                 queue_block,
                 approval,
                 usage,
+                streaming,
             ) = {
-                let st = state.lock().unwrap();
+                let mut st = state.lock().unwrap();
+                st.flush_streaming();
                 (
                     st.rows().to_vec(),
                     st.is_running(),
@@ -129,6 +134,7 @@ pub async fn run_interactive(
                     crate::queue_lines(st.queued()),
                     st.pending_approval().cloned(),
                     st.usage(),
+                    st.streaming_preview().map(|s| s.to_string()),
                 )
             };
             let model_label = model_selection
@@ -139,7 +145,8 @@ pub async fn run_interactive(
                 .as_ref()
                 .map(crate::approval_overlay::overlay_lines);
             let view = crate::display::DisplayInput {
-                rows,
+                rows: rows.clone(),
+                streaming,
                 running,
                 input: &input,
                 status: status.clone(),
@@ -152,20 +159,36 @@ pub async fn run_interactive(
                 slash_menu: slash_menu.as_ref(),
                 transcript_view: &transcript_view,
             };
-            let width = crossterm::terminal::size()
-                .map(|(w, _)| w as usize)
-                .unwrap_or(80);
-            if width != last_width {
-                // 宽度变化：全量重绘（差分基准失效）。
-                renderer = crate::inline_render::InlineRenderer::new();
-                last_width = width;
+            let (width, height) = crossterm::terminal::size()
+                .map(|(w, h)| (w as usize, h as usize))
+                .unwrap_or((80, 24));
+            let commit = if rows.len() > committed {
+                crate::display::transcript_commit_lines(&rows[committed..])
+            } else {
+                Vec::new()
+            };
+            let mut live = crate::display::live_lines(&view, width);
+            // live 块不得高于一屏减 2（保留一行余量），只保留底部最关键行。
+            let max_live = height.saturating_sub(2).max(1);
+            if live.len() > max_live {
+                live = live.split_off(live.len() - max_live);
             }
-            let bytes = renderer.update(&crate::display::display_lines(&view, width));
-            use std::io::Write;
-            let mut stdout = std::io::stdout();
+            let caret_col = crate::display::input_caret_col(&view, width);
+            let rows_len = rows.len();
+            (commit, live, caret_col, rows_len)
+        };
+
+        // 无新历史且 live 未变：跳过重绘（省字节；终端无扰动）。
+        if !commit.is_empty() || live != last_live {
+            let bytes = renderer.frame(&commit, &live);
             let _ = stdout.write_all(bytes.as_bytes());
+            // 硬件光标放回输入位（IME 跟随）。
+            let cursor_seq = renderer.cursor_to_live(0, caret_col as usize + 1);
+            let _ = stdout.write_all(cursor_seq.as_bytes());
             let _ = stdout.flush();
+            last_live = live;
         }
+        committed = rows_len;
 
         // 非阻塞轮询（tick 驱动流式刷新）；Ctrl-C 由 crossterm 默认捕获，这里
         // 通过 poll 收事件即可（未启用 raw 的 ctrl-c 时无需额外处理）。
@@ -186,6 +209,11 @@ pub async fn run_interactive(
                             } else {
                                 input.insert_str(&text);
                             }
+                        }
+                        // M5-02：尺寸变化 → live 区几何失效，下一帧重起块。
+                        Ok(Event::Resize(..)) => {
+                            renderer.invalidate();
+                            last_live.clear();
                         }
                         _ => {}
                     }

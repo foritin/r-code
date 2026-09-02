@@ -1,5 +1,9 @@
-//! inline 显示模型（M5-02）：把 TuiState/输入/浮层组装成行数组，
-//! 交 `inline_render::InlineRenderer` 行差分输出。
+//! inline 显示模型（commit/live 双区）。
+//!
+//! - [`transcript_commit_lines`]：transcript 行 → scrollback 区行（含 `\n` 的
+//!   拆物理行；**不截断**——超宽自然折行，打印一次永不回访，折行无害）。
+//! - [`live_lines`]：底部活动块行（流式预览/浮层/状态/输入），**每行 ANSI
+//!   感知截断到终端宽**（live 行必须恰占一物理行，光标算术才成立）。
 //!
 //! 行内 ANSI 语义色（§2.7）：cyan=强调/选中、green=助手、yellow=警告、
 //! red=失败、magenta=模式/命令、dim=辅助、light-red=bash 态提示符。
@@ -17,6 +21,8 @@ fn fg(text: &str, code: &str) -> String {
 /// 显示快照输入（渲染所需的全部状态；由 app 循环装配）。
 pub struct DisplayInput<'a> {
     pub rows: Vec<crate::TranscriptRow>,
+    /// 流式 assistant 预览（未收口内容；live 区呈现，收口后整行 commit）。
+    pub streaming: Option<String>,
     pub running: bool,
     pub input: &'a InputBuffer,
     pub status: Option<String>,
@@ -30,24 +36,40 @@ pub struct DisplayInput<'a> {
     pub transcript_view: &'a TranscriptView,
 }
 
-/// 组装完整显示行（inline 模式唯一渲染入口）。
-pub fn display_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
-    // transcript 浮层：占满整屏（唯一"全屏"语义载体）。
+/// scrollback 区：transcript 行拆物理行（含 `\n`），不截断。
+pub fn transcript_commit_lines(rows: &[crate::TranscriptRow]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for row in rows {
+        for segment in transcript_row_line(row).split('\n') {
+            lines.push(segment.to_string());
+        }
+    }
+    lines
+}
+
+/// live 区：流式预览 + 排队 + 审批 + 浮层/菜单 + 状态 + 输入行。
+/// 每行截断到 `width` 可视列（ANSI 感知、CJK 双宽）。
+pub fn live_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
+    // transcript 浮层：占满 live 区（唯一"全屏"语义载体）。
     if view.transcript_view.is_open() {
-        let mut lines = vec![fg(&crate::transcript_view::header_line(width), "2")];
-        lines.extend(
-            crate::transcript_view::render_rows(&view.rows)
-                .into_iter()
-                .map(|line| fg(&line, "2")),
-        );
-        lines.push(fg(crate::transcript_view::hints_line(), "2"));
-        return lines;
+        let header = fg(&crate::transcript_view::header_line(width), "2");
+        let body = crate::transcript_view::render_rows(&view.rows)
+            .into_iter()
+            .map(|line| fg(&line, "2"));
+        let hints = fg(crate::transcript_view::hints_line(), "2");
+        let mut lines: Vec<String> = std::iter::once(header)
+            .chain(body)
+            .chain(std::iter::once(hints))
+            .collect();
+        return truncate_live_block(&mut lines, width);
     }
 
     let mut lines = Vec::new();
-    // 历史区（进 scrollback 后不再重写——append-only 差分天然满足）。
-    for row in &view.rows {
-        lines.push(transcript_row_line(row));
+    // 流式预览（未收口 assistant；收口后整行进 commit 区）。
+    if let Some(text) = &view.streaming {
+        if !text.is_empty() {
+            lines.push(fg(&format!("R-Code > {text}"), "32;3"));
+        }
     }
     // 排队块。
     for line in &view.queue_block {
@@ -84,8 +106,16 @@ pub fn display_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
     }
     // 输入行（贴底：prompt + 徽章 + 输入 + 右侧统计/模型标签）。
     lines.push(input_line(view, width));
-    // M6-03 修复：所有行拆物理行 + 截断（diff 引擎要求"行=物理行"）。
-    normalize_lines(&lines, width)
+    truncate_live_block(&mut lines, width)
+}
+
+/// live 块截断：每行 ANSI 感知截断到 width；超出一屏的只保留底部
+/// `max_rows` 行（浮层/输入贴底最关键）。
+fn truncate_live_block(lines: &mut Vec<String>, width: usize) -> Vec<String> {
+    for line in lines.iter_mut() {
+        *line = truncate_live(line, width);
+    }
+    std::mem::take(lines)
 }
 
 fn transcript_row_line(row: &crate::TranscriptRow) -> String {
@@ -185,14 +215,18 @@ fn input_line(view: &DisplayInput<'_>, width: usize) -> String {
     } else {
         "36"
     };
-    let badge = view.mode_badge.map(|(text, color)| {
-        let code = match color {
-            crate::task_mode::BadgeColor::Cyan => "36",
-            crate::task_mode::BadgeColor::Yellow => "33",
-            crate::task_mode::BadgeColor::Magenta => "35",
-        };
-        fg(&format!("{text} "), code)
-    });
+    let badge = view
+        .mode_badge
+        .map(|(text, color)| {
+            let code = match color {
+                crate::task_mode::BadgeColor::Cyan => "36",
+                crate::task_mode::BadgeColor::Yellow => "33",
+                crate::task_mode::BadgeColor::Magenta => "35",
+            };
+            fg(&format!("{text} "), code)
+        })
+        .unwrap_or_default();
+    // 统计 + 模型标签只拼一次（右侧段）。
     let (stats_text, stats_color) = view
         .usage
         .map(|stats| {
@@ -205,80 +239,49 @@ fn input_line(view: &DisplayInput<'_>, width: usize) -> String {
             (format!("{text}  "), code)
         })
         .unwrap_or_default();
-    let left = format!(
-        "{}{}{}",
-        fg(prompt, prompt_color),
-        badge.unwrap_or_default(),
-        view.input.text()
-    );
-    // right = 模型标签（stats 已作为独立右段拼一次，避免 "used ↑0 ↓0 used" 重复）。
-    let right = view.model_label.clone().unwrap_or_default();
-    let left_len = plain_len(&left);
-    let right_len = plain_len(&right) + plain_len(&stats_text);
-    let padding = width
-        .saturating_sub(left_len + right_len + 1)
-        .saturating_sub(1);
+    let model = view.model_label.clone().unwrap_or_default();
+    let left = format!("{}{}{}", fg(prompt, prompt_color), badge, view.input.text());
+    let left_cols = visible_width(&left);
+    let right_cols = visible_width(&stats_text) + visible_width(&model);
+    let padding = width.saturating_sub(left_cols + right_cols + 1);
     format!(
         "{}{}{}{}",
         left,
         " ".repeat(padding),
         fg(&stats_text, stats_color),
-        fg(&right, "2")
+        fg(&model, "2")
     )
 }
 
-/// M6-03 修复：把含 `\n` 的显示行拆成多物理行、超宽行截断、去尾随空白。
-/// 差分引擎假设"一行 = 一个终端物理行"，任何多物理行/自动折行都会让
-/// `\x1b[{n}A` / `\x1b[1B` 光标跳行错位（截图撕裂根因）。
-pub fn normalize_lines(lines: &[String], width: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in lines.iter() {
-        for segment in split_physical(line, width) {
-            out.push(segment);
-        }
+/// 输入光标位（IME/定位用）：live 块最后一行、prompt+徽章+光标前文本的可见列
+/// （钳在 width-1 内）。
+pub fn input_caret_col(view: &DisplayInput<'_>, width: usize) -> u16 {
+    let prompt = if view.running { "⏳ steer > " } else { "> " };
+    let badge_cols = view
+        .mode_badge
+        .map(|(text, _)| text.chars().count() + 1)
+        .unwrap_or(0);
+    let text = view.input.text();
+    let before: String = text.chars().take(view.input.cursor()).collect();
+    let col = visible_width(prompt) + badge_cols + visible_width(&before);
+    (col.min(width.saturating_sub(1))) as u16
+}
+
+/// ANSI 感知截断到 `width` 可视列（超宽尾部加 `…`）。live 行专用。
+pub fn truncate_live(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
     }
-    out
-}
-
-/// 拆 `\n` 并逐段截断到 width（CJK 双宽 + ANSI 感知；超宽截断加省略号）。
-pub fn split_physical(line: &str, width: usize) -> Vec<String> {
-    let mut result = Vec::new();
-    for segment in line.split('\n') {
-        let mut current = segment.to_string();
-        // 去尾随空白（消费多余的 padding）。
-        loop {
-            let stripped = strip_ansi(&current);
-            if stripped.len() <= width {
-                break;
-            }
-            if let Some(ch) = current.pop() {
-                let _ = ch;
-            } else {
-                break;
-            }
-        }
-        if plot_width(&current) > width {
-            current = truncate_styled(&current, width);
-        }
-        result.push(current);
+    if visible_width(text) <= width {
+        // 仅去尾随空白（padding 类）。
+        return text.trim_end().to_string();
     }
-    result
-}
-
-/// 可视宽度（ANSI 感知 + CJK 双宽）。
-fn plot_width(text: &str) -> usize {
-    strip_ansi(text).chars().map(cjk_width).sum()
-}
-
-/// 保留 ANSI 序列前提下截断到 width 可视列（尾部加 `…`）。
-fn truncate_styled(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut used = 0usize;
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\x1b' {
             out.push(ch);
-            // 原样复制 ANSI 转义序列。
             if let Some(&'[') = chars.peek() {
                 out.push(chars.next().unwrap());
                 for inner in chars.by_ref() {
@@ -291,7 +294,7 @@ fn truncate_styled(text: &str, width: usize) -> String {
             continue;
         }
         let w = cjk_width(ch);
-        if used + w > width.saturating_sub(1) && used > 0 {
+        if used + w > width.saturating_sub(1) {
             break;
         }
         out.push(ch);
@@ -302,9 +305,8 @@ fn truncate_styled(text: &str, width: usize) -> String {
 }
 
 /// 去 ANSI 后的可视宽度（CJK 按宽表计）。
-fn plain_len(text: &str) -> usize {
-    let stripped = strip_ansi(text);
-    stripped.chars().map(cjk_width).sum()
+pub fn visible_width(text: &str) -> usize {
+    strip_ansi(text).chars().map(cjk_width).sum()
 }
 
 fn strip_ansi(text: &str) -> String {
@@ -336,135 +338,134 @@ fn cjk_width(ch: char) -> usize {
 mod tests {
     use super::*;
 
-    /// M6-03 复现：输入行统计只能出现一次（截图 "used ↑0 ↓0 used" 重复是 stats 双拼）。
-    #[test]
-    fn input_line_stats_not_duplicated() {
-        let input = InputBuffer::new();
-        let view = DisplayInput {
+    fn base_view<'a>(
+        input: &'a InputBuffer,
+        transcript_view: &'a TranscriptView,
+    ) -> DisplayInput<'a> {
+        DisplayInput {
             rows: vec![],
+            streaming: None,
             running: false,
-            input: &input,
+            input,
             status: None,
             queue_block: vec![],
             approval_lines: None,
             model_label: None,
             mode_badge: None,
-            usage: Some(crate::status_bar::UsageStats {
-                input_tokens: 1000,
-                output_tokens: 900,
-                ..Default::default()
-            }),
-            overlay: None,
-            slash_menu: None,
-            transcript_view: &TranscriptView::new(),
-        };
-        let line = input_line(&view, 80);
-        let text = strip_ansi(&line);
-        // footer_stats_line 一次调用产出 tokens 段 + 占用段，二者都应各出现一次。
-        let token_count = text.matches("↑1.0K").count();
-        let used_count = text.matches("1.9K used").count();
-        assert_eq!(token_count, 1, "token 段不重复：{text}");
-        assert_eq!(used_count, 1, "占用段不重复：{text}");
-    }
-
-    /// M6-03 复现：含 \n 的引导行必须拆成多物理行（否则差分光标错位）。
-    #[test]
-    fn embedded_newlines_split_into_physical_lines() {
-        let lines = vec![fg(
-            "R-Code CLI 尚未配置模型服务\n  1) 桌面端设置\n  2) 直接编辑 config.toml",
-            "2",
-        )];
-        let normalized = normalize_lines(&lines, 80);
-        assert_eq!(
-            normalized.len(),
-            3,
-            "引导行含 2 个换行应拆成 3 行：{normalized:?}"
-        );
-    }
-
-    /// M6-03 复现：超宽行必须截断（否则终端自动折行 → 差分引擎光标跳行错位）。
-    #[test]
-    fn overwide_lines_are_truncated() {
-        let long = "x".repeat(200);
-        let lines = vec![fg(&long, "36")];
-        let normalized = normalize_lines(&lines.clone(), 60);
-        assert_eq!(normalized.len(), 1, "单行超宽截断为 1 物理行");
-        let text = strip_ansi(&normalized[0]);
-        assert!(
-            text.chars().count() <= 61,
-            "截断后含省略号 ≤ 宽+1：{text:?} (len={})",
-            text.chars().count()
-        );
-    }
-
-    /// M5-02.A3：resize 稳定——输入行贴底且宽度自适应（窄宽不越界、统计/标签右对齐）。
-    #[test]
-    fn input_line_stays_bottom_and_fits_width() {
-        let mut input = InputBuffer::new();
-        input.insert_str("hello");
-        let view = DisplayInput {
-            rows: vec![],
-            running: false,
-            input: &input,
-            status: None,
-            queue_block: vec![],
-            approval_lines: None,
-            model_label: Some("(demo) m".into()),
-            mode_badge: None,
             usage: None,
             overlay: None,
             slash_menu: None,
-            transcript_view: &TranscriptView::new(),
-        };
-        let line = input_line(&view, 40);
-        assert!(line.contains("hello"), "输入贴底：{line}");
-        // 窄宽不 panic（宽度小于内容时 padding 钳 0）。
-        let narrow = input_line(&view, 5);
-        assert!(!narrow.contains("  "), "窄宽不产生负 padding 异常");
+            transcript_view,
+        }
     }
 
-    /// M5-02.A4：M1-M4 组件面在 inline 行模型下仍投影（语义色 + 审批带 + 菜单 no matches）。
+    /// commit 区：含 \n 的行拆物理行；超宽**不截断**（wrap 无害，打印一次）。
+    #[test]
+    fn commit_lines_split_newlines_and_keep_long_text() {
+        let rows = vec![crate::TranscriptRow::System {
+            text: "两种配置途径：\n  1) 桌面端设置\n  2) 直接编辑 config.toml".into(),
+        }];
+        let lines = transcript_commit_lines(&rows);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[2].contains("config.toml"));
+        // 超宽保留（scrollback 自然折行，无回访所以无害）。
+        let long = crate::TranscriptRow::Assistant {
+            text: "x".repeat(500),
+            complete: true,
+        };
+        let lines = transcript_commit_lines(&[long]);
+        assert_eq!(lines.len(), 1);
+        assert!(visible_width(&lines[0]) > 400, "长文不得截断");
+    }
+
+    /// live 区：超宽行 ANSI 感知截断（每行恰占一物理行）。
+    #[test]
+    fn live_lines_truncated_to_width() {
+        let input = InputBuffer::new();
+        let transcript_view = TranscriptView::new();
+        let mut view = base_view(&input, &transcript_view);
+        view.status = Some(format!("很长的状态 {}", "字".repeat(80)));
+        let lines = live_lines(&view, 40);
+        assert_eq!(lines.len(), 2, "状态 + 输入：{lines:?}");
+        for line in &lines {
+            assert!(visible_width(line) <= 40, "行宽必须 ≤ 40：{line:?}");
+        }
+    }
+
+    /// 输入行统计只出现一次（实测截图 "used ↑0 ↓0 used" 重复回归）。
+    #[test]
+    fn input_line_stats_not_duplicated() {
+        let input = InputBuffer::new();
+        let transcript_view = TranscriptView::new();
+        let mut view = base_view(&input, &transcript_view);
+        view.usage = Some(crate::status_bar::UsageStats {
+            input_tokens: 1000,
+            output_tokens: 900,
+            ..Default::default()
+        });
+        let line = input_line(&view, 80);
+        let text = strip_ansi(&line);
+        assert_eq!(text.matches("↑1.0K").count(), 1, "token 段唯一：{text}");
+        assert_eq!(text.matches("1.9K used").count(), 1, "占用段唯一：{text}");
+    }
+
+    /// 流式预览进 live 区；commit 行不重复它。
+    #[test]
+    fn streaming_preview_in_live_block() {
+        let input = InputBuffer::new();
+        let transcript_view = TranscriptView::new();
+        let mut view = base_view(&input, &transcript_view);
+        view.streaming = Some("部分回答".into());
+        view.running = true;
+        let lines = live_lines(&view, 80);
+        assert!(
+            lines.iter().any(|l| l.contains("R-Code > 部分回答")),
+            "{lines:?}"
+        );
+    }
+
+    /// 输入光标列 = prompt + 徽章 + 光标前文本可见宽（CJK 双宽），钳在宽度内。
+    #[test]
+    fn input_caret_col_accounts_for_cjk() {
+        let mut input = InputBuffer::new();
+        input.insert_str("你好");
+        let transcript_view = TranscriptView::new();
+        let mut view = base_view(&input, &transcript_view);
+        assert_eq!(input_caret_col(&view, 80), 2 + 4); // "> "=2 + 你好=4
+        view.mode_badge = Some(("[plan]", crate::task_mode::BadgeColor::Magenta));
+        assert_eq!(input_caret_col(&view, 80), 2 + 7 + 4); // [plan]=6 + 空格=1
+    }
+
+    /// M5-02.A4：M1-M4 组件面在行模型下仍投影（审批带/排队/模式徽章/菜单）。
     #[test]
     fn display_assembly_covers_all_milestone_surfaces() {
         let input = InputBuffer::new();
-        let view = DisplayInput {
-            rows: vec![crate::TranscriptRow::System {
-                text: "错误进 transcript".into(),
-            }],
-            running: true,
-            input: &input,
-            status: Some("已请求中止…".into()),
-            queue_block: vec!["• Queued follow-up inputs".into()],
-            approval_lines: Some(crate::approval_overlay::overlay_lines(
-                &crate::approval_overlay::PendingApproval {
-                    request_id: "r".into(),
-                    tool_name: "bash".into(),
-                    command: "cargo test".into(),
-                    risk: r_code_core::dto::RiskLevel::R2,
-                },
-            )),
-            model_label: Some("(demo) m • high".into()),
-            mode_badge: Some(("[plan]", crate::task_mode::BadgeColor::Magenta)),
-            usage: Some(crate::status_bar::UsageStats {
-                input_tokens: 1000,
-                output_tokens: 900,
-                ..Default::default()
-            }),
-            overlay: None,
-            slash_menu: Some(&crate::slash_menu::SlashMenu::new("/zzz")),
-            transcript_view: &TranscriptView::new(),
-        };
-        let lines = display_lines(&view, 100);
-        let body = lines.join("\n");
+        let transcript_view = TranscriptView::new();
+        let mut view = base_view(&input, &transcript_view);
+        view.rows = vec![crate::TranscriptRow::System {
+            text: "错误进 transcript".into(),
+        }];
+        view.running = true;
+        view.status = Some("已请求中止…".into());
+        view.queue_block = vec!["• Queued follow-up inputs".into()];
+        view.approval_lines = Some(crate::approval_overlay::overlay_lines(
+            &crate::approval_overlay::PendingApproval {
+                request_id: "r".into(),
+                tool_name: "bash".into(),
+                command: "cargo test".into(),
+                risk: r_code_core::dto::RiskLevel::R2,
+            },
+        ));
+        view.mode_badge = Some(("[plan]", crate::task_mode::BadgeColor::Magenta));
+        let menu = crate::slash_menu::SlashMenu::new("/zzz");
+        view.slash_menu = Some(&menu);
+        let commit = transcript_commit_lines(&view.rows);
+        let lines = live_lines(&view, 100);
+        let body = format!("{}\n{}", commit.join("\n"), lines.join("\n"));
         assert!(body.contains("· 错误进 transcript"), "{body}");
         assert!(body.contains("• Queued follow-up inputs"), "{body}");
         assert!(body.contains("是否允许执行以下命令？"), "{body}");
         assert!(body.contains("[plan]"), "{body}");
-        assert!(body.contains("no matches"), "斜杠菜单无命中行：{body}");
-        // ANSI 语义色存在（cyan/green/magenta）。
-        assert!(
-            body.contains("\x1b[35m") || body.contains("\x1b[36m"),
-            "语义色存在：{body:?}"
-        );
+        assert!(body.contains("no matches"), "{body}");
     }
 }

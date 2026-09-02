@@ -6,11 +6,11 @@
 
 | 路线 | 写入字节/帧（均值） | 语义 |
 | --- | --- | --- |
-| A. 自研行差分（inline_render.rs，CSI ?2026 包裹，append-only 续写） | 200 | 历史行真正滚入终端 scrollback；spinner 帧仅重写 1 行 |
+| A. 自研行差分（inline_render.rs，CSI ?2026 包裹，append-only 续写） | 109 | 历史行真正滚入终端 scrollback；spinner 帧仅重写 1 行 |
 | B. 朴素全量重绘 | 2069 | 对照基线（最差情形） |
 | C. ratatui InlineViewport（视口内全量重绘，高 10） | 728 | 历史锁在固定视口内，不进 scrollback |
 
-差分/朴素 = 9.6%；差分/viewport = 27.4%。
+差分/朴素 = 5.3%；差分/viewport = 15.0%。
 
 ## 语义对照（PRD 冻结评判维度）
 
@@ -23,4 +23,4 @@
 
 ## 定案
 
-**选 A（自研行差分，`crates/r-code-tui/src/inline_render.rs`）**。决定性依据：scrollback 语义完整性是 PRD §2.4 的硬要求（历史进终端 scrollback、退出保留），InlineViewport 的视口内重绘语义与之冲突（被否路线的差距 = 历史锁视口 + 每帧视口全量写入）；差分路线的 resize 自管成本可接受（宽度变化触发全量重绘即可）。被否路线差距量化：写入字节高 3.6 倍且不满足 scrollback 判据。
+**选 A（自研行差分，`crates/r-code-tui/src/inline_render.rs`）**。决定性依据：scrollback 语义完整性是 PRD §2.4 的硬要求（历史进终端 scrollback、退出保留），InlineViewport 的视口内重绘语义与之冲突（被否路线的差距 = 历史锁视口 + 每帧视口全量写入）；差分路线的 resize 自管成本可接受（宽度变化触发全量重绘即可）。被否路线差距量化：写入字节高 6.7 倍且不满足 scrollback 判据。
