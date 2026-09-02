@@ -1,0 +1,55 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M3-02
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m3-02-status-与-usage
+
+revision:
+  git_revision: 9d6584e
+  worktree_digest: recorded-in-report-M3-02.json
+
+deliverables:
+  - crates/r-code-tui/src/status_bar.rs（status_card_lines/accumulate_cost/usage_summary + 3 单测）
+  - crates/r-code-tui/src/app.rs（/status /usage 裸命令 + controller.status_report）
+  - crates/r-code-tui/src/main.rs（status_report 装配：模型标签/目录 ~ 缩写/用量/成本）
+  - scripts/verify-tui-v2.mjs M3-02 断言注册
+changed_paths:
+  - crates/r-code-tui/src/status_bar.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M3-02.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib status_card_matches_codex_shape
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3-02.json
+    note: "圆角框 ╭╮╰╯、>_ R-Code CLI 头、model:/directory:/Token usage:/Context window: padEnd(18) 对齐"
+  - id: "M3-02.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib usage_summary_reports_cost_when_priced
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3-02.json
+    note: "cost_usd 累加（宿主归因进 usage_json）；成本 $0.4123 呈现；无定价数据省略成本段"
+  - id: "M3-02.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib status_card_context_row_matches_footer_format
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3-02.json
+    note: "卡内 context 行与 footer 同一格式化函数族（窗口未知→x.xK used 回退一致）"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M3 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3.json
+
+decisions:
+  - DM1: codex 的 Directory 行不对齐 quirk 不保留（PRD 决策空间允许）——统一 padEnd(18) 对齐更正确；记录与原型的差异点。
+  - DM2: /status /usage 一期为裸命令回车直达（M4-03 斜杠菜单落地后自动出现在菜单，命令处理复用同一入口）。
+  - DM3: 卡内宽度按内容自适应上限 56（codex SESSION_HEADER_MAX_INNER_WIDTH 语义）。
+external_gates_remaining: []
+notes: []

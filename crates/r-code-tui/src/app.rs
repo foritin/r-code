@@ -47,6 +47,8 @@ pub struct RunController {
     pub queue_send: Arc<dyn Fn(String) + Send + Sync>,
     /// 审批决策落账（y/a/esc 三键契约；经宿主 PermissionEngine）。
     pub decide_approval: Arc<dyn Fn(crate::approval::ApprovalDecision) + Send + Sync>,
+    /// /status 与 /usage 的数据装配（卡行 + 汇总行）。
+    pub status_report: Arc<dyn Fn() -> (Vec<String>, String) + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -60,6 +62,7 @@ impl Default for RunController {
             set_mode: Arc::new(|_| {}),
             queue_send: Arc::new(|_| {}),
             decide_approval: Arc::new(|_| {}),
+            status_report: Arc::new(|| (Vec::new(), String::new())),
         }
     }
 }
@@ -187,6 +190,16 @@ pub async fn run_interactive(
                         overlay = (controller.open_model_picker)().map(Overlay::Model);
                         if overlay.is_none() {
                             status = Some("没有可用的模型服务（先完成 provider 配置）".to_string());
+                        }
+                    } else if trimmed == "/status" || trimmed == "/usage" {
+                        let (card, summary) = (controller.status_report)();
+                        let mut st = state.lock().unwrap();
+                        if trimmed == "/status" {
+                            for line in card {
+                                st.push_system(line);
+                            }
+                        } else {
+                            st.push_system(summary);
                         }
                     } else if trimmed == "/thinking" {
                         let current = state.lock().unwrap().thinking().map(str::to_string);

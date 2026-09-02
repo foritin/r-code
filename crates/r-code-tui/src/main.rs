@@ -436,6 +436,42 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         });
     }
 
+    // M3-02：/status 与 /usage 数据装配（模型标签 + 目录缩写 + 用量/成本）。
+    let status_state = state.clone();
+    let status_task = task_id.clone();
+    let status_tui = tui_state.clone();
+    let status_report: Arc<dyn Fn() -> (Vec<String>, String) + Send + Sync> = Arc::new(move || {
+        let model_label = status_tui
+            .lock()
+            .ok()
+            .and_then(|st| {
+                st.model_selection().map(|(provider, model)| {
+                    r_code_tui::model_selector::model_label(provider, model)
+                })
+            })
+            .unwrap_or_else(|| "未选择".to_string());
+        let directory = std::env::current_dir()
+            .map(|path| {
+                let text = path.display().to_string();
+                match std::env::var_os("HOME") {
+                    Some(home) => text.replace(home.to_string_lossy().as_ref(), "~"),
+                    None => text,
+                }
+            })
+            .unwrap_or_else(|_| "?".to_string());
+        let Ok(detail) = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(task_detail(&status_state, &status_task))
+        }) else {
+            return (Vec::new(), "状态不可用".to_string());
+        };
+        let stats = r_code_tui::status_bar::accumulate_usage(&detail.runs);
+        let cost = r_code_tui::status_bar::accumulate_cost(&detail.runs);
+        let card =
+            r_code_tui::status_bar::status_card_lines(&model_label, &directory, &stats, None);
+        let summary = r_code_tui::status_bar::usage_summary(&stats, cost);
+        (card, summary)
+    });
+
     let controller = RunController {
         send,
         abort,
@@ -445,6 +481,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         set_mode,
         queue_send,
         decide_approval,
+        status_report,
     };
 
     crossterm::terminal::enable_raw_mode().expect("raw mode");

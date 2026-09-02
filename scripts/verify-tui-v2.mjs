@@ -417,6 +417,44 @@ const REGISTRY = {
       },
     ],
   },
+  "M3-02": {
+    milestone: "M3",
+    assertions: [
+      {
+        id: "M3-02.A1",
+        description: "/status 卡行快照：圆角框、>_ 头、标签 padEnd(18)、Token usage/Context window 行",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "status_card_matches_codex_shape",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M3-02.A2",
+        description: "/usage 输出含累计成本（无定价数据时省略成本段）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "usage_summary_reports_cost_when_priced",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M3-02.A3",
+        description: "卡内 context 行与 footer 形态一致（未知窗口回退 used）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "status_card_context_row_matches_footer_format",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M3-01": {
     milestone: "M3",
     assertions: [

@@ -21,8 +21,8 @@
 
 <!-- AI_WORKLIST_VOLATILE_START -->
 
-- 当前进度：`12 / 24` 项完成。
-- 下一执行项：M3-02（`/status` 与 `/usage`）。
+- 当前进度：`13 / 24` 项完成（M0-M3 四个里程碑全部收口）。
+- 下一执行项：M4-01（多行编辑器内核）。
 - 当前任务包：`artifacts/ai-tasks/tui-v2/current.yaml`（M1-01 进行中时建立；根 `current.yaml` 与 `artifacts/ai-tasks/pi-alignment/current.yaml` 属于其他 worklist 的活跃资产，不得占用或覆盖）。
 - 注意：工作区可能存在未提交改动（含 `docs/tui-v2/` 下文档与原型），一律视为用户资产，任何任务不得 reset/覆盖/回滚它们。
 
@@ -255,7 +255,7 @@ M0-01 自身在 Harness 尚未存在时，先用任务卡列出的直接命令�
 - [x] **M2-04** 运行中排队 follow-up。证据：`artifacts/ai-tasks/evidence/tui-v2/M2-04.yaml`
 - [x] **M2-05** 审批浮层 codex 化。证据：`artifacts/ai-tasks/evidence/tui-v2/M2-05.yaml`
 - [x] **M3-01** footer 统计投影。证据：`artifacts/ai-tasks/evidence/tui-v2/M3-01.yaml`
-- [ ] **M3-02** `/status` 与 `/usage`。证据：待生成
+- [x] **M3-02** `/status` 与 `/usage`。证据：`artifacts/ai-tasks/evidence/tui-v2/M3-02.yaml`
 - [ ] **M4-01** 多行编辑器内核。证据：待生成
 - [ ] **M4-02** 粘贴折叠与外部编辑器。证据：待生成
 - [ ] **M4-03** 斜杠命令菜单与 `?` 面板。证据：待生成

@@ -1,0 +1,59 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M3-02",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:34:18.257Z",
+  "started_at": "2026-09-02T04:34:17.467Z",
+  "finished_at": "2026-09-02T04:34:18.257Z",
+  "duration_ms": 790,
+  "revision": "9d6584eae34013ed74ab7f6df8cd4cf8c527b819",
+  "worktree_digest": "81b0a49646b2dbe41e3a2d453c757f8cd3b25da1181f945e2c9553fcf0df51ce",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-02.A1",
+      "description": "/status 卡行快照：圆角框、>_ 头、标签 padEnd(18)、Token usage/Context window 行",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M3-02"
+    },
+    {
+      "id": "M3-02.A2",
+      "description": "/usage 输出含累计成本（无定价数据时省略成本段）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M3-02"
+    },
+    {
+      "id": "M3-02.A3",
+      "description": "卡内 context 行与 footer 形态一致（未知窗口回退 used）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M3-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M3-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M3-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

@@ -120,6 +120,89 @@ pub fn footer_stats_line(
     )
 }
 
+/// 从持久化 run 列表累计成本（宿主已把 cost_usd 归因进 usage_json；
+/// 无任何成本数据返回 None）。
+pub fn accumulate_cost(runs: &[AgentRun]) -> Option<f64> {
+    let mut total = 0.0;
+    let mut seen = false;
+    for run in runs {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(run.usage_json.as_deref()?)
+        else {
+            continue;
+        };
+        if let Some(cost) = value.get("cost_usd").and_then(serde_json::Value::as_f64) {
+            total += cost;
+            seen = true;
+        }
+    }
+    seen.then_some((total * 1e6).round() / 1e6)
+}
+
+/// `/usage` 汇总行（成本段仅在有定价数据时出现）。
+pub fn usage_summary(stats: &UsageStats, cost: Option<f64>) -> String {
+    match cost {
+        Some(cost) => format!(
+            "累计用量：↑{} ↓{} · 成本 ${cost:.4}",
+            format_compact(stats.input_tokens + stats.cache_read_tokens),
+            format_compact(stats.output_tokens)
+        ),
+        None => format!(
+            "累计用量：↑{} ↓{}（无定价数据）",
+            format_compact(stats.input_tokens + stats.cache_read_tokens),
+            format_compact(stats.output_tokens)
+        ),
+    }
+}
+
+/// codex /status 状态卡（圆角框 ≤56 内宽；标签 padEnd(18) 对齐）。
+pub fn status_card_lines(
+    model_label: &str,
+    directory: &str,
+    stats: &UsageStats,
+    context_window: Option<u64>,
+) -> Vec<String> {
+    let label = |name: &str| format!("{name:<18}");
+    let context = match context_window {
+        Some(window) if window > 0 => {
+            let percent_used = ((stats.total_tokens() * 100) / window).min(100);
+            format!(
+                "{}% left ({} used / {})",
+                100 - percent_used,
+                format_compact(stats.total_tokens()),
+                format_compact(window),
+            )
+        }
+        _ => format!("{} used", format_compact(stats.total_tokens())),
+    };
+    let rows = vec![
+        format!(" >_ R-Code CLI"),
+        String::new(),
+        format!("{}{}", label("model:"), model_label),
+        format!("{}{}", label("directory:"), directory),
+        format!(
+            "{}{} total ({} input + {} output)",
+            label("Token usage:"),
+            format_compact(stats.total_tokens()),
+            format_compact(stats.input_tokens + stats.cache_read_tokens),
+            format_compact(stats.output_tokens),
+        ),
+        format!("{}{}", label("Context window:"), context),
+    ];
+    let width = rows
+        .iter()
+        .map(|row| row.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(56);
+    let mut lines = vec![format!("╭{}╮", "─".repeat(width + 2))];
+    for row in rows {
+        let pad = width.saturating_sub(row.chars().count());
+        lines.push(format!("│ {}{} │", row, " ".repeat(pad)));
+    }
+    lines.push(format!("╰{}╯", "─".repeat(width + 2)));
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +293,65 @@ mod tests {
         let (text, threshold) = footer_stats_line(&stats, None, false);
         assert_eq!(threshold, Threshold::Normal);
         assert!(text.contains("2.0K used"), "未知窗口回退 used 形态：{text}");
+    }
+
+    /// M3-02.A1：/status 卡行快照（圆角框、>_ 头、标签 padEnd(18)、两行用量）。
+    #[test]
+    fn status_card_matches_codex_shape() {
+        let stats = UsageStats {
+            input_tokens: 1000,
+            output_tokens: 900,
+            ..UsageStats::default()
+        };
+        let lines = status_card_lines("(demo) m", "~/dev/r-code", &stats, Some(272_000));
+        assert!(lines.first().is_some_and(|line| line.starts_with("╭")));
+        assert!(lines.last().is_some_and(|line| line.starts_with("╰")));
+        let body = lines.join("\n");
+        assert!(body.contains(" >_ R-Code CLI"), "codex 头行：{body}");
+        assert!(
+            body.contains("model:            (demo) m"),
+            "标签 padEnd(18) 对齐：{body}"
+        );
+        assert!(
+            body.contains("Token usage:      1.9K total (1.0K input + 900 output)"),
+            "Token usage 行：{body}"
+        );
+        assert!(
+            body.contains("Context window:   100% left (1.9K used / 272.0K)"),
+            "Context window 行（窗口已知→余量形态）：{body}"
+        );
+    }
+
+    /// M3-02.A2：成本累加与 /usage 汇总（无定价数据省略成本段）。
+    #[test]
+    fn usage_summary_reports_cost_when_priced() {
+        let priced =
+            run_with_usage(r#"{"input_tokens":1000,"output_tokens":900,"cost_usd":0.4123}"#);
+        let stats = accumulate_usage(std::slice::from_ref(&priced));
+        let cost = accumulate_cost(std::slice::from_ref(&priced)).expect("cost attributed");
+        assert!((cost - 0.4123).abs() < 1e-9);
+        let summary = usage_summary(&stats, Some(cost));
+        assert!(summary.contains("成本 $0.4123"), "{summary}");
+
+        let unpriced = run_with_usage(r#"{"input_tokens":10,"output_tokens":5}"#);
+        assert!(accumulate_cost(std::slice::from_ref(&unpriced)).is_none());
+        let summary = usage_summary(&accumulate_usage(std::slice::from_ref(&unpriced)), None);
+        assert!(summary.contains("无定价数据"), "{summary}");
+    }
+
+    /// M3-02.A3：卡内 context 行与 footer 形态一致（未知窗口回退 used）。
+    #[test]
+    fn status_card_context_row_matches_footer_format() {
+        let stats = UsageStats {
+            input_tokens: 2300,
+            ..UsageStats::default()
+        };
+        let lines = status_card_lines("(demo) m", "~", &stats, None);
+        let body = lines.join("\n");
+        assert!(
+            body.contains("Context window:   2.3K used"),
+            "未知窗口回退 used 形态：{body}"
+        );
     }
 
     /// M3-01.A3：compaction 标记（(auto) / 空）。
