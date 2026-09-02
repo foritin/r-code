@@ -1,0 +1,63 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M4-03
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m4-03-斜杠命令菜单与-面板
+
+revision:
+  git_revision: 5c5921e
+  worktree_digest: recorded-in-report-M4-03.json
+
+deliverables:
+  - crates/r-code-tui/src/slash_menu.rs（命令注册表/SlashMenu fuzzy/Tab 补全/help_panel + 4 单测）
+  - crates/r-code-tui/src/app.rs（输入驱动菜单、↑↓ 归菜单、Tab 补全、/clear /help /quit /? 命令）
+  - crates/r-code-tui/src/lib.rs（clear_transcript）
+  - crates/r-code-tui/src/input.rs（Tab → ToggleSearch 复用为补全键）
+  - scripts/verify-tui-v2.mjs M4-03 断言注册
+changed_paths:
+  - crates/r-code-tui/src/slash_menu.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/input.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M4-03.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib registry_matches_frozen_implemented_set
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-03.json
+    note: "已实现集 = /model /thinking /status /usage /clear /help /quit；PENDING（/new /resume /rename /compact）不在菜单"
+  - id: "M4-03.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib filter_matches_and_no_matches
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-03.json
+    note: "命令名 + 中文描述双命中；无命中 no matches 行"
+  - id: "M4-03.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib tab_completion_returns_selected_name
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-03.json
+    note: "Tab 返回选中命令名；上下移动钳位；过滤集内补全"
+  - id: "M4-03.A4"
+    passed: true
+    command: cargo test -p r-code-tui --lib help_panel_renders_two_aligned_columns
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-03.json
+    note: "两列键名定宽 14、行宽一致（尾补齐）、shift+tab/ctrl+g/命令菜单等关键键位覆盖"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M4 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4.json
+
+decisions:
+  - DM1: /permissions 从一期命令集移除（M2-03 预检确认宿主无公开任务级权限面；PRD 决策空间允许"检索到宿主权限面，否则移除并记录"）——任务卡 A1 的注册表契约测试即此记录的机验形态。
+  - DM2: 菜单是被动浮层（输入 / 起始即呈现，编辑键仍进编辑器；仅 ↑↓ 被菜单截获）；Tab = 补全（复用 ToggleSearch 动作位，ctrl+/ 的旧 fullscreen 搜索随 M5 退役）。
+  - DM3: 回车非完整命令时取菜单选中补全再分派（fuzzy 半输入 → 选中即执行）；/quit 直接退出循环；/clear 只清视图（JSONL 权威不动）；/help 与 ? 同一面板进 transcript。
+external_gates_remaining: []
+notes: []

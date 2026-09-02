@@ -90,6 +90,8 @@ pub async fn run_interactive(
     let mut overlay: Option<Overlay> = None;
     // M4-02：折叠粘贴登记簿（发送时展开原文）。
     let mut pastes = crate::paste::PasteBuffer::new();
+    // M4-03：斜杠菜单（输入以 / 起始时呈现；↑↓ 移动、Tab 补全）。
+    let mut slash_menu: Option<crate::slash_menu::SlashMenu> = None;
 
     loop {
         terminal
@@ -185,6 +187,51 @@ pub async fn run_interactive(
                 continue;
             }
             let action_variant = map_key(key);
+            // 斜杠菜单活动时 ↑↓ 优先归菜单（其余键仍进编辑器——菜单是被动浮层）。
+            if slash_menu.is_some() {
+                match action_variant {
+                    KeyAction::ScrollUp => {
+                        if let Some(menu) = slash_menu.as_mut() {
+                            menu.move_up();
+                        }
+                        continue;
+                    }
+                    KeyAction::ScrollDown => {
+                        if let Some(menu) = slash_menu.as_mut() {
+                            menu.move_down();
+                        }
+                        continue;
+                    }
+                    KeyAction::Send if input.text().trim() == "/model" => {}
+                    KeyAction::Send if input.text().trim() == "/thinking" => {}
+                    KeyAction::Send if input.text().trim() == "/status" => {}
+                    KeyAction::Send if input.text().trim() == "/usage" => {}
+                    KeyAction::Send if input.text().trim() == "/clear" => {}
+                    KeyAction::Send if input.text().trim() == "/help" => {}
+                    KeyAction::Send if input.text().trim() == "/quit" => {}
+                    KeyAction::Send if input.text().trim() == "?" => {}
+                    // 非完整命令的回车 = 取菜单选中补全后再交给下方命令分派。
+                    KeyAction::Send => {
+                        if let Some(name) = slash_menu
+                            .as_ref()
+                            .and_then(|menu| menu.complete().map(str::to_string))
+                        {
+                            input.set_text(&name);
+                        }
+                    }
+                    KeyAction::ToggleSearch => {
+                        // Tab：补全选中命令名。
+                        if let Some(name) = slash_menu
+                            .as_ref()
+                            .and_then(|menu| menu.complete().map(str::to_string))
+                        {
+                            input.set_text(&name);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             match action_variant {
                 KeyAction::Insert(ch) => input.insert(ch),
                 KeyAction::Newline => input.newline(),
@@ -252,6 +299,15 @@ pub async fn run_interactive(
                         } else {
                             st.push_system(summary);
                         }
+                    } else if trimmed == "/clear" {
+                        state.lock().unwrap().clear_transcript();
+                    } else if trimmed == "/help" || trimmed == "?" {
+                        let mut st = state.lock().unwrap();
+                        for line in crate::slash_menu::help_panel_lines() {
+                            st.push_system(line);
+                        }
+                    } else if trimmed == "/quit" {
+                        return LoopOutcome::Quit;
                     } else if trimmed == "/thinking" {
                         let current = state.lock().unwrap().thinking().map(str::to_string);
                         overlay = Some(Overlay::Thinking(ThinkingPicker::new(current.as_deref())));
@@ -311,6 +367,18 @@ pub async fn run_interactive(
                     (controller.set_thinking)(level);
                 }
                 KeyAction::Ignore => {}
+            }
+            // M4-03：按输入文本同步斜杠菜单（/ 起始即呈现；编辑即过滤）。
+            let text = input.text();
+            if crate::slash_menu::should_show(&text) {
+                match slash_menu.as_mut() {
+                    Some(menu) => menu.set_query(text.trim()),
+                    None => {
+                        slash_menu = Some(crate::slash_menu::SlashMenu::new(text.trim()));
+                    }
+                }
+            } else {
+                slash_menu = None;
             }
         }
     }

@@ -23,6 +23,7 @@ pub mod input;
 pub mod interaction;
 pub mod model_selector;
 pub mod paste;
+pub mod slash_menu;
 pub mod snapshot;
 pub mod status_bar;
 pub mod task_mode;
@@ -210,6 +211,12 @@ impl TuiState {
     /// 取走待审批请求（决策时消费；None = 已被处理）。
     pub fn take_pending_approval(&mut self) -> Option<crate::approval_overlay::PendingApproval> {
         self.pending_approval.take()
+    }
+
+    /// 清空 transcript 视图（/clear；持久化 JSONL 不动，仅展示层）。
+    pub fn clear_transcript(&mut self) {
+        self.rows.clear();
+        self.streaming = None;
     }
 
     /// 用量投影（footer 统计；由壳层周期性从 task_detail 刷新）。

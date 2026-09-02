@@ -342,6 +342,7 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('.') if alt => KeyAction::ThinkingUp,
         KeyCode::F(10) => KeyAction::ToggleFullscreen,
         KeyCode::Char(ch) => KeyAction::Insert(ch),
+        KeyCode::Tab => KeyAction::ToggleSearch,
         KeyCode::BackTab => KeyAction::CycleMode,
         KeyCode::Enter => KeyAction::Send,
         KeyCode::Backspace => KeyAction::Backspace,

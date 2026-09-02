@@ -1,0 +1,69 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-03",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:48:46.881Z",
+  "started_at": "2026-09-02T04:48:45.708Z",
+  "finished_at": "2026-09-02T04:48:46.881Z",
+  "duration_ms": 1173,
+  "revision": "5c5921e667429b376e389bfd7f9c31bd7cbed394",
+  "worktree_digest": "3fddb3a6ed59310dcf56b01a9abaa564c156f2226b2f01c43879a5561badb05d",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-03.A1",
+      "description": "注册表 = 冻结已实现命令集（/model /thinking /status /usage /clear /help /quit）；计划中命令不入菜单",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-03"
+    },
+    {
+      "id": "M4-03.A2",
+      "description": "fuzzy 过滤（命令名+中文描述）+ no matches 行",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-03"
+    },
+    {
+      "id": "M4-03.A3",
+      "description": "Tab 补全返回选中命令名；上下移动钳位",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-03"
+    },
+    {
+      "id": "M4-03.A4",
+      "description": "? 面板两列渲染（键名定宽、行宽一致、关键键位覆盖）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

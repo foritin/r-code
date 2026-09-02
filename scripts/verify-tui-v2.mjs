@@ -417,6 +417,55 @@ const REGISTRY = {
       },
     ],
   },
+  "M4-03": {
+    milestone: "M4",
+    assertions: [
+      {
+        id: "M4-03.A1",
+        description: "注册表 = 冻结已实现命令集（/model /thinking /status /usage /clear /help /quit）；计划中命令不入菜单",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "registry_matches_frozen_implemented_set",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-03.A2",
+        description: "fuzzy 过滤（命令名+中文描述）+ no matches 行",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "filter_matches_and_no_matches",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-03.A3",
+        description: "Tab 补全返回选中命令名；上下移动钳位",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "tab_completion_returns_selected_name",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-03.A4",
+        description: "? 面板两列渲染（键名定宽、行宽一致、关键键位覆盖）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "help_panel_renders_two_aligned_columns",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M4-02": {
     milestone: "M4",
     assertions: [
