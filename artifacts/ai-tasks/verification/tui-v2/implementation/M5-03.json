@@ -1,0 +1,59 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M5-03",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T07:09:56.669Z",
+  "started_at": "2026-09-02T07:09:56.221Z",
+  "finished_at": "2026-09-02T07:09:56.669Z",
+  "duration_ms": 448,
+  "revision": "253a3921b076367ce71dcf5309ea7bde3d4a3b94",
+  "worktree_digest": "e3a7b173b12d454be011195104cff3a4ae8ce139fcd31071e30d6433d82a3253",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M5-03.A1",
+      "description": "交互主路径无 EnterAlternateScreen（inline 唯一形态；静态断言 main.rs）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "hasEnterAlternateScreen": false
+      },
+      "task": "M5-03"
+    },
+    {
+      "id": "M5-03.A2",
+      "description": "IME 光标坐标单测：CJK 双宽 + 窄宽折行（inline_caret）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M5-03"
+    },
+    {
+      "id": "M5-03.A3",
+      "description": "print/json 回归绿（alt-screen 退役不影响非交互模式）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M5-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M5-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

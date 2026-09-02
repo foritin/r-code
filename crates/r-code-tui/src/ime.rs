@@ -57,6 +57,34 @@ pub fn caret_after_text(
     }
 }
 
+/// M5-03：inline 模式输入行光标位（贴底行 + 输入光标列；CJK=2 列）。
+/// `prompt_cols`=提示符可见宽（> / steer > / !），`badge_cols`=模式徽章可见宽，
+/// `text`=输入文本、`cursor`=char 光标位。返回 (col, row) 相对输入行起点。
+pub fn inline_caret(
+    prompt_cols: usize,
+    badge_cols: usize,
+    text: &str,
+    cursor: usize,
+    input_width: usize,
+) -> CaretPosition {
+    use unicode_width::UnicodeWidthStr;
+    let before: String = text.chars().take(cursor).collect();
+    let before_cols = UnicodeWidthStr::width(before.as_str());
+    let col = prompt_cols + badge_cols + before_cols;
+    // input_width 为 0 是防御性边界（终端宽度永远 ≥1 列）；除零不可达但
+    // 保留安全回退。clippy 的 checked_div 建议不适用于除+取模成对场景。
+    #[allow(clippy::manual_checked_ops)]
+    let (row, col_in_row) = if input_width == 0 {
+        (col, col)
+    } else {
+        (col / input_width, col % input_width)
+    };
+    CaretPosition {
+        col: col_in_row as u16,
+        row: row as u16,
+    }
+}
+
 /// 硬件光标同步指令（壳层翻译为 crossterm MoveTo；IME 候选窗随之定位）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HardwareCursorSync {
@@ -86,6 +114,19 @@ pub fn no_sync() -> HardwareCursorSync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M5-03.A2：inline 光标位含 CJK 双宽（IME 候选窗跟随正确列）。
+    #[test]
+    fn inline_caret_accounts_for_cjk_double_width() {
+        let caret = inline_caret(2, 0, "你好", 1, 80); // "你"=2 列，光标在 你|好
+        assert_eq!(caret, CaretPosition { col: 4, row: 0 });
+        let caret = inline_caret(2, 0, "你好", 2, 80); // 你好| 末尾
+        assert_eq!(caret, CaretPosition { col: 6, row: 0 });
+        // 窄宽折行：光标落到下一行。
+        let caret = inline_caret(2, 0, "你好世界", 2, 4);
+        assert_eq!(caret.col, 2, "4 列宽下 '你好' 占满，光标在 | 世界 前换行");
+        assert_eq!(caret.row, 1);
+    }
 
     /// M8-03.A1：焦点容器树传播——输入框聚焦可从任意深度判定。
     #[test]

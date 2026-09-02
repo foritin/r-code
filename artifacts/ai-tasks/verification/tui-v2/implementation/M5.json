@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M5",
   "profile": "implementation",
-  "generated_at": "2026-09-02T07:08:29.600Z",
-  "started_at": "2026-09-02T07:08:08.579Z",
-  "finished_at": "2026-09-02T07:08:29.600Z",
-  "duration_ms": 21021,
-  "revision": "fd657a35906b84f3d01c7fe05c49428f223eb242",
-  "worktree_digest": "ef0d1189c848f9c05dee56626cdbb78df11742c5ae996a76164489db2f005429",
+  "generated_at": "2026-09-02T07:12:10.275Z",
+  "started_at": "2026-09-02T07:11:52.739Z",
+  "finished_at": "2026-09-02T07:12:10.274Z",
+  "duration_ms": 17535,
+  "revision": "253a3921b076367ce71dcf5309ea7bde3d4a3b94",
+  "worktree_digest": "db6c10af61eb07baf2b85ddab96c919a19ea1770b5d1cf07bbf3a7913da02913",
   "worktree_dirty": true,
   "summary": {
-    "total": 66,
-    "passed": 66,
+    "total": 69,
+    "passed": 69,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "fd657a35906b84f3d01c7fe05c49428f223eb242",
+        "revision": "253a3921b076367ce71dcf5309ea7bde3d4a3b94",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-39fb2b32a604.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-ca3a35551f7b.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-2bfaa954f1fa.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-8bf692fd82be.log"
       },
       "task": "M1-01"
     },
@@ -758,6 +758,36 @@
         ]
       },
       "task": "M5-02"
+    },
+    {
+      "id": "M5-03.A1",
+      "description": "交互主路径无 EnterAlternateScreen（inline 唯一形态；静态断言 main.rs）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "hasEnterAlternateScreen": false
+      },
+      "task": "M5-03"
+    },
+    {
+      "id": "M5-03.A2",
+      "description": "IME 光标坐标单测：CJK 双宽 + 窄宽折行（inline_caret）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M5-03"
+    },
+    {
+      "id": "M5-03.A3",
+      "description": "print/json 回归绿（alt-screen 退役不影响非交互模式）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M5-03"
     }
   ],
   "failed_assertions": [],
@@ -860,6 +890,11 @@
     {
       "task": "M5-02",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-02.yaml",
+      "exists": true
+    },
+    {
+      "task": "M5-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-03.yaml",
       "exists": false
     }
   ],

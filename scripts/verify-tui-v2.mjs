@@ -417,6 +417,49 @@ const REGISTRY = {
       },
     ],
   },
+  "M5-03": {
+    milestone: "M5",
+    assertions: [
+      {
+        id: "M5-03.A1",
+        description: "交互主路径无 EnterAlternateScreen（inline 唯一形态；静态断言 main.rs）",
+        kind: "self",
+        async check(ctx) {
+          const source = await readFile(
+            path.join(REPO_ROOT, "crates", "r-code-tui", "src", "main.rs"),
+            "utf8",
+          );
+          const interactive = source.includes("EnterAlternateScreen");
+          return {
+            passed: !interactive,
+            details: { hasEnterAlternateScreen: interactive },
+          };
+        },
+      },
+      {
+        id: "M5-03.A2",
+        description: "IME 光标坐标单测：CJK 双宽 + 窄宽折行（inline_caret）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "inline_caret_accounts_for_cjk_double_width",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M5-03.A3",
+        description: "print/json 回归绿（alt-screen 退役不影响非交互模式）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--bins", "m1_tests",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M5-02": {
     milestone: "M5",
     assertions: [

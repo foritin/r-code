@@ -1,0 +1,58 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M5-03
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m5-03-alt-screen-退役与-ime-适配
+
+revision:
+  git_revision: 253a392
+  worktree_digest: recorded-in-report-M5-03.json
+
+deliverables:
+  - crates/r-code-tui/src/fullscreen.rs（删除——inline 唯一形态，无独立 fullscreen）
+  - crates/r-code-tui/src/ime.rs（inline_caret：CJK 双宽 + 窄宽折行光标位 + 单测）
+  - crates/r-code-tui/src/input.rs（退役 F10/ctrl+/ 键位映射与测试）
+  - crates/r-code-tui/src/lib.rs（移除 fullscreen 模块）
+  - scripts/verify-tui-v2.mjs M5-03 断言注册
+changed_paths:
+  - crates/r-code-tui/src/fullscreen.rs
+  - crates/r-code-tui/src/ime.rs
+  - crates/r-code-tui/src/input.rs
+  - crates/r-code-tui/src/lib.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M5-03.A1"
+    passed: true
+    command: static assert
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-03.json
+    note: "main.rs 交互主路径无 EnterAlternateScreen（inline 唯一形态）"
+  - id: "M5-03.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib inline_caret_accounts_for_cjk_double_width
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-03.json
+    note: "inline_caret 光标位：CJK=2 列（你|好 → col 4）、窄宽 4 折行到 row 1"
+  - id: "M5-03.A3"
+    passed: true
+    command: cargo test -p r-code-tui --bins m1_tests
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-03.json
+    note: "print/json 非交互回归绿（alt-screen 退役不影响）
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M5 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5.json
+
+decisions:
+  - DM1: fullscreen.rs 整体删除（M5-02 已删 ratatui 渲染管线，本文件无引用）；"全屏"语义完全由 ctrl+t transcript 浮层承担（PRD §2.4 拍板）。
+  - DM2: F10/ctrl+/ 键位退役（ToggleFullscreen/ToggleSearch 动作枚举保留仅因 Tab 补全复用了 ToggleSearch 位——见 M4-03 DM2）；新增 ctrl+t（transcript 浮层）替换 ctrl+/ 断言。
+  - DM3: IME 假光标 inline 坐标经 ime::inline_caret（prompt+badge+输入可见宽 + CJK 双宽 + 折行），壳层翻译为 crossterm MoveTo；硬件光标同步与 raw mode 保留不变。
+external_gates_remaining:
+  - IME 候选窗在真实终端/中文输入法下的跟随（§11.3；坐标核算已单测覆盖）
+notes: []

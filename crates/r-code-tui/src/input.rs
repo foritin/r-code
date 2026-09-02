@@ -335,7 +335,6 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
     match key.code {
         KeyCode::Char(ch) if ctrl && (ch == 'c' || ch == 'C') => KeyAction::Abort,
         KeyCode::Char(ch) if ctrl && (ch == 'd' || ch == 'D') => KeyAction::Quit,
-        KeyCode::Char('/') if ctrl => KeyAction::ToggleSearch,
         KeyCode::Enter if shift => KeyAction::Newline,
         KeyCode::Char('j') | KeyCode::Char('J') if ctrl => KeyAction::Newline,
         KeyCode::Char('z') | KeyCode::Char('Z') if ctrl => KeyAction::Undo,
@@ -351,7 +350,6 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('t') | KeyCode::Char('T') if alt => KeyAction::ToggleThinking,
         KeyCode::Char(',') if alt => KeyAction::ThinkingDown,
         KeyCode::Char('.') if alt => KeyAction::ThinkingUp,
-        KeyCode::F(10) => KeyAction::ToggleFullscreen,
         KeyCode::Char(ch) => KeyAction::Insert(ch),
         KeyCode::Tab => KeyAction::ToggleSearch,
         KeyCode::BackTab => KeyAction::CycleMode,
@@ -403,10 +401,9 @@ mod tests {
         assert_eq!(key(KeyCode::Esc), KeyAction::Quit);
         assert_eq!(key(KeyCode::Up), KeyAction::HistoryPrev);
         assert_eq!(key(KeyCode::PageUp), KeyAction::ScrollUp);
-        assert_eq!(key(KeyCode::F(10)), KeyAction::ToggleFullscreen);
         assert_eq!(ctrl(KeyCode::Char('c')), KeyAction::Abort);
         assert_eq!(ctrl(KeyCode::Char('d')), KeyAction::Quit);
-        assert_eq!(ctrl(KeyCode::Char('/')), KeyAction::ToggleSearch);
+        assert_eq!(ctrl(KeyCode::Char('t')), KeyAction::ToggleTranscript);
         assert_eq!(key(KeyCode::Char('你')), KeyAction::Insert('你'));
         assert_eq!(key(KeyCode::Backspace), KeyAction::Backspace);
         assert_eq!(key(KeyCode::Delete), KeyAction::DeleteForward);
