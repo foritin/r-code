@@ -472,6 +472,24 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         (card, summary)
     });
 
+    // M4-04：! 直通（宿主 LocalShellBackend 五级 shell 链；cwd = 当前目录）。
+    let bang_tui = tui_state.clone();
+    let run_bang: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |command| {
+        let tui = bang_tui.clone();
+        tokio::runtime::Handle::current().spawn(async move {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let (output, exit_code) = r_code_tui::bang_exec::run_bang(&command, &cwd).await;
+            if let Ok(mut st) = tui.lock() {
+                st.push_row(r_code_tui::TranscriptRow::Shell(
+                    r_code_tui::bang_command::ShellRow::Output {
+                        text: output,
+                        exit_code,
+                    },
+                ));
+            }
+        });
+    });
+
     let controller = RunController {
         send,
         abort,
@@ -482,6 +500,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         queue_send,
         decide_approval,
         status_report,
+        run_bang,
     };
 
     crossterm::terminal::enable_raw_mode().expect("raw mode");

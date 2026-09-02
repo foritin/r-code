@@ -417,6 +417,47 @@ const REGISTRY = {
       },
     ],
   },
+  "M4-04": {
+    milestone: "M4",
+    assertions: [
+      {
+        id: "M4-04.A1",
+        description: "! 执行输出进 transcript Shell 行（成功含输出/退出码 0；失败退出码 1 透传）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "bang_execution_collects_output_and_exit_code",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-04.A2",
+        description: "@ 查询提取与补全过滤（隐藏项排除、目录带 /、上限截断）",
+        kind: "self",
+        async check(ctx) {
+          const a = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "mention_query_extracts_active_token",
+          ]);
+          const b = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "completion_filters_and_skips_hidden",
+          ]);
+          return { passed: a.exitCode === 0 && b.exitCode === 0, details: { query: a.exitCode, filter: b.exitCode } };
+        },
+      },
+      {
+        id: "M4-04.A3",
+        description: "! 输入态提示符 light-red 语义（prompt_semantic 映射）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "bang_input_switches_prompt_semantic",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M4-03": {
     milestone: "M4",
     assertions: [

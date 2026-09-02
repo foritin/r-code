@@ -16,11 +16,13 @@ pub mod app;
 pub mod approval;
 pub mod approval_overlay;
 pub mod bang_command;
+pub mod bang_exec;
 pub mod external_editor;
 pub mod fullscreen;
 pub mod ime;
 pub mod input;
 pub mod interaction;
+pub mod mention;
 pub mod model_selector;
 pub mod paste;
 pub mod slash_menu;
@@ -211,6 +213,11 @@ impl TuiState {
     /// 取走待审批请求（决策时消费；None = 已被处理）。
     pub fn take_pending_approval(&mut self) -> Option<crate::approval_overlay::PendingApproval> {
         self.pending_approval.take()
+    }
+
+    /// 追加一条已完成行（! 直通 shell 行等壳层产出）。
+    pub fn push_row(&mut self, row: TranscriptRow) {
+        self.rows.push(row);
     }
 
     /// 清空 transcript 视图（/clear；持久化 JSONL 不动，仅展示层）。

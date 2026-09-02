@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M4",
   "profile": "implementation",
-  "generated_at": "2026-09-02T04:51:29.922Z",
-  "started_at": "2026-09-02T04:51:11.290Z",
-  "finished_at": "2026-09-02T04:51:29.922Z",
-  "duration_ms": 18632,
-  "revision": "5c5921e667429b376e389bfd7f9c31bd7cbed394",
-  "worktree_digest": "ea03431aee9e859903e168a672700d95df4b00b81e518770cedb57b6e50e55c2",
+  "generated_at": "2026-09-02T04:54:14.133Z",
+  "started_at": "2026-09-02T04:53:51.987Z",
+  "finished_at": "2026-09-02T04:54:14.133Z",
+  "duration_ms": 22146,
+  "revision": "0c9175ff84106c3abed0fc0129c5528f9613c400",
+  "worktree_digest": "778aba88c953441a9a289fde85dad68dd6a5bf8eaf42ec3c94f3faf3e66ff990",
   "worktree_dirty": true,
   "summary": {
-    "total": 52,
-    "passed": 52,
+    "total": 55,
+    "passed": 55,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "5c5921e667429b376e389bfd7f9c31bd7cbed394",
+        "revision": "0c9175ff84106c3abed0fc0129c5528f9613c400",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-611b4b98f096.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-6bd98e67ed11.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-f3025d865a2f.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-1efec1ba83d6.log"
       },
       "task": "M1-01"
     },
@@ -579,6 +579,37 @@
         "exitCode": 0
       },
       "task": "M4-03"
+    },
+    {
+      "id": "M4-04.A1",
+      "description": "! 执行输出进 transcript Shell 行（成功含输出/退出码 0；失败退出码 1 透传）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-04"
+    },
+    {
+      "id": "M4-04.A2",
+      "description": "@ 查询提取与补全过滤（隐藏项排除、目录带 /、上限截断）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "query": 0,
+        "filter": 0
+      },
+      "task": "M4-04"
+    },
+    {
+      "id": "M4-04.A3",
+      "description": "! 输入态提示符 light-red 语义（prompt_semantic 映射）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-04"
     }
   ],
   "failed_assertions": [],
@@ -661,6 +692,11 @@
     {
       "task": "M4-03",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-03.yaml",
+      "exists": true
+    },
+    {
+      "task": "M4-04",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-04.yaml",
       "exists": false
     }
   ],

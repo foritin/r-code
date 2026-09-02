@@ -20,6 +20,22 @@ pub fn command_body(input: &str) -> &str {
     input.trim_start().strip_prefix('!').unwrap_or(input).trim()
 }
 
+/// 输入区提示符语义（M4-04.A3：! 态 light-red；lib 层枚举，app 层映射终端色）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptSemantic {
+    Normal,
+    Bang,
+}
+
+/// `!` 起始（含裸 `!`）即 bash 态。
+pub fn prompt_semantic(input: &str) -> PromptSemantic {
+    if input.trim_start().starts_with('!') {
+        PromptSemantic::Bang
+    } else {
+        PromptSemantic::Normal
+    }
+}
+
 /// shell 直执行的 transcript 行（与 ToolCard 不同类——渲染与检索都区分）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

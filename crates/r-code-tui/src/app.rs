@@ -49,6 +49,8 @@ pub struct RunController {
     pub decide_approval: Arc<dyn Fn(crate::approval::ApprovalDecision) + Send + Sync>,
     /// /status 与 /usage 的数据装配（卡行 + 汇总行）。
     pub status_report: Arc<dyn Fn() -> (Vec<String>, String) + Send + Sync>,
+    /// !command 直通执行（宿主 shell 链；输出进 Shell 行）。
+    pub run_bang: Arc<dyn Fn(String) + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -63,6 +65,7 @@ impl Default for RunController {
             queue_send: Arc::new(|_| {}),
             decide_approval: Arc::new(|_| {}),
             status_report: Arc::new(|| (Vec::new(), String::new())),
+            run_bang: Arc::new(|_| {}),
         }
     }
 }
@@ -284,7 +287,18 @@ pub async fn run_interactive(
                 KeyAction::Send => {
                     let text = input.take();
                     let trimmed = text.trim();
-                    if trimmed == "/model" {
+                    if crate::bang_command::is_bang_command(&text) {
+                        let command = crate::bang_command::command_body(&text).to_string();
+                        {
+                            let mut st = state.lock().unwrap();
+                            st.push_row(crate::TranscriptRow::Shell(
+                                crate::bang_command::ShellRow::Prompt {
+                                    command: command.clone(),
+                                },
+                            ));
+                        }
+                        (controller.run_bang)(command);
+                    } else if trimmed == "/model" {
                         overlay = (controller.open_model_picker)().map(Overlay::Model);
                         if overlay.is_none() {
                             status = Some("没有可用的模型服务（先完成 provider 配置）".to_string());
@@ -602,7 +616,15 @@ fn render_regular(
 
     let input_text = input.text();
     let prompt = if running { "⏳ steer > " } else { "> " };
-    let mut input_line = vec![Span::styled(prompt, Style::default().fg(Color::Blue))];
+    // M4-04：! 输入态提示符 light-red（bash 直通语义）。
+    let prompt_color = if crate::bang_command::prompt_semantic(&input_text)
+        == crate::bang_command::PromptSemantic::Bang
+    {
+        Color::LightRed
+    } else {
+        Color::Blue
+    };
+    let mut input_line = vec![Span::styled(prompt, Style::default().fg(prompt_color))];
     // M2-03：模式徽章（plan=magenta / edit=cyan / auto=yellow；ask 无徽章）。
     if let Some((badge, color)) = mode_badge {
         let semantic = match color {

@@ -1,0 +1,60 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-04",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:53:49.575Z",
+  "started_at": "2026-09-02T04:53:48.484Z",
+  "finished_at": "2026-09-02T04:53:49.575Z",
+  "duration_ms": 1091,
+  "revision": "0c9175ff84106c3abed0fc0129c5528f9613c400",
+  "worktree_digest": "c7548ea7ba1c7b6a2496372d582fcb8df20fd12c78fa573537c41e105597f199",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-04.A1",
+      "description": "! 执行输出进 transcript Shell 行（成功含输出/退出码 0；失败退出码 1 透传）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-04"
+    },
+    {
+      "id": "M4-04.A2",
+      "description": "@ 查询提取与补全过滤（隐藏项排除、目录带 /、上限截断）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "query": 0,
+        "filter": 0
+      },
+      "task": "M4-04"
+    },
+    {
+      "id": "M4-04.A3",
+      "description": "! 输入态提示符 light-red 语义（prompt_semantic 映射）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-04",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-04.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

@@ -1,0 +1,61 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M4-04
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m4-04--直通与-文件提及
+
+revision:
+  git_revision: 0c9175f
+  worktree_digest: recorded-in-report-M4-04.json
+
+deliverables:
+  - crates/r-code-tui/src/bang_exec.rs（run_bang：宿主 LocalShellBackend 链执行 + 3 单测）
+  - crates/r-code-tui/src/mention.rs（@ 查询提取 + 补全过滤 + 2 单测）
+  - crates/r-code-tui/src/bang_command.rs（PromptSemantic）
+  - crates/r-code-tui/src/app.rs（! 分派/提示符 light-red/run_bang 回调）
+  - crates/r-code-tui/src/lib.rs（push_row；bang_exec/mention 模块）
+  - crates/r-code-tui/src/main.rs（run_bang 装配：cwd 当前目录、输出进 Shell 行）
+  - scripts/verify-tui-v2.mjs M4-04 断言注册
+changed_paths:
+  - crates/r-code-tui/src/bang_exec.rs
+  - crates/r-code-tui/src/mention.rs
+  - crates/r-code-tui/src/bang_command.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M4-04.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib bang_execution_collects_output_and_exit_code
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-04.json
+    note: "真实进程执行：echo bang-ok → stdout 进 Shell Output 行 + exit 0；sh -c 'exit 1' → exit 1 透传；stderr 并流"
+  - id: "M4-04.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib mention_query_extracts_active_token + completion_filters_and_skips_hidden
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-04.json
+    note: "@token 提取（裸 @ = 空查询、邮箱 a@b 不误触发）；一层目录扫描隐藏项排除、目录带 /、上限 20、大小写不敏感过滤"
+  - id: "M4-04.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib bang_input_switches_prompt_semantic
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-04.json
+    note: "! 起始（含裸 !）→ Bang 态；app 层映射 LightRed 提示符"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M4 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4.json
+
+decisions:
+  - DM1: ! 执行走 r-code-gateway LocalShellBackend（宿主五级 shell 链：plan_shell 解析 + tokio spawn + kill_tree），不开裸 std::process 通道（§5 安全不变量）；超时 120s。
+  - DM2: 用户亲手键入 ! = 用户授权语义（codex ! 同款），不重复走审批矩阵；agent 工具调用仍全量经 ToolGateway。
+  - DM3: @ 补全数据面 = 一层目录扫描（PRD 决策空间按性能定的最小实现）；候选菜单渲染复用菜单带，Tab 插入留给 M4-05 一并接（当前提及补全为查询/过滤纯逻辑 + 渲染）。
+external_gates_remaining: []
+notes: []
