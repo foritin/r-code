@@ -94,6 +94,9 @@ pub fn live_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
         Some(Overlay::Resume(picker)) => {
             lines.extend(picker.visible_rows().into_iter().map(|row| fg(&row, "2")))
         }
+        Some(Overlay::Setup(flow)) => {
+            lines.extend(flow.render_rows().into_iter().map(|row| fg(&row, "2")))
+        }
         None => {
             if let Some(menu) = view.slash_menu {
                 lines.extend(slash_menu_lines(menu));

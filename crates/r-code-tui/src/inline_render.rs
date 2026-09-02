@@ -34,12 +34,20 @@ impl InlineRenderer {
     ///   scrollback，永不重写）。允许自然折行（超宽由终端 wrap，无回访）。
     /// - `live`：底部活动块行——原位重绘。调用方必须保证每行不含 `\n` 且
     ///   可视宽度 ≤ 终端宽（每行恰占一物理行，光标算术才成立）。
+    ///
+    /// 帧间光标锚点：调用方（app.rs）每帧画完会把光标放到输入行（live 块
+    /// 最后一行、`cursor_to_live(0, col)`）。因此回到块首需上移
+    /// `live_height - 1` 行——曾按"块尾下一行"算成 `live_height`，每帧
+    /// 多升 1 行、live 块逐帧上漂，把上方已提交历史逐行吃掉（2026-09-03
+    /// 用户实测"随便输入就把上面的内容顶掉"的根因）。
     pub fn frame(&mut self, commit: &[String], live: &[String]) -> String {
         let mut out = String::from(SYNC_BEGIN);
-        // 1) 光标回到 live 区块首（上一帧画完后光标停在块尾下一行）。
-        if self.live_height > 0 {
-            out.push_str(&format!("\x1b[{}A\r", self.live_height));
+        // 1) 光标回到 live 区块首（锚点 = 输入行，见函数级注释）。
+        let up = self.live_height.saturating_sub(1);
+        if up > 0 {
+            out.push_str(&format!("\x1b[{up}A"));
         }
+        out.push('\r');
         // 2) 新历史行打印一次。写在旧 live 区顶部：旧 live 是 stale 内容，
         //    下面的 live 重绘 + ED 会清理。终端按需滚动，行进 scrollback。
         for line in commit {
@@ -88,13 +96,13 @@ mod tests {
         assert!(out.ends_with("\x1b[J\x1b[?2026l"), "{out:?}");
     }
 
-    /// 第二帧无新历史：只重绘 live 区（cursor-up = 上帧 live 高度）。
+    /// 第二帧无新历史：只重绘 live 区（锚点=输入行，上移 live 高度-1）。
     #[test]
     fn live_only_frame_moves_up_by_previous_height() {
         let mut r = InlineRenderer::new();
         r.frame(&["h1".into()], &["a".into(), "b".into()]);
         let out = r.frame(&[], &["a".into(), "b2".into()]);
-        assert!(out.contains("\x1b[2A\r"), "上移 2 行到块首：{out:?}");
+        assert!(out.contains("\x1b[1A\r"), "上移 1 行到块首：{out:?}");
         assert!(out.contains("\x1b[2Kb2"), "变化行清写：{out:?}");
         assert!(!out.contains("h1"), "历史行永不重写：{out:?}");
     }
@@ -105,7 +113,7 @@ mod tests {
         let mut r = InlineRenderer::new();
         r.frame(&[], &["a".into(), "b".into(), "c".into()]);
         let out = r.frame(&[], &["a".into()]);
-        assert!(out.contains("\x1b[3A\r"), "{out:?}");
+        assert!(out.contains("\x1b[2A\r"), "{out:?}");
         assert!(out.ends_with("\x1b[J\x1b[?2026l"), "ED 清残留：{out:?}");
     }
 
@@ -115,8 +123,8 @@ mod tests {
         let mut r = InlineRenderer::new();
         r.frame(&["h1".into(), "h2".into()], &["› x".into()]);
         let out = r.frame(&["h3".into()], &["› xy".into()]);
-        // 上移 1 行（live 高度）→ 打印 h3 → live 重绘。
-        assert!(out.contains("\x1b[1A\r"), "{out:?}");
+        // 上移 0 行（live 高度 1，锚点=输入行）→ 打印 h3 → live 重绘。
+        assert!(!out.contains("\x1b[1A"), "单行 live 无需上移：{out:?}");
         assert!(out.contains("h3\r\n"), "{out:?}");
         assert!(
             !out.contains("h1") && !out.contains("h2"),

@@ -29,6 +29,7 @@ pub mod model_selector;
 pub mod paste;
 pub mod session_ops;
 pub mod session_picker;
+pub mod setup_flow;
 pub mod slash_menu;
 pub mod snapshot;
 pub mod status_bar;
@@ -313,7 +314,7 @@ pub fn provider_config_guidance(config_dir: &std::path::Path) -> Option<String> 
     let default = config.default_provider.trim();
     if default.is_empty() || !config.providers.contains_key(default) {
         return Some(format!(
-            "未找到默认模型服务“{default}”。两种配置途径：\n  1) 桌面端 R-Code Dev「设置 → 模型服务」选择并保存；\n  2) 直接编辑 {}。",
+            "未找到默认模型服务“{default}”。三种配置途径：\n  1) 本 TUI 输入 /setup（选预设 + 输 API key，保存即默认）；\n  2) 桌面端 R-Code Dev「设置 → 模型服务」选择并保存；\n  3) 直接编辑 {}。",
             config_file.display()
         ));
     }

@@ -54,6 +54,7 @@ pub async fn run_external_editor(text: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn make_executable(path: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
         let mut permissions = std::fs::metadata(path).expect("stat").permissions();
@@ -82,6 +83,8 @@ mod tests {
 
     /// M4-02.A2：真实 run_external_editor + fixture EDITOR——成功回填、
     /// 非零退出取消（单测试内串行改 env，避免并行竞态）。
+    /// fixture 是 `#!/bin/sh` 脚本 + chmod，仅 Unix 可跑。
+    #[cfg(unix)]
     #[tokio::test]
     async fn external_editor_roundtrip_with_fixture_editor() {
         let dir = tempfile::tempdir().expect("tempdir");

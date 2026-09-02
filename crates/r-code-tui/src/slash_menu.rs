@@ -18,6 +18,10 @@ pub const COMMANDS: &[SlashCommand] = &[
         desc: "切换模型服务（fuzzy 搜索）",
     },
     SlashCommand {
+        name: "/setup",
+        desc: "配置模型服务（选预设 + 输入 API key）",
+    },
+    SlashCommand {
         name: "/thinking",
         desc: "思考级别（alt+T 打开，alt+, / alt+. 升降）",
     },
@@ -223,6 +227,7 @@ mod tests {
     use super::*;
 
     /// M4-03.A1：注册表 = 冻结的已实现命令集；计划中命令不在其中。
+    /// 2026-09-03 增补 /setup（症状3：无配置时 /model 死端 → 引导式配置）。
     #[test]
     fn registry_matches_frozen_implemented_set() {
         let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
@@ -230,6 +235,7 @@ mod tests {
             names,
             vec![
                 "/model",
+                "/setup",
                 "/thinking",
                 "/status",
                 "/usage",
@@ -241,7 +247,7 @@ mod tests {
                 "/help",
                 "/quit"
             ],
-            "已实现命令集（M6 收口后）"
+            "已实现命令集（M6 收口 + /setup 引导配置）"
         );
         for command in COMMANDS {
             assert!(
@@ -292,7 +298,7 @@ mod tests {
         let mut menu = SlashMenu::new("/");
         assert_eq!(menu.complete(), Some("/model"), "默认选中第一条");
         menu.move_down();
-        assert_eq!(menu.complete(), Some("/thinking"));
+        assert_eq!(menu.complete(), Some("/setup"));
         menu.move_up();
         assert_eq!(menu.complete(), Some("/model"));
         for _ in 0..20 {
@@ -304,8 +310,11 @@ mod tests {
             "下移钳在最后一条"
         );
         // 过滤后补全选中过滤集内条目。
-        let filtered = SlashMenu::new("/st");
+        let filtered = SlashMenu::new("/sta");
         assert_eq!(filtered.complete(), Some("/status"));
+        // /setup 已实现（前缀 /se 命中）。
+        let setup = SlashMenu::new("/se");
+        assert_eq!(setup.complete(), Some("/setup"));
     }
 
     /// M4-03.A4：? 面板两列渲染（键名列定宽、行宽一致）。

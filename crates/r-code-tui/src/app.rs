@@ -15,11 +15,12 @@ use crate::model_selector::ModelPicker;
 use crate::thinking::ThinkingPicker;
 use crate::TuiState;
 
-/// 底部插入式浮层（同一时刻至多一层；模型/思考/会话选择器）。
+/// 底部插入式浮层（同一时刻至多一层；模型/思考/会话选择器/引导式配置）。
 pub enum Overlay {
     Model(ModelPicker),
     Thinking(ThinkingPicker),
     Resume(crate::session_picker::SessionPicker),
+    Setup(crate::setup_flow::SetupFlow),
 }
 
 /// 交互循环的宿主回调（发送/steer/abort 的真实语义由 main.rs 装配）。
@@ -53,6 +54,8 @@ pub struct RunController {
     pub new_session: Arc<dyn Fn() + Send + Sync>,
     /// 重命名会话（/rename <title>）。
     pub rename_session: Arc<dyn Fn(String) + Send + Sync>,
+    /// 配置目录（/setup 引导流写回 config 与平台凭据）。
+    pub config_dir: std::path::PathBuf,
 }
 
 impl Default for RunController {
@@ -72,6 +75,7 @@ impl Default for RunController {
             resume_session: Arc::new(|_| {}),
             new_session: Arc::new(|| {}),
             rename_session: Arc::new(|_| {}),
+            config_dir: std::path::PathBuf::new(),
         }
     }
 }
@@ -110,6 +114,13 @@ pub async fn run_interactive(
     let mut last_live: Vec<String> = Vec::new();
     use std::io::Write;
     let mut stdout = std::io::stdout();
+    // 诊断记录器：环境变量指定路径则 tee 全部渲染字节（见帧写入处注释）。
+    let mut record: Option<std::fs::File> =
+        std::env::var_os("R_CODE_TUI_RECORD").and_then(|path| {
+            std::fs::File::create(std::path::PathBuf::from(path))
+                .map_err(|e| eprintln!("r-code-tui: R_CODE_TUI_RECORD 打开失败：{e}"))
+                .ok()
+        });
     loop {
         let (commit, live, caret_col, rows_len) = {
             let (
@@ -186,6 +197,13 @@ pub async fn run_interactive(
             let cursor_seq = renderer.cursor_to_live(0, caret_col as usize + 1);
             let _ = stdout.write_all(cursor_seq.as_bytes());
             let _ = stdout.flush();
+            // 字节级输出记录（诊断/回归：ConPTY 会重合成输出流，真字节
+            // 只有这里可取；R_CODE_TUI_RECORD=<file> 开启，帧边界以 2026 包
+            // 裹为准）。
+            if let Some(record) = record.as_mut() {
+                let _ = record.write_all(bytes.as_bytes());
+                let _ = record.write_all(cursor_seq.as_bytes());
+            }
             last_live = live;
         }
         committed = rows_len;
@@ -296,6 +314,58 @@ pub async fn run_interactive(
                             close = true;
                         }
                         _ => close = true,
+                    },
+                    Overlay::Setup(active) => match action {
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev => active.move_up(),
+                        KeyAction::ScrollDown | KeyAction::HistoryNext => active.move_down(),
+                        KeyAction::Backspace => active.backspace(),
+                        KeyAction::Insert(ch) => active.input_char(ch),
+                        KeyAction::Send => {
+                            if let Some(outcome) = active.advance() {
+                                match outcome {
+                                    crate::setup_flow::SubmitOutcome::EmptyKey => {
+                                        status = Some("API key 为空，未保存".to_string());
+                                    }
+                                    crate::setup_flow::SubmitOutcome::Applied {
+                                        provider,
+                                        model,
+                                    } => {
+                                        let preset = crate::setup_flow::setup_presets()
+                                            .into_iter()
+                                            .find(|preset| preset.id == provider);
+                                        match preset
+                                            .map(|preset| {
+                                                crate::setup_flow::apply(
+                                                    &controller.config_dir,
+                                                    preset,
+                                                    match active.step() {
+                                                        crate::setup_flow::Step::EnterKey {
+                                                            key,
+                                                            ..
+                                                        } => key.as_str(),
+                                                        _ => "",
+                                                    },
+                                                )
+                                            })
+                                            .unwrap_or_else(|| {
+                                                Err("预设缺失，配置未保存".to_string())
+                                            }) {
+                                            Ok(()) => {
+                                                status = Some(format!(
+                                                    "已配置并设为默认：({provider}) {model}——/model 可切换"
+                                                ));
+                                                close = true;
+                                            }
+                                            Err(error) => {
+                                                status = Some(error);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        KeyAction::Quit => close = active.back(),
+                        _ => {}
                     },
                 }
                 if close {
@@ -414,8 +484,13 @@ pub async fn run_interactive(
                     } else if trimmed == "/model" {
                         overlay = (controller.open_model_picker)().map(Overlay::Model);
                         if overlay.is_none() {
-                            status = Some("没有可用的模型服务（先完成 provider 配置）".to_string());
+                            // 症状3修复：死端改引导——无可用服务时直接进 /setup 流。
+                            overlay = Some(Overlay::Setup(crate::setup_flow::SetupFlow::new()));
+                            status =
+                                Some("没有可用的模型服务——已进入配置向导（Esc 取消）".to_string());
                         }
+                    } else if trimmed == "/setup" {
+                        overlay = Some(Overlay::Setup(crate::setup_flow::SetupFlow::new()));
                     } else if trimmed == "/status" || trimmed == "/usage" {
                         let (card, summary) = (controller.status_report)();
                         let mut st = state.lock().unwrap();

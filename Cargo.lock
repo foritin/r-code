@@ -4303,6 +4303,7 @@ dependencies = [
 name = "r-code-tui"
 version = "1.0.1"
 dependencies = [
+ "agent-config",
  "agent-contract",
  "chrono",
  "crossterm",

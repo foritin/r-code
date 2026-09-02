@@ -767,7 +767,7 @@ const REGISTRY = {
     assertions: [
       {
         id: "M4-03.A1",
-        description: "注册表 = 冻结已实现命令集（/model /thinking /status /usage /clear /help /quit）；计划中命令不入菜单",
+        description: "注册表 = 冻结已实现命令集（/model /setup /thinking /status /usage /resume /new /rename /compact /clear /help /quit）；计划中命令不入菜单",
         kind: "self",
         async check(ctx) {
           const record = await ctx.runner.run([

@@ -591,6 +591,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         resume_session,
         new_session,
         rename_session,
+        config_dir: state.config_dir.clone(),
     };
 
     // M5-02：inline 模式——只进 raw + bracketed paste，不进备用屏

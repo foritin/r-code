@@ -175,7 +175,7 @@ pub fn status_card_lines(
         _ => format!("{} used", format_compact(stats.total_tokens())),
     };
     let rows = vec![
-        format!(" >_ R-Code CLI"),
+        " >_ R-Code CLI".to_string(),
         String::new(),
         format!("{}{}", label("model:"), model_label),
         format!("{}{}", label("directory:"), directory),

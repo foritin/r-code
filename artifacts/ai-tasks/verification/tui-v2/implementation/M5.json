@@ -3,12 +3,12 @@
   "scope": "milestone",
   "scope_id": "M5",
   "profile": "implementation",
-  "generated_at": "2026-09-02T08:40:56.360Z",
-  "started_at": "2026-09-02T08:40:36.007Z",
-  "finished_at": "2026-09-02T08:40:56.360Z",
-  "duration_ms": 20353,
-  "revision": "f92f40ad2c2119a66daf2aac910b35031c577d8d",
-  "worktree_digest": "253ffedc19ebf775c1b01bfc5ce178da0d1681e5f2042483191120eaa3a238ba",
+  "generated_at": "2026-09-02T13:07:53.152Z",
+  "started_at": "2026-09-02T13:07:09.225Z",
+  "finished_at": "2026-09-02T13:07:53.152Z",
+  "duration_ms": 43927,
+  "revision": "702f3a21ed5e716ff473f05d7dbbd9b1bfb0d286",
+  "worktree_digest": "da5327f3694d3a98a9c7c7294edc71df6cf91088fda2083abf18110304f14d18",
   "worktree_dirty": true,
   "summary": {
     "total": 69,
@@ -34,7 +34,7 @@
       "description": "文档门禁 check 通过：freeze digest 一致、blocking=0、major=0",
       "required": true,
       "status": "passed",
-      "evidence": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-e9969a657a18.log",
+      "evidence": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-cf9f0dfecfc2.log",
       "details": {
         "exitCode": 0,
         "gatePassed": true
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "f92f40ad2c2119a66daf2aac910b35031c577d8d",
+        "revision": "702f3a21ed5e716ff473f05d7dbbd9b1bfb0d286",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -112,7 +112,7 @@
       "status": "passed",
       "details": {
         "exitCode": 2,
-        "baselineFormRecorded": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-68390e6bc07b.log",
+        "baselineFormRecorded": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-68390e6bc07b.log",
         "note": "M1-01 前 = mock 回放 exit 0；M1-01 后无配置 = 显式引导 exit 2。基线形态以 cmd 日志为准。"
       },
       "task": "M0-02"
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-d8682d0539f5.log"
+        "log": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-fc7c9b2605cd.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-a2d2e44b2f11.log"
+        "log": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-da62dc61da0e.log"
       },
       "task": "M1-01"
     },
@@ -161,7 +161,7 @@
       "details": {
         "exitCode": 2,
         "rejected": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-0b7cf3463585.log"
+        "log": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-0b7cf3463585.log"
       },
       "task": "M1-01"
     },
@@ -542,7 +542,7 @@
     },
     {
       "id": "M4-03.A1",
-      "description": "注册表 = 冻结已实现命令集（/model /thinking /status /usage /clear /help /quit）；计划中命令不入菜单",
+      "description": "注册表 = 冻结已实现命令集（/model /setup /thinking /status /usage /resume /new /rename /compact /clear /help /quit）；计划中命令不入菜单",
       "required": true,
       "status": "passed",
       "details": {
@@ -794,107 +794,107 @@
   "evidence_index": [
     {
       "task": "M0-01",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M0-01.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M0-01.yaml",
       "exists": true
     },
     {
       "task": "M0-02",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M0-02.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M0-02.yaml",
       "exists": true
     },
     {
       "task": "M1-01",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-01.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M1-01.yaml",
       "exists": true
     },
     {
       "task": "M1-02",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-02.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M1-02.yaml",
       "exists": true
     },
     {
       "task": "M1-03",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-03.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M1-03.yaml",
       "exists": true
     },
     {
       "task": "M1-04",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-04.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M1-04.yaml",
       "exists": true
     },
     {
       "task": "M2-01",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-01.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M2-01.yaml",
       "exists": true
     },
     {
       "task": "M2-02",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-02.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M2-02.yaml",
       "exists": true
     },
     {
       "task": "M2-03",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-03.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M2-03.yaml",
       "exists": true
     },
     {
       "task": "M2-04",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-04.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M2-04.yaml",
       "exists": true
     },
     {
       "task": "M2-05",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-05.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M2-05.yaml",
       "exists": true
     },
     {
       "task": "M3-01",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M3-01.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M3-01.yaml",
       "exists": true
     },
     {
       "task": "M3-02",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M3-02.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M3-02.yaml",
       "exists": true
     },
     {
       "task": "M4-01",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-01.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M4-01.yaml",
       "exists": true
     },
     {
       "task": "M4-02",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-02.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M4-02.yaml",
       "exists": true
     },
     {
       "task": "M4-03",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-03.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M4-03.yaml",
       "exists": true
     },
     {
       "task": "M4-04",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-04.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M4-04.yaml",
       "exists": true
     },
     {
       "task": "M4-05",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-05.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M4-05.yaml",
       "exists": true
     },
     {
       "task": "M5-01",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-01.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M5-01.yaml",
       "exists": true
     },
     {
       "task": "M5-02",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-02.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M5-02.yaml",
       "exists": true
     },
     {
       "task": "M5-03",
-      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-03.yaml",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v2\\M5-03.yaml",
       "exists": true
     }
   ],
