@@ -4304,6 +4304,7 @@ name = "r-code-tui"
 version = "1.0.1"
 dependencies = [
  "agent-contract",
+ "chrono",
  "crossterm",
  "r-code-agent-worker",
  "r-code-core",

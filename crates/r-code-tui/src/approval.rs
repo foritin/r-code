@@ -7,7 +7,7 @@
 use crate::interaction::ApprovalCard;
 
 /// 用户对审批卡的决策（意图；执行经宿主 PermissionEngine）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
     Approve,
     ApproveAlways,

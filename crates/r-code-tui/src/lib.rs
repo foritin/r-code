@@ -14,6 +14,7 @@ use r_code_core::dto::{AgentEvent, TaskState};
 
 pub mod app;
 pub mod approval;
+pub mod approval_overlay;
 pub mod bang_command;
 pub mod fullscreen;
 pub mod ime;
@@ -64,6 +65,8 @@ pub struct TuiState {
     /// 待发送队列的展示镜像（M2-04：权威在宿主持久化队列；此处仅渲染投影，
     /// 新 run 启动（Activity）即清空——宿主在 run 结束时自动派发队列）。
     queued: Vec<String>,
+    /// 待审批请求投影（M2-05：权威在 PermissionEngine pending 队列）。
+    pending_approval: Option<crate::approval_overlay::PendingApproval>,
 }
 
 impl TuiState {
@@ -188,6 +191,20 @@ impl TuiState {
 
     pub fn queued(&self) -> &[String] {
         &self.queued
+    }
+
+    /// 待审批请求（Some 时浮层自动呈现，键位被审批契约接管）。
+    pub fn pending_approval(&self) -> Option<&crate::approval_overlay::PendingApproval> {
+        self.pending_approval.as_ref()
+    }
+
+    pub fn set_pending_approval(&mut self, pending: crate::approval_overlay::PendingApproval) {
+        self.pending_approval = Some(pending);
+    }
+
+    /// 取走待审批请求（决策时消费；None = 已被处理）。
+    pub fn take_pending_approval(&mut self) -> Option<crate::approval_overlay::PendingApproval> {
+        self.pending_approval.take()
     }
 }
 

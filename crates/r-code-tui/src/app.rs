@@ -45,6 +45,8 @@ pub struct RunController {
     pub set_mode: Arc<dyn Fn(&'static str) + Send + Sync>,
     /// 运行中排队发送（宿主 AgentSendMode::Queue）。
     pub queue_send: Arc<dyn Fn(String) + Send + Sync>,
+    /// 审批决策落账（y/a/esc 三键契约；经宿主 PermissionEngine）。
+    pub decide_approval: Arc<dyn Fn(crate::approval::ApprovalDecision) + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -57,6 +59,7 @@ impl Default for RunController {
             set_thinking: Arc::new(|_| {}),
             set_mode: Arc::new(|_| {}),
             queue_send: Arc::new(|_| {}),
+            decide_approval: Arc::new(|_| {}),
         }
     }
 }
@@ -114,6 +117,13 @@ pub async fn run_interactive(
         });
 
         if let Some(key) = event {
+            // M2-05：待审批请求接管键位（y/a/esc；必须决策，不可忽略关闭）。
+            if overlay.is_none() && state.lock().unwrap().pending_approval().is_some() {
+                if let Some(decision) = approval_decision_for_key(map_key(key)) {
+                    (controller.decide_approval)(decision);
+                }
+                continue;
+            }
             // 浮层打开期间独占键位（↑↓/enter/esc/字符过滤/backspace）。
             if overlay.is_some() {
                 let action = map_key(key);
@@ -255,7 +265,7 @@ fn render(
         st.flush_streaming();
         st.rows().to_vec()
     };
-    let (running, model_selection, thinking, mode_badge, queue_block) = {
+    let (running, model_selection, thinking, mode_badge, queue_block, approval) = {
         let st = state.lock().unwrap();
         (
             st.is_running(),
@@ -263,8 +273,12 @@ fn render(
             st.thinking().map(str::to_string),
             crate::task_mode::mode_badge(st.task_mode()),
             crate::queue_lines(st.queued()),
+            st.pending_approval().cloned(),
         )
     };
+    let approval_lines = approval
+        .as_ref()
+        .map(crate::approval_overlay::overlay_lines);
 
     let area = frame.area();
     if screen.mode == crate::fullscreen::ScreenMode::Fullscreen {
@@ -285,6 +299,7 @@ fn render(
             label,
             mode_badge,
             queue_block,
+            approval_lines,
             overlay,
         );
     }
@@ -362,6 +377,7 @@ fn render_regular(
     model_label: Option<String>,
     mode_badge: Option<(&'static str, crate::task_mode::BadgeColor)>,
     queue_block: Vec<String>,
+    approval_lines: Option<Vec<crate::approval_overlay::OverlayLine>>,
     overlay: Option<&Overlay>,
 ) {
     // 浮层打开时：底部预留插入式列表（≤8 行 + 查询行），列表在输入区上方；
@@ -401,7 +417,41 @@ fn render_regular(
         frame.render_widget(queue_paragraph, chunks[1]);
     }
 
-    if let (Some(overlay), true) = (overlay, overlay_height > 0) {
+    // M2-05：审批浮层（带面语义：内联底部面板，Title bold / Command magenta / Hint dim）。
+    if let Some(lines) = approval_lines {
+        let styled: Vec<Line<'static>> = lines
+            .iter()
+            .map(|line| {
+                let style = match line.kind {
+                    crate::approval_overlay::LineKind::Title => {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    }
+                    crate::approval_overlay::LineKind::Command => {
+                        Style::default().fg(Color::Magenta)
+                    }
+                    crate::approval_overlay::LineKind::Option => Style::default(),
+                    crate::approval_overlay::LineKind::Hint => Style::default().fg(Color::DarkGray),
+                };
+                Line::from(Span::styled(line.text.clone(), style))
+            })
+            .collect();
+        let height = styled.len() as u16;
+        let band = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(height), Constraint::Min(0)].as_ref())
+            .split(chunks[2]);
+        frame.render_widget(
+            Paragraph::new(styled).block(Block::default().borders(Borders::TOP)),
+            band[0],
+        );
+        // 其余浮层（若同时存在）渲染在审批带之下。
+        if let (Some(overlay), true) = (overlay, overlay_height > 0) {
+            match overlay {
+                Overlay::Model(picker) => render_model_picker(frame, band[1], picker),
+                Overlay::Thinking(picker) => render_thinking_picker(frame, band[1], picker),
+            }
+        }
+    } else if let (Some(overlay), true) = (overlay, overlay_height > 0) {
         match overlay {
             Overlay::Model(picker) => render_model_picker(frame, chunks[2], picker),
             Overlay::Thinking(picker) => render_thinking_picker(frame, chunks[2], picker),
@@ -502,6 +552,15 @@ fn render_thinking_picker(frame: &mut Frame<'_>, area: Rect, picker: &ThinkingPi
     frame.render_widget(picker_paragraph, area);
 }
 
+/// M2-05：审批接管期的键位映射（y/a=决策，esc/ctrl-c=拒绝——审批不可忽略关闭）。
+fn approval_decision_for_key(action: KeyAction) -> Option<crate::approval::ApprovalDecision> {
+    match action {
+        KeyAction::Insert(ch) => crate::approval_overlay::map_decision(ch),
+        KeyAction::Quit | KeyAction::Abort => Some(crate::approval::ApprovalDecision::Deny),
+        _ => None,
+    }
+}
+
 fn render_fullscreen(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -524,6 +583,7 @@ fn render_fullscreen(
         None,
         None,
         Vec::new(),
+        None,
         None,
     );
 }

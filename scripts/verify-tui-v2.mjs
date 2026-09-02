@@ -417,6 +417,55 @@ const REGISTRY = {
       },
     ],
   },
+  "M2-05": {
+    milestone: "M2",
+    assertions: [
+      {
+        id: "M2-05.A1",
+        description: "浮层渲染契约（行快照：bold 标题、$ 命令、编号选项 1/2/3、a 任务级放行措辞）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "overlay_lines_match_codex_shape",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-05.A2",
+        description: "y/a/esc → 三态映射（含宿主 PermissionDecision 对齐）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "decision_keys_map_to_three_states",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-05.A3",
+        description: "a 放行 → 宿主 standing rule 生效（同任务同工具复检直接 Allowed）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "approve_always_creates_standing_rule",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-05.A4",
+        description: "esc 拒绝 → pending 清空、复检回到 NeedsApproval（会话可继续）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "deny_clears_pending_and_session_continues",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M2-04": {
     milestone: "M2",
     assertions: [

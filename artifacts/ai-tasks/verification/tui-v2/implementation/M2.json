@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M2",
   "profile": "implementation",
-  "generated_at": "2026-09-02T04:21:00.462Z",
-  "started_at": "2026-09-02T04:20:49.946Z",
-  "finished_at": "2026-09-02T04:21:00.462Z",
-  "duration_ms": 10516,
-  "revision": "a26c2960a8bbdb14f5060b8e458e8994074dc72f",
-  "worktree_digest": "acc60961796fc2e342bee25da183af7ef389bede3721e78eb6b4ec1fbd87d3e9",
+  "generated_at": "2026-09-02T04:26:40.055Z",
+  "started_at": "2026-09-02T04:26:22.678Z",
+  "finished_at": "2026-09-02T04:26:40.055Z",
+  "duration_ms": 17377,
+  "revision": "e04e7e7cef4463350a965dd4c6c27421dc309bd0",
+  "worktree_digest": "0e1d1a08c2f18e4068a3d37923ba0baaa266fd2c1fdb11d121c69cec9cfe3121",
   "worktree_dirty": true,
   "summary": {
-    "total": 31,
-    "passed": 31,
+    "total": 35,
+    "passed": 35,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "a26c2960a8bbdb14f5060b8e458e8994074dc72f",
+        "revision": "e04e7e7cef4463350a965dd4c6c27421dc309bd0",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-5e680833900f.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-45feb0308dcb.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-ea4a7987b2eb.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-d01276f8e1f7.log"
       },
       "task": "M1-01"
     },
@@ -367,6 +367,46 @@
         "exitCode": 0
       },
       "task": "M2-04"
+    },
+    {
+      "id": "M2-05.A1",
+      "description": "浮层渲染契约（行快照：bold 标题、$ 命令、编号选项 1/2/3、a 任务级放行措辞）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
+    },
+    {
+      "id": "M2-05.A2",
+      "description": "y/a/esc → 三态映射（含宿主 PermissionDecision 对齐）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
+    },
+    {
+      "id": "M2-05.A3",
+      "description": "a 放行 → 宿主 standing rule 生效（同任务同工具复检直接 Allowed）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
+    },
+    {
+      "id": "M2-05.A4",
+      "description": "esc 拒绝 → pending 清空、复检回到 NeedsApproval（会话可继续）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
     }
   ],
   "failed_assertions": [],
@@ -419,6 +459,11 @@
     {
       "task": "M2-04",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-04.yaml",
+      "exists": true
+    },
+    {
+      "task": "M2-05",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-05.yaml",
       "exists": false
     }
   ],

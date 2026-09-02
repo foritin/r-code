@@ -358,6 +358,65 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         });
     });
 
+    // M2-05：审批请求订阅泵（PermissionEngine broadcast → TuiState 投影）。
+    {
+        let engine = state.permission_engine.clone();
+        let tui = tui_state.clone();
+        let mut requests = engine.subscribe_requests();
+        handle.spawn(async move {
+            loop {
+                match requests.recv().await {
+                    Ok(request) => {
+                        if let Ok(mut st) = tui.lock() {
+                            st.set_pending_approval(
+                                r_code_tui::approval_overlay::PendingApproval::from_request(
+                                    &request,
+                                ),
+                            );
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    // M2-05：y/a/esc 决策落账（意图经宿主 PermissionEngine；不绕过安全边界）。
+    let approval_state = state.clone();
+    let approval_handle = handle.clone();
+    let approval_tui = tui_state.clone();
+    let decide_approval: Arc<dyn Fn(r_code_tui::approval::ApprovalDecision) + Send + Sync> =
+        Arc::new(move |decision| {
+            let Some(pending) = approval_tui
+                .lock()
+                .ok()
+                .and_then(|mut st| st.take_pending_approval())
+            else {
+                return;
+            };
+            let engine = approval_state.permission_engine.clone();
+            let tui = approval_tui.clone();
+            approval_handle.spawn(async move {
+                let host_decision = r_code_tui::approval_overlay::to_host_decision(decision);
+                let result = engine.decide(&pending.request_id, host_decision).await;
+                match result {
+                    Ok(()) => {
+                        if let Ok(mut st) = tui.lock() {
+                            st.push_system(r_code_tui::approval_overlay::resolution_note(
+                                &pending, decision,
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        if let Ok(mut st) = tui.lock() {
+                            st.push_system(format!("审批落账失败：{error}"));
+                        }
+                    }
+                }
+            });
+        });
+
     let controller = RunController {
         send,
         abort,
@@ -366,6 +425,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         set_thinking,
         set_mode,
         queue_send,
+        decide_approval,
     };
 
     crossterm::terminal::enable_raw_mode().expect("raw mode");

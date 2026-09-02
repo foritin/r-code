@@ -1,0 +1,69 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M2-05
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m2-05-审批浮层-codex-化
+
+revision:
+  git_revision: e04e7e7
+  worktree_digest: recorded-in-report-M2-05.json
+
+deliverables:
+  - crates/r-code-tui/src/approval_overlay.rs（codex 形态浮层行/键映射/决策翻译 + 4 单测含 2 条 PermissionEngine 真实集成）
+  - crates/r-code-tui/src/approval.rs（ApprovalDecision 派生 Copy）
+  - crates/r-code-tui/src/lib.rs（TuiState.pending_approval 投影）
+  - crates/r-code-tui/src/app.rs（审批接管键位 + 带面渲染：Title bold/Command magenta/Hint dim）
+  - crates/r-code-tui/src/main.rs（PermissionEngine 订阅泵 + decide_approval 落账装配）
+  - crates/r-code-tui/Cargo.toml（chrono dev/main dep 补齐）
+  - scripts/verify-tui-v2.mjs M2-05 断言注册
+changed_paths:
+  - crates/r-code-tui/src/approval_overlay.rs
+  - crates/r-code-tui/src/approval.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/main.rs
+  - crates/r-code-tui/Cargo.toml
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M2-05.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib overlay_lines_match_codex_shape
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-05.json
+    note: "行快照：bold 标题（是否允许执行以下命令？）、$ 命令前缀、编号选项 1/2/3、a=任务级放行措辞、esc=拒绝"
+  - id: "M2-05.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib decision_keys_map_to_three_states
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-05.json
+    note: "y/Y→Allow、a/A→AllowAlways、宿主 PermissionDecision 三态对齐、非决策键 None"
+  - id: "M2-05.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib approve_always_creates_standing_rule
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-05.json
+    note: "真实 PermissionEngine 集成：AllowAlways 落账后同任务同工具复检直接 Allowed（standing rule 命中）"
+  - id: "M2-05.A4"
+    passed: true
+    command: cargo test -p r-code-tui --lib deny_clears_pending_and_session_continues
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-05.json
+    note: "Deny 后 pending 清空、新请求仍走审批流（会话可继续）；TUI 侧拒绝注记经 resolution_note 进 transcript"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M2 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2.json
+
+decisions:
+  - DM1: 审批接管语义：pending 存在时键位被审批契约接管且必须决策（y/a=决策，esc/ctrl-c=拒绝，无"忽略关闭"路径）——避免审批卡被 Esc 顺手关掉后工具调用悬挂。
+  - DM2: `a` = 宿主 AllowAlways（本任务级 standing rule；R3/R4 由宿主 add_standing_rule 拒绝——语义如实，不实现 codex 的命令前缀粒度，前缀放行为宿主未来扩展，浮层措辞用"本任务内不再询问"）。
+  - DM3: 请求泵 = PermissionEngine.subscribe_requests() broadcast → TuiState 投影；决策经 engine.decide(request_id)（v1 approval.rs 的 ApprovalDecision 意图链与 MC-5 合同对齐）。
+  - DM4: 带面渲染先于其他浮层（审批优先级最高；模型/思考浮层在审批期间不可达——键位已被接管）。
+external_gates_remaining:
+  - 真实运行中工具调用的审批浮层端到端（需要真实 provider 发起 R2+ 工具调用；本任务覆盖引擎集成与渲染契约，全链路在 §11.3 真实 Provider 复测）
+notes: []

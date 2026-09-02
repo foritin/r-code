@@ -1,0 +1,69 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-05",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:26:19.791Z",
+  "started_at": "2026-09-02T04:26:18.590Z",
+  "finished_at": "2026-09-02T04:26:19.791Z",
+  "duration_ms": 1201,
+  "revision": "e04e7e7cef4463350a965dd4c6c27421dc309bd0",
+  "worktree_digest": "08ee9ba0c1e7e018d3fa508ee440164fa30a45823c328f9ef7526c2ee027d730",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-05.A1",
+      "description": "浮层渲染契约（行快照：bold 标题、$ 命令、编号选项 1/2/3、a 任务级放行措辞）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
+    },
+    {
+      "id": "M2-05.A2",
+      "description": "y/a/esc → 三态映射（含宿主 PermissionDecision 对齐）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
+    },
+    {
+      "id": "M2-05.A3",
+      "description": "a 放行 → 宿主 standing rule 生效（同任务同工具复检直接 Allowed）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
+    },
+    {
+      "id": "M2-05.A4",
+      "description": "esc 拒绝 → pending 清空、复检回到 NeedsApproval（会话可继续）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-05"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-05",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-05.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}
