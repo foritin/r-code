@@ -3,12 +3,12 @@
   "scope": "milestone",
   "scope_id": "M6",
   "profile": "implementation",
-  "generated_at": "2026-09-02T13:07:57.371Z",
-  "started_at": "2026-09-02T13:06:23.151Z",
-  "finished_at": "2026-09-02T13:07:57.371Z",
-  "duration_ms": 94220,
-  "revision": "702f3a21ed5e716ff473f05d7dbbd9b1bfb0d286",
-  "worktree_digest": "da5327f3694d3a98a9c7c7294edc71df6cf91088fda2083abf18110304f14d18",
+  "generated_at": "2026-09-02T13:55:48.036Z",
+  "started_at": "2026-09-02T13:54:01.029Z",
+  "finished_at": "2026-09-02T13:55:48.036Z",
+  "duration_ms": 107007,
+  "revision": "6090c230af5cf74f4915e93cdcf2c6925f20173b",
+  "worktree_digest": "d0173c1536ef30425e49b947421d3b46f18f56f8ee6c8c862f14d72d2e96e635",
   "worktree_dirty": true,
   "summary": {
     "total": 78,
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "702f3a21ed5e716ff473f05d7dbbd9b1bfb0d286",
+        "revision": "6090c230af5cf74f4915e93cdcf2c6925f20173b",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-630c047626e7.log"
+        "log": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-fe304bade0d4.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-e7b01b6514e3.log"
+        "log": "artifacts\\ai-tasks\\verification\\tui-v2\\implementation\\logs\\cmd-2410281b3ed8.log"
       },
       "task": "M1-01"
     },
@@ -842,7 +842,7 @@
     },
     {
       "id": "M6-02.A3",
-      "description": "/compact 数据缺口如实暴露（宿主无公开压缩命令，接线方显式引导）",
+      "description": "/compact 支持断言（2026-09-03 G5 接线宿主 task_compact_context，显式压缩可用）",
       "required": true,
       "status": "passed",
       "details": {

@@ -188,6 +188,66 @@ impl InputBuffer {
         ch.is_alphanumeric() || ch == '_'
     }
 
+    /// 光标是否在首行（↑ 的历史翻页边界，pi 对齐 G3）。
+    pub fn cursor_on_first_line(&self) -> bool {
+        !self.chars[..self.cursor].contains(&'\n')
+    }
+
+    /// 光标是否在末行（↓ 的历史翻页边界）。
+    pub fn cursor_on_last_line(&self) -> bool {
+        !self.chars[self.cursor..].contains(&'\n')
+    }
+
+    /// 垂直上移：保持 char 列，目标行短则到行尾；已在首行返回 false
+    /// （调用方据此翻历史）。纯移动不进 undo 栈。
+    pub fn move_up(&mut self) -> bool {
+        if self.cursor_on_first_line() {
+            return false;
+        }
+        let current_start = self.line_start_index();
+        let column = self.cursor - current_start;
+        // 上一行范围 = [prev_start, current_start-1)。
+        let prev_start = self.chars[..current_start - 1]
+            .iter()
+            .rposition(|ch| *ch == '\n')
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let prev_end = current_start - 1; // 该行行尾（'\n' 位置）
+        self.cursor = (prev_start + column).min(prev_end);
+        true
+    }
+
+    /// 垂直下移：保持 char 列；已在末行返回 false（调用方据此翻历史）。
+    pub fn move_down(&mut self) -> bool {
+        if self.cursor_on_last_line() {
+            return false;
+        }
+        let current_start = self.line_start_index();
+        let column = self.cursor - current_start;
+        let next_start = self.chars[self.cursor..]
+            .iter()
+            .position(|ch| *ch == '\n')
+            .map(|offset| self.cursor + offset + 1)
+            .unwrap_or(self.chars.len());
+        // 下一行行尾 = 再下一个 '\n' 或缓冲末尾。
+        let next_end = self.chars[next_start..]
+            .iter()
+            .position(|ch| *ch == '\n')
+            .map(|offset| next_start + offset)
+            .unwrap_or(self.chars.len());
+        self.cursor = (next_start + column).min(next_end);
+        true
+    }
+
+    /// 光标所在行的行首 char 索引。
+    fn line_start_index(&self) -> usize {
+        self.chars[..self.cursor]
+            .iter()
+            .rposition(|ch| *ch == '\n')
+            .map(|index| index + 1)
+            .unwrap_or(0)
+    }
+
     pub fn move_left(&mut self) {
         self.cursor = self.prev_grapheme_start();
     }
@@ -309,12 +369,20 @@ pub enum KeyAction {
     WordRight,
     /// 外部编辑器（Ctrl+G）。
     ExternalEditor,
-    /// 历史上一条（↑ / Ctrl+P）。
+    /// 历史上一条（Ctrl+P；↑ 在首行边界时由 app.rs 门控转此语义）。
     HistoryPrev,
-    /// 历史下一条（↓ / Ctrl+N）。
+    /// 历史下一条（Ctrl+N；↓ 在末行边界时由 app.rs 门控转此语义）。
     HistoryNext,
     /// transcript 浮层开关（Ctrl+T）。
     ToggleTranscript,
+    /// 打开模型选择器（Ctrl+L，pi 对齐 G1）。
+    OpenModelPicker,
+    /// 浮层选中项持久为全局默认（Ctrl+S，pi 对齐 G2）。
+    PersistSelection,
+    /// 垂直上移（↑：多行编辑先移动光标，首行边界翻历史）。
+    CursorUp,
+    /// 垂直下移（↓：多行编辑先移动光标，末行边界翻历史）。
+    CursorDown,
     /// 忽略（未映射键）。
     Ignore,
 }
@@ -343,6 +411,8 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('p') | KeyCode::Char('P') if ctrl => KeyAction::HistoryPrev,
         KeyCode::Char('n') | KeyCode::Char('N') if ctrl => KeyAction::HistoryNext,
         KeyCode::Char('t') | KeyCode::Char('T') if ctrl => KeyAction::ToggleTranscript,
+        KeyCode::Char('l') | KeyCode::Char('L') if ctrl => KeyAction::OpenModelPicker,
+        KeyCode::Char('s') | KeyCode::Char('S') if ctrl => KeyAction::PersistSelection,
         KeyCode::PageUp => KeyAction::ScrollUp,
         KeyCode::PageDown => KeyAction::ScrollDown,
         KeyCode::Left if ctrl => KeyAction::WordLeft,
@@ -360,8 +430,8 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Right => KeyAction::CursorRight,
         KeyCode::Home => KeyAction::CursorHome,
         KeyCode::End => KeyAction::CursorEnd,
-        KeyCode::Up => KeyAction::HistoryPrev,
-        KeyCode::Down => KeyAction::HistoryNext,
+        KeyCode::Up => KeyAction::CursorUp,
+        KeyCode::Down => KeyAction::CursorDown,
         KeyCode::Esc => KeyAction::Quit,
         _ => KeyAction::Ignore,
     }
@@ -393,17 +463,24 @@ mod tests {
     }
 
     /// 按键映射：Enter 发送、Ctrl-C abort、Esc 退出、可打印插入、F10 切全屏。
+    /// 2026-09-03 G1/G2/G3：↑↓=垂直移动（app 层门控翻历史）、ctrl+l=模型
+    /// 选择器、ctrl+s=浮层持久选中。
     #[test]
     fn key_mapping_actions() {
         let key = |code| map_key(KeyEvent::new(code, KeyModifiers::NONE));
         let ctrl = |code| map_key(KeyEvent::new(code, KeyModifiers::CONTROL));
         assert_eq!(key(KeyCode::Enter), KeyAction::Send);
         assert_eq!(key(KeyCode::Esc), KeyAction::Quit);
-        assert_eq!(key(KeyCode::Up), KeyAction::HistoryPrev);
+        assert_eq!(key(KeyCode::Up), KeyAction::CursorUp);
+        assert_eq!(key(KeyCode::Down), KeyAction::CursorDown);
         assert_eq!(key(KeyCode::PageUp), KeyAction::ScrollUp);
         assert_eq!(ctrl(KeyCode::Char('c')), KeyAction::Abort);
         assert_eq!(ctrl(KeyCode::Char('d')), KeyAction::Quit);
         assert_eq!(ctrl(KeyCode::Char('t')), KeyAction::ToggleTranscript);
+        assert_eq!(ctrl(KeyCode::Char('l')), KeyAction::OpenModelPicker);
+        assert_eq!(ctrl(KeyCode::Char('s')), KeyAction::PersistSelection);
+        assert_eq!(ctrl(KeyCode::Char('p')), KeyAction::HistoryPrev);
+        assert_eq!(ctrl(KeyCode::Char('n')), KeyAction::HistoryNext);
         assert_eq!(key(KeyCode::Char('你')), KeyAction::Insert('你'));
         assert_eq!(key(KeyCode::Backspace), KeyAction::Backspace);
         assert_eq!(key(KeyCode::Delete), KeyAction::DeleteForward);
@@ -411,6 +488,34 @@ mod tests {
         assert_eq!(key(KeyCode::Right), KeyAction::CursorRight);
         assert_eq!(key(KeyCode::Home), KeyAction::CursorHome);
         assert_eq!(key(KeyCode::End), KeyAction::CursorEnd);
+    }
+
+    /// G3：多行垂直移动保持 char 列、目标行短则钳到行尾；首/末行边界返回
+    /// false（app 层据此翻历史）。
+    #[test]
+    fn vertical_movement_columns_and_boundaries() {
+        let mut buf = InputBuffer::new();
+        buf.insert_str("abc\n中文字\nxy");
+        // 光标在末行尾（"xy" 第 2 列）：↑ 到第二行同列 = "中文"后。
+        assert!(buf.move_up());
+        assert_eq!(buf.cursor(), "abc\n中文".chars().count());
+        // 再 ↑ 到首行第 2 列。
+        assert!(buf.move_up());
+        assert_eq!(buf.cursor(), "ab".chars().count());
+        // 首行再 ↑ = false（翻历史信号）。
+        assert!(!buf.move_up());
+        // ↓ 原路返回：第二行第 2 列 → 末行第 2 列（行尾）。
+        assert!(buf.move_down());
+        assert_eq!(buf.cursor(), "abc\n中文".chars().count());
+        assert!(buf.move_down());
+        assert_eq!(buf.cursor(), "abc\n中文字\nxy".chars().count());
+        // 末行再 ↓ = false（向前翻历史信号）。
+        assert!(!buf.move_down());
+        // 单行缓冲：两个方向都是边界。
+        let mut single = InputBuffer::new();
+        single.insert_str("one");
+        assert!(!single.move_up());
+        assert!(!single.move_down());
     }
 
     /// M4-01.A1：多行编辑与显式换行（newline/backspace 跨行合并/take 全文）。

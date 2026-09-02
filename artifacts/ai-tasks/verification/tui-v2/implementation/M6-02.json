@@ -3,12 +3,12 @@
   "scope": "task",
   "scope_id": "M6-02",
   "profile": "implementation",
-  "generated_at": "2026-09-02T13:07:57.346Z",
-  "started_at": "2026-09-02T13:07:55.261Z",
-  "finished_at": "2026-09-02T13:07:57.346Z",
-  "duration_ms": 2085,
-  "revision": "702f3a21ed5e716ff473f05d7dbbd9b1bfb0d286",
-  "worktree_digest": "43f84e29b88f2c5342487a7315dfcb84977014e9bf5d01ca1fd125dbd07442b2",
+  "generated_at": "2026-09-02T13:55:48.012Z",
+  "started_at": "2026-09-02T13:55:45.713Z",
+  "finished_at": "2026-09-02T13:55:48.012Z",
+  "duration_ms": 2299,
+  "revision": "6090c230af5cf74f4915e93cdcf2c6925f20173b",
+  "worktree_digest": "c696ce2dbbafa568cdb295fe64873bf4bf25d88af4563a29e3badaac724cea88",
   "worktree_dirty": true,
   "summary": {
     "total": 3,
@@ -38,7 +38,7 @@
     },
     {
       "id": "M6-02.A3",
-      "description": "/compact 数据缺口如实暴露（宿主无公开压缩命令，接线方显式引导）",
+      "description": "/compact 支持断言（2026-09-03 G5 接线宿主 task_compact_context，显式压缩可用）",
       "required": true,
       "status": "passed",
       "details": {

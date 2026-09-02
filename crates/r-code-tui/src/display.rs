@@ -158,7 +158,11 @@ fn transcript_row_line(row: &crate::TranscriptRow) -> String {
 }
 
 fn model_picker_lines(picker: &ModelPicker) -> Vec<String> {
-    let mut lines = vec![fg(&format!("/model {}", picker.query()), "2")];
+    let mut lines = vec![
+        // G2 双语义（pi 对齐）：Enter=本次会话，Ctrl+S=设为全局默认。
+        fg("enter=本次会话 · ctrl+s=设为默认 · esc=取消", "2"),
+        fg(&format!("/model {}", picker.query()), "2"),
+    ];
     let selected_row = picker.selected_row().unwrap_or(0);
     let mut row_index = 1usize;
     let mut last_provider: Option<&str> = None;

@@ -56,6 +56,11 @@ pub struct RunController {
     pub rename_session: Arc<dyn Fn(String) + Send + Sync>,
     /// 配置目录（/setup 引导流写回 config 与平台凭据）。
     pub config_dir: std::path::PathBuf,
+    /// 模型选择器 Ctrl+S：选择并持久为全局默认（G2；写 config）。
+    pub persist_default_model: Arc<dyn Fn(crate::model_selector::ModelEntry) + Send + Sync>,
+    /// /compact [prompt]：显式压缩当前会话上下文（G5；宿主
+    /// task_compact_context，focus=自定义指令）。返回状态行或错误。
+    pub compact_context: Arc<dyn Fn(Option<String>) -> Result<String, String> + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -76,6 +81,8 @@ impl Default for RunController {
             new_session: Arc::new(|| {}),
             rename_session: Arc::new(|_| {}),
             config_dir: std::path::PathBuf::new(),
+            persist_default_model: Arc::new(|_| {}),
+            compact_context: Arc::new(|_| Err("未装配压缩入口".to_string())),
         }
     }
 }
@@ -246,11 +253,13 @@ pub async fn run_interactive(
                 match map_key(key) {
                     KeyAction::Quit => transcript_view.close(),
                     KeyAction::Insert(ch) if ch == 'q' || ch == 'Q' => transcript_view.close(),
-                    KeyAction::HistoryPrev => {
+                    KeyAction::HistoryPrev | KeyAction::CursorUp => {
                         let total = state.lock().unwrap().rows().len();
                         transcript_view.scroll_up(total);
                     }
-                    KeyAction::HistoryNext => transcript_view.scroll_down(),
+                    KeyAction::HistoryNext | KeyAction::CursorDown => {
+                        transcript_view.scroll_down()
+                    }
                     KeyAction::ScrollUp => {
                         let total = state.lock().unwrap().rows().len();
                         transcript_view.page_up(total, 20);
@@ -273,12 +282,25 @@ pub async fn run_interactive(
                 let mut close = false;
                 match overlay.as_mut().expect("overlay") {
                     Overlay::Model(active) => match action {
-                        KeyAction::ScrollUp => active.move_up(),
-                        KeyAction::ScrollDown => active.move_down(),
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
+                            active.move_up()
+                        }
+                        KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
+                            active.move_down()
+                        }
                         KeyAction::CursorLeft | KeyAction::CursorRight => {}
                         KeyAction::Send => {
+                            // Enter = 本次会话生效（pi 对齐 G2）。
                             if let Some(entry) = active.selection().cloned() {
                                 (controller.select_model)(entry);
+                            }
+                            close = true;
+                        }
+                        // Ctrl+S = 选择并持久为全局默认（写 config default_provider）。
+                        KeyAction::PersistSelection => {
+                            if let Some(entry) = active.selection().cloned() {
+                                (controller.select_model)(entry.clone());
+                                (controller.persist_default_model)(entry);
                             }
                             close = true;
                         }
@@ -295,8 +317,12 @@ pub async fn run_interactive(
                         _ => close = true,
                     },
                     Overlay::Thinking(active) => match action {
-                        KeyAction::ScrollUp => active.move_up(),
-                        KeyAction::ScrollDown => active.move_down(),
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
+                            active.move_up()
+                        }
+                        KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
+                            active.move_down()
+                        }
                         KeyAction::Send => {
                             let level = active.selection();
                             (controller.set_thinking)(level);
@@ -305,8 +331,12 @@ pub async fn run_interactive(
                         _ => close = true,
                     },
                     Overlay::Resume(active) => match action {
-                        KeyAction::ScrollUp | KeyAction::HistoryPrev => active.move_up(),
-                        KeyAction::ScrollDown | KeyAction::HistoryNext => active.move_down(),
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
+                            active.move_up()
+                        }
+                        KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
+                            active.move_down()
+                        }
                         KeyAction::Send => {
                             if let Some(entry) = active.selection().cloned() {
                                 (controller.resume_session)(entry.task_id);
@@ -316,8 +346,12 @@ pub async fn run_interactive(
                         _ => close = true,
                     },
                     Overlay::Setup(active) => match action {
-                        KeyAction::ScrollUp | KeyAction::HistoryPrev => active.move_up(),
-                        KeyAction::ScrollDown | KeyAction::HistoryNext => active.move_down(),
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
+                            active.move_up()
+                        }
+                        KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
+                            active.move_down()
+                        }
                         KeyAction::Backspace => active.backspace(),
                         KeyAction::Insert(ch) => active.input_char(ch),
                         KeyAction::Send => {
@@ -377,13 +411,13 @@ pub async fn run_interactive(
             // 斜杠菜单活动时 ↑↓ 优先归菜单（其余键仍进编辑器——菜单是被动浮层）。
             if slash_menu.is_some() {
                 match action_variant {
-                    KeyAction::ScrollUp | KeyAction::HistoryPrev => {
+                    KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
                         if let Some(menu) = slash_menu.as_mut() {
                             menu.move_up();
                         }
                         continue;
                     }
-                    KeyAction::ScrollDown | KeyAction::HistoryNext => {
+                    KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
                         if let Some(menu) = slash_menu.as_mut() {
                             menu.move_down();
                         }
@@ -440,6 +474,31 @@ pub async fn run_interactive(
                         input.set_text(&text);
                     }
                 }
+                // pi 对齐 G3：多行编辑 ↑/↓ 先做垂直光标移动，只在首行/末行
+                // 边界翻历史（Ctrl+P/N 无条件翻，保持 shell 惯例）。
+                KeyAction::CursorUp => {
+                    if !input.move_up() {
+                        if let Some(text) = history.navigate_back(&input.text()) {
+                            input.set_text(&text);
+                        }
+                    }
+                }
+                KeyAction::CursorDown => {
+                    if !input.move_down() {
+                        if let Some(text) = history.navigate_forward() {
+                            input.set_text(&text);
+                        }
+                    }
+                }
+                // pi 对齐 G1：Ctrl+L 直开模型选择器（空集转配置向导，同 /model）。
+                KeyAction::OpenModelPicker => {
+                    overlay = (controller.open_model_picker)().map(Overlay::Model);
+                    if overlay.is_none() {
+                        overlay = Some(Overlay::Setup(crate::setup_flow::SetupFlow::new()));
+                        status =
+                            Some("没有可用的模型服务——已进入配置向导（Esc 取消）".to_string());
+                    }
+                }
                 KeyAction::ToggleTranscript => transcript_view.toggle(),
                 KeyAction::ExternalEditor => {
                     // 临时退出 raw mode 给编辑器，回来后回填。
@@ -467,6 +526,8 @@ pub async fn run_interactive(
                 KeyAction::CursorEnd => input.move_end(),
                 KeyAction::ScrollUp | KeyAction::ScrollDown => {}
                 KeyAction::ToggleFullscreen | KeyAction::ToggleSearch => {}
+                // Ctrl+S 只在模型浮层里有语义（见 Overlay::Model 臂）。
+                KeyAction::PersistSelection => {}
                 KeyAction::Send => {
                     let text = input.take();
                     let trimmed = text.trim();
@@ -522,11 +583,18 @@ pub async fn run_interactive(
                                 .unwrap_or_default()
                                 .to_string(),
                         );
-                    } else if trimmed == "/compact" {
-                        if !crate::session_ops::compaction_supported() {
-                            state.lock().unwrap().push_system(
-                                "自动压缩随 run 结束触发，暂无可显式调用的压缩入口".to_string(),
-                            );
+                    } else if trimmed == "/compact" || trimmed.starts_with("/compact ") {
+                        // pi 对齐 G5：/compact [指令]——focus 为空走宿主默认摘要指令。
+                        let focus = trimmed
+                            .strip_prefix("/compact")
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(str::to_string);
+                        match (controller.compact_context)(focus) {
+                            Ok(line) => {
+                                state.lock().unwrap().push_system(line);
+                            }
+                            Err(error) => status = Some(error),
                         }
                     } else if trimmed == "/quit" {
                         return LoopOutcome::Quit;

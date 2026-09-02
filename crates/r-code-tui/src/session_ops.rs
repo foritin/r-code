@@ -21,11 +21,10 @@ pub async fn rename_session(
     task_rename(state, task_id, title).await.map(|_| ())
 }
 
-/// 触发宿主压缩（本期：压缩入口 = 宿主既有 automatic_compaction 由 run 结束
-/// 触发，无显式公开命令；此处为占位接点——返回是否已支持。PRD 允许宿主无公开
-/// 入口时记录数据缺口）。
+/// 宿主显式压缩入口可用性（2026-09-03 G5 接线：
+/// `commands::task_compact_context(state, task, focus)`，focus=自定义指令）。
 pub fn compaction_supported() -> bool {
-    false
+    true
 }
 
 #[cfg(test)]
@@ -83,12 +82,9 @@ mod tests {
         assert_eq!(detail.task.title, "重命名后");
     }
 
-    /// M6-02.A3：/compact 数据缺口如实暴露（宿主无公开压缩命令）。
+    /// M6-02.A3（2026-09-03 G5 更新）：宿主压缩命令已接线，/compact 显式可用。
     #[test]
-    fn compaction_gap_is_reported() {
-        assert!(
-            !compaction_supported(),
-            "宿主无公开压缩命令，接线方必须显式引导"
-        );
+    fn compaction_is_supported() {
+        assert!(compaction_supported(), "宿主压缩命令已公开接线");
     }
 }

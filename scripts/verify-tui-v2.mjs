@@ -551,11 +551,11 @@ const REGISTRY = {
       },
       {
         id: "M6-02.A3",
-        description: "/compact 数据缺口如实暴露（宿主无公开压缩命令，接线方显式引导）",
+        description: "/compact 支持断言（2026-09-03 G5 接线宿主 task_compact_context，显式压缩可用）",
         kind: "self",
         async check(ctx) {
           const record = await ctx.runner.run([
-            "cargo", "test", "-p", "r-code-tui", "--lib", "compaction_gap_is_reported",
+            "cargo", "test", "-p", "r-code-tui", "--lib", "compaction_is_supported",
           ]);
           return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
         },

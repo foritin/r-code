@@ -47,7 +47,7 @@ pub const COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/compact",
-        desc: "压缩上下文（自动随 run 触发）",
+        desc: "压缩上下文（可选自定义指令：/compact <指令>）",
     },
     SlashCommand {
         name: "/clear",

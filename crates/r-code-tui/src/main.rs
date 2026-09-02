@@ -31,8 +31,64 @@ fn ensure_utf8_console() {}
 
 fn usage() -> &'static str {
     "usage: r-code-tui [--mode tui|print|json] [--data-dir <path>] [--message <text>] [--mock]\n\
+       r-code-tui auth check [--data-dir <path>]\n\
      --mode print/json 默认走真实 provider（无配置时输出引导并以 exit 2 退出）\n\
-     --mock 仅限 --mode print|json：注入确定性演示场景（评估/演示线路），交互模式不可用"
+     --mock 仅限 --mode print|json：注入确定性演示场景（评估/演示线路），交互模式不可用\n\
+     auth check 打印各 provider 认证状态（默认服务已认证 = exit 0，否则 exit 1）"
+}
+
+/// `auth check` 报告（G4，pi `pi auth check` 对齐；脚本/CI 消费）。
+/// 口径与 /model 选择器同源（load_global_unvalidated + decls +
+/// build_snapshot(runtime_has_auth)）。
+fn auth_check_report(config_dir: &std::path::Path) -> i32 {
+    let settings = r_code_host::settings::SettingsService::new(config_dir.to_path_buf());
+    let config = match settings.load_global_unvalidated() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("auth check: 配置加载失败：{error}");
+            return 1;
+        }
+    };
+    let decls = r_code_host::provider_decl::load_decls(config_dir).unwrap_or_default();
+    let snapshot = r_code_host::model_availability::build_snapshot(
+        &config,
+        &decls,
+        None,
+        &r_code_host::model_availability::runtime_has_auth,
+    );
+    println!("default provider: {}", config.default_provider);
+    // provider 去重序（all 保序；available 子集判定认证态）。
+    let mut providers: Vec<String> = Vec::new();
+    for entry in &snapshot.all {
+        if !providers.contains(&entry.provider) {
+            providers.push(entry.provider.clone());
+        }
+    }
+    if providers.is_empty() {
+        println!("no providers configured（/setup 或桌面设置页完成配置）");
+        return 1;
+    }
+    for provider in &providers {
+        let authed_models = snapshot
+            .available
+            .iter()
+            .filter(|entry| &entry.provider == provider)
+            .count();
+        if authed_models > 0 {
+            println!("ok      {provider} ({authed_models} models)");
+        } else {
+            println!("no-auth {provider}（配置存在但缺鉴权，/setup 重配或检查凭据）");
+        }
+    }
+    let default_ok = snapshot
+        .available
+        .iter()
+        .any(|entry| entry.provider == config.default_provider);
+    if default_ok {
+        0
+    } else {
+        1
+    }
 }
 
 fn parse_args(args: &[String]) -> Result<(String, Option<PathBuf>, Option<String>, bool), String> {
@@ -556,6 +612,8 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     let rename_session_state = state.clone();
     let rename_session_tui = tui_state.clone();
+    // compact（G5）与 rename 都要 task_id，先各自留克隆。
+    let compact_task = task_id.clone();
     let rename_session: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |title| {
         let state = rename_session_state.clone();
         let task_id = task_id.clone();
@@ -576,6 +634,81 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         });
     });
 
+    // G2：模型选择器 Ctrl+S —— 选择并持久为全局默认（写 config，同 /setup
+    // 的写回口径：load → 改 default_provider + 该服务默认模型 → save_global）。
+    let persist_state = state.clone();
+    let persist_tui = tui_state.clone();
+    let persist_default_model: Arc<
+        dyn Fn(r_code_tui::model_selector::ModelEntry) + Send + Sync,
+    > = Arc::new(move |entry| {
+        let settings =
+            r_code_host::settings::SettingsService::new(persist_state.config_dir.clone());
+        let mut config = match settings.load_global_unvalidated() {
+            Ok(config) => config,
+            Err(error) => {
+                if let Ok(mut st) = persist_tui.lock() {
+                    st.push_system(format!("持久化默认模型失败：{error}"));
+                }
+                return;
+            }
+        };
+        config.default_provider = entry.provider.clone();
+        if let Some(provider) = config.providers.get_mut(&entry.provider) {
+            provider.model = entry.model.clone();
+        }
+        match settings.save_global(&config) {
+            Ok(()) => {
+                if let Ok(mut st) = persist_tui.lock() {
+                    st.push_system(format!(
+                        "已设为全局默认：({}) {}（新会话沿用）",
+                        entry.provider, entry.model
+                    ));
+                }
+            }
+            Err(error) => {
+                if let Ok(mut st) = persist_tui.lock() {
+                    st.push_system(format!("持久化默认模型失败：{error}"));
+                }
+            }
+        }
+    });
+
+    // G5：/compact [prompt] —— 宿主显式压缩（focus=自定义指令）。
+    let compact_state = state.clone();
+    let compact_handle = handle.clone();
+    let compact_context: Arc<dyn Fn(Option<String>) -> Result<String, String> + Send + Sync> =
+        Arc::new(move |focus| {
+            let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+            let state = compact_state.clone();
+            let task_id = compact_task.clone();
+            compact_handle.spawn(async move {
+                let focus = focus.as_deref();
+                let outcome = match r_code_host::commands::task_compact_context(
+                    &state, &task_id, focus,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        if result.compacted {
+                            Ok(format!(
+                                "上下文已压缩：{} → {} 条消息",
+                                result.before_messages, result.after_messages
+                            ))
+                        } else {
+                            Ok(format!(
+                                "无需压缩（当前 {} 条消息，低于阈值）",
+                                result.before_messages
+                            ))
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = tx.send(outcome);
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(120))
+                .unwrap_or_else(|_| Err("压缩超时（120s）".to_string()))
+        });
+
     let controller = RunController {
         send,
         abort,
@@ -592,6 +725,8 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         new_session,
         rename_session,
         config_dir: state.config_dir.clone(),
+        persist_default_model,
+        compact_context,
     };
 
     // M5-02：inline 模式——只进 raw + bracketed paste，不进备用屏
@@ -611,6 +746,27 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 async fn main() {
     ensure_utf8_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // G4：`auth check` 子命令（脚本/CI 用，pi `pi auth check` 对齐）——
+    // 打印各 provider 认证状态；默认服务已认证 = exit 0，否则 exit 1。
+    if args.first().map(String::as_str) == Some("auth") {
+        let sub = args.get(1).map(String::as_str).unwrap_or("");
+        if sub != "check" {
+            eprintln!("r-code-tui: 未知 auth 子命令：{sub:?}（仅支持 auth check）");
+            std::process::exit(2);
+        }
+        let data_root = args
+            .iter()
+            .position(|arg| arg == "--data-dir")
+            .and_then(|index| args.get(index + 1))
+            .map(std::path::PathBuf::from)
+            .or_else(r_code_host::app_paths::default_data_dir);
+        let config_dir = data_root
+            .as_ref()
+            .map(|root| root.join("config"))
+            .unwrap_or_else(|| std::path::PathBuf::from("config"));
+        let code = auth_check_report(&config_dir);
+        std::process::exit(code);
+    }
     let (mode, data_dir, message, mock) = match parse_args(&args) {
         Ok(parsed) => parsed,
         Err(error) => {
