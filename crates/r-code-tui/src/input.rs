@@ -216,6 +216,13 @@ impl InputBuffer {
         self.cursor = index;
     }
 
+    /// 整体替换文本（外部编辑器回填用；入 undo 栈可回退）。
+    pub fn set_text(&mut self, text: &str) {
+        self.snapshot();
+        self.chars = text.chars().collect();
+        self.cursor = self.chars.len();
+    }
+
     /// 取走当前文本并清空（发送/steer 用；可 undo 找回）。
     pub fn take(&mut self) -> String {
         self.snapshot();
@@ -300,6 +307,8 @@ pub enum KeyAction {
     WordLeft,
     /// 词右移（Ctrl+Right）。
     WordRight,
+    /// 外部编辑器（Ctrl+G）。
+    ExternalEditor,
     /// 忽略（未映射键）。
     Ignore,
 }
@@ -325,6 +334,7 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('j') | KeyCode::Char('J') if ctrl => KeyAction::Newline,
         KeyCode::Char('z') | KeyCode::Char('Z') if ctrl => KeyAction::Undo,
         KeyCode::Char('y') | KeyCode::Char('Y') if ctrl => KeyAction::Redo,
+        KeyCode::Char('g') | KeyCode::Char('G') if ctrl => KeyAction::ExternalEditor,
         KeyCode::Left if ctrl => KeyAction::WordLeft,
         KeyCode::Right if ctrl => KeyAction::WordRight,
         KeyCode::Char('t') | KeyCode::Char('T') if alt => KeyAction::ToggleThinking,

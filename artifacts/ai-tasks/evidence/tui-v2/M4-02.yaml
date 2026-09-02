@@ -1,0 +1,61 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M4-02
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m4-02-粘贴折叠与外部编辑器
+
+revision:
+  git_revision: 3267ccf
+  worktree_digest: recorded-in-report-M4-02.json
+
+deliverables:
+  - crates/r-code-tui/src/paste.rs（PasteBuffer 折叠登记簿 + 占位符/展开 + 2 单测）
+  - crates/r-code-tui/src/external_editor.rs（VISUAL>EDITOR>vi 解析 + run_external_editor + 2 单测含真实 fixture 脚本）
+  - crates/r-code-tui/src/input.rs（ExternalEditor 键位 Ctrl+G + set_text 回填）
+  - crates/r-code-tui/src/app.rs（Event::Paste 折叠路由 + 发送时展开 + 外编屏幕切换）
+  - crates/r-code-tui/src/main.rs（EnableBracketedPaste/Disable）
+  - scripts/verify-tui-v2.mjs M4-02 断言注册
+changed_paths:
+  - crates/r-code-tui/src/paste.rs
+  - crates/r-code-tui/src/external_editor.rs
+  - crates/r-code-tui/src/input.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M4-02.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib large_pastes_fold_into_numbered_placeholders
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-02.json
+    note: ">1000 折叠（恰好 1000 不折）；[Pasted Content #N +M chars] 编号递增稳定"
+  - id: "M4-02.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib external_editor_roundtrip_with_fixture_editor + editor_command_prefers_visual_then_editor
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-02.json
+    note: "真实 run_external_editor + VISUAL=fixture 脚本：写入内容完整读回；非零退出取消（退出码非零报错）；VISUAL>EDITOR>vi、空串视为未设置"
+  - id: "M4-02.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib expansion_restores_original_content_on_send
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-02.json
+    note: "发送内容含完整原文（占位符全展开）；未登记占位符（手打）不被误替换"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M4 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4.json
+
+decisions:
+  - DM1: 折叠原文仅内存登记簿（会话生命周期），不落盘缓存——codex 的 paste-cache 目录机制 defer（重启丢草稿可接受，与宿主 blob 存储的整合留给后续任务）。
+  - DM2: 占位符形态 [Pasted Content #N +M chars]（PRD 冻结格式 + 行数改字符数，编辑器内更直观）。
+  - DM3: 外编期间终端状态切换（raw/alt-screen 退出与恢复）在 app 层完成，external_editor 模块只管进程与文件（可测）；失败路径恢复屏幕并 push_system 错误。
+  - DM4: set_text 入 undo 栈（外编回填可 Ctrl+Z 撤回）。
+external_gates_remaining:
+  - bracketed paste 在 legacy conhost 的支持度（Windows Terminal 实测）
+notes: []

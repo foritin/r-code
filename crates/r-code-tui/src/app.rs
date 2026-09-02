@@ -88,6 +88,8 @@ pub async fn run_interactive(
     let mut status: Option<String> = None;
     // M2-01/M2-02：底部插入式浮层（模型/思考选择器；打开期间独占键位）。
     let mut overlay: Option<Overlay> = None;
+    // M4-02：折叠粘贴登记簿（发送时展开原文）。
+    let mut pastes = crate::paste::PasteBuffer::new();
 
     loop {
         terminal
@@ -110,9 +112,21 @@ pub async fn run_interactive(
             let mut got = None;
             for _ in 0..10 {
                 if event::poll(Duration::from_millis(10)).unwrap_or(false) {
-                    if let Ok(Event::Key(key)) = event::read() {
-                        got = Some(key);
-                        break;
+                    match event::read() {
+                        Ok(Event::Key(key)) => {
+                            got = Some(key);
+                            break;
+                        }
+                        // M4-02：bracketed paste——超阈值折叠占位，小粘贴直插。
+                        Ok(Event::Paste(text)) => {
+                            if crate::paste::should_fold(&text) {
+                                let placeholder = pastes.register(text);
+                                input.insert_str(&placeholder);
+                            } else {
+                                input.insert_str(&text);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -182,6 +196,34 @@ pub async fn run_interactive(
                 }
                 KeyAction::WordLeft => input.move_word_left(),
                 KeyAction::WordRight => input.move_word_right(),
+                KeyAction::ExternalEditor => {
+                    // 临时退出 raw/alt-screen 给编辑器，回来后回填。
+                    let draft = input.text();
+                    let _ = crossterm::terminal::disable_raw_mode();
+                    let mut stdout = std::io::stdout();
+                    let _ = crossterm::execute!(
+                        stdout,
+                        crossterm::cursor::Show,
+                        crossterm::terminal::LeaveAlternateScreen
+                    );
+                    let outcome = crate::external_editor::run_external_editor(&draft).await;
+                    let _ = crossterm::terminal::enable_raw_mode();
+                    let _ = crossterm::execute!(
+                        stdout,
+                        crossterm::terminal::EnterAlternateScreen,
+                        crossterm::cursor::Hide
+                    );
+                    match outcome {
+                        Ok(edited) => input.set_text(&edited),
+                        Err(error) => {
+                            state
+                                .lock()
+                                .unwrap()
+                                .push_system(format!("外部编辑器：{error}"));
+                        }
+                    }
+                    terminal.clear().expect("terminal clear");
+                }
                 KeyAction::Backspace => input.backspace(),
                 KeyAction::DeleteForward => input.delete_forward(),
                 KeyAction::CursorLeft => input.move_left(),
@@ -216,6 +258,8 @@ pub async fn run_interactive(
                     } else if !trimmed.is_empty() {
                         // M2-04：运行中 Enter = 排队（不打断当前 run），
                         // 空闲 = 正常发送。
+                        // M4-02：折叠占位符在发送时展开（上下文拿完整原文）。
+                        let text = pastes.expand(&text);
                         let route = {
                             let mut st = state.lock().unwrap();
                             let route = crate::route_send(st.is_running());

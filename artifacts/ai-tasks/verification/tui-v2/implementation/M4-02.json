@@ -1,0 +1,60 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-02",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:45:45.799Z",
+  "started_at": "2026-09-02T04:45:44.676Z",
+  "finished_at": "2026-09-02T04:45:45.799Z",
+  "duration_ms": 1123,
+  "revision": "3267ccfff0face6c247bc947f00b62d38024b1fe",
+  "worktree_digest": "2b866aa4ec86ce781064ca3c2669673784fa1a570657dfc95d776a15325d96ea",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-02.A1",
+      "description": ">1000 字符折叠为编号占位符（编号递增、恰好 1000 不折叠）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-02"
+    },
+    {
+      "id": "M4-02.A2",
+      "description": "外编回填（真实 run_external_editor + fixture 脚本；非零退出取消）+ VISUAL>EDITOR>vi 解析",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "roundtrip": 0,
+        "resolve": 0
+      },
+      "task": "M4-02"
+    },
+    {
+      "id": "M4-02.A3",
+      "description": "发送内容含折叠原文（占位符全展开、未登记占位符不误替换）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

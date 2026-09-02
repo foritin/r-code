@@ -489,7 +489,8 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
-        crossterm::cursor::Hide
+        crossterm::cursor::Hide,
+        crossterm::event::EnableBracketedPaste
     )
     .expect("enter alt screen");
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
@@ -501,7 +502,8 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     crossterm::execute!(
         stdout,
         crossterm::cursor::Show,
-        crossterm::terminal::LeaveAlternateScreen
+        crossterm::terminal::LeaveAlternateScreen,
+        crossterm::event::DisableBracketedPaste
     )
     .expect("leave alt screen");
     crossterm::terminal::disable_raw_mode().expect("disable raw mode");

@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M4",
   "profile": "implementation",
-  "generated_at": "2026-09-02T04:42:57.235Z",
-  "started_at": "2026-09-02T04:42:37.163Z",
-  "finished_at": "2026-09-02T04:42:57.235Z",
-  "duration_ms": 20072,
-  "revision": "da2d42230a2d81522e0f190147847c50c7a46fcc",
-  "worktree_digest": "b13722e1fbed823ee2f3f227a28dd1c918113dc74b6f3fbd1f799d743de093ac",
+  "generated_at": "2026-09-02T04:46:10.227Z",
+  "started_at": "2026-09-02T04:45:51.249Z",
+  "finished_at": "2026-09-02T04:46:10.227Z",
+  "duration_ms": 18978,
+  "revision": "3267ccfff0face6c247bc947f00b62d38024b1fe",
+  "worktree_digest": "a3bbf21792c321eb5ece344d791acc4d5c2d2b98420e4f73d8312a257e296860",
   "worktree_dirty": true,
   "summary": {
-    "total": 45,
-    "passed": 45,
+    "total": 48,
+    "passed": 48,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "da2d42230a2d81522e0f190147847c50c7a46fcc",
+        "revision": "3267ccfff0face6c247bc947f00b62d38024b1fe",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-898a70a8887d.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-10a3c3f60d79.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-367820c98ef8.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-96250d95a88c.log"
       },
       "task": "M1-01"
     },
@@ -508,6 +508,37 @@
         "exitCode": 0
       },
       "task": "M4-01"
+    },
+    {
+      "id": "M4-02.A1",
+      "description": ">1000 字符折叠为编号占位符（编号递增、恰好 1000 不折叠）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-02"
+    },
+    {
+      "id": "M4-02.A2",
+      "description": "外编回填（真实 run_external_editor + fixture 脚本；非零退出取消）+ VISUAL>EDITOR>vi 解析",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "roundtrip": 0,
+        "resolve": 0
+      },
+      "task": "M4-02"
+    },
+    {
+      "id": "M4-02.A3",
+      "description": "发送内容含折叠原文（占位符全展开、未登记占位符不误替换）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-02"
     }
   ],
   "failed_assertions": [],
@@ -580,6 +611,11 @@
     {
       "task": "M4-01",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-01.yaml",
+      "exists": true
+    },
+    {
+      "task": "M4-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-02.yaml",
       "exists": false
     }
   ],

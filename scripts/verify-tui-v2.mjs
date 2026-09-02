@@ -417,6 +417,47 @@ const REGISTRY = {
       },
     ],
   },
+  "M4-02": {
+    milestone: "M4",
+    assertions: [
+      {
+        id: "M4-02.A1",
+        description: ">1000 字符折叠为编号占位符（编号递增、恰好 1000 不折叠）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "large_pastes_fold_into_numbered_placeholders",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-02.A2",
+        description: "外编回填（真实 run_external_editor + fixture 脚本；非零退出取消）+ VISUAL>EDITOR>vi 解析",
+        kind: "self",
+        async check(ctx) {
+          const a = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "external_editor_roundtrip_with_fixture_editor",
+          ]);
+          const b = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "editor_command_prefers_visual_then_editor",
+          ]);
+          return { passed: a.exitCode === 0 && b.exitCode === 0, details: { roundtrip: a.exitCode, resolve: b.exitCode } };
+        },
+      },
+      {
+        id: "M4-02.A3",
+        description: "发送内容含折叠原文（占位符全展开、未登记占位符不误替换）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "expansion_restores_original_content_on_send",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M4-01": {
     milestone: "M4",
     assertions: [
