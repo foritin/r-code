@@ -19,7 +19,9 @@ pub mod fullscreen;
 pub mod ime;
 pub mod input;
 pub mod interaction;
+pub mod model_selector;
 pub mod snapshot;
+pub mod thinking;
 pub mod window;
 
 /// transcript 的一行（事件 → widget 映射的产物）。
@@ -51,6 +53,11 @@ pub struct TuiState {
     streaming: Option<String>,
     /// 会话是否运行中（发送/steer 可用性判断）。
     running: bool,
+    /// 当前 (provider, model) 选择（M2-01 footer 右侧联动；权威在 Task，
+    /// 此处仅投影，选中写回成功后更新）。
+    model_selection: Option<(String, String)>,
+    /// 当前思考档位（M2-02 footer `• thinking` 段；None = 未设/不支持省略段）。
+    thinking: Option<String>,
 }
 
 impl TuiState {
@@ -137,6 +144,24 @@ impl TuiState {
     /// 交互路径的用户可见错误一律走这里）。
     pub fn push_system(&mut self, text: impl Into<String>) {
         self.rows.push(TranscriptRow::System { text: text.into() });
+    }
+
+    /// 当前模型选择投影（权威在 Task；选中写回成功后由壳层更新）。
+    pub fn model_selection(&self) -> Option<&(String, String)> {
+        self.model_selection.as_ref()
+    }
+
+    pub fn set_model_selection(&mut self, provider: String, model: String) {
+        self.model_selection = Some((provider, model));
+    }
+
+    /// 当前思考档位投影（权威在 Task.inference）。
+    pub fn thinking(&self) -> Option<&str> {
+        self.thinking.as_deref()
+    }
+
+    pub fn set_thinking(&mut self, level: Option<String>) {
+        self.thinking = level;
     }
 }
 

@@ -1,0 +1,60 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-01",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:07:11.215Z",
+  "started_at": "2026-09-02T04:07:10.240Z",
+  "finished_at": "2026-09-02T04:07:11.215Z",
+  "duration_ms": 975,
+  "revision": "7f0d89d1460e71320a82ad9192440881d70d0b21",
+  "worktree_digest": "65b5fa5257bbdd5cb67264573a163aae853160832091915a993150c1c4d4e545",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-01.A1",
+      "description": "目录投影只收可用集、provider 分组稳定序；fuzzy 子序列过滤",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "projection": 0,
+        "fuzzy": 0
+      },
+      "task": "M2-01"
+    },
+    {
+      "id": "M2-01.A2",
+      "description": "选中写 task（provider+model 落库读回）且返回 footer 标签",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-01"
+    },
+    {
+      "id": "M2-01.A3",
+      "description": "弹层预选当前 provider、上下移动 clamp、selection 返回条目",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

@@ -189,7 +189,127 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         });
     });
 
-    let controller = RunController { send, abort };
+    // 初始模型投影（footer 右侧）：任务绑定优先，回落全局默认。
+    {
+        let settings = r_code_host::settings::SettingsService::new(state.config_dir.clone());
+        if let Ok(config) = settings.load_global_unvalidated() {
+            let detail = task_detail(&state, &task_id).await.ok();
+            let provider = detail
+                .as_ref()
+                .and_then(|item| item.task.provider_name.clone())
+                .unwrap_or_else(|| config.default_provider.clone());
+            let model = detail
+                .as_ref()
+                .and_then(|item| item.task.model.clone())
+                .or_else(|| config.providers.get(&provider).map(|p| p.model.clone()));
+            if let Some(model) = model {
+                tui_state
+                    .lock()
+                    .unwrap()
+                    .set_model_selection(provider, model);
+            }
+            // M2-02：初始思考档位投影（task.inference.reasoning_effort）。
+            if let Some(effort) = detail
+                .as_ref()
+                .and_then(|item| item.task.inference.reasoning_effort.clone())
+            {
+                tui_state.lock().unwrap().set_thinking(Some(effort));
+            }
+        }
+    }
+
+    // M2-01：/model 选择器数据源（可用集 = model_availability 的 available，
+    // 与设置页/`--list-models` 同一口径；快照构建是同步纯函数）。
+    let picker_state = state.clone();
+    let picker_tui = tui_state.clone();
+    let open_model_picker: Arc<
+        dyn Fn() -> Option<r_code_tui::model_selector::ModelPicker> + Send + Sync,
+    > = Arc::new(move || {
+        let settings = r_code_host::settings::SettingsService::new(picker_state.config_dir.clone());
+        let config = settings.load_global_unvalidated().ok()?;
+        let decls =
+            r_code_host::provider_decl::load_decls(&picker_state.config_dir).unwrap_or_default();
+        let snapshot = r_code_host::model_availability::build_snapshot(
+            &config,
+            &decls,
+            None,
+            &r_code_host::model_availability::runtime_has_auth,
+        );
+        let entries = r_code_tui::model_selector::picker_entries(&snapshot.available);
+        if entries.is_empty() {
+            return None;
+        }
+        let current = picker_tui
+            .lock()
+            .ok()
+            .and_then(|st| st.model_selection().map(|(provider, _)| provider.clone()));
+        Some(r_code_tui::model_selector::ModelPicker::new(
+            entries,
+            current.as_deref(),
+        ))
+    });
+
+    let select_state = state.clone();
+    let select_task = task_id.clone();
+    let select_handle = handle.clone();
+    let select_tui = tui_state.clone();
+    let select_model: Arc<dyn Fn(r_code_tui::model_selector::ModelEntry) + Send + Sync> =
+        Arc::new(move |entry| {
+            let state = select_state.clone();
+            let task_id = select_task.clone();
+            let tui = select_tui.clone();
+            select_handle.spawn(async move {
+                match r_code_tui::model_selector::apply_model_selection(&state, &task_id, &entry)
+                    .await
+                {
+                    Ok(label) => {
+                        if let Ok(mut st) = tui.lock() {
+                            st.set_model_selection(entry.provider.clone(), entry.model.clone());
+                            st.push_system(format!("已切换模型：{label}"));
+                        }
+                    }
+                    Err(error) => {
+                        if let Ok(mut st) = tui.lock() {
+                            st.push_system(format!("切换模型失败：{error}"));
+                        }
+                    }
+                }
+            });
+        });
+
+    // M2-02：思考档位写回（alt+T 弹层与 alt+,/alt+. 升降共用；per-task 持久）。
+    let think_state = state.clone();
+    let think_task = task_id.clone();
+    let think_handle = handle.clone();
+    let think_tui = tui_state.clone();
+    let set_thinking: Arc<dyn Fn(&'static str) + Send + Sync> = Arc::new(move |level| {
+        let state = think_state.clone();
+        let task_id = think_task.clone();
+        let tui = think_tui.clone();
+        think_handle.spawn(async move {
+            match r_code_tui::thinking::apply_thinking(&state, &task_id, level).await {
+                Ok(()) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.set_thinking(Some(level.to_string()));
+                        st.push_system(format!("思考级别：{level}"));
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("设置思考级别失败：{error}"));
+                    }
+                }
+            }
+        });
+    });
+
+    let controller = RunController {
+        send,
+        abort,
+        open_model_picker,
+        select_model,
+        set_thinking,
+    };
 
     crossterm::terminal::enable_raw_mode().expect("raw mode");
     let mut stdout = std::io::stdout();

@@ -105,6 +105,12 @@ pub enum KeyAction {
     ToggleFullscreen,
     /// 打开/关闭全文搜索（fullscreen 态）。
     ToggleSearch,
+    /// 打开思考级别选择器（alt+T）。
+    ToggleThinking,
+    /// 思考降一档（alt+,）。
+    ThinkingDown,
+    /// 思考升一档（alt+.）。
+    ThinkingUp,
     /// 忽略（未映射键）。
     Ignore,
 }
@@ -120,10 +126,14 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         crossterm::event::KeyEventKind::Release => return KeyAction::Ignore,
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
         KeyCode::Char(ch) if ctrl && (ch == 'c' || ch == 'C') => KeyAction::Abort,
         KeyCode::Char(ch) if ctrl && (ch == 'd' || ch == 'D') => KeyAction::Quit,
         KeyCode::Char('/') if ctrl => KeyAction::ToggleSearch,
+        KeyCode::Char('t') | KeyCode::Char('T') if alt => KeyAction::ToggleThinking,
+        KeyCode::Char(',') if alt => KeyAction::ThinkingDown,
+        KeyCode::Char('.') if alt => KeyAction::ThinkingUp,
         KeyCode::F(10) => KeyAction::ToggleFullscreen,
         KeyCode::Char(ch) => KeyAction::Insert(ch),
         KeyCode::Enter => KeyAction::Send,

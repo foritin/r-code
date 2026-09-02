@@ -1,0 +1,58 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M2-01
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m2-01-model-模型选择器弹层
+
+revision:
+  git_revision: 7f0d89d
+  worktree_digest: recorded-in-report-M2-01.json
+
+deliverables:
+  - crates/r-code-tui/src/model_selector.rs（纯逻辑选择器 + 4 单测，含真实 CommandState 集成）
+  - crates/r-code-tui/src/app.rs（/model 命令入口、选择器独占键位、插入式渲染 ≤8 行、footer 右侧标签）
+  - crates/r-code-tui/src/lib.rs（TuiState.model_selection 投影）
+  - crates/r-code-tui/src/main.rs（open_model_picker/select_model 装配、初始标签）
+  - scripts/verify-tui-v2.mjs M2-01 断言注册
+changed_paths:
+  - crates/r-code-tui/src/model_selector.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M2-01.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib picker_entries_project_available_set_grouped / fuzzy_filter_matches_subsequence
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-01.json
+    note: "可用集（has_auth）过滤 + provider/model 稳定排序；fuzzy 子序列大小写不敏感、空查询全量"
+  - id: "M2-01.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib model_selection_writes_task_and_returns_label
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-01.json
+    note: "task_set_provider→task_set_model 顺序写回（宿主换服务清旧模型语义），task_detail 读回 provider/model 一致；标签 (demo) demo-model-v2"
+  - id: "M2-01.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib picker_preselects_current_and_moves_within_bounds
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-01.json
+    note: "预选当前 provider 首条、跨组移动、顶/底 clamp、过滤后选中保持"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M2 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2.json
+
+decisions:
+  - DM1: 写回命令复用宿主既有 task_set_provider + task_set_model（顺序保证换服务清旧模型覆盖与推理参数复位）；未新造宿主 API。
+  - DM2: 弹层数据源 = model_availability 快照的 available 集（与设置页/--list-models 同一口径），快照构建是同步纯函数，闭包内直接调用无需 async 装配。
+  - DM3: /model 触发 = 输入精确 "/model" 后回车（一期无斜杠菜单，M4-03 落菜单后复用同一入口）；空可用集出 status 提示不开层。
+  - DM4: footer 联动经 TuiState.model_selection 投影（权威在 Task；选中写回成功才更新），初始值任务绑定优先、回落全局默认 provider/model。
+external_gates_remaining: []
+notes: []

@@ -17,8 +17,16 @@ use ratatui::{Frame, Terminal};
 
 use crate::fullscreen::ScreenState;
 use crate::input::{map_key, InputBuffer, KeyAction};
+use crate::model_selector::ModelPicker;
+use crate::thinking::ThinkingPicker;
 use crate::window::windowed;
 use crate::{TranscriptRow, TuiState};
+
+/// 底部插入式浮层（同一时刻至多一层；模型/思考选择器）。
+pub enum Overlay {
+    Model(ModelPicker),
+    Thinking(ThinkingPicker),
+}
 
 /// 交互循环的宿主回调（发送/steer/abort 的真实语义由 main.rs 装配）。
 #[derive(Clone)]
@@ -27,6 +35,12 @@ pub struct RunController {
     pub send: Arc<dyn Fn(String) + Send + Sync>,
     /// 中止当前运行。
     pub abort: Arc<dyn Fn() + Send + Sync>,
+    /// 打开 /model 选择器（可用集为空时返回 None）。
+    pub open_model_picker: Arc<dyn Fn() -> Option<ModelPicker> + Send + Sync>,
+    /// 选中模型写回（task_set_provider + task_set_model + footer 联动）。
+    pub select_model: Arc<dyn Fn(crate::model_selector::ModelEntry) + Send + Sync>,
+    /// 思考档位写回（task_set_inference + footer 联动；升降与弹层共用）。
+    pub set_thinking: Arc<dyn Fn(&'static str) + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -34,6 +48,9 @@ impl Default for RunController {
         Self {
             send: Arc::new(|_| {}),
             abort: Arc::new(|| {}),
+            open_model_picker: Arc::new(|| None),
+            select_model: Arc::new(|_| {}),
+            set_thinking: Arc::new(|_| {}),
         }
     }
 }
@@ -57,6 +74,8 @@ pub async fn run_interactive(
     let mut screen = ScreenState::default();
     let mut scroll_offset: usize = 0;
     let mut status: Option<String> = None;
+    // M2-01/M2-02：底部插入式浮层（模型/思考选择器；打开期间独占键位）。
+    let mut overlay: Option<Overlay> = None;
 
     loop {
         terminal
@@ -68,6 +87,7 @@ pub async fn run_interactive(
                     &screen,
                     scroll_offset,
                     status.as_deref(),
+                    overlay.as_ref(),
                 );
             })
             .expect("terminal draw");
@@ -88,7 +108,51 @@ pub async fn run_interactive(
         });
 
         if let Some(key) = event {
-            match map_key(key) {
+            // 浮层打开期间独占键位（↑↓/enter/esc/字符过滤/backspace）。
+            if overlay.is_some() {
+                let action = map_key(key);
+                let mut close = false;
+                match overlay.as_mut().expect("overlay") {
+                    Overlay::Model(active) => match action {
+                        KeyAction::ScrollUp => active.move_up(),
+                        KeyAction::ScrollDown => active.move_down(),
+                        KeyAction::CursorLeft | KeyAction::CursorRight => {}
+                        KeyAction::Send => {
+                            if let Some(entry) = active.selection().cloned() {
+                                (controller.select_model)(entry);
+                            }
+                            close = true;
+                        }
+                        KeyAction::Backspace => {
+                            let mut query = active.query().to_string();
+                            query.pop();
+                            active.set_query(&query);
+                        }
+                        KeyAction::Insert(ch) => {
+                            let mut query = active.query().to_string();
+                            query.push(ch);
+                            active.set_query(&query);
+                        }
+                        _ => close = true,
+                    },
+                    Overlay::Thinking(active) => match action {
+                        KeyAction::ScrollUp => active.move_up(),
+                        KeyAction::ScrollDown => active.move_down(),
+                        KeyAction::Send => {
+                            let level = active.selection();
+                            (controller.set_thinking)(level);
+                            close = true;
+                        }
+                        _ => close = true,
+                    },
+                }
+                if close {
+                    overlay = None;
+                }
+                continue;
+            }
+            let action_variant = map_key(key);
+            match action_variant {
                 KeyAction::Insert(ch) => input.insert(ch),
                 KeyAction::Backspace => input.backspace(),
                 KeyAction::DeleteForward => input.delete_forward(),
@@ -102,7 +166,16 @@ pub async fn run_interactive(
                 KeyAction::ToggleSearch => screen.toggle_search(),
                 KeyAction::Send => {
                     let text = input.take();
-                    if !text.trim().is_empty() {
+                    let trimmed = text.trim();
+                    if trimmed == "/model" {
+                        overlay = (controller.open_model_picker)().map(Overlay::Model);
+                        if overlay.is_none() {
+                            status = Some("没有可用的模型服务（先完成 provider 配置）".to_string());
+                        }
+                    } else if trimmed == "/thinking" {
+                        let current = state.lock().unwrap().thinking().map(str::to_string);
+                        overlay = Some(Overlay::Thinking(ThinkingPicker::new(current.as_deref())));
+                    } else if !trimmed.is_empty() {
                         {
                             let mut st = state.lock().unwrap();
                             st.push_user(text.clone());
@@ -126,6 +199,20 @@ pub async fn run_interactive(
                         return LoopOutcome::Quit;
                     }
                 }
+                KeyAction::ToggleThinking => {
+                    let current = state.lock().unwrap().thinking().map(str::to_string);
+                    overlay = Some(Overlay::Thinking(ThinkingPicker::new(current.as_deref())));
+                }
+                KeyAction::ThinkingDown | KeyAction::ThinkingUp => {
+                    let current = state.lock().unwrap().thinking().map(str::to_string);
+                    let delta = if matches!(action_variant, KeyAction::ThinkingUp) {
+                        1
+                    } else {
+                        -1
+                    };
+                    let level = crate::thinking::step_level(current.as_deref(), delta);
+                    (controller.set_thinking)(level);
+                }
                 KeyAction::Ignore => {}
             }
         }
@@ -139,6 +226,7 @@ fn render(
     screen: &ScreenState,
     scroll_offset: usize,
     status: Option<&str>,
+    overlay: Option<&Overlay>,
 ) {
     // snapshot 权威：渲染只读快照（不累积副本）。
     let rows = {
@@ -146,13 +234,34 @@ fn render(
         st.flush_streaming();
         st.rows().to_vec()
     };
-    let running = state.lock().unwrap().is_running();
+    let (running, model_selection, thinking) = {
+        let st = state.lock().unwrap();
+        (
+            st.is_running(),
+            st.model_selection().cloned(),
+            st.thinking().map(str::to_string),
+        )
+    };
 
     let area = frame.area();
     if screen.mode == crate::fullscreen::ScreenMode::Fullscreen {
         render_fullscreen(frame, area, &rows, input, running, status);
     } else {
-        render_regular(frame, area, &rows, input, running, status, scroll_offset);
+        let label = model_selection
+            .as_ref()
+            .map(|(provider, model)| crate::model_selector::model_label(provider, model))
+            .map(|label| crate::thinking::footer_label(&label, thinking.as_deref()));
+        render_regular(
+            frame,
+            area,
+            &rows,
+            input,
+            running,
+            status,
+            scroll_offset,
+            label,
+            overlay,
+        );
     }
 }
 
@@ -216,6 +325,7 @@ fn transcript_lines(rows: &[TranscriptRow]) -> Vec<Line<'static>> {
     lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_regular(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -224,10 +334,21 @@ fn render_regular(
     running: bool,
     status: Option<&str>,
     _scroll_offset: usize,
+    model_label: Option<String>,
+    overlay: Option<&Overlay>,
 ) {
+    // 浮层打开时：底部预留插入式列表（≤8 行 + 查询行），列表在输入区上方。
+    let overlay_height = overlay.map(|_| 9).unwrap_or(0);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)].as_ref())
+        .constraints(
+            [
+                Constraint::Min(3),
+                Constraint::Length(overlay_height),
+                Constraint::Length(3),
+            ]
+            .as_ref(),
+        )
         .split(area);
 
     let transcript = Paragraph::new(transcript_lines(rows))
@@ -235,14 +356,34 @@ fn render_regular(
         .wrap(Wrap { trim: false });
     frame.render_widget(transcript, chunks[0]);
 
+    if let (Some(overlay), true) = (overlay, overlay_height > 0) {
+        match overlay {
+            Overlay::Model(picker) => render_model_picker(frame, chunks[1], picker),
+            Overlay::Thinking(picker) => render_thinking_picker(frame, chunks[1], picker),
+        }
+    }
+
     let input_text = input.text();
     let prompt = if running { "⏳ steer > " } else { "> " };
-    let input_paragraph = Paragraph::new(Line::from(vec![
+    let mut input_line = vec![
         Span::styled(prompt, Style::default().fg(Color::Blue)),
-        Span::raw(input_text),
-    ]))
-    .block(Block::default().borders(Borders::TOP));
-    frame.render_widget(input_paragraph, chunks[1]);
+        Span::raw(input_text.clone()),
+    ];
+    // footer 右侧标签 `(provider) model • thinking`（M2-01/M2-02 联动；未定时不占位）。
+    if let Some(label) = model_label {
+        let used: usize = prompt.chars().count() + input_text.chars().count();
+        let width = area.width as usize;
+        if let Some(padding) = (width.saturating_sub(used + label.chars().count() + 1))
+            .checked_sub(1)
+            .filter(|pad| *pad > 0)
+        {
+            input_line.push(Span::raw(" ".repeat(padding)));
+            input_line.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
+        }
+    }
+    let input_paragraph =
+        Paragraph::new(Line::from(input_line)).block(Block::default().borders(Borders::TOP));
+    frame.render_widget(input_paragraph, chunks[2]);
 
     if let Some(status) = status {
         let status_line = Paragraph::new(Span::styled(status, Style::default().fg(Color::Yellow)));
@@ -252,6 +393,58 @@ fn render_regular(
             .split(area);
         frame.render_widget(status_line, bottom[1]);
     }
+}
+
+/// /model 选择器：查询行 + 分组条目（选中行 `› ` + cyan bold；组头 dim）。
+fn render_model_picker(frame: &mut Frame<'_>, area: Rect, picker: &ModelPicker) {
+    let selected_row = picker.selected_row().unwrap_or(0);
+    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+        format!("/model {}", picker.query()),
+        Style::default().fg(Color::DarkGray),
+    ))];
+    for (index, (group, text)) in picker.visible_rows().iter().take(8).enumerate() {
+        let row_index = index + 1;
+        if let Some(provider) = group {
+            lines.push(Line::from(Span::styled(
+                provider.clone(),
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else if row_index == selected_row {
+            lines.push(Line::from(Span::styled(
+                format!("› {text}"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::raw(format!("  {text}"))));
+        }
+    }
+    let picker_paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::TOP));
+    frame.render_widget(picker_paragraph, area);
+}
+
+/// 思考档位选择器：选中行 `› ` + cyan bold（与模型选择器同视觉语义）。
+fn render_thinking_picker(frame: &mut Frame<'_>, area: Rect, picker: &ThinkingPicker) {
+    let selected = picker.selection();
+    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+        "/thinking（alt+T 打开，alt+, / alt+. 升降）",
+        Style::default().fg(Color::DarkGray),
+    ))];
+    for level in crate::thinking::EFFORT_LEVELS {
+        if level == selected {
+            lines.push(Line::from(Span::styled(
+                format!("› {level}"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::raw(format!("  {level}"))));
+        }
+    }
+    let picker_paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::TOP));
+    frame.render_widget(picker_paragraph, area);
 }
 
 fn render_fullscreen(
@@ -265,5 +458,5 @@ fn render_fullscreen(
     // 窗口化：turn 级（PRD R-TUI-05），窗口 = 最近 50 turn。
     let windowed = windowed(rows, 50);
     let owned: Vec<TranscriptRow> = windowed.iter().map(|row| (*row).clone()).collect();
-    render_regular(frame, area, &owned, input, running, status, 0);
+    render_regular(frame, area, &owned, input, running, status, 0, None, None);
 }

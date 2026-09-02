@@ -417,6 +417,96 @@ const REGISTRY = {
       },
     ],
   },
+  "M2-02": {
+    milestone: "M2",
+    assertions: [
+      {
+        id: "M2-02.A1",
+        description: "档位集合与宿主 validated_inference 契约逐值一致（全档写回通过、非法档被拒）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "effort_levels_match_host_contract",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-02.A2",
+        description: "升降步进 clamp（上下界、未设/未知回落 medium）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "step_levels_clamp_at_bounds",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-02.A3",
+        description: "per-task 记忆：写回后 task_detail 读回一致（thinking 随档映射，none→disabled）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "thinking_persists_on_task",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-02.A4",
+        description: "footer thinking 段联动（有档位拼 • level；未设/空省略）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "footer_label_appends_thinking_when_set",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
+  "M2-01": {
+    milestone: "M2",
+    assertions: [
+      {
+        id: "M2-01.A1",
+        description: "目录投影只收可用集、provider 分组稳定序；fuzzy 子序列过滤",
+        kind: "self",
+        async check(ctx) {
+          const a = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "picker_entries_project_available_set_grouped",
+          ]);
+          const b = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "fuzzy_filter_matches_subsequence",
+          ]);
+          return { passed: a.exitCode === 0 && b.exitCode === 0, details: { projection: a.exitCode, fuzzy: b.exitCode } };
+        },
+      },
+      {
+        id: "M2-01.A2",
+        description: "选中写 task（provider+model 落库读回）且返回 footer 标签",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "model_selection_writes_task_and_returns_label",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-01.A3",
+        description: "弹层预选当前 provider、上下移动 clamp、selection 返回条目",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "picker_preselects_current_and_moves_within_bounds",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M1-04": {
     milestone: "M1",
     assertions: [

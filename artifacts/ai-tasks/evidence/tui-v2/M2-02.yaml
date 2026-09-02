@@ -1,0 +1,66 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M2-02
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m2-02-思考级别弹层升降与-per-task-记忆
+
+revision:
+  git_revision: 7f0d89d
+  worktree_digest: recorded-in-report-M2-02.json
+
+deliverables:
+  - crates/r-code-tui/src/thinking.rs（档位契约/步进 clamp/写回/footer 联动/弹层 + 5 单测）
+  - crates/r-code-tui/src/input.rs（alt+T / alt+, / alt+. 键位）
+  - crates/r-code-tui/src/app.rs（Overlay 枚举：模型/思考浮层互斥、/thinking 命令、升降直接写回）
+  - crates/r-code-tui/src/lib.rs（TuiState.thinking 投影）
+  - crates/r-code-tui/src/main.rs（set_thinking 装配、初始档位投影）
+  - scripts/verify-tui-v2.mjs M2-02 断言注册
+changed_paths:
+  - crates/r-code-tui/src/thinking.rs
+  - crates/r-code-tui/src/input.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M2-02.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib effort_levels_match_host_contract
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-02.json
+    note: "8 档（含 ultra）逐值经 task_set_inference 写回通过；非法档位被宿主拒绝（契约边界真实生效）"
+  - id: "M2-02.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib step_levels_clamp_at_bounds
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-02.json
+    note: "上下界 clamp、±1 步进、未设/未知回落 medium"
+  - id: "M2-02.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib thinking_persists_on_task
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-02.json
+    note: "写回后 task_detail 读回 reasoning_effort=xhigh/thinking=enabled；none 档映射 disabled"
+  - id: "M2-02.A4"
+    passed: true
+    command: cargo test -p r-code-tui --lib footer_label_appends_thinking_when_set
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-02.json
+    note: "(demo) m • high；None/空省略段"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M2 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2.json
+
+decisions:
+  - DM1: 档位集合以宿主 validated_inference 实测契约为准（8 档含 ultra，比调研报告 pi 七档多一档）；A1 用"全档写回通过 + 非法档被拒"的集成断言防漂移，而非硬编码字符串比对。
+  - DM2: 能力 clamp 一期落地为档位边界 clamp（none/ultra 两端）；按模型能力的精细 clamp 数据源（provider 目录 thinking_level_map）未在宿主公开面暴露，deferred 到 M2-01 弹层数据源扩展时一并接（记录数据缺口，不阻断）。
+  - DM3: 浮层互斥经 Overlay 枚举（Model/Thinking 二选一），打开一个自动替代另一个。
+  - DM4: footer 联动 = footer_label(model_label, thinking) 纯函数；"不支持省略" = thinking 投影 None 时省略段（能力不可得时即 None）。
+external_gates_remaining: []
+notes: []

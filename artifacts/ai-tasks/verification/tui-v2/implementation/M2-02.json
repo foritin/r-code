@@ -1,0 +1,69 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-02",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:13:02.385Z",
+  "started_at": "2026-09-02T04:13:01.101Z",
+  "finished_at": "2026-09-02T04:13:02.385Z",
+  "duration_ms": 1284,
+  "revision": "7f0d89d1460e71320a82ad9192440881d70d0b21",
+  "worktree_digest": "247f38f5bc6d60b3716a01c20b6d6b4321bedf89ae51a5389910d3c092012b73",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-02.A1",
+      "description": "档位集合与宿主 validated_inference 契约逐值一致（全档写回通过、非法档被拒）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-02"
+    },
+    {
+      "id": "M2-02.A2",
+      "description": "升降步进 clamp（上下界、未设/未知回落 medium）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-02"
+    },
+    {
+      "id": "M2-02.A3",
+      "description": "per-task 记忆：写回后 task_detail 读回一致（thinking 随档映射，none→disabled）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-02"
+    },
+    {
+      "id": "M2-02.A4",
+      "description": "footer thinking 段联动（有档位拼 • level；未设/空省略）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}
