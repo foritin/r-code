@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>r-code cli · codex 风格原型 v4</title>
+<style>
+/* ---- codex-faithful dark terminal palette ---- */
+:root{
+  --bg:#111312;            /* terminal default dark bg */
+  --fg:#d8d8d8;            /* terminal default fg */
+  --dim:#6e736e;           --dim2:#575c57;
+  --cyan:#56b6c2;          /* accent: selected rows, /model hint */
+  --green:#7ec699;         --red:#e06c75;
+  --magenta:#c678dd;       --yellow:#e5c07b;
+  --band:rgba(255,255,255,.08);  /* user msg / menu surface bg (white 12% blend 近似) */
+  --code-bg:rgba(255,255,255,.06);
+  --mono:"Cascadia Code","JetBrains Mono",Consolas,"Courier New",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--fg);
+  font:13.5px/1.5 var(--mono);
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:rgba(86,182,194,.35)}
+b,strong{font-weight:700}
+.dim{color:var(--dim)} .dim2{color:var(--dim2)} .bold{font-weight:700}
+.cyan{color:var(--cyan)} .green{color:var(--green)} .red{color:var(--red)}
+.magenta{color:var(--magenta)} .yellow{color:var(--yellow)}
+
+#flow{max-width:960px;margin:0 auto;padding:14px 10px 190px;white-space:pre-wrap;word-break:break-word}
+.row{min-height:1.5em}
+
+/* ---- user message: background band, › prefix ---- */
+.umsg{background:var(--band)}
+.umsg .caret{color:var(--dim);font-weight:700}
+
+/* ---- assistant / reasoning bullet ---- */
+.bullet{color:var(--dim)}
+.reason{color:var(--dim);font-style:italic}
+
+/* ---- code spans ---- */
+code{background:var(--code-bg);padding:0 .35em;font-family:var(--mono)}
+
+/* ---- exec/edit cells（输出整体 dim — exec_cell/render.rs） ---- */
+.exec-pre{color:var(--dim)}
+.exec-out{color:var(--dim)}
+.gutter{color:var(--dim2)}
+
+/* ---- dock: popup + queue + status + approval + composer + footer ---- */
+#dock{position:fixed;left:0;right:0;bottom:0;background:var(--bg);padding:2px 0 6px}
+#dock-in{max-width:960px;margin:0 auto;padding:0 10px}
+
+#status{display:none;padding:0 0 2px}
+#status .hdr{white-space:pre}
+#status .det{color:var(--dim);white-space:pre-wrap}
+
+/* popups: menu surface bg band（selected = cyan bold = accent_style） */
+.pop{display:none;background:var(--band);margin:2px 0}
+.pop .prow{white-space:pre-wrap;cursor:pointer}
+.pop .prow.sel{color:var(--cyan);font-weight:700}
+.pop .prow.sel .pdesc{color:var(--cyan)}
+.pop .pdesc{color:var(--dim)}
+.pop .phint{color:var(--dim);white-space:pre-wrap}
+.pop .ppad{height:1.5em}
+
+/* composer: 无边框，但整区刷 user_message 微亮底色（含上下各一空行）；
+   › prompt 在 col 0, 文本从 col 2；effort=max 时 › 金橙（effort_ignition） */
+#compwrap{background:var(--band);padding:0}
+#compwrap .cpad{height:1.5em}
+#comp{position:relative;padding-left:2ch;min-height:1.5em}
+#prompt{position:absolute;left:0;top:0;font-weight:700;user-select:none}
+#prompt.bash{color:var(--red)}
+#prompt.max{color:#ffb242}
+#ta{
+  display:block;width:100%;background:transparent;border:none;outline:none;resize:none;
+  color:var(--fg);font:inherit;line-height:inherit;padding:0;overflow:hidden;caret-color:var(--fg);
+}
+#ta::placeholder{color:var(--dim)}
+
+#foot{display:flex;justify-content:space-between;gap:2ch;padding-left:2ch;color:var(--dim);white-space:pre;overflow:hidden}
+#foot .l{overflow:hidden;text-overflow:ellipsis}
+#foot .r{flex:none}
+
+/* approval 面板替换 composer 区（菜单面微亮底色 — render_menu_surface） */
+#approval{display:none;background:var(--band);padding:1.5em 0 1.5em 0;white-space:pre-wrap;margin:2px 0}
+#approval .opt{white-space:pre-wrap;cursor:pointer}
+#approval .opt.sel{color:var(--cyan);font-weight:700}
+
+/* transcript overlay (ctrl+t) */
+#transcript{display:none;position:fixed;inset:0;background:var(--bg);z-index:40;overflow-y:auto;padding:14px 10px}
+#transcript .inner{max-width:960px;margin:0 auto;white-space:pre-wrap;word-break:break-word}
+#transcript .thead{position:sticky;top:0;background:var(--bg);color:var(--dim);padding-bottom:6px}
+
+/* shimmer：JS 逐字点亮相邻字符 */
+#status .sh span{color:var(--dim);transition:color .09s}
+#status .sh span.sh-on{color:#fff;font-weight:700}
+
+/* 场景按钮（原型辅助，非设计本体） */
+#review{position:fixed;top:8px;right:10px;z-index:50;display:flex;gap:6px;opacity:.55}
+#review button{font:11px var(--mono);background:#1b1d1b;color:var(--dim);border:1px solid #2c2f2c;padding:2px 8px;cursor:pointer;border-radius:3px}
+#review button:hover{color:var(--fg)}
+#review .ttl{color:var(--dim2);font:11px var(--mono);align-self:center}
+@media (prefers-reduced-motion:reduce){#status .sh span{transition:none}}
+</style>
+</head>
+<body>
+
+<div id="review">
+  <span class="ttl">场景:</span>
+  <button data-sc="chat">示例会话</button>
+  <button data-sc="appr">审批</button>
+  <button data-sc="noconf">未配置错误</button>
+  <button data-sc="reset">重置</button>
+</div>
+
+<div id="flow"></div>
+
+<div id="dock"><div id="dock-in">
+  <div class="pop" id="pop"></div>
+  <div id="queue"></div>
+  <div id="status">
+    <div class="hdr sh" id="status-hdr"></div>
+    <div class="det" id="status-det"></div>
+  </div>
+  <div id="approval"></div>
+  <div id="compwrap">
+    <div class="cpad"></div>
+    <div id="comp">
+      <span id="prompt">›</span>
+      <textarea id="ta" rows="1" placeholder="Ask R-Code to do anything" spellcheck="false"></textarea>
+    </div>
+    <div class="cpad"></div>
+  </div>
+  <div id="foot"><span class="l" id="foot-l"></span><span class="r" id="foot-r"></span></div>
+</div></div>
+
+<div id="transcript"><div class="inner">
+  <div class="thead">/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / /</div>
+  <div id="transcript-body"></div>
+  <div class="thead" style="position:static;padding-top:6px"> ↑/↓ to scroll    pgup/pgdn to page    home/end to top/bottom
+ q to quit    esc to edit prev</div>
+</div></div>
+
+<script>
+"use strict";
+/* =====================================================================
+ * r-code cli 原型 v4 — 1:1 仿 codex-rs/tui 视觉与交互
+ * 依据: openai/codex 源码 history_cell/*、bottom_pane/*、exec_cell/render.rs、
+ *       status_indicator_widget.rs、style.rs、footer.rs、keymap.rs + insta 快照
+ * ===================================================================*/
+const $=id=>document.getElementById(id);
+const flow=$("flow"),ta=$("ta"),promptEl=$("prompt"),
+      popEl=$("pop"),statusEl=$("status"),statusHdr=$("status-hdr"),statusDet=$("status-det"),
+      apprEl=$("approval"),queueEl=$("queue"),
+      footL=$("foot-l"),footR=$("foot-r");
+
+/* ---------- 东亚宽度（字符框对齐用） ---------- */
+function vw(s){let w=0;for(const ch of s){const c=ch.codePointAt(0);
+  w+=(c>=0x2E80&&c<=0xA4CF)||(c>=0xAC00&&c<=0xD7A3)||(c>=0xF900&&c<=0xFAFF)||
+     (c>=0xFF00&&c<=0xFF60)||(c>=0x3000&&c<=0x303F)||(c>=0x20000&&c<=0x3FFFD)?2:1;}return w;}
+function padEnd(s,n){const d=n-vw(s);return d>0?s+" ".repeat(d):s;}
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+
+/* ---------- 会话状态 ---------- */
+const MODELS=[
+  {id:"deepseek-chat",     desc:"DeepSeek V4 · 通用对话/编码"},
+  {id:"deepseek-reasoner", desc:"DeepSeek R · 显式思维链"},
+  {id:"glm-4.7",           desc:"智谱旗舰 · 工具调用强"},
+  {id:"kimi-k3",           desc:"月之暗面 · 长上下文"},
+  {id:"claude-opus-4-5",   desc:"Anthropic · 编码 SOTA"},
+  {id:"gpt-5.2",           desc:"OpenAI · 通用旗舰"},
+];
+const EFFORTS=["minimal","low","medium","high","xhigh","max"];
+const MODES=[
+  {id:"ask",  label:"Ask before edits",       desc:"所有写入/命令都需批准"},
+  {id:"plan", label:"Plan mode",              desc:"先出计划，批准后再动手"},
+  {id:"auto", label:"Workspace Write (auto)", desc:"工作区内自动批准"},
+  {id:"yolo", label:"Full Access (YOLO)",     desc:"不再询问，风险自负"},
+];
+const state={
+  provider:"deepseek", model:"deepseek-chat", effort:"high",
+  mode:"ask",
+  running:false, queued:[], bash:false,
+  usedK:35.2, ctxK:272,
+  history:[], histIdx:-1, lastUser:"",
+  pop:null, appr:null, transcript:false,
+  escArmed:false, quitArmed:false, timers:[],
+};
+function ctxLeft(){return Math.max(0,Math.round(100-state.usedK/state.ctxK*100));}
+
+/* =====================================================================
+ * 历史区 cell（对应 codex history_cell/*）
+ * ===================================================================*/
+function row(html,cls){const d=document.createElement("div");d.className="row"+(cls?" "+cls:"");d.innerHTML=html||" ";return d;}
+function pushRows(rows){for(const r of rows)flow.appendChild(r);}
+function scrollBottom(){window.scrollTo(0,document.body.scrollHeight);}
+
+/* 启动头 SessionHeaderHistoryCell：dim 边框, >_ dim + 名 bold + 版本 dim；内宽≤56 */
+function headerCell(){
+  const L=[
+    ['<span class="dim">&gt;_ </span><b>R-Code</b><span class="dim"> (v1.0.0)</span>',">_ R-Code (v1.0.0)"],
+    ["",""],
+    [`<span class="dim">model:     </span>${esc(state.model)} ${esc(state.effort)}<span class="dim">   </span><span class="cyan">/model</span><span class="dim"> to change</span>`,`model:     ${state.model} ${state.effort}   /model to change`],
+    [`<span class="dim">directory: </span>~/project/r-code`,"directory: ~/project/r-code"],
+  ];
+  if(state.mode==="yolo")L.push([`<span class="dim">permissions: </span><span class="magenta bold">YOLO mode</span>`,"permissions: YOLO mode"]);
+  const inner=Math.min(56,Math.max(...L.map(l=>vw(l[1]))));
+  const out=[row("╭"+"─".repeat(inner+2)+"╮","dim")];
+  for(const [h,t]of L)out.push(row(`<span class="dim">│ </span>${h}${" ".repeat(Math.max(0,inner-vw(t)))}<span class="dim"> │</span>`));
+  out.push(row("╰"+"─".repeat(inner+2)+"╯","dim"));
+  return out;
+}
+function helpCell(){
+  const items=[
+    ["/init","create an AGENTS.md file with instructions"],
+    ["/status","show current session configuration"],
+    ["/permissions","choose what R-Code is allowed to do"],
+    ["/model","choose what model and reasoning effort to use"],
+    ["/review","review any changes and find issues"],
+  ];
+  const out=[row('<span class="dim">  To get started, describe a task or try one of these commands:</span>'),row("")];
+  for(const [c,d]of items)out.push(row(`  ${c}<span class="dim"> - ${d}</span>`));
+  return out;
+}
+
+/* 用户消息：背景带 + `› ` bold-dim，上下各一空行（带背景） */
+function userCell(text){
+  const out=[row(" ","umsg")];
+  text.split("\n").forEach((ln,i)=>{
+    out.push(row(i===0?`<span class="caret">›</span> ${esc(ln)}`:`  ${esc(ln)}`,"umsg"));
+  });
+  out.push(row(" ","umsg"));
+  return out;
+}
+
+/* reasoning 摘要：dim italic + `• ` bullet */
+function reasonCell(text){
+  return [row(`<span class="bullet">•</span> <span class="reason">${esc(text)}</span>`)];
+}
+
+/* assistant：首行 `• ` dim + markdown-lite */
+function mdInline(s){
+  return esc(s)
+    .replace(/`([^`]+)`/g,"<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>");
+}
+function asstCell(md){
+  return md.split("\n").map((ln,i)=>row((i===0?'<span class="bullet">•</span> ':"  ")+mdInline(ln)));
+}
+
+/* exec cell：bullet 绿(成功)/红(失败)/闪烁(运行中) + bold Ran/Running/You ran */
+function execCell(o){ // {cmd,out[],omitted,err,running,you}
+  const bullet=o.running?`<span class="bullet">•</span>`
+    :o.err?`<span class="red bold">•</span>`:`<span class="green bold">•</span>`;
+  const title=o.running?"Running":(o.you?"You ran":"Ran");
+  const out=[row(`${bullet} <b>${title}</b> ${esc(o.cmd)}`)];
+  (o.out||[]).forEach((ln,i)=>out.push(row(i===0?`  <span class="exec-pre">└</span> <span class="exec-out">${esc(ln)}</span>`:`    <span class="exec-out">${esc(ln)}</span>`)));
+  if(o.omitted)out.push(row(`  <span class="exec-pre">└</span> <span class="dim">… +${o.omitted} lines (ctrl + t to view transcript)</span>`));
+  return out;
+}
+
+/* edit/diff cell：• Edited n files (+a -d)，└ 文件 (+x -y)，行号槽 +/-/空格 */
+function editCell(o){
+  const one=o.files.length===1;
+  const head=one
+    ?`<span class="green bold">•</span> <b>Edited</b> ${esc(o.files[0].path)} <span class="green">(+${o.files[0].add}</span> <span class="red">-${o.files[0].del})</span>`
+    :`<span class="green bold">•</span> <b>Edited ${o.files.length} files</b> <span class="green">(+${o.add}</span> <span class="red">-${o.del})</span>`;
+  const out=[row(head)];
+  for(const f of o.files){
+    if(!one)out.push(row(`  <span class="exec-pre">└</span> ${esc(f.path)} <span class="green">(+${f.add}</span> <span class="red">-${f.del})</span>`));
+    for(const ln of (f.lines||[])){
+      const g=String(ln.n).padStart(4," ");
+      const sign=ln.sign==="+"?'<span class="green">+</span>':ln.sign==="-"?'<span class="red">-</span>':" ";
+      const tcls=ln.sign==="+"?"green":ln.sign==="-"?"red":"dim";
+      out.push(row(`  <span class="gutter">${g}</span> ${sign}<span class="${tcls==="dim"?"dim":tcls}">${esc(ln.text)}</span>`));
+    }
+  }
+  return out;
+}
+
+/* plan cell：✔ 绿(dim 文本) / □ */
+function planCell(o){
+  const out=[row(`<span class="bullet">•</span> <b>Updated Plan</b>`)];
+  if(o.note)out.push(row(`  <span class="exec-pre">└</span> <span class="dim">${esc(o.note)}</span>`));
+  for(const it of o.items)
+    out.push(row(it.done
+      ?`    <span class="green">✔</span> <span class="dim">${esc(it.text)}</span>`
+      :`    □ ${esc(it.text)}`));
+  return out;
+}
+
+function errCell(t){return [row(`<span class="red">■ ${esc(t)}</span>`)];}
+function warnCell(t){return [row(`<span class="red bold">⚠ </span><span class="red">${esc(t)}</span>`)];}
+function sysCell(t){return [row(`<span class="dim">${esc(t)}</span>`)];}
+
+/* /status 卡片（status 快照布局：│ + 两格缩进，label padEnd 18；Directory 行不对齐是 codex 原样） */
+function statusCell(){
+  const tot=(state.usedK+2.3).toFixed(1);
+  const F=[
+    [`  <span class="dim">&gt;_ </span><b>R-Code</b><span class="dim"> (v1.0.0)</span>`,"  >_ R-Code (v1.0.0)"],
+    ["",""],
+    [`  <span class="dim">${padEnd("Model:",18)}</span>${esc(state.model)} (reasoning ${esc(state.effort)})`,`  ${padEnd("Model:",18)}${state.model} (reasoning ${state.effort})`],
+    [`  <span class="dim">Directory:</span> ~/project/r-code`,"  Directory: ~/project/r-code"],
+    [`  <span class="dim">${padEnd("Permissions:",18)}</span>${esc(MODES.find(m=>m.id===state.mode).label)}`,`  ${padEnd("Permissions:",18)}${MODES.find(m=>m.id===state.mode).label}`],
+    [`  <span class="dim">${padEnd("Agents.md:",18)}</span>&lt;none&gt;`,`  ${padEnd("Agents.md:",18)}<none>`],
+    ["",""],
+    [`  <span class="dim">${padEnd("Token usage:",18)}</span>${tot}K total  (${state.usedK.toFixed(1)}K input + 2.3K output)`,`  ${padEnd("Token usage:",18)}${tot}K total  (${state.usedK.toFixed(1)}K input + 2.3K output)`],
+    [`  <span class="dim">${padEnd("Context window:",18)}</span>${ctxLeft()}% left (${state.usedK.toFixed(1)}K used / ${state.ctxK}K)`,`  ${padEnd("Context window:",18)}${ctxLeft()}% left (${state.usedK.toFixed(1)}K used / ${state.ctxK}K)`],
+  ];
+  const inner=Math.max(...F.map(l=>vw(l[1])));
+  const out=[row("/status"),row("")];
+  out.push(row("╭"+"─".repeat(inner+3)+"╮","dim"));
+  for(const [h,t]of F)out.push(row(`<span class="dim">│</span>${h}${" ".repeat(Math.max(0,inner-vw(t)))}<span class="dim">   │</span>`));
+  out.push(row("╰"+"─".repeat(inner+3)+"╯","dim"));
+  return out;
+}
+
+/* =====================================================================
+ * dock：状态行 / footer / 弹窗 / 审批
+ * ===================================================================*/
+let shimTimer=null,shimIdx=0;
+function showStatus(header,details,inline){
+  statusEl.style.display="block";
+  statusHdr.dataset.t0=Date.now();
+  statusHdr.dataset.header=header;
+  statusHdr.dataset.inline=inline||"";
+  statusDet.textContent=details?`  └ ${details}`:"";
+  startShimmer();
+}
+function hideStatus(){statusEl.style.display="none";stopShimmer();}
+function startShimmer(){
+  stopShimmer();shimIdx=0;
+  shimTimer=setInterval(()=>{
+    const t0=+statusHdr.dataset.t0||Date.now();
+    const el=fmtElapsed(Math.floor((Date.now()-t0)/1000));
+    const header=statusHdr.dataset.header||"Working";
+    const inline=statusHdr.dataset.inline;
+    const text=`• ${header} (${el} • esc to interrupt)`;
+    shimIdx=(shimIdx+1)%(text.length+8);
+    let html="";
+    for(let i=0;i<text.length;i++)
+      html+=`<span${Math.abs(i-shimIdx)<=2?' class="sh-on"':""}>${esc(text[i])}</span>`;
+    if(inline)html+=`<span class="dim"> · ${esc(inline)}</span>`;
+    statusHdr.innerHTML=html;
+  },90);
+}
+function stopShimmer(){if(shimTimer){clearInterval(shimTimer);shimTimer=null;}}
+function fmtElapsed(s){if(s<60)return s+"s";const m=Math.floor(s/60);return `${m}m ${String(s%60).padStart(2,"0")}s`;}
+
+/* footer — codex footer.rs 模式机 */
+function renderFoot(){
+  let l="",r=`<span class="dim">${ctxLeft()}% context left</span>`;
+  if(state.quitArmed)l=`<span class="dim">ctrl + c again to quit</span>`;
+  else if(state.escArmed)l=`<span class="dim">esc esc to edit previous message</span>`;
+  else if(ta.value&&state.running)l=`<span class="dim">tab to queue message</span>`;
+  else{
+    const mode=state.mode==="plan"?'<span class="magenta">Plan mode</span><span class="dim"> (shift+tab to cycle)</span>':"";
+    l=`<span class="dim">? for shortcuts</span>`+(mode?`<span class="dim"> · </span>`+mode:"");
+  }
+  footL.innerHTML=l;footR.innerHTML=r;
+}
+
+/* `?` 快捷键 overlay — codex 两栏布局 */
+function toggleShortcuts(){
+  if(popEl.dataset.kind==="help"){closePop();return;}
+  const items=[
+    ["/ for commands","! for shell commands"],
+    ["ctrl + j for newline","tab to queue message"],
+    ["@ for file paths","ctrl + v to paste images"],
+    ["ctrl + g to edit in external editor","esc esc to edit previous message"],
+    ["ctrl + r search history","ctrl + c to exit"],
+    ["alt + , reasoning down","alt + . reasoning up"],
+    ["shift + tab to change mode","ctrl + t to view transcript"],
+  ];
+  const colW=Math.max(...items.map(r=>vw(r[0])))+4;
+  let html='<div class="ppad"></div>';
+  for(const [a,b]of items)html+=`<div class="prow phint">  ${esc(padEnd(a,colW))}${esc(b||"")}</div>`;
+  html+=`<div class="prow phint"> </div><div class="prow phint">  customize shortcuts with <span class="cyan">/keymap</span></div><div class="ppad"></div>`;
+  popEl.innerHTML=html;popEl.dataset.kind="help";popEl.style.display="block";
+  state.pop={kind:"help",items:[]};
+}
+
+/* 通用选择弹窗（slash/model/permissions/resume/mention） */
+function openPop(kind,items,onAccept,hint){
+  state.pop={kind,items,sel:0,onAccept,hint};
+  popEl.dataset.kind=kind;
+  renderPop();
+  popEl.style.display="block";
+}
+function renderPop(){
+  const p=state.pop;if(!p||p.kind==="help")return;
+  const cursor=p.kind==="resume"?"❯ ":"› "; /* resume picker 用 ❯（resume_picker 快照） */
+  let html='<div class="ppad"></div>';
+  if(p.hint)html+=`<div class="prow phint">  ${esc(p.hint)}</div>`;
+  if(!p.items.length){
+    html+=`<div class="prow phint">  <span class="it">no matches</span></div>`;
+  }
+  p.items.forEach((it,i)=>{
+    html+=`<div class="prow${i===p.sel?" sel":""}" data-i="${i}">${i===p.sel?cursor:"  "}${esc(it.label)}${it.desc?`  <span class="pdesc">${esc(it.desc)}</span>`:""}${it.cur?' <span class="cyan">(current)</span>':""}</div>`;
+  });
+  if(p.kind!=="slash"&&p.kind!=="mention")
+    html+=`<div class="prow phint"> </div><div class="prow phint">  Press enter to confirm or esc to go back</div>`;
+  html+='<div class="ppad"></div>';
+  popEl.innerHTML=html;
+  popEl.querySelectorAll(".prow[data-i]").forEach(el=>{
+    el.onmouseenter=()=>{p.sel=+el.dataset.i;renderPop();};
+    el.onclick=()=>{p.sel=+el.dataset.i;acceptPop();};
+  });
+}
+function closePop(){popEl.style.display="none";popEl.innerHTML="";popEl.dataset.kind="";state.pop=null;}
+function acceptPop(){
+  const p=state.pop;if(!p)return;
+  const it=p.items[p.sel];closePop();
+  if(p.onAccept&&it)p.onAccept(it);
+}
+
+const SLASHES=[
+  ["/model","choose what model and reasoning effort to use"],
+  ["/permissions","choose what R-Code is allowed to do"],
+  ["/status","show current session configuration and token usage"],
+  ["/init","create an AGENTS.md file with instructions"],
+  ["/compact","summarize conversation to prevent hitting the context limit"],
+  ["/diff","show git diff (including untracked files)"],
+  ["/review","review my current changes and find issues"],
+  ["/resume","resume a saved chat"],
+  ["/clear","clear the terminal and start a new chat"],
+  ["/keymap","remap TUI shortcuts"],
+  ["/quit","exit R-Code"],
+];
+function openSlash(){
+  const q=ta.value.startsWith("/")?ta.value.slice(1).split(" ")[0]:"";
+  const items=SLASHES.filter(([c])=>c.indexOf("/"+q)===0)
+    .map(([c,d])=>({label:c,desc:d,cmd:c}));
+  openPop("slash",items,it=>{ta.value="";autosize();runSlash(it.cmd);});
+  if(!items.length){renderPop();return;}
+  const exact=items.findIndex(i=>i.cmd==="/"+q);
+  state.pop.sel=exact>=0?exact:0;renderPop();
+}
+function openModels(){
+  openPop("model",
+    MODELS.map(m=>({label:m.id,desc:m.desc,cur:m.id===state.model,id:m.id})),
+    it=>{state.model=it.id;openEffort();},
+    "Select model — enter to confirm");
+  state.pop.sel=MODELS.findIndex(m=>m.id===state.model);renderPop(); /* 预选当前 */
+}
+function openEffort(){
+  openPop("effort",
+    EFFORTS.map(e=>({label:e,cur:e===state.effort,id:e})),
+    it=>{state.effort=it.id;paintPrompt();
+      pushRows(sysCell(`model: ${state.model} · reasoning ${state.effort}`));
+      scrollBottom();},
+    "Select reasoning effort");
+  state.pop.sel=Math.max(0,EFFORTS.indexOf(state.effort));renderPop();
+}
+function openPermissions(){
+  openPop("perms",
+    MODES.map(m=>({label:m.label,desc:m.desc,cur:m.id===state.mode,id:m.id})),
+    it=>{state.mode=it.id;pushRows(sysCell(`permissions: ${it.label}`));renderFoot();scrollBottom();},
+    "Select permission mode");
+  state.pop.sel=MODES.findIndex(m=>m.id===state.mode);renderPop();
+}
+function openResume(){
+  const rows=[
+    ["2h ago","main","修复 Windows 双击输入 — app.rs KeyEventKind"],
+    ["1d ago","feat/tui","Pi 对齐 M8 验收收尾"],
+    ["3d ago","dev","设置页抽屉交互评审"],
+    ["5d ago","main","Windows 命令可靠性 11 切片"],
+  ];
+  openPop("resume",
+    rows.map(r=>({label:r[2],desc:`${r[0]} · ${r[1]}`,id:r[2]})),
+    it=>{pushRows(sysCell(`resumed: ${it.id}`));scrollBottom();},
+    "Resume a previous session — enter to resume, esc to cancel");
+}
+
+function runSlash(cmd){
+  switch(cmd){
+    case "/model":openModels();break;
+    case "/permissions":openPermissions();break;
+    case "/status":pushRows(statusCell());scrollBottom();break;
+    case "/init":pushRows(sysCell("created AGENTS.md"));scrollBottom();break;
+    case "/compact":state.usedK=Math.max(4,state.usedK*0.3);
+      pushRows(sysCell(`compacted — context window: ${ctxLeft()}% left`));renderFoot();scrollBottom();break;
+    case "/diff":pushRows(editCell(demoEdit()));scrollBottom();break;
+    case "/resume":openResume();break;
+    case "/clear":flow.innerHTML="";pushRows(headerCell());scrollBottom();break;
+    case "/review":pushRows(sysCell("review: no changes found"));scrollBottom();break;
+    case "/keymap":toggleShortcuts();break;
+    case "/quit":pushRows(sysCell("(原型) 真实环境将退出 r-code"));scrollBottom();break;
+    default:pushRows(errCell(`Unrecognized command ${cmd}`));scrollBottom();
+  }
+}
+
+/* =====================================================================
+ * 审批面板（approval_overlay：内联于 composer 区域，› 光标 + y/a/esc）
+ * ===================================================================*/
+function apprLabels(cmd){
+  return [
+    "1. Yes, proceed (y)",
+    `2. Yes, and don't ask again for commands that start with \`${cmd}\` (p)`,
+    "3. No, and tell R-Code what to do differently (esc)",
+  ];
+}
+function openApproval(cmd){
+  state.appr={sel:0,cmd,labels:apprLabels(cmd)};
+  $("compwrap").style.display="none";
+  ta.blur();
+  apprEl.innerHTML=
+    `  <b>Would you like to run the following command?</b>\n\n`+
+    `  <span class="magenta">$</span> ${esc(cmd)}\n\n`+
+    state.appr.labels.map((o,i)=>`<div class="opt${i===0?" sel":""}" data-i="${i}">${i===0?"›":" "} ${esc(o)}</div>`).join("")+
+    `\n  <span class="dim">Press enter to confirm or esc to cancel</span>`;
+  apprEl.style.display="block";
+  apprEl.querySelectorAll(".opt").forEach(el=>{
+    el.onclick=()=>closeApproval(+el.dataset.i);
+    el.onmouseenter=()=>{state.appr.sel=+el.dataset.i;paintAppr();};
+  });
+}
+function paintAppr(){
+  apprEl.querySelectorAll(".opt").forEach((el,i)=>{
+    el.classList.toggle("sel",i===state.appr.sel);
+    el.textContent=`${i===state.appr.sel?"›":" "} ${state.appr.labels[i]}`;
+  });
+}
+function closeApproval(choice){
+  const cmd=state.appr.cmd;
+  apprEl.style.display="none";apprEl.innerHTML="";
+  $("compwrap").style.display="block";ta.focus();
+  state.appr=null;
+  if(choice===2){
+    pushRows(errCell("Command rejected — tell R-Code what to do differently"));
+  }else{
+    pushRows(execCell({cmd,out:["removed 4123 directories, 1.2 GB"],err:false}));
+    if(choice===1)pushRows(sysCell(`approved commands starting with: \`${cmd}\``));
+  }
+  scrollBottom();renderFoot();
+}
+
+/* =====================================================================
+ * 演示流程（真实接线后由 AgentEvent 驱动；此处模拟事件序列）
+ * ===================================================================*/
+function demoEdit(){return{add:2,del:1,files:[
+  {path:"crates/r-code-tui/src/app.rs",add:2,del:1,lines:[
+    {n:79,sign:" ",text:"for _ in 0..10 {"},
+    {n:80,sign:" ",text:"    if event::poll(Duration::from_millis(10))? {"},
+    {n:81,sign:"-",text:'        if let Ok(Event::Key(key)) = event::read() {'},
+    {n:81,sign:"+",text:'        if let Ok(Event::Key(key)) = event::read() {'},
+    {n:82,sign:"+",text:'            if key.kind != KeyEventKind::Press { continue; }'},
+  ]},
+]};}
+function demoRun(){
+  state.running=true;renderFoot();
+  showStatus("Working","Reading crates/r-code-tui/src/app.rs…");
+  const steps=[
+    [1100,()=>{statusDet.textContent='  └ Running rg -n "event::read" crates/…';}],
+    [1100,()=>{hideStatus();
+      pushRows(reasonCell("双击输入的根因：Windows 下 crossterm 对同一按键发 Press+Release 两个事件，app.rs 读键循环未过滤 KeyEventKind。"));}],
+    [150 ,()=>showStatus("Working",'Running rg -n "event::read" crates/…')],
+    [700 ,()=>{hideStatus();
+      pushRows(execCell({cmd:'rg -n "event::read" crates/r-code-tui/src',
+        out:["crates/r-code-tui/src/app.rs:81: if let Ok(Event::Key(key)) = event::read() {"],err:false}));}],
+    [250 ,()=>showStatus("Working","Editing crates/r-code-tui/src/app.rs…")],
+    [700 ,()=>{hideStatus();pushRows(editCell(demoEdit()));}],
+    [250 ,()=>showStatus("Working","Running cargo test -p r-code-tui…")],
+    [1000,()=>{hideStatus();
+      pushRows(execCell({cmd:"cargo test -p r-code-tui",
+        out:["running 14 tests","test result: ok. 14 passed; 0 failed"],omitted:12,err:false}));}],
+    [150 ,()=>streamReply("已修复 `app.rs:81` 的双击输入：读键循环现在只接受 **KeyEventKind::Press**，Release/Repeat 直接跳过。\n\n验证：`cargo test -p r-code-tui` 14/14 通过，Windows 下中文输入不再翻倍。")],
+    [0   ,()=>{state.running=false;state.usedK+=3.1;renderFoot();drainQueue();}],
+  ];
+  let t=0;const timers=[];
+  for(const [dt,fn]of steps){t+=dt;timers.push(setTimeout(()=>{if(state.running||dt===0)fn();},t));}
+  state.timers=timers;
+}
+function streamReply(md){
+  const host=row('<span class="bullet">•</span> <span class="reply"></span>');
+  flow.appendChild(host);scrollBottom();
+  const target=host.querySelector(".reply");
+  let i=0;
+  const tick=setInterval(()=>{
+    if(!state.running&&i<md.length){/* interrupt 时直接收尾 */}
+    i=Math.min(md.length,i+3);
+    target.innerHTML=mdInline(md.slice(0,i)).replace(/\n/g,"<br>");
+    scrollBottom();
+    if(i>=md.length)clearInterval(tick);
+  },24);
+}
+function drainQueue(){
+  const next=state.queued.shift();paintQueue();
+  if(next)setTimeout(()=>{pushRows(sysCell("processing queued message…"));doSend(next,true);},300);
+}
+function paintQueue(){
+  if(!state.queued.length){queueEl.innerHTML="";return;}
+  queueEl.innerHTML=`<div class="row"><b>• Queued follow-up inputs</b></div>`+
+    state.queued.map(q=>`<div class="row"><span class="dim">  ↳ ${esc(q)}</span></div>`).join("");
+}
+
+/* =====================================================================
+ * 发送与键盘
+ * ===================================================================*/
+function doSend(text,fromQueue){
+  if(!text.trim())return;
+  state.history.push(text);state.histIdx=state.history.length;state.lastUser=text;
+  if(text.startsWith("/")){runSlash(text.split(" ")[0]);return;}
+  if(text.startsWith("!")){
+    pushRows(userCell(text));
+    pushRows(execCell({cmd:text.slice(1),out:["app.rs  input.rs  lib.rs  main.rs"],err:false,you:true}));
+    scrollBottom();return;
+  }
+  if(text==="rm -rf target/"){pushRows(userCell(text));openApproval("rm -rf target/");scrollBottom();return;}
+  if(state.running&&!fromQueue){state.queued.push(text);paintQueue();pushRows(userCell(text));scrollBottom();return;}
+  pushRows(userCell(text));scrollBottom();
+  demoRun();
+}
+
+function autosize(){ta.style.height="auto";ta.style.height=Math.min(ta.scrollHeight,220)+"px";renderFoot();}
+function paintPrompt(){
+  state.bash=ta.value.startsWith("!");
+  promptEl.textContent=state.bash?"!":"›";
+  promptEl.className=state.bash?"bash":(state.effort==="max"?"max":"");
+}
+ta.addEventListener("input",()=>{
+  autosize();
+  paintPrompt();
+  if(state.pop&&state.pop.kind==="slash")openSlash();
+  else if(ta.value.startsWith("/"))openSlash();
+  if(state.pop&&state.pop.kind==="mention")openMention();
+});
+ta.addEventListener("paste",e=>{
+  const t=(e.clipboardData||window.clipboardData).getData("text");
+  if(t&&t.length>200){
+    e.preventDefault();
+    insertAtCursor(`[Pasted Content ${[...t].length} chars]`);
+  }
+});
+function insertAtCursor(s){
+  const st=ta.selectionStart||0,en=ta.selectionEnd||0;
+  ta.value=ta.value.slice(0,st)+s+ta.value.slice(en);
+  ta.selectionStart=ta.selectionEnd=st+s.length;autosize();
+}
+const FILES=["AGENTS.md","Cargo.toml","crates/r-code-tui/src/app.rs","crates/r-code-tui/src/input.rs","crates/r-code-tui/src/main.rs","src-tauri/src/commands.rs","docs/tui-v2/pi-tui-deep-research.md"];
+function openMention(){
+  const m=ta.value.match(/@([^\s@]*)$/);if(!m){closePop();return;}
+  const items=FILES.filter(f=>f.toLowerCase().includes(m[1].toLowerCase())).slice(0,8)
+    .map(f=>({label:"@"+f,id:f}));
+  if(!items.length){closePop();return;}
+  openPop("mention",items,it=>{
+    ta.value=ta.value.replace(/@[^\s@]*$/,"@"+it.id+" ");
+    autosize();ta.focus();
+  });
+}
+
+ta.addEventListener("keydown",e=>{
+  const k=e.key;
+  if(state.appr){e.preventDefault();return;} /* 审批键在 document 层处理（comp 隐藏时 ta 无焦点） */
+  if(state.pop&&state.pop.kind!=="help"){
+    const p=state.pop;
+    if(!p.items.length){ /* no matches：仅 esc 可关 */
+      if(k==="Escape"||k==="Enter"){e.preventDefault();closePop();}
+      return;
+    }
+    if(k==="ArrowUp"){e.preventDefault();p.sel=(p.sel-1+p.items.length)%p.items.length;renderPop();return;}
+    if(k==="ArrowDown"){e.preventDefault();p.sel=(p.sel+1)%p.items.length;renderPop();return;}
+    if(k==="Enter"){e.preventDefault();const it=p.items[p.sel];
+      if(p.kind==="slash"){closePop();runSlash(it.cmd);}
+      else acceptPop();
+      autosize();renderFoot();return;}
+    if(k==="Escape"){e.preventDefault();closePop();return;}
+    if(k==="Tab"){e.preventDefault();if(p.kind==="slash"){ta.value=p.items[p.sel].cmd;autosize();}return;}
+  }
+  if(k==="Enter"&&!e.shiftKey&&!e.ctrlKey){
+    e.preventDefault();
+    const t0=ta.value;ta.value="";
+    if(state.pop&&state.pop.kind==="help")closePop();
+    if(state.running&&t0.trim())doSendQueue(t0);else doSend(t0,false);
+    autosize();renderFoot();return;
+  }
+  if(k==="Enter"&&e.ctrlKey){e.preventDefault();insertAtCursor("\n");return;} /* ctrl+j 浏览器拿不到，用 ctrl+enter 代替换行 */
+  if(k==="Tab"&&!state.pop){
+    e.preventDefault();
+    if(state.running&&ta.value.trim()){const t0=ta.value;ta.value="";doSendQueue(t0);autosize();}
+    return;
+  }
+  if(k==="Escape"){
+    e.preventDefault();
+    if(state.transcript){return;} /* document 层关闭 transcript */
+    if(state.pop){closePop();return;}
+    if(state.running){interrupt();return;}
+    if(state.escArmed){state.escArmed=false;ta.value=state.lastUser||"";autosize();renderFoot();return;}
+    state.escArmed=true;renderFoot();
+    setTimeout(()=>{state.escArmed=false;renderFoot();},1600);
+    return;
+  }
+  if(k==="ArrowUp"&&!ta.value){
+    e.preventDefault();
+    if(state.histIdx>0){state.histIdx--;ta.value=state.history[state.histIdx]||"";autosize();}
+    return;
+  }
+  if(k==="ArrowDown"&&!ta.value){
+    e.preventDefault();
+    if(state.histIdx<state.history.length-1){state.histIdx++;ta.value=state.history[state.histIdx]||"";}
+    else{state.histIdx=state.history.length;ta.value="";}
+    autosize();return;
+  }
+  if(k==="?"&&!ta.value){e.preventDefault();toggleShortcuts();return;}
+  if(k==="@"){setTimeout(openMention,0);}
+});
+function doSendQueue(t){
+  state.queued.push(t);paintQueue();
+  pushRows(userCell(t));scrollBottom();
+}
+
+document.addEventListener("keydown",e=>{
+  const key=e.key.toLowerCase();
+  if(state.appr){ /* 审批面板：↑↓ 移动，enter 确认，y/p/esc 直达 */
+    if(e.defaultPrevented)return; /* ta 层已消费（如开审批的那次 Enter）不重复触发 */
+    e.preventDefault();
+    if(e.key==="ArrowUp"){state.appr.sel=(state.appr.sel+2)%3;paintAppr();}
+    else if(e.key==="ArrowDown"){state.appr.sel=(state.appr.sel+1)%3;paintAppr();}
+    else if(e.key==="Enter")closeApproval(state.appr.sel);
+    else if(key==="y")closeApproval(0);
+    else if(key==="p"||key==="a")closeApproval(1);
+    else if(e.key==="Escape"||key==="n")closeApproval(2);
+    return;
+  }
+  if(state.transcript&&(e.key==="Escape"||key==="q")){e.preventDefault();closeTranscript();return;}
+  if(e.ctrlKey&&key==="t"){e.preventDefault();state.transcript?closeTranscript():openTranscript();return;}
+  if(e.ctrlKey&&key==="c"){
+    if(document.activeElement===ta&&ta.selectionStart!==ta.selectionEnd)return; /* 有选区=复制 */
+    e.preventDefault();
+    if(state.running){interrupt();return;}
+    if(state.quitArmed){pushRows(sysCell("(原型) 真实环境将退出 r-code"));state.quitArmed=false;renderFoot();scrollBottom();return;}
+    state.quitArmed=true;renderFoot();
+    setTimeout(()=>{state.quitArmed=false;renderFoot();},1600);
+    return;
+  }
+  if(e.ctrlKey&&key==="g"){e.preventDefault();pushRows(sysCell("(原型) 将打开外部编辑器 $EDITOR"));scrollBottom();return;}
+  if(e.altKey&&(e.key===",")){e.preventDefault();stepEffort(-1);return;}
+  if(e.altKey&&(e.key===".")){e.preventDefault();stepEffort(1);return;}
+  if(e.shiftKey&&e.key==="Tab"){e.preventDefault();cycleMode();return;}
+});
+function stepEffort(d){
+  const i=EFFORTS.indexOf(state.effort);
+  state.effort=EFFORTS[(i+d+EFFORTS.length)%EFFORTS.length];
+  paintPrompt();
+  pushRows(sysCell(`reasoning effort: ${state.effort}`));scrollBottom();
+}
+function cycleMode(){
+  const order=["ask","plan","auto"];
+  const i=order.indexOf(state.mode==="yolo"?"ask":state.mode);
+  state.mode=order[(i+1)%order.length];
+  renderFoot();
+  pushRows(sysCell(`mode: ${MODES.find(m=>m.id===state.mode).label}`));scrollBottom();
+}
+function interrupt(){
+  state.running=false;
+  (state.timers||[]).forEach(clearTimeout);
+  hideStatus();
+  pushRows(errCell("Interrupted by user"));
+  state.queued=[];paintQueue();
+  renderFoot();scrollBottom();
+}
+
+/* transcript overlay（ctrl+t） */
+function openTranscript(){
+  state.transcript=true;
+  const body=$("transcript-body");
+  body.innerHTML=flow.innerHTML;
+  body.querySelectorAll(".umsg").forEach(el=>el.classList.remove("umsg"));
+  $("transcript").style.display="block";
+}
+function closeTranscript(){state.transcript=false;$("transcript").style.display="none";}
+
+/* =====================================================================
+ * 场景
+ * ===================================================================*/
+function scene(sc){
+  state.running=false;(state.timers||[]).forEach(clearTimeout);hideStatus();
+  flow.innerHTML="";state.queued=[];paintQueue();
+  closePop();state.appr=null;apprEl.style.display="none";$("compwrap").style.display="block";
+  pushRows(headerCell());
+  if(sc==="chat"){
+    pushRows(helpCell());
+  }else if(sc==="appr"){
+    pushRows(userCell("清理一下构建产物"));
+    openApproval("rm -rf target/");
+  }else if(sc==="noconf"){
+    pushRows(errCell("Provider not configured: no API key found for deepseek"));
+    pushRows(sysCell("  1. 打开桌面端 设置 → 模型服务 填入 API key"));
+    pushRows(sysCell("  2. 或设置环境变量 DEEPSEEK_API_KEY 后重启 r-code"));
+  }
+  renderFoot();scrollBottom();
+}
+document.querySelectorAll("#review button").forEach(b=>b.onclick=()=>{
+  if(b.dataset.sc==="reset"){state.usedK=35.2;scene("chat");}
+  else scene(b.dataset.sc);
+});
+
+scene("chat");
+ta.focus();
+renderFoot();
+</script>
+</body>
+</html>

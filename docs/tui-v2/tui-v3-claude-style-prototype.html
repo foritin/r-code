@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>r-code · cli 交互原型 v3（字符网格 · 终端原生语言）</title>
+<style>
+  /* ============================================================
+     终端原生语言约束（每个声明对应一种终端能力）：
+     - 字体：等宽字符网格（终端唯一字体）
+     - 颜色：仅前景/背景色（ANSI 256 等效），无渐变/阴影/圆角/毛玻璃
+     - 边框：box-drawing 字符（由 JS 按东亚宽度拼列），非 CSS border
+     - 层级：bold / dim / 前景色，无字号缩放（终端无缩放）
+     - 动效：字符帧动画（braille spinner），reduce-motion 停帧
+     - 布局：行 × 列；wrap 即软折行
+     ============================================================ */
+  :root {
+    /* ANSI 256 近似标注在注释；终端主题提供底色，这里仅模拟暗色终端环境 */
+    --bg: #0f100e;            /* 终端主题底色（非应用绘制） */
+    --fg: #d8d4cc;            /* 默认前景 */
+    --dim: #8a857a;           /* bright black (8) */
+    --faint: #5d594f;         /* black+mix */
+    --accent: #f4742b;        /* ansi256(208) R-Code 橙 */
+    --accent-2: #c49a61;      /* ansi256(179) 金 */
+    --ok: #69c798;            /* green */
+    --warn: #e5a15b;          /* yellow */
+    --err: #e06c5b;           /* red */
+    --plan: #b39cf5;          /* ansi256(141) 紫：plan 模式（claude code planMode 语义）*/
+    --user-bg: #26211a;       /* userMessageBackground：用户消息整行背景（ANSI 背景色）*/
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "Sarasa Term SC", Consolas, "Microsoft YaHei", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px; line-height: 1.45;   /* 终端行高=1 */
+    white-space: pre-wrap;
+    min-height: 100%;
+    font-variant-ligatures: none;
+  }
+  b { font-weight: 700; color: var(--fg); }
+  .dim { color: var(--dim); }
+  .faint { color: var(--faint); }
+  .acc { color: var(--accent); }
+  .gold { color: var(--accent-2); }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  .plan { color: var(--plan); }
+
+  /* ============ scrollback 文档流 ============ */
+  #flow { padding: 10px 6px 260px; }
+  .ln { min-height: 1.45em; }
+
+  /* 用户消息：整行背景带（ANSI 背景色能力） */
+  .u-msg {
+    background: var(--user-bg);
+    padding: 1px 6px 1px 1ch;
+    margin: 2px 0;
+  }
+  .u-msg .caret { color: var(--accent-2); font-weight: 700; }
+
+  /* 动作行 / 结果行 / 思考行（⏺ ⎿ ✳ 符号系统） */
+  .act { cursor: pointer; }
+  .act .dot { color: var(--accent); font-weight: 700; }
+  .act .tname { font-weight: 700; }
+  .res { padding-left: 2ch; color: var(--dim); cursor: pointer; }
+  .res.err { color: var(--err); }
+  .res .rhead { color: var(--dim); }
+  .res pre, .act pre {
+    display: none; margin: 2px 0 2px 4ch;
+    color: var(--dim); font-family: inherit; font-size: inherit;
+    white-space: pre-wrap; max-height: 220px; overflow-y: auto;
+  }
+  .open pre { display: block; }
+  .think { color: var(--dim); cursor: pointer; }   /* 终端斜体（SGR 3）支持不可靠，用 dim 色表达 */
+  .think .sym { color: var(--plan); font-style: normal; }
+  .think pre {
+    display: none; margin: 2px 0 2px 3ch; font-style: normal;
+    color: var(--dim); font-family: inherit; white-space: pre-wrap;
+  }
+  .think.open pre { display: block; }
+
+  .sys { color: var(--dim); }
+  .sys.err { color: var(--err); }
+  .sys.ok { color: var(--ok); }
+
+  .paste { color: var(--accent-2); }
+
+  /* 流式光标 */
+  .streaming::after { content: "▊"; color: var(--accent); animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ============ 底部固定区（输入框 + hints）============ */
+  #dock {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    background: var(--bg);
+    padding: 0 6px 6px;
+  }
+  #spin-line { min-height: 1.45em; color: var(--dim); padding: 0 2px; }
+  #spin-line .sp { color: var(--accent); font-weight: 700; }
+  #spin-line .act-text { color: var(--dim); }
+  #spin-line .hint-r { color: var(--faint); }
+
+  .inputbox { position: relative; }
+  .ib-border { color: var(--dim); white-space: pre; overflow: hidden; height: 1.45em; line-height: 1.45em; }
+  .ib-border.plan { color: var(--plan); }
+  .ib-border.bash { color: var(--ok); }
+  .ib-border.auto { color: var(--accent); }
+  .ib-mid { display: flex; }
+  .ib-side { color: var(--dim); white-space: pre; line-height: 1.45em; }
+  .ib-mid.plan .ib-side { color: var(--plan); }
+  .ib-mid.bash .ib-side { color: var(--ok); }
+  .ib-mid.auto .ib-side { color: var(--accent); }
+  #editor {
+    flex: 1; background: transparent; border: none; outline: none; resize: none;
+    color: var(--fg); font-family: inherit; font-size: inherit; line-height: 1.45em;
+    min-height: 1.45em; max-height: 132px; overflow-y: hidden;
+    caret-color: var(--accent); padding: 0 4px;
+  }
+  #editor::placeholder { color: var(--faint); }
+
+  #hints { color: var(--faint); padding: 1px 2px 0; white-space: pre-wrap; }
+  #hints .k { color: var(--dim); }
+
+  /* ============ 插入式列表（斜杠菜单 / 模型选择）============
+     终端实现：输入框上方插入 N 行（claude code 斜杠菜单同款），非居中模态 */
+  #ins-list {
+    display: none; position: fixed; left: 6px; right: 6px; z-index: 40;
+    background: var(--bg);
+  }
+  #ins-list.show { display: block; }
+  #ins-list .il-row { white-space: pre; padding: 0 2px; color: var(--dim); }
+  #ins-list .il-row.sel { color: var(--fg); }
+  #ins-list .il-row.sel::before { content: "❯ "; color: var(--accent); }
+  #ins-list .il-row:not(.sel)::before { content: "  "; }
+  #ins-list .il-cmd { font-weight: 700; color: var(--fg); }
+  #ins-list .il-row.sel .il-cmd { color: var(--accent); }
+  #ins-list .il-note { color: var(--faint); }
+
+  /* ============ ? 帮助面板：整屏字符框（终端 overlay = 行区域覆盖）============ */
+  #help-ov {
+    display: none; position: fixed; inset: 0; z-index: 50;
+    background: var(--bg); padding: 20px 10px; overflow-y: auto;
+  }
+  #help-ov.show { display: block; }
+
+  /* 右上角评审控件（原型专用，非产品 UI；收成一列小字） */
+  #review {
+    position: fixed; top: 4px; right: 8px; z-index: 60;
+    font-size: 11px; color: var(--faint); text-align: right; line-height: 1.7;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    padding: 2px 8px;
+  }
+  #review button {
+    font-family: inherit; font-size: 11px; background: none; border: none;
+    color: var(--faint); cursor: pointer; padding: 0 3px;
+  }
+  #review button:hover { color: var(--fg); text-decoration: underline; }
+  #review button[aria-pressed="true"] { color: var(--accent); }
+  #review .tag { color: var(--faint); }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: #33322d; }
+  html { scrollbar-width: thin; scrollbar-color: #33322d transparent; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 评审控件（产品中不存在） -->
+<div id="review">
+  <span class="tag">v3 原型</span>
+  <button data-scene="chat" aria-pressed="true">会话</button>
+  <button data-scene="noconf" aria-pressed="false">未配置</button>
+  <button data-scene="error" aria-pressed="false">错误</button>
+  <button id="rv-full">全屏</button>
+  <button id="rv-paste">演示粘贴</button>
+  <button id="rv-reset">重置</button>
+</div>
+
+<main id="flow" aria-label="会话记录"></main>
+
+<!-- 插入式列表（/ 命令菜单、@ 补全、模型选择共用） -->
+<div id="ins-list" role="listbox" aria-label="命令菜单"></div>
+
+<!-- 底部固定区 -->
+<div id="dock">
+  <div id="spin-line"></div>
+  <div class="inputbox" id="inputbox">
+    <div class="ib-border" id="ib-top"></div>
+    <div class="ib-mid" id="ib-mid"><span class="ib-side">│ </span><textarea id="editor" rows="1" aria-label="消息输入框" placeholder="询问或输入任务…（/ 命令 · @ 文件 · ! shell）"></textarea><span class="ib-side"> │</span></div>
+    <div class="ib-border" id="ib-bot"></div>
+  </div>
+  <div id="hints"></div>
+</div>
+
+<!-- ? 帮助面板 -->
+<div id="help-ov" role="dialog" aria-modal="true" aria-label="快捷键帮助"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ================= 终端基础：东亚宽度与字符框 =================
+     终端里 1 个汉字 = 2 列。拼接右边框必须按可视宽度补空格。 */
+  function vw(s) {
+    var w = 0;
+    for (var c of s) {
+      var cp = c.codePointAt(0);
+      var wide = (cp >= 0x1100 && cp <= 0x115F) ||
+        (cp >= 0x2E80 && cp <= 0xA4CF) ||
+        (cp >= 0xAC00 && cp <= 0xD7A3) ||
+        (cp >= 0xF900 && cp <= 0xFAFF) ||
+        (cp >= 0xFE30 && cp <= 0xFE6F) ||
+        (cp >= 0xFF00 && cp <= 0xFF60) ||
+        (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+        (cp >= 0x1F300 && cp <= 0x1FAFF);
+      w += wide ? 2 : 1;
+    }
+    return w;
+  }
+  function pad(s, cols) { return s + " ".repeat(Math.max(0, cols - vw(s))); }
+
+  /* 圆角字符框（╭─╮）：返回 { top, bottom, rows }；rows 每行已补格并带左右 │ */
+  function boxFrame(lines, label, colorCls, widthCols) {
+    var W = widthCols || 62;
+    var lab = label ? " " + label + " " : "";
+    var labW = vw(lab);
+    var dashes = Math.max(0, W - 2 - labW);
+    var rows = lines.map(function (l) {
+      var padN = Math.max(0, W - 2 - vw(l.text) - 2);
+      return { html: "│ " + l.html + " ".repeat(padN) + " │" };
+    });
+    return {
+      top: "╭" + "─".repeat(dashes) + lab + "╮",
+      bottom: "╰" + "─".repeat(W - 2) + "╯",
+      rows: rows
+    };
+  }
+
+  /* ================= 状态 ================= */
+  var MODELS = [
+    { id: "deepseek-chat",     prov: "deepseek",   note: "默认 · 健康" },
+    { id: "deepseek-reasoner", prov: "deepseek",   note: "原生思考" },
+    { id: "glm-4.7",           prov: "zhipu",      note: "健康" },
+    { id: "kimi-k3",           prov: "moonshot",   note: "思考回传" },
+    { id: "claude-opus-4-5",   prov: "anthropic",  note: "budget_tokens" },
+    { id: "gpt-5.2",           prov: "openrouter", note: "中转" }
+  ];
+  var THINKS = ["off", "minimal", "low", "medium", "high"];
+  var MODES = [
+    { key: "ask",  label: "ask",  cls: "",         desc: "手动确认（默认）" },
+    { key: "plan", label: "plan", cls: "plan",     desc: "先出方案不动手" },
+    { key: "auto", label: "auto", cls: "auto",     desc: "自动接受编辑" }
+  ];
+  var state = {
+    modelIdx: 0, think: 4, modeIdx: 0,
+    running: false, scene: "chat", hideThink: false, fullscreen: false,
+    usage: { up: 12.4, down: 6.8, r: 89.2, w: 3.1, ch: 96.6, cost: 0.184, ctx: 41.3 },
+    streamTimer: null, spinTimer: null, spinFrame: 0,
+    insMode: null, insSel: 0, escTs: 0, draft: null
+  };
+  var SPIN = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+  var ACTS = ["思考中", "读取文件", "检索代码", "运行命令", "分析输出"];
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var $ = function (i) { return document.getElementById(i); };
+  var flow = $("flow"), editor = $("editor");
+
+  function scrollC() { return state.fullscreen ? flow : document.scrollingElement; }
+  function nearBottom() { var c = scrollC(); return c.scrollHeight - c.scrollTop - c.clientHeight < 80; }
+  function stickBottom(force) { var c = scrollC(); c.scrollTop = c.scrollHeight; }
+  document.addEventListener("scroll", function () {
+    if (state.fullscreen) return;
+  }, { passive: true });
+
+  /* ================= transcript 行原语 ================= */
+  function line(html, cls) {
+    var el = document.createElement("div");
+    el.className = "ln " + (cls || "");
+    el.innerHTML = html;
+    flow.appendChild(el); stickBottom();
+    return el;
+  }
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  function userMsg(text) {
+    return line('<span class="caret">› </span>' + esc(text), "u-msg");
+  }
+  function sys(text, kind) {
+    return line('<span class="' + (kind || "dim") + '">· ' + esc(text) + "</span>", "sys" + (kind === "err" ? " err" : kind === "ok" ? " ok" : ""));
+  }
+  function pastePh(n, lines) {
+    return line('<span class="paste">[Pasted text #' + n + " +" + lines + " lines]</span>", "paste ln");
+  }
+  /* ⏺ 动作行 + ⎿ 结果行（claude code 符号系统） */
+  function toolAct(name, args, result, ms, isErr, output) {
+    var act = line('<span class="dot">⏺ </span><span class="tname">' + esc(name) + "</span><span class='dim'>(" + esc(args) + ")</span>", "act ln");
+    var res = line(
+      '<span class="rhead">⎿ </span>' + (isErr
+        ? '<span class="err">✗ ' + esc(result) + "</span>"
+        : esc(result) + ' <span class="faint">· ' + ms + "</span>"),
+      "res ln" + (isErr ? " err" : ""));
+    if (output) {
+      var pre = document.createElement("pre");
+      pre.textContent = output;
+      res.appendChild(pre);
+      var pre2 = document.createElement("pre");
+      pre2.textContent = output;
+      act.appendChild(pre2);
+    }
+    function tog(el) {
+      return function (e) { if (e.target.tagName === "PRE") return; el.classList.toggle("open"); stickBottom(); };
+    }
+    res.addEventListener("click", tog(res));
+    act.addEventListener("click", tog(act));
+    return { act: act, res: res };
+  }
+  function thinkRow(sec, tokens, body) {
+    var el = line('<span class="sym">✳</span> Thinking… <span class="faint">' + sec + "s · " + tokens + " tokens · Alt+T 展开</span>", "think ln");
+    if (state.hideThink) el.style.display = "none";
+    var pre = document.createElement("pre");
+    pre.textContent = body;
+    el.appendChild(pre);
+    el.addEventListener("click", function (e) {
+      if (e.target.tagName === "PRE") return;
+      el.classList.toggle("open"); stickBottom();
+    });
+    return el;
+  }
+
+  /* ================= 输入框（字符边框，随高度自适应）================= */
+  /* 实测字符宽（等宽字体在一个环境里恒定），边框通栏对齐终端列数 */
+  var CHAR_W = (function () {
+    var s = document.createElement("span");
+    s.style.cssText = "position:absolute;visibility:hidden;font:inherit;white-space:pre";
+    s.textContent = "──────────";
+    document.body.appendChild(s);
+    var w = s.getBoundingClientRect().width / 10;
+    s.remove();
+    return w || 8.4;
+  })();
+  function renderInputBorder() {
+    var cols = Math.floor((document.documentElement.clientWidth - 14) / CHAR_W);
+    cols = Math.max(40, cols);
+    var mode = MODES[state.modeIdx];
+    var label = "";
+    if (mode.key !== "ask") label = " " + mode.label + " ";
+    var bash = editor.value.startsWith("!");
+    var lab = label ? " " + label.trim() + " " : "";
+    var dashes = Math.max(2, cols - 2 - vw(lab));
+    $("ib-top").textContent = "╭" + "─".repeat(dashes) + lab + "╮";
+    $("ib-bot").textContent = "╰" + "─".repeat(cols - 2) + "╯";
+    var cls = bash ? "bash" : (mode.cls || "");
+    $("ib-top").className = "ib-border " + cls;
+    $("ib-bot").className = "ib-border " + cls;
+    $("ib-mid").className = "ib-mid " + cls;
+  }
+  function autoGrow() {
+    editor.style.height = "auto";
+    editor.style.height = Math.min(editor.scrollHeight, 132) + "px";
+    renderInputBorder();
+  }
+  window.addEventListener("resize", renderInputBorder);
+
+  /* ================= hints 行（footer）================= */
+  var hintTimer = null;
+  function renderHints() {
+    var mode = MODES[state.modeIdx];
+    $("hints").innerHTML =
+      '<span class="k">?</span> 快捷键 · <span class="k">/</span> 命令 · <span class="k">@</span> 文件 · ' +
+      '<span class="k">!</span> shell · <span class="k">Shift+Tab</span> 模式(' + mode.label + ") · " +
+      '<span class="k">Alt+P</span> 模型 · <span class="k">Alt+T</span> 思考 · <span class="k">F10</span> ' +
+      (state.fullscreen ? "inline" : "fullscreen") +
+      '   <span class="dim">' + MODELS[state.modelIdx].prov + "/" + MODELS[state.modelIdx].id +
+      " • " + THINKS[state.think] + " · ctx " + state.usage.ctx.toFixed(1) + "%/200k</span>";
+  }
+  function hintFlash(text) {   /* toast 的终端形态：hints 行短暂替换 */
+    $("hints").innerHTML = '<span class="acc">❯ </span>' + esc(text);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(renderHints, 1600);
+  }
+
+  /* ================= spinner（braille 帧）================= */
+  function spinStart() {
+    var el = $("spin-line");
+    var frame = 0;
+    state.spinTimer = setInterval(function () {
+      var ch = reduceMotion ? "⠿" : SPIN[frame % SPIN.length];
+      el.innerHTML = '<span class="sp">' + ch + "</span> <span class='act-text'>" +
+        ACTS[Math.floor(frame / 14) % ACTS.length] + '…</span>   <span class="hint-r">esc 中断</span>';
+      frame++;
+    }, 90);
+  }
+  function spinStop() {
+    clearInterval(state.spinTimer);
+    $("spin-line").innerHTML = "";
+  }
+
+  /* ================= 模式 / 模型 / 思考 ================= */
+  function cycleMode() {
+    state.modeIdx = (state.modeIdx + 1) % MODES.length;
+    var m = MODES[state.modeIdx];
+    renderInputBorder(); renderHints();
+    sys("模式 → " + m.label + "（" + m.desc + "）");
+    hintFlash("模式 → " + m.label);
+  }
+  function cycleModel(dir) {
+    state.modelIdx = (state.modelIdx + dir + MODELS.length) % MODELS.length;
+    renderHints();
+    var m = MODELS[state.modelIdx];
+    sys("模型 → " + m.prov + "/" + m.id + (state.running ? "（下一轮生效，model_change 已入会话）" : ""));
+    hintFlash("模型 → " + m.id);
+  }
+  function cycleThink() {
+    state.think = (state.think + 1) % THINKS.length;
+    renderHints();
+    sys("思考 → " + THINKS[state.think] + "（reasoning_effort 写入 task，按模型记忆）");
+    hintFlash("思考 → " + THINKS[state.think]);
+  }
+  function toggleThinkView() {
+    state.hideThink = !state.hideThink;
+    flow.querySelectorAll(".think").forEach(function (t) { t.style.display = state.hideThink ? "none" : ""; });
+    hintFlash(state.hideThink ? "思考行已隐藏" : "思考行已显示");
+  }
+
+  /* ================= 插入式列表（/ 与模型选择）================= */
+  var insList = $("ins-list");
+  function insClose() { state.insMode = null; insList.classList.remove("show"); }
+  function insRender(items) {
+    var html = "";
+    items.forEach(function (it, i) {
+      html += '<div class="il-row' + (i === state.insSel ? " sel" : "") + '" data-i="' + i + '">' +
+        '<span class="il-cmd">' + esc(it.cmd) + "</span>  " +
+        '<span class="faint">' + esc(it.note) + "</span></div>";
+    });
+    insList.innerHTML = html;
+    var rows = insList.querySelectorAll(".il-row");
+    var h = 0;
+    rows.forEach(function (r) { h += r.offsetHeight; });
+    insList.style.bottom = $("dock").offsetHeight + "px";
+    insList.style.maxHeight = Math.min(h + 4, 220) + "px";
+    insList.style.overflowY = "auto";
+    Array.prototype.forEach.call(rows, function (r) {
+      r.addEventListener("click", function () { insPick(parseInt(r.dataset.i, 10)); });
+    });
+  }
+  function insPick(i) {
+    var mode = state.insMode;
+    if (mode === "slash") {
+      var it = slashItems()[i];
+      insClose();
+      runSlash(it.cmd);
+    } else if (mode === "model") {
+      var m = modelItems()[i];
+      state.modelIdx = MODELS.findIndex(function (x) { return x.id === m.m.id; });
+      insClose(); renderHints();
+      sys("模型 → " + m.m.prov + "/" + m.m.id);
+    }
+  }
+  function slashItems() {
+    var q = state.insQuery || "";
+    var all = [
+      { cmd: "/model",  note: "切换模型（Alt+P 循环）", keep: true },
+      { cmd: "/thinking", note: "思考级别：off → high", keep: true },
+      { cmd: "/tui",    note: "fullscreen / inline 渲染切换", keep: true },
+      { cmd: "/clear",  note: "清空会话，开始新任务" },
+      { cmd: "/resume", note: "恢复历史会话（共享桌面 data-dir）" },
+      { cmd: "/help",   note: "命令与快捷键帮助" },
+      { cmd: "/config", note: "打开配置（config.json / 主题）" },
+      { cmd: "/cost",   note: "本会话 token 与成本统计" }
+    ].filter(function (x) { return x.cmd.indexOf("/" + q) === 0; });
+    return all;
+  }
+  function modelItems() {
+    var q = state.insQuery || "";
+    return MODELS.filter(function (m) {
+      return (m.id + m.prov).toLowerCase().indexOf(q.toLowerCase()) >= 0;
+    }).map(function (m) { return { cmd: m.id, note: m.prov + " · " + m.note, m: m }; });
+  }
+  function runSlash(cmd) {
+    if (cmd === "/model") {
+      state.insMode = "model"; state.insSel = 0; state.insQuery = "";
+      insList.classList.add("show"); insRender(modelItems());
+    } else if (cmd === "/thinking") {
+      cycleThink();
+    } else if (cmd === "/tui") {
+      toggleFullscreen();
+    } else if (cmd === "/clear") {
+      sceneChat(true);
+    } else if (cmd === "/help") {
+      openHelp();
+    } else {
+      sys("命令 " + cmd + "（原型演示：未实现）");
+    }
+  }
+
+  /* ================= ? 帮助面板（整屏字符框）================= */
+  function openHelp() {
+    var rows = [
+      ["Enter", "发送 · 运行中=排队 follow-up"],
+      ["Esc", "中断 · 双击：存草稿 / 空=rewind"],
+      ["Shift+Tab", "模式循环 ask → plan → auto"],
+      ["Alt+P / Ctrl+P", "模型循环（/model 选择器）"],
+      ["Alt+T", "思考级别 off → high（按模型记忆）"],
+      ["Ctrl+O", "展开 / 折叠工具输出"],
+      ["/", "斜杠命令菜单"],
+      ["@", "文件路径补全"],
+      ["!", "shell 直通（输出进上下文）"],
+      ["Ctrl+G", "外部编辑器（$VISUAL/$EDITOR）"],
+      ["Ctrl+R", "历史反向搜索"],
+      ["F10", "inline ↔ fullscreen 渲染"],
+      ["Ctrl+C ×2", "退出（对话保留在 scrollback）"]
+    ];
+    var lines = rows.map(function (r) {
+      return { text: " " + r[0] + "  " + r[1], html: " <b>" + esc(r[0]) + "</b>  <span class='dim'>" + esc(r[1]) + "</span>" };
+    });
+    var frame = boxFrame(lines, "快捷键", "dim", 64);
+    $("help-ov").innerHTML =
+      '<div class="dim">' + esc(frame.top) + "</div>" +
+      frame.rows.map(function (r) { return "<div>" + r.html + "</div>"; }).join("") +
+      '<div class="dim">' + esc(frame.bottom) + "</div>" +
+      '<div class="faint" style="margin-top:8px">按 Esc 关闭</div>';
+    $("help-ov").classList.add("show");
+  }
+
+  /* ================= fullscreen（/tui fullscreen 语义）================= */
+  function toggleFullscreen() {
+    state.fullscreen = !state.fullscreen;
+    document.body.style.overflow = state.fullscreen ? "hidden" : "";
+    flow.style.height = state.fullscreen ? "calc(100vh - 170px)" : "";
+    flow.style.overflowY = state.fullscreen ? "auto" : "";
+    flow.style.borderTop = state.fullscreen ? "1px dashed #33322d" : "";
+    renderHints(); stickBottom();
+    hintFlash(state.fullscreen ? "fullscreen 渲染（应用内部滚动）" : "inline 渲染（历史进 scrollback）");
+  }
+
+  /* ================= 发送 / 流式 ================= */
+  function send() {
+    var text = editor.value;
+    if (!text.trim()) return;
+    if (text.startsWith("/")) {
+      var q = text.slice(1).split(" ")[0];
+      editor.value = ""; autoGrow();
+      var hit = slashItems().find(function (x) { return x.cmd === "/" + q; });
+      runSlash(hit ? hit.cmd : "/" + q);
+      return;
+    }
+    if (text.startsWith("!")) {
+      userMsg(text);
+      editor.value = ""; autoGrow();
+      sys("shell 直通：输出进入上下文，模型将自动回应", "dim");
+      toolAct("bash", text.slice(1).trim(), "exit 0 · 3 行输出", "204ms", false, "$ " + text.slice(1) + "\nmock-runtime.rs  mock 已移除\napp.rs         key 过滤已修");
+      return;
+    }
+    if (state.scene === "noconf") { noConfigSendError(); editor.value = ""; autoGrow(); return; }
+    if (state.scene === "error") { showError(); editor.value = ""; autoGrow(); return; }
+
+    userMsg(text);
+    editor.value = ""; autoGrow();
+    if (state.running) {
+      sys("已排队（运行中 Enter = follow-up 队列，Esc 中断后立即发送）", "ok");
+      return;
+    }
+    state.running = true; spinStart();
+    var thinkOn = state.think > 0;
+    var m = MODELS[state.modelIdx];
+    var replyRow = null;
+
+    function finish() {
+      state.running = false; spinStop();
+      state.usage.up += 1.8; state.usage.down += 0.9; state.usage.r += 6.2;
+      state.usage.cost += 0.021; state.usage.ctx += 2.1;
+      renderHints();
+    }
+    function stream(full, i) {
+      if (!replyRow) {
+        replyRow = line("", "ln a-body streaming");
+      }
+      i = i || 0;
+      if (i > full.length) { replyRow.classList.remove("streaming"); finish(); return; }
+      replyRow.textContent = full.slice(0, i);
+      stickBottom();
+      if (!state.running) { replyRow.classList.remove("streaming"); sys("已中断——已完成内容保留", "ok"); spinStop(); return; }
+      state.streamTimer = setTimeout(function () {
+        stream(full, i + (reduceMotion ? full.length : 3));
+      }, reduceMotion ? 0 : 24);
+    }
+    setTimeout(function () {
+      if (!state.running) { finish(); return; }
+      if (thinkOn) thinkRow("3.2", "512", "红线：交互路径禁 mock。核对 push_demo_scenario 调用点、enable_real_agent_mode 装配、无配置引导。评估线路保留显式注入。");
+      setTimeout(function () {
+        if (!state.running) { finish(); return; }
+        toolAct("Read", "src-tauri/src/commands.rs:14228", "定位 push_demo_scenario 隐式调用", "86ms", false,
+          "if let AgentRuntimeKind::Mock(runtime) = &mut bridge.kind {\n    push_demo_scenario(runtime, &message_text);\n}");
+        setTimeout(function () {
+          stream("三步走：\n\n1. main.rs 装配后调 enable_real_agent_mode()（对齐桌面端 771 行）\n2. 删除 14228 的隐式注入，Mock 只留给 evals 显式线路\n3. 无配置时首屏引导 + 发送失败就地报错\n\n从第 1 步开始。", 0);
+        }, 600);
+      }, 600);
+    }, 380);
+  }
+  function abort() {
+    if (!state.running) return false;
+    state.running = false;
+    clearTimeout(state.streamTimer); spinStop();
+    return true;
+  }
+
+  /* ================= 场景 ================= */
+  function welcomeBox(rt) {
+    var lines = [
+      { text: " ✻ R-Code cli  v2.0.0-prototype", html: ' <span class="gold">✻</span> <b>R-Code cli</b>  <span class="dim">v2.0.0-prototype</span>' },
+      { text: "", html: "" },
+      { text: "   data-dir 与桌面 App 共享（会话互通）", html: "<span class='dim'>   data-dir 与桌面 App 共享（会话互通）</span>" },
+      { text: "   runtime: " + rt, html: "<span class='dim'>   runtime: </span><span class='" + (rt.indexOf("未配置") >= 0 ? "warn" : "ok") + "'>" + rt + "</span>" },
+      { text: "   /help 命令 · ? 快捷键 · inline 渲染", html: "<span class='dim'>   /help 命令 · ? 快捷键 · inline 渲染</span>" }
+    ];
+    var frame = boxFrame(lines, "", "dim", 58);
+    line('<span class="dim">$ </span><span class="ok">r-code</span>', "ln");
+    var wrap = document.createElement("div");
+    wrap.innerHTML = '<div class="dim">' + esc(frame.top) + "</div>" +
+      frame.rows.map(function (r) { return "<div>" + r.html + "</div>"; }).join("") +
+      '<div class="dim">' + esc(frame.bottom) + "</div>";
+    flow.appendChild(wrap);
+  }
+  function sceneChat(cleared) {
+    flow.innerHTML = "";
+    state.running = false; clearTimeout(state.streamTimer); spinStop();
+    welcomeBox("real · deepseek");
+    userMsg("把 mock runtime 从 cli 交互路径移除，不允许 mock 模式");
+    thinkRow("2.8", "438", "红线确认：三处核对——装配、隐式场景注入、无配置降级。评估线路显式注入保留。");
+    toolAct("Grep", "\"push_demo_scenario\\|enable_real_mode\"", "5 处命中", "142ms", false,
+      "src-tauri/src/commands.rs:5339   fn push_demo_scenario\nsrc-tauri/src/commands.rs:14228  隐式调用点 ← 删除\nsrc-tauri/src/main.rs:771        enable_real_mode()\ncrates/r-code-tui/src/main.rs     缺调用 ← 接线");
+    toolAct("Read", "crates/r-code-tui/src/main.rs", "run_interactive_tui 未开 real_mode", "12ms", false);
+    line("<b>定位完成</b>：v1 漏调 <span class='acc'>enable_real_agent_mode()</span>，交互模式整体跑在 Mock 演示场景上。<span class='dim'>修复接线 → 移除隐式注入 → 补无配置引导，三步。</span>", "ln a-body");
+    if (!cleared) sys("试试：Enter 发送 · Shift+Tab 模式 · /model · ? 快捷键 · ! git status");
+    stickBottom();
+  }
+  function noConfigPanel() {
+    var lines = [
+      { text: " ⚠ 尚未配置模型服务", html: ' <span class="warn">⚠ 尚未配置模型服务</span>' },
+      { text: "", html: "" },
+      { text: " r-code cli 只连真实 provider，无 mock 降级。", html: "<span class='dim'> r-code cli 只连真实 provider，无 mock 降级。</span>" },
+      { text: " [1] 桌面端：设置 → 模型服务 → 保存（共享 data-dir）", html: "<span class='dim'> [</span>1<span class='dim'>] 桌面端：设置 → 模型服务 → 保存（共享 data-dir）</span>" },
+      { text: " [2] 手动编辑 %APPDATA%\\r-code\\config\\config.json", html: "<span class='dim'> [</span>2<span class='dim'>] 手动编辑 %APPDATA%\\r-code\\config\\config.json</span>" },
+      { text: "", html: "" },
+      { text: " 输入 1 或 2 查看对应指引", html: "<span class='faint'> 输入 1 或 2 查看对应指引</span>" }
+    ];
+    var frame = boxFrame(lines, "", "warn", 58);
+    var wrap = document.createElement("div");
+    wrap.innerHTML = '<div class="dim">' + esc(frame.top) + "</div>" +
+      frame.rows.map(function (r) { return "<div>" + r.html + "</div>"; }).join("") +
+      '<div class="dim">' + esc(frame.bottom) + "</div>";
+    flow.appendChild(wrap);
+  }
+  function sceneNoConfig() {
+    flow.innerHTML = "";
+    state.running = false; clearTimeout(state.streamTimer); spinStop();
+    welcomeBox("real · 未配置");
+    sys("启动检查：共享 data-dir 未找到就绪的模型服务", "err");
+    noConfigPanel();
+    sys("发送已停用——完成配置后自动解除", "dim");
+    state.scene = "noconf";
+    stickBottom();
+  }
+  function noConfigSendError() {
+    sys("发送失败：没有就绪的模型服务（见上方面板，输入 1/2 查看指引）", "err");
+  }
+  function showError() {
+    sys("发送失败：模型服务「deepseek」尚未就绪——API key 缺失。就地报错，不重试不降级。输入 /model 切换或按面板指引修复", "err");
+  }
+
+  /* 评审控件 */
+  document.querySelectorAll("#review button[data-scene]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll("#review button[data-scene]").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+      b.setAttribute("aria-pressed", "true");
+      var s = b.dataset.scene;
+      state.scene = "chat";
+      if (s === "noconf") sceneNoConfig();
+      else if (s === "error") { sceneChat(); state.scene = "error"; sys("（场景：下一次发送演示错误呈现）"); }
+      else sceneChat();
+      editor.focus();
+    });
+  });
+  $("rv-full").addEventListener("click", toggleFullscreen);
+  $("rv-paste").addEventListener("click", function () {
+    pastePh(1, 120);
+    sys("粘贴超 800 字符自动折叠（claude code 同款语义），原文存 paste-cache", "dim");
+  });
+  $("rv-reset").addEventListener("click", function () {
+    document.querySelectorAll("#review button[data-scene]").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+    document.querySelector('#review button[data-scene="chat"]').setAttribute("aria-pressed", "true");
+    state.usage = { up: 12.4, down: 6.8, r: 89.2, w: 3.1, ch: 96.6, cost: 0.184, ctx: 41.3 };
+    state.modelIdx = 0; state.think = 4; state.modeIdx = 0; state.hideThink = false;
+    renderInputBorder(); renderHints(); sceneChat(); editor.focus();
+  });
+
+  /* ================= 键盘 ================= */
+  editor.addEventListener("input", function () {
+    autoGrow();
+    var v = editor.value;
+    if (v.startsWith("/")) {
+      state.insMode = "slash"; state.insSel = 0;
+      state.insQuery = v.slice(1).split(" ")[0];
+      insList.classList.add("show");
+      insRender(slashItems());
+    } else if (state.insMode) { insClose(); }
+    renderInputBorder();
+  });
+  document.addEventListener("keydown", function (e) {
+    var inEditor = document.activeElement === editor;
+    if ($("help-ov").classList.contains("show")) {
+      if (e.key === "Escape" || e.key === "?") { e.preventDefault(); $("help-ov").classList.remove("show"); }
+      return;
+    }
+    /* 插入列表导航 */
+    if (state.insMode && inEditor) {
+      var items = state.insMode === "slash" ? slashItems() : modelItems();
+      if (e.key === "ArrowDown") { e.preventDefault(); state.insSel = Math.min(state.insSel + 1, items.length - 1); insRender(items); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); state.insSel = Math.max(state.insSel - 1, 0); insRender(items); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        var it = items[state.insSel];
+        var mode0 = state.insMode;
+        insClose(); editor.value = ""; autoGrow();
+        if (mode0 === "model" && it && it.m) {
+          state.modelIdx = MODELS.indexOf(it.m);
+          renderHints();
+          sys("模型 → " + it.m.prov + "/" + it.m.id);
+        } else if (it && it.cmd) {
+          runSlash(it.cmd);
+        }
+        return;
+      }
+      if (e.key === "Escape") { e.preventDefault(); insClose(); return; }
+    }
+    if (e.key === "Escape") {
+      if (state.running) { e.preventDefault(); if (abort()) hintFlash("已中断（已完成内容保留）"); return; }
+      var now = Date.now();
+      if (now - state.escTs < 350) {
+        e.preventDefault();
+        if (editor.value) {
+          state.draft = editor.value;
+          editor.value = ""; autoGrow();
+          hintFlash("草稿已存（↑ 召回）");
+        } else {
+          hintFlash("rewind 菜单（原型示意）");
+          sys("rewind：回退到检查点（原型示意，M6 里程碑）", "dim");
+        }
+      }
+      state.escTs = now;
+      return;
+    }
+    if (e.key === "F10") { e.preventDefault(); toggleFullscreen(); return; }
+    if (e.key === "?" && inEditor && !editor.value) { e.preventDefault(); openHelp(); return; }
+    if (!inEditor) return;
+    if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); cycleMode(); }
+    else if (e.altKey && (e.key === "p" || e.key === "P")) { e.preventDefault(); cycleModel(1); }
+    else if ((e.ctrlKey || e.metaKey) && (e.key === "p" || e.key === "P") && !e.shiftKey) { e.preventDefault(); cycleModel(1); }
+    else if (e.altKey && (e.key === "t" || e.key === "T")) { e.preventDefault(); cycleThink(); }
+    else if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); send(); }
+    else if ((e.ctrlKey || e.metaKey) && (e.key === "o" || e.key === "O")) {
+      e.preventDefault();
+      var anyClosed = false;
+      flow.querySelectorAll(".act,.res").forEach(function (el) { if (!el.classList.contains("open")) anyClosed = true; });
+      flow.querySelectorAll(".act,.res").forEach(function (el) { el.classList.toggle("open", anyClosed); });
+      stickBottom();
+    }
+    else if ((e.ctrlKey || e.metaKey) && (e.key === "g" || e.key === "G")) {
+      e.preventDefault(); hintFlash("外部编辑器：$VISUAL/$EDITOR（原型示意）");
+    }
+    else if (e.key === "ArrowUp" && !editor.value && state.draft) {
+      e.preventDefault(); editor.value = state.draft; state.draft = null; autoGrow();
+    }
+  });
+
+  /* ================= 启动 ================= */
+  renderInputBorder();
+  renderHints();
+  sceneChat();
+  stickBottom();
+  editor.focus();
+})();
+</script>
+</body>
+</html>
