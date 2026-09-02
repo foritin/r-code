@@ -17,6 +17,7 @@ pub mod approval;
 pub mod approval_overlay;
 pub mod bang_command;
 pub mod bang_exec;
+pub mod display;
 pub mod external_editor;
 pub mod fullscreen;
 pub mod history;

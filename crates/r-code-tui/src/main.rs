@@ -503,28 +503,16 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         run_bang,
     };
 
+    // M5-02：inline 模式——只进 raw + bracketed paste，不进备用屏
+    //（历史进终端 scrollback、退出保留；行差分渲染见 app.rs）。
     crossterm::terminal::enable_raw_mode().expect("raw mode");
-    let mut stdout = std::io::stdout();
-    crossterm::execute!(
-        stdout,
-        crossterm::terminal::EnterAlternateScreen,
-        crossterm::cursor::Hide,
-        crossterm::event::EnableBracketedPaste
-    )
-    .expect("enter alt screen");
-    let backend = ratatui::backend::CrosstermBackend::new(stdout);
-    let terminal = ratatui::Terminal::new(backend).expect("terminal");
+    crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)
+        .expect("enable bracketed paste");
 
-    run_interactive(terminal, tui_state, controller).await;
+    run_interactive(tui_state, controller).await;
 
-    let mut stdout = std::io::stdout();
-    crossterm::execute!(
-        stdout,
-        crossterm::cursor::Show,
-        crossterm::terminal::LeaveAlternateScreen,
-        crossterm::event::DisableBracketedPaste
-    )
-    .expect("leave alt screen");
+    crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste)
+        .expect("disable bracketed paste");
     crossterm::terminal::disable_raw_mode().expect("disable raw mode");
 }
 

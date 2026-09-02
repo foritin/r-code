@@ -1,0 +1,97 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M5-02",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T07:07:05.817Z",
+  "started_at": "2026-09-02T07:06:57.229Z",
+  "finished_at": "2026-09-02T07:07:05.817Z",
+  "duration_ms": 8588,
+  "revision": "fd657a35906b84f3d01c7fe05c49428f223eb242",
+  "worktree_digest": "8983e8f51487d31ed6bc246ad2582de4711579d966f611106ce218a9146c85c9",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M5-02.A1",
+      "description": "历史行进终端 scrollback（PTY 集成：append-only 输出流含完整历史；无整屏清屏）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --test inline_scrollback",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --test inline_scrollback",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    },
+    {
+      "id": "M5-02.A2",
+      "description": "重绘包 CSI ?2026 同步输出（字节级：首帧全量包裹、append-only 不重写历史）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib inline_render",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib inline_render",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    },
+    {
+      "id": "M5-02.A3",
+      "description": "resize 稳定（输入行贴底、窄宽不越界、宽度变化触发全量重绘）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib input_line_stays_bottom_and_fits_width",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib input_line_stays_bottom_and_fits_width",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    },
+    {
+      "id": "M5-02.A4",
+      "description": "M1-M4 组件面在 inline 行模型下投影（语义色 + 审批带 + 排队 + 菜单 no matches + 模式徽章）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib display_assembly_covers_all_milestone_surfaces",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib display_assembly_covers_all_milestone_surfaces",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M5-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

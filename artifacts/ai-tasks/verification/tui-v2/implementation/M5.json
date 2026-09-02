@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M5",
   "profile": "implementation",
-  "generated_at": "2026-09-02T05:02:51.260Z",
-  "started_at": "2026-09-02T05:02:28.819Z",
-  "finished_at": "2026-09-02T05:02:51.260Z",
-  "duration_ms": 22441,
-  "revision": "b68542ce56df26cfe23071f35151e73ee229f76f",
-  "worktree_digest": "22919771f7e4f9ee4b40631a3f75812c5f2410c68026e475ddd38d1b097bbb8b",
+  "generated_at": "2026-09-02T07:08:29.600Z",
+  "started_at": "2026-09-02T07:08:08.579Z",
+  "finished_at": "2026-09-02T07:08:29.600Z",
+  "duration_ms": 21021,
+  "revision": "fd657a35906b84f3d01c7fe05c49428f223eb242",
+  "worktree_digest": "ef0d1189c848f9c05dee56626cdbb78df11742c5ae996a76164489db2f005429",
   "worktree_dirty": true,
   "summary": {
-    "total": 62,
-    "passed": 62,
+    "total": 66,
+    "passed": 66,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "b68542ce56df26cfe23071f35151e73ee229f76f",
+        "revision": "fd657a35906b84f3d01c7fe05c49428f223eb242",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-065b954361f5.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-39fb2b32a604.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-ebf3c622bec2.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-2bfaa954f1fa.log"
       },
       "task": "M1-01"
     },
@@ -690,6 +690,74 @@
         "coreTests": 0
       },
       "task": "M5-01"
+    },
+    {
+      "id": "M5-02.A1",
+      "description": "历史行进终端 scrollback（PTY 集成：append-only 输出流含完整历史；无整屏清屏）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --test inline_scrollback",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --test inline_scrollback",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    },
+    {
+      "id": "M5-02.A2",
+      "description": "重绘包 CSI ?2026 同步输出（字节级：首帧全量包裹、append-only 不重写历史）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib inline_render",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib inline_render",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    },
+    {
+      "id": "M5-02.A3",
+      "description": "resize 稳定（输入行贴底、窄宽不越界、宽度变化触发全量重绘）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib input_line_stays_bottom_and_fits_width",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib input_line_stays_bottom_and_fits_width",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
+    },
+    {
+      "id": "M5-02.A4",
+      "description": "M1-M4 组件面在 inline 行模型下投影（语义色 + 审批带 + 排队 + 菜单 no matches + 模式徽章）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib display_assembly_covers_all_milestone_surfaces",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib display_assembly_covers_all_milestone_surfaces",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M5-02"
     }
   ],
   "failed_assertions": [],
@@ -787,6 +855,11 @@
     {
       "task": "M5-01",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-01.yaml",
+      "exists": true
+    },
+    {
+      "task": "M5-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-02.yaml",
       "exists": false
     }
   ],

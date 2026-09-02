@@ -417,6 +417,35 @@ const REGISTRY = {
       },
     ],
   },
+  "M5-02": {
+    milestone: "M5",
+    assertions: [
+      {
+        id: "M5-02.A1",
+        description: "历史行进终端 scrollback（PTY 集成：append-only 输出流含完整历史；无整屏清屏）",
+        kind: "command",
+        command: ["cargo", "test", "-p", "r-code-tui", "--test", "inline_scrollback"],
+      },
+      {
+        id: "M5-02.A2",
+        description: "重绘包 CSI ?2026 同步输出（字节级：首帧全量包裹、append-only 不重写历史）",
+        kind: "command",
+        command: ["cargo", "test", "-p", "r-code-tui", "--lib", "inline_render"],
+      },
+      {
+        id: "M5-02.A3",
+        description: "resize 稳定（输入行贴底、窄宽不越界、宽度变化触发全量重绘）",
+        kind: "command",
+        command: ["cargo", "test", "-p", "r-code-tui", "--lib", "input_line_stays_bottom_and_fits_width"],
+      },
+      {
+        id: "M5-02.A4",
+        description: "M1-M4 组件面在 inline 行模型下投影（语义色 + 审批带 + 排队 + 菜单 no matches + 模式徽章）",
+        kind: "command",
+        command: ["cargo", "test", "-p", "r-code-tui", "--lib", "display_assembly_covers_all_milestone_surfaces"],
+      },
+    ],
+  },
   "M5-01": {
     milestone: "M5",
     assertions: [

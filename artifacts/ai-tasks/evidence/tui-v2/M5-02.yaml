@@ -1,0 +1,69 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M5-02
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m5-02-inline-渲染落地
+
+revision:
+  git_revision: fd657a3
+  worktree_digest: recorded-in-report-M5-02.json
+
+deliverables:
+  - crates/r-code-tui/src/display.rs（行模型组装：语义色/审批带/菜单/输入贴底 + 2 单测）
+  - crates/r-code-tui/src/app.rs（run_interactive 改 inline 行差分循环；宽度变化全量重绘；删旧 ratatui 管线）
+  - crates/r-code-tui/src/main.rs（去 EnterAlternateScreen/ratatui Terminal，只进 raw + bracketed paste）
+  - crates/r-code-tui/examples/inline_scrollback_demo.rs（PTY 演示载体）
+  - crates/r-code-tui/tests/inline_scrollback.rs（PTY 集成：历史进 scrollback + 无整屏清屏）
+  - crates/r-code-tui/Cargo.toml（portable-pty dev-dep）
+  - scripts/verify-tui-v2.mjs M5-02 断言注册
+changed_paths:
+  - crates/r-code-tui/src/display.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/main.rs
+  - crates/r-code-tui/examples/inline_scrollback_demo.rs
+  - crates/r-code-tui/tests/inline_scrollback.rs
+  - crates/r-code-tui/Cargo.toml
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M5-02.A1"
+    passed: true
+    command: cargo test -p r-code-tui --test inline_scrollback
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-02.json
+    note: "PTY 集成：append-only 历史行写入终端输出流（history line 1..7 全含）、无 \\x1b[2J 整屏清屏（历史保留）"
+  - id: "M5-02.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib inline_render
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-02.json
+    note: "CSI ?2026 同步输出包裹、append-only 不重写历史、行内 spinner 差分、清块"
+  - id: "M5-02.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib input_line_stays_bottom_and_fits_width
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-02.json
+    note: "输入行贴底、窄宽 padding 钳 0 不越界"
+  - id: "M5-02.A4"
+    passed: true
+    command: cargo test -p r-code-tui --lib display_assembly_covers_all_milestone_surfaces
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-02.json
+    note: "M1 错误 System/M2 排队/M2-05 审批带/M2-03 模式徽章/M4-03 no matches 全投影 + ANSI 语义色"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M5 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5.json
+
+decisions:
+  - DM1: 渲染层 = display.rs（行模型 + ANSI 语义色）→ inline_render.rs（行差分）；删除了旧 ratatui 全屏渲染管线（render/render_regular/render_fullscreen/render_model_picker 等全部退役）。
+  - DM2: 外编/宽度变化时全量重置差分器（终端状态被外部改写或基准失效，下一帧全量对齐）。
+  - DM3: PTY 不可用环境跳过集成测试（PRD 允许确定性 harness 替代；语义由 inline_render 单测覆盖，真实终端归 §11.3）。
+  - DM4: resize 检测在每帧读 crossterm size，宽度变化即重置渲染器（A 路线自管 resize 成本，PoC 定案已接受）。
+external_gates_remaining:
+  - 真实终端 p95 帧耗/闪烁实测 + scrollback 在主流终端的手工验证
+notes: []

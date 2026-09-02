@@ -4306,6 +4306,7 @@ dependencies = [
  "agent-contract",
  "chrono",
  "crossterm",
+ "portable-pty",
  "r-code-agent-worker",
  "r-code-core",
  "r-code-gateway",

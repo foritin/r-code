@@ -21,8 +21,8 @@
 
 <!-- AI_WORKLIST_VOLATILE_START -->
 
-- 当前进度：`19 / 24` 项完成。
-- 下一执行项：M5-02（inline 渲染落地）。
+- 当前进度：`20 / 24` 项完成。
+- 下一执行项：M5-03（alt-screen 退役与 IME 适配）。
 - 当前任务包：`artifacts/ai-tasks/tui-v2/current.yaml`（M1-01 进行中时建立；根 `current.yaml` 与 `artifacts/ai-tasks/pi-alignment/current.yaml` 属于其他 worklist 的活跃资产，不得占用或覆盖）。
 - 注意：工作区可能存在未提交改动（含 `docs/tui-v2/` 下文档与原型），一律视为用户资产，任何任务不得 reset/覆盖/回滚它们。
 
@@ -262,7 +262,7 @@ M0-01 自身在 Harness 尚未存在时，先用任务卡列出的直接命令�
 - [x] **M4-04** `!` 直通与 `@` 文件提及。证据：`artifacts/ai-tasks/evidence/tui-v2/M4-04.yaml`
 - [x] **M4-05** 历史导航与 transcript 浮层。证据：`artifacts/ai-tasks/evidence/tui-v2/M4-05.yaml`
 - [x] **M5-01** inline 渲染路线 PoC 定案。证据：`artifacts/ai-tasks/evidence/tui-v2/M5-01.yaml`
-- [ ] **M5-02** inline 渲染落地。证据：待生成
+- [x] **M5-02** inline 渲染落地。证据：`artifacts/ai-tasks/evidence/tui-v2/M5-02.yaml`
 - [ ] **M5-03** alt-screen 退役与 IME 适配。证据：待生成
 - [ ] **M6-01** `/resume` 会话列表。证据：待生成
 - [ ] **M6-02** `/new` `/rename` `/compact`。证据：待生成
