@@ -1,0 +1,69 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-05",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:57:09.771Z",
+  "started_at": "2026-09-02T04:57:08.798Z",
+  "finished_at": "2026-09-02T04:57:09.771Z",
+  "duration_ms": 973,
+  "revision": "c0146a83ab90c56fe79bba18a2245a54b031b2b0",
+  "worktree_digest": "bb2c74f982c9277d82902b36812b378506f1e01788e1b8a3a796760dd209e8d8",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-05.A1",
+      "description": "历史导航（↑/↓ 与 Ctrl+P/N：草稿保留、相邻去重、空历史 no-op、越过最新还原草稿）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
+    },
+    {
+      "id": "M4-05.A2",
+      "description": "浮层开合与滚动钳位（打开锚定底部、顶部钳总行数、翻页、toggle）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
+    },
+    {
+      "id": "M4-05.A3",
+      "description": "浮层顶行/hints 行快照（/ T R A N S C R I P T / 铺满 + q to quit）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
+    },
+    {
+      "id": "M4-05.A4",
+      "description": "浮层内容全量展开（工具卡错误态、shell 退出码、用户/助手前缀）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-05",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-05.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

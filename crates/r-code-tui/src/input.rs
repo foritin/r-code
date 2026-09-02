@@ -309,6 +309,12 @@ pub enum KeyAction {
     WordRight,
     /// 外部编辑器（Ctrl+G）。
     ExternalEditor,
+    /// 历史上一条（↑ / Ctrl+P）。
+    HistoryPrev,
+    /// 历史下一条（↓ / Ctrl+N）。
+    HistoryNext,
+    /// transcript 浮层开关（Ctrl+T）。
+    ToggleTranscript,
     /// 忽略（未映射键）。
     Ignore,
 }
@@ -335,6 +341,11 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('z') | KeyCode::Char('Z') if ctrl => KeyAction::Undo,
         KeyCode::Char('y') | KeyCode::Char('Y') if ctrl => KeyAction::Redo,
         KeyCode::Char('g') | KeyCode::Char('G') if ctrl => KeyAction::ExternalEditor,
+        KeyCode::Char('p') | KeyCode::Char('P') if ctrl => KeyAction::HistoryPrev,
+        KeyCode::Char('n') | KeyCode::Char('N') if ctrl => KeyAction::HistoryNext,
+        KeyCode::Char('t') | KeyCode::Char('T') if ctrl => KeyAction::ToggleTranscript,
+        KeyCode::PageUp => KeyAction::ScrollUp,
+        KeyCode::PageDown => KeyAction::ScrollDown,
         KeyCode::Left if ctrl => KeyAction::WordLeft,
         KeyCode::Right if ctrl => KeyAction::WordRight,
         KeyCode::Char('t') | KeyCode::Char('T') if alt => KeyAction::ToggleThinking,
@@ -351,8 +362,8 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Right => KeyAction::CursorRight,
         KeyCode::Home => KeyAction::CursorHome,
         KeyCode::End => KeyAction::CursorEnd,
-        KeyCode::Up => KeyAction::ScrollUp,
-        KeyCode::Down => KeyAction::ScrollDown,
+        KeyCode::Up => KeyAction::HistoryPrev,
+        KeyCode::Down => KeyAction::HistoryNext,
         KeyCode::Esc => KeyAction::Quit,
         _ => KeyAction::Ignore,
     }
@@ -390,7 +401,8 @@ mod tests {
         let ctrl = |code| map_key(KeyEvent::new(code, KeyModifiers::CONTROL));
         assert_eq!(key(KeyCode::Enter), KeyAction::Send);
         assert_eq!(key(KeyCode::Esc), KeyAction::Quit);
-        assert_eq!(key(KeyCode::Up), KeyAction::ScrollUp);
+        assert_eq!(key(KeyCode::Up), KeyAction::HistoryPrev);
+        assert_eq!(key(KeyCode::PageUp), KeyAction::ScrollUp);
         assert_eq!(key(KeyCode::F(10)), KeyAction::ToggleFullscreen);
         assert_eq!(ctrl(KeyCode::Char('c')), KeyAction::Abort);
         assert_eq!(ctrl(KeyCode::Char('d')), KeyAction::Quit);

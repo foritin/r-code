@@ -1,0 +1,66 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M4-05
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m4-05-历史导航与-transcript-浮层
+
+revision:
+  git_revision: c0146a8
+  worktree_digest: recorded-in-report-M4-05.json
+
+deliverables:
+  - crates/r-code-tui/src/history.rs（历史栈：草稿保留/去重/钳位 + 1 单测）
+  - crates/r-code-tui/src/transcript_view.rs（浮层状态/顶行/hints/全量展开渲染 + 3 单测）
+  - crates/r-code-tui/src/input.rs（↑/↓→HistoryPrev/Next、Ctrl+P/N、Ctrl+T、PgUp/PgDn→滚动）
+  - crates/r-code-tui/src/app.rs（历史导航接线、浮层键位接管与全屏渲染、发送入历史栈）
+  - crates/r-code-tui/src/lib.rs（模块注册）
+  - scripts/verify-tui-v2.mjs M4-05 断言注册
+changed_paths:
+  - crates/r-code-tui/src/history.rs
+  - crates/r-code-tui/src/transcript_view.rs
+  - crates/r-code-tui/src/input.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/lib.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M4-05.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib history_navigation_preserves_draft
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-05.json
+    note: "↑ 向旧/↓ 向新、进入历史存草稿、越过最新还原草稿、最旧钳位、相邻去重、空历史/空消息 no-op"
+  - id: "M4-05.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib transcript_view_open_close_and_scroll_clamp
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-05.json
+    note: "打开锚定底部、顶部钳总行数、翻页钳位、底部锚定 0、toggle 开合"
+  - id: "M4-05.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib header_and_hints_match_codex_shape
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-05.json
+    note: "/ T R A N S C R I P T / 斜线铺满（窄宽不截断）；hints q to quit / esc to edit prev"
+  - id: "M4-05.A4"
+    passed: true
+    command: cargo test -p r-code-tui --lib render_rows_expand_tools_and_shell
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-05.json
+    note: "全量展开：⏺ 工具卡含（失败）态、shell exit 码、› 用户/• 助手前缀"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M4 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4.json
+
+decisions:
+  - DM1: ↑/↓ 语义让位历史导航（codex 同款）；transcript 滚动改 PgUp/PgDn + ctrl+t 浮层内 ↑↓——v1 的 ↑↓ 直接滚 transcript 退役。
+  - DM2: transcript 浮层 = 唯一"全屏"语义载体（PRD §2.4 拍板）：打开时占满区域渲染（顶行 dim + 全量行 + hints），q/esc 关闭。
+  - DM3: 历史栈上限 500、发送路径统一入栈（普通消息/!命令/斜杠命令都可 ↑ 找回——粘贴展开后的全文入栈）。
+  - DM4: 键位重构连锁：input.rs 旧 key_mapping_actions 测试随新语义更新（Up/Down→History*、PageUp/Down→Scroll*）。
+external_gates_remaining: []
+notes: []

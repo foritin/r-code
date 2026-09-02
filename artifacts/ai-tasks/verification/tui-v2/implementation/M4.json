@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M4",
   "profile": "implementation",
-  "generated_at": "2026-09-02T04:54:14.133Z",
-  "started_at": "2026-09-02T04:53:51.987Z",
-  "finished_at": "2026-09-02T04:54:14.133Z",
-  "duration_ms": 22146,
-  "revision": "0c9175ff84106c3abed0fc0129c5528f9613c400",
-  "worktree_digest": "778aba88c953441a9a289fde85dad68dd6a5bf8eaf42ec3c94f3faf3e66ff990",
+  "generated_at": "2026-09-02T04:58:36.761Z",
+  "started_at": "2026-09-02T04:58:17.875Z",
+  "finished_at": "2026-09-02T04:58:36.761Z",
+  "duration_ms": 18886,
+  "revision": "c0146a83ab90c56fe79bba18a2245a54b031b2b0",
+  "worktree_digest": "764db43c10725559b2be2c610cc5b1cda8021ce48ad2929ae7900b9595912d7a",
   "worktree_dirty": true,
   "summary": {
-    "total": 55,
-    "passed": 55,
+    "total": 59,
+    "passed": 59,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "0c9175ff84106c3abed0fc0129c5528f9613c400",
+        "revision": "c0146a83ab90c56fe79bba18a2245a54b031b2b0",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-6bd98e67ed11.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-4c0de6e793d6.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-1efec1ba83d6.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-609034ebd4aa.log"
       },
       "task": "M1-01"
     },
@@ -610,6 +610,46 @@
         "exitCode": 0
       },
       "task": "M4-04"
+    },
+    {
+      "id": "M4-05.A1",
+      "description": "历史导航（↑/↓ 与 Ctrl+P/N：草稿保留、相邻去重、空历史 no-op、越过最新还原草稿）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
+    },
+    {
+      "id": "M4-05.A2",
+      "description": "浮层开合与滚动钳位（打开锚定底部、顶部钳总行数、翻页、toggle）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
+    },
+    {
+      "id": "M4-05.A3",
+      "description": "浮层顶行/hints 行快照（/ T R A N S C R I P T / 铺满 + q to quit）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
+    },
+    {
+      "id": "M4-05.A4",
+      "description": "浮层内容全量展开（工具卡错误态、shell 退出码、用户/助手前缀）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-05"
     }
   ],
   "failed_assertions": [],
@@ -697,6 +737,11 @@
     {
       "task": "M4-04",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-04.yaml",
+      "exists": true
+    },
+    {
+      "task": "M4-05",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-05.yaml",
       "exists": false
     }
   ],

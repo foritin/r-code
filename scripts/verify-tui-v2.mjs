@@ -417,6 +417,55 @@ const REGISTRY = {
       },
     ],
   },
+  "M4-05": {
+    milestone: "M4",
+    assertions: [
+      {
+        id: "M4-05.A1",
+        description: "历史导航（↑/↓ 与 Ctrl+P/N：草稿保留、相邻去重、空历史 no-op、越过最新还原草稿）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "history_navigation_preserves_draft",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-05.A2",
+        description: "浮层开合与滚动钳位（打开锚定底部、顶部钳总行数、翻页、toggle）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "transcript_view_open_close_and_scroll_clamp",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-05.A3",
+        description: "浮层顶行/hints 行快照（/ T R A N S C R I P T / 铺满 + q to quit）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "header_and_hints_match_codex_shape",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-05.A4",
+        description: "浮层内容全量展开（工具卡错误态、shell 退出码、用户/助手前缀）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "render_rows_expand_tools_and_shell",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M4-04": {
     milestone: "M4",
     assertions: [

@@ -95,6 +95,9 @@ pub async fn run_interactive(
     let mut pastes = crate::paste::PasteBuffer::new();
     // M4-03：斜杠菜单（输入以 / 起始时呈现；↑↓ 移动、Tab 补全）。
     let mut slash_menu: Option<crate::slash_menu::SlashMenu> = None;
+    // M4-05：已发消息历史 + transcript 浮层（Ctrl+T）。
+    let mut history = crate::history::History::new();
+    let mut transcript_view = crate::transcript_view::TranscriptView::new();
 
     loop {
         terminal
@@ -107,6 +110,7 @@ pub async fn run_interactive(
                     scroll_offset,
                     status.as_deref(),
                     overlay.as_ref(),
+                    Some(&transcript_view),
                 );
             })
             .expect("terminal draw");
@@ -139,6 +143,25 @@ pub async fn run_interactive(
         });
 
         if let Some(key) = event {
+            // M4-05：transcript 浮层接管键位（q/esc 关闭、滚动；其余忽略）。
+            if transcript_view.is_open() {
+                match map_key(key) {
+                    KeyAction::Quit => transcript_view.close(),
+                    KeyAction::Insert(ch) if ch == 'q' || ch == 'Q' => transcript_view.close(),
+                    KeyAction::HistoryPrev => {
+                        let total = state.lock().unwrap().rows().len();
+                        transcript_view.scroll_up(total);
+                    }
+                    KeyAction::HistoryNext => transcript_view.scroll_down(),
+                    KeyAction::ScrollUp => {
+                        let total = state.lock().unwrap().rows().len();
+                        transcript_view.page_up(total, 20);
+                    }
+                    KeyAction::ScrollDown => transcript_view.page_down(20),
+                    _ => {}
+                }
+                continue;
+            }
             // M2-05：待审批请求接管键位（y/a/esc；必须决策，不可忽略关闭）。
             if overlay.is_none() && state.lock().unwrap().pending_approval().is_some() {
                 if let Some(decision) = approval_decision_for_key(map_key(key)) {
@@ -193,13 +216,13 @@ pub async fn run_interactive(
             // 斜杠菜单活动时 ↑↓ 优先归菜单（其余键仍进编辑器——菜单是被动浮层）。
             if slash_menu.is_some() {
                 match action_variant {
-                    KeyAction::ScrollUp => {
+                    KeyAction::ScrollUp | KeyAction::HistoryPrev => {
                         if let Some(menu) = slash_menu.as_mut() {
                             menu.move_up();
                         }
                         continue;
                     }
-                    KeyAction::ScrollDown => {
+                    KeyAction::ScrollDown | KeyAction::HistoryNext => {
                         if let Some(menu) = slash_menu.as_mut() {
                             menu.move_down();
                         }
@@ -246,6 +269,17 @@ pub async fn run_interactive(
                 }
                 KeyAction::WordLeft => input.move_word_left(),
                 KeyAction::WordRight => input.move_word_right(),
+                KeyAction::HistoryPrev => {
+                    if let Some(text) = history.navigate_back(&input.text()) {
+                        input.set_text(&text);
+                    }
+                }
+                KeyAction::HistoryNext => {
+                    if let Some(text) = history.navigate_forward() {
+                        input.set_text(&text);
+                    }
+                }
+                KeyAction::ToggleTranscript => transcript_view.toggle(),
                 KeyAction::ExternalEditor => {
                     // 临时退出 raw/alt-screen 给编辑器，回来后回填。
                     let draft = input.text();
@@ -330,6 +364,8 @@ pub async fn run_interactive(
                         // 空闲 = 正常发送。
                         // M4-02：折叠占位符在发送时展开（上下文拿完整原文）。
                         let text = pastes.expand(&text);
+                        // M4-05：进历史栈（! 命令与斜杠命令同样可 ↑ 找回）。
+                        history.record(&text);
                         let route = {
                             let mut st = state.lock().unwrap();
                             let route = crate::route_send(st.is_running());
@@ -398,6 +434,7 @@ pub async fn run_interactive(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render(
     frame: &mut Frame<'_>,
     state: &Arc<Mutex<TuiState>>,
@@ -406,6 +443,7 @@ fn render(
     scroll_offset: usize,
     status: Option<&str>,
     overlay: Option<&Overlay>,
+    transcript_view: Option<&crate::transcript_view::TranscriptView>,
 ) {
     // snapshot 权威：渲染只读快照（不累积副本）。
     let rows = {
@@ -429,7 +467,32 @@ fn render(
         .as_ref()
         .map(crate::approval_overlay::overlay_lines);
 
+    // M4-05：transcript 浮层打开时占满全屏（唯一"全屏"语义载体）。
     let area = frame.area();
+    if let Some(view) = transcript_view.filter(|view| view.is_open()) {
+        let lines = crate::transcript_view::render_rows(&rows);
+        let height = area.height as usize;
+        let total = lines.len();
+        let scroll = view.scroll().min(total.saturating_sub(1));
+        let start = total.saturating_sub(height.saturating_sub(2) + scroll);
+        let end = total.saturating_sub(scroll).max(start);
+        let mut rendered = vec![crate::transcript_view::header_line(area.width as usize)];
+        rendered.extend(lines[start.min(total)..end.min(total).max(start.min(total))].to_vec());
+        rendered.push(crate::transcript_view::hints_line().to_string());
+        frame.render_widget(
+            Paragraph::new(
+                rendered
+                    .into_iter()
+                    .map(|line| {
+                        Line::from(Span::styled(line, Style::default().fg(Color::DarkGray)))
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            area,
+        );
+        return;
+    }
+
     if screen.mode == crate::fullscreen::ScreenMode::Fullscreen {
         render_fullscreen(frame, area, &rows, input, running, status);
     } else {

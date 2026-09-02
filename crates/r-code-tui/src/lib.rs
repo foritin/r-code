@@ -19,6 +19,7 @@ pub mod bang_command;
 pub mod bang_exec;
 pub mod external_editor;
 pub mod fullscreen;
+pub mod history;
 pub mod ime;
 pub mod input;
 pub mod interaction;
@@ -30,6 +31,7 @@ pub mod snapshot;
 pub mod status_bar;
 pub mod task_mode;
 pub mod thinking;
+pub mod transcript_view;
 pub mod window;
 
 /// transcript 的一行（事件 → widget 映射的产物）。
