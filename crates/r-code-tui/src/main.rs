@@ -417,6 +417,25 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
             });
         });
 
+    // M3-01：用量刷新泵（持久化投影：task_detail.runs.usage_json 累加；
+    // resume 后仍准确。上下文窗口数据源暂缺——未知窗口按 codex 形态回退 used）。
+    {
+        let refresh_state = state.clone();
+        let refresh_task = task_id.clone();
+        let refresh_tui = tui_state.clone();
+        handle.spawn(async move {
+            loop {
+                if let Ok(detail) = task_detail(&refresh_state, &refresh_task).await {
+                    let stats = r_code_tui::status_bar::accumulate_usage(&detail.runs);
+                    if let Ok(mut st) = refresh_tui.lock() {
+                        st.set_usage(stats);
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        });
+    }
+
     let controller = RunController {
         send,
         abort,

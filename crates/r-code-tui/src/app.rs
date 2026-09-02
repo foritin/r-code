@@ -265,7 +265,7 @@ fn render(
         st.flush_streaming();
         st.rows().to_vec()
     };
-    let (running, model_selection, thinking, mode_badge, queue_block, approval) = {
+    let (running, model_selection, thinking, mode_badge, queue_block, approval, usage) = {
         let st = state.lock().unwrap();
         (
             st.is_running(),
@@ -274,6 +274,7 @@ fn render(
             crate::task_mode::mode_badge(st.task_mode()),
             crate::queue_lines(st.queued()),
             st.pending_approval().cloned(),
+            st.usage(),
         )
     };
     let approval_lines = approval
@@ -300,6 +301,7 @@ fn render(
             mode_badge,
             queue_block,
             approval_lines,
+            usage,
             overlay,
         );
     }
@@ -378,6 +380,7 @@ fn render_regular(
     mode_badge: Option<(&'static str, crate::task_mode::BadgeColor)>,
     queue_block: Vec<String>,
     approval_lines: Option<Vec<crate::approval_overlay::OverlayLine>>,
+    usage: Option<crate::status_bar::UsageStats>,
     overlay: Option<&Overlay>,
 ) {
     // 浮层打开时：底部预留插入式列表（≤8 行 + 查询行），列表在输入区上方；
@@ -474,15 +477,29 @@ fn render_regular(
         ));
     }
     input_line.push(Span::raw(input_text.clone()));
-    // footer 右侧标签 `(provider) model • thinking`（M2-01/M2-02 联动；未定时不占位）。
+    // footer 右侧：统计行（M3-01，阈值变色）+ 模型标签
+    // `↑in ↓out N% context left (provider) model • thinking`。
+    let (stats_text, stats_color) = usage
+        .map(|stats| {
+            let (text, threshold) = crate::status_bar::footer_stats_line(&stats, None, false);
+            let color = match threshold {
+                crate::status_bar::Threshold::Normal => Color::DarkGray,
+                crate::status_bar::Threshold::Warning => Color::Yellow,
+                crate::status_bar::Threshold::Error => Color::Red,
+            };
+            (format!("{text}  "), color)
+        })
+        .unwrap_or_default();
     if let Some(label) = model_label {
         let used: usize = prompt.chars().count() + input_text.chars().count();
+        let tail = format!("{stats_text}{label}");
         let width = area.width as usize;
-        if let Some(padding) = (width.saturating_sub(used + label.chars().count() + 1))
+        if let Some(padding) = (width.saturating_sub(used + tail.chars().count() + 1))
             .checked_sub(1)
             .filter(|pad| *pad > 0)
         {
             input_line.push(Span::raw(" ".repeat(padding)));
+            input_line.push(Span::styled(stats_text, Style::default().fg(stats_color)));
             input_line.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
         }
     }
@@ -583,6 +600,7 @@ fn render_fullscreen(
         None,
         None,
         Vec::new(),
+        None,
         None,
         None,
     );

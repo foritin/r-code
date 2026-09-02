@@ -1,0 +1,60 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M3-01",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:30:52.821Z",
+  "started_at": "2026-09-02T04:30:51.992Z",
+  "finished_at": "2026-09-02T04:30:52.820Z",
+  "duration_ms": 828,
+  "revision": "a7cfef0d0a2b9abdf1af94fe486afb5f7cb62b80",
+  "worktree_digest": "5810090a4e68f18532f9e6efa50c5b2fd91ad990ee2112fa839e803c5ecf9f4e",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M3-01.A1",
+      "description": "格式化：usage 累加（持久化投影）+ 紧凑格式（900/1.9K/45.6K/4.56M）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M3-01"
+    },
+    {
+      "id": "M3-01.A2",
+      "description": "阈值变色契约（>70% warning、>90% error；余量呈现；未知窗口回退 used）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M3-01"
+    },
+    {
+      "id": "M3-01.A3",
+      "description": "同输入恒等输出（resume 后数值一致）+ compaction 标记 (auto)",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "marker": 0,
+        "determinism": 0
+      },
+      "task": "M3-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M3-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M3-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

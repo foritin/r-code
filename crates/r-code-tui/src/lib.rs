@@ -22,6 +22,7 @@ pub mod input;
 pub mod interaction;
 pub mod model_selector;
 pub mod snapshot;
+pub mod status_bar;
 pub mod task_mode;
 pub mod thinking;
 pub mod window;
@@ -67,6 +68,8 @@ pub struct TuiState {
     queued: Vec<String>,
     /// 待审批请求投影（M2-05：权威在 PermissionEngine pending 队列）。
     pending_approval: Option<crate::approval_overlay::PendingApproval>,
+    /// 会话累计用量投影（M3-01：权威在 TaskDetail.runs.usage_json）。
+    usage: Option<crate::status_bar::UsageStats>,
 }
 
 impl TuiState {
@@ -205,6 +208,15 @@ impl TuiState {
     /// 取走待审批请求（决策时消费；None = 已被处理）。
     pub fn take_pending_approval(&mut self) -> Option<crate::approval_overlay::PendingApproval> {
         self.pending_approval.take()
+    }
+
+    /// 用量投影（footer 统计；由壳层周期性从 task_detail 刷新）。
+    pub fn usage(&self) -> Option<crate::status_bar::UsageStats> {
+        self.usage
+    }
+
+    pub fn set_usage(&mut self, stats: crate::status_bar::UsageStats) {
+        self.usage = Some(stats);
     }
 }
 

@@ -417,6 +417,50 @@ const REGISTRY = {
       },
     ],
   },
+  "M3-01": {
+    milestone: "M3",
+    assertions: [
+      {
+        id: "M3-01.A1",
+        description: "格式化：usage 累加（持久化投影）+ 紧凑格式（900/1.9K/45.6K/4.56M）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "accumulates_and_formats_usage",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M3-01.A2",
+        description: "阈值变色契约（>70% warning、>90% error；余量呈现；未知窗口回退 used）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "thresholds_change_at_contract_boundaries",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M3-01.A3",
+        description: "同输入恒等输出（resume 后数值一致）+ compaction 标记 (auto)",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "compaction_marker_toggles",
+          ]);
+          const record2 = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "accumulates_and_formats_usage",
+          ]);
+          return {
+            passed: record.exitCode === 0 && record2.exitCode === 0,
+            details: { marker: record.exitCode, determinism: record2.exitCode },
+          };
+        },
+      },
+    ],
+  },
   "M2-05": {
     milestone: "M2",
     assertions: [

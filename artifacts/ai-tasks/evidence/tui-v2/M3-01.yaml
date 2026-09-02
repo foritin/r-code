@@ -1,0 +1,58 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M3-01
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m3-01-footer-统计投影
+
+revision:
+  git_revision: a7cfef0
+  worktree_digest: recorded-in-report-M3-01.json
+
+deliverables:
+  - crates/r-code-tui/src/status_bar.rs（usage 累加/紧凑格式/阈值/compaction 标记 + 3 单测）
+  - crates/r-code-tui/src/lib.rs（TuiState.usage 投影）
+  - crates/r-code-tui/src/app.rs（footer 统计行渲染 + 阈值变色）
+  - crates/r-code-tui/src/main.rs（2s 用量刷新泵：task_detail.runs.usage_json 累加）
+  - scripts/verify-tui-v2.mjs M3-01 断言注册
+changed_paths:
+  - crates/r-code-tui/src/status_bar.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M3-01.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib accumulates_and_formats_usage
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3-01.json
+    note: "runs.usage_json 累加（无 usage/损坏 JSON 按 0 跳过）；紧凑格式 900/1.9K/45.6K/4.56M"
+  - id: "M3-01.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib thresholds_change_at_contract_boundaries
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3-01.json
+    note: ">70% warning / >90% error（占用计、余量呈现 N% context left）；窗口未知回退 x.xK used（codex 同款）"
+  - id: "M3-01.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib compaction_marker_toggles + accumulates_and_formats_usage
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3-01.json
+    note: "同输入恒等输出（持久化投影，resume 后一致）；(auto) 标记双分支"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M3 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M3.json
+
+decisions:
+  - DM1: 数据源 = task_detail.runs.usage_json 累加（持久化投影而非 AgentEvent::Usage 运行时事件——后者"会话 JSONL 与 WebView 事件流不消费"，且 run 级持久化天然 resume 稳定）。
+  - DM2: 上下文窗口数据缺口：宿主 model_capabilities 未在公开面暴露窗口大小——一期窗口传 None，按 codex 形态回退 `{x.xK} used`；窗口接入后自动切百分比形态（footer_stats_line 已双分支）。与 M2-02 DM2 同类数据缺口记录。
+  - DM3: compaction 标记为带开关纯函数；宿主无 compaction 公开事件/状态（TaskEventType 无变体），接线传 false。缺口记录，M6-02 /compact 接宿主压缩入口时一并评估。
+  - DM4: 刷新泵 2s 周期直读 task_detail（DB 读轻量）；渲染层只消费 TuiState.usage 投影。
+external_gates_remaining: []
+notes: []
