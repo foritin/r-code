@@ -21,6 +21,7 @@ pub mod external_editor;
 pub mod fullscreen;
 pub mod history;
 pub mod ime;
+pub mod inline_render;
 pub mod input;
 pub mod interaction;
 pub mod mention;

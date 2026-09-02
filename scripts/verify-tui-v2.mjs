@@ -417,6 +417,44 @@ const REGISTRY = {
       },
     ],
   },
+  "M5-01": {
+    milestone: "M5",
+    assertions: [
+      {
+        id: "M5-01.A1",
+        description: "基准报告存在且含两路线数据（差分/viewport/朴素 三列字节对比 + 语义对照表）",
+        kind: "file",
+        path: "docs/tui-v2/m5-01-poc-report.md",
+        contains: ["自研行差分", "ratatui InlineViewport", "定案"],
+      },
+      {
+        id: "M5-01.A2",
+        description: "PoC 可复跑：cargo run -p r-code-tui --example inline_bench exit 0（确定性，无终端依赖）",
+        kind: "command",
+        command: ["cargo", "run", "-q", "-p", "r-code-tui", "--example", "inline_bench"],
+      },
+      {
+        id: "M5-01.A3",
+        description: "定案记录含依据与被否路线差距（scrollback 判据 + 量化倍数）；差分核心单测绿",
+        kind: "self",
+        async check(ctx) {
+          const report = await (await import("node:fs/promises")).readFile(
+            path.join(REPO_ROOT, "docs", "tui-v2", "m5-01-poc-report.md"),
+            "utf8",
+          );
+          const hasRationale =
+            report.includes("scrollback 语义完整性") && report.includes("视口内重绘语义与之冲突");
+          const tests = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "inline_render",
+          ]);
+          return {
+            passed: hasRationale && tests.exitCode === 0,
+            details: { hasRationale, coreTests: tests.exitCode },
+          };
+        },
+      },
+    ],
+  },
   "M4-05": {
     milestone: "M4",
     assertions: [

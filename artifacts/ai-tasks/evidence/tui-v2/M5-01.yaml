@@ -1,0 +1,60 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M5-01
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m5-01-inline-渲染路线-poc-定案
+
+revision:
+  git_revision: b68542c
+  worktree_digest: recorded-in-report-M5-01.json
+
+deliverables:
+  - crates/r-code-tui/src/inline_render.rs（自研行差分核心：CSI ?2026 包裹、append-only 续写、行内差分、清块 + 4 单测）
+  - crates/r-code-tui/examples/inline_bench.rs（确定性基准：差分/朴素/viewport 三路线，无终端依赖）
+  - crates/r-code-tui/examples/inline_ratatui.rs（路线 C 可运行 PoC，非 TTY 安全跳过）
+  - docs/tui-v2/m5-01-poc-report.md（基准报告 + 语义对照 + 定案）
+  - scripts/verify-tui-v2.mjs M5-01 断言注册
+changed_paths:
+  - crates/r-code-tui/src/inline_render.rs
+  - crates/r-code-tui/examples/inline_bench.rs
+  - crates/r-code-tui/examples/inline_ratatui.rs
+  - crates/r-code-tui/src/lib.rs
+  - docs/tui-v2/m5-01-poc-report.md
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M5-01.A1"
+    passed: true
+    command: file check
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-01.json
+    note: "报告含三路线数据：差分 200B/帧、viewport 728B/帧、朴素 2069B/帧 + 四维语义对照表"
+  - id: "M5-01.A2"
+    passed: true
+    command: cargo run -q -p r-code-tui --example inline_bench
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-01.json
+    note: "可复跑（确定性模拟，120 帧），每次运行重写报告"
+  - id: "M5-01.A3"
+    passed: true
+    command: node scripts/verify-tui-v2.mjs --task M5-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5-01.json
+    note: "定案含依据（scrollback 语义完整性硬判据）与被否路线差距（视口内重绘 + 写入高 3.6 倍）；差分核心 4 单测绿"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M5 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M5.json
+
+decisions:
+  - DM1: 定案 = A 自研行差分（inline_render.rs）。决定性判据：scrollback 语义完整性（PRD §2.4 硬要求——历史进终端 scrollback、退出保留）；ratatui InlineViewport 的视口内重绘语义与之结构性冲突（写入量也高 3.6 倍）。resize 成本自管（宽度变化全量重绘）可接受。
+  - DM2: 基准用写入字节数作终端工作 + 闪烁面代理指标（无真实终端依赖、确定性可复跑）；真实终端 p95 帧耗归 §11.3 外部放行。
+  - DM3: "freeze 注记"落在证据文件（本 yaml）——直接改 freeze.yaml 会破坏 digest 门禁，决策链以 evidence 为准。
+  - DM4: inline_ratatui PoC 非 TTY 安全跳过（CI 可复跑 exit 0）；语义结论已进报告。
+external_gates_remaining:
+  - 真实终端 p95 帧耗时与闪烁实测（Windows Terminal/iTerm2/Termux）
+notes: []
