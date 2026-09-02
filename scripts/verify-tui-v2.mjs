@@ -458,6 +458,51 @@ const REGISTRY = {
       },
     ],
   },
+  "M6-03": {
+    milestone: "M6",
+    assertions: [
+      {
+        id: "M6-03.A1",
+        description: "命名决策记录存在且含分发影响分析（三方案对照 + 否决依据）",
+        kind: "file",
+        path: "docs/tui-v2/cli-naming-decision.md",
+        contains: ["维持 `r-code-tui` 单名", "externalBin", "否决"],
+      },
+      {
+        id: "M6-03.A2",
+        description: "脚本/externalBin/release.yml/断言四面一致（bin 名 r-code-tui 全链一致）",
+        kind: "self",
+        async check(ctx) {
+          const conf = await readFile(path.join(REPO_ROOT, "src-tauri", "tauri.conf.json"), "utf8");
+          const release = await readFile(path.join(REPO_ROOT, ".github", "workflows", "release.yml"), "utf8");
+          const devtui = await readFile(path.join(REPO_ROOT, "dev-tui.sh"), "utf8");
+          const confOk = conf.includes("binaries/r-code-tui");
+          const releaseOk = release.includes("--bin r-code-tui");
+          const devtuiOk = devtui.includes("--bin r-code-tui");
+          return {
+            passed: confOk && releaseOk && devtuiOk,
+            details: { confOk, releaseOk, devtuiOk },
+          };
+        },
+      },
+      {
+        id: "M6-03.A3",
+        description: "累计门禁 --through M6 --profile implementation exit 0（全 24 任务收口）",
+        kind: "self",
+        async check(ctx) {
+          const report = await readFile(
+            path.join(PROFILE_DIR_BASE, "implementation", "M6.json"),
+            "utf8",
+          ).then((text) => JSON.parse(text)).catch(() => null);
+          const allPassed = Boolean(report && report.summary?.failed === 0 && report.summary?.total > 0);
+          return {
+            passed: allPassed,
+            details: { total: report?.summary?.total ?? 0, failed: report?.summary?.failed ?? -1 },
+          };
+        },
+      },
+    ],
+  },
   "M6-02": {
     milestone: "M6",
     assertions: [

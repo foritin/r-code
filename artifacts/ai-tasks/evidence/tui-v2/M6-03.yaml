@@ -1,0 +1,52 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M6-03
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m6-03-cli-收口命名决策脚本与文档同步累计门禁
+
+revision:
+  git_revision: 373f0d2
+  worktree_digest: recorded-in-report-M6-03.json
+
+deliverables:
+  - docs/tui-v2/cli-naming-decision.md（命名决策：维持 r-code-tui 单名 + 三方案对照 + 否决依据）
+  - scripts/verify-tui-v2.mjs M6-03 断言注册
+changed_paths:
+  - docs/tui-v2/cli-naming-decision.md
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M6-03.A1"
+    passed: true
+    command: file check
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-03.json
+    note: "决策记录含维持单名、externalBin 影响、三方案对照、否决 B/C 四条依据"
+  - id: "M6-03.A2"
+    passed: true
+    command: self check
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-03.json
+    note: "四面一致：tauri.conf.json binaries/r-code-tui、release.yml --bin r-code-tui、dev-tui.sh --bin r-code-tui"
+  - id: "M6-03.A3"
+    passed: true
+    command: node scripts/verify-tui-v2.mjs --through M6 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6.json
+    note: "78/78 全部 required 断言通过（24 任务全部收口）"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M6 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6.json
+
+decisions:
+  - DM1: 命名决策 = 维持 r-code-tui 单名（PRD 决策空间"维持现状则仅记录"分支）。否决 r-code 别名：品牌混淆（与桌面 R-Code 同名）、PRD §2.1 硬约束"不新增第二 CLI 入口"、成本不对称（externalBin/release.yml/installer PATH/文档/断言五面同步 + 卸载清理面）、v1 M8-04 管线已按 r-code-tui 跑通三平台。
+  - DM2: 收口 = 决策记录（cli-naming-decision.md）+ 四面一致断言（release.test.mjs 已有 TUI 漂移断言 + verify-tui-v2 全链），无代码改动。
+external_gates_remaining:
+  - 四平台 bundle 产物实机验证（CI release 腿；externalBin 路径已由 v1 M8-04 验证）
+notes:
+  - 至此 docs/tui-v2/r-code-cli-prd.md 的 24 任务全部 implementation_verified；production_release_ready 项见 PRD §11.3。

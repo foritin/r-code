@@ -1,0 +1,64 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M6-03",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T07:18:37.897Z",
+  "started_at": "2026-09-02T07:18:37.873Z",
+  "finished_at": "2026-09-02T07:18:37.897Z",
+  "duration_ms": 24,
+  "revision": "373f0d257a27e61b188dba049eaf1a3a7a0ceb9b",
+  "worktree_digest": "1627631ce6f5fd606d6c22581827b4f4454e6c643d38f67d50c3bffc3b8836ec",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M6-03.A1",
+      "description": "命名决策记录存在且含分发影响分析（三方案对照 + 否决依据）",
+      "required": true,
+      "status": "passed",
+      "evidence": "docs/tui-v2/cli-naming-decision.md",
+      "details": {
+        "exists": true,
+        "contains": true
+      },
+      "task": "M6-03"
+    },
+    {
+      "id": "M6-03.A2",
+      "description": "脚本/externalBin/release.yml/断言四面一致（bin 名 r-code-tui 全链一致）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "confOk": true,
+        "releaseOk": true,
+        "devtuiOk": true
+      },
+      "task": "M6-03"
+    },
+    {
+      "id": "M6-03.A3",
+      "description": "累计门禁 --through M6 --profile implementation exit 0（全 24 任务收口）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "total": 75,
+        "failed": 0
+      },
+      "task": "M6-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M6-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

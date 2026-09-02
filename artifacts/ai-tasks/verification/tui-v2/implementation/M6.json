@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M6",
   "profile": "implementation",
-  "generated_at": "2026-09-02T07:17:31.477Z",
-  "started_at": "2026-09-02T07:17:13.202Z",
-  "finished_at": "2026-09-02T07:17:31.477Z",
-  "duration_ms": 18275,
-  "revision": "187ffdabbcf78ce89d09fb27db2e39f5f173cbb6",
-  "worktree_digest": "274dc0e490b71f95e49b86ca44edf0aee41e3e40ef95682252f287fcee80dbcf",
+  "generated_at": "2026-09-02T07:19:01.475Z",
+  "started_at": "2026-09-02T07:18:41.436Z",
+  "finished_at": "2026-09-02T07:19:01.475Z",
+  "duration_ms": 20039,
+  "revision": "373f0d257a27e61b188dba049eaf1a3a7a0ceb9b",
+  "worktree_digest": "f0932f70c50d050eb4d148b70da1ceced0506a0c4636fa0bb24dad7fc5cd12d0",
   "worktree_dirty": true,
   "summary": {
-    "total": 75,
-    "passed": 75,
+    "total": 78,
+    "passed": 78,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "187ffdabbcf78ce89d09fb27db2e39f5f173cbb6",
+        "revision": "373f0d257a27e61b188dba049eaf1a3a7a0ceb9b",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-e423aeeae1fc.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-c30be4775590.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-310350775178.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-386ce1b07de9.log"
       },
       "task": "M1-01"
     },
@@ -849,6 +849,41 @@
         "exitCode": 0
       },
       "task": "M6-02"
+    },
+    {
+      "id": "M6-03.A1",
+      "description": "命名决策记录存在且含分发影响分析（三方案对照 + 否决依据）",
+      "required": true,
+      "status": "passed",
+      "evidence": "docs/tui-v2/cli-naming-decision.md",
+      "details": {
+        "exists": true,
+        "contains": true
+      },
+      "task": "M6-03"
+    },
+    {
+      "id": "M6-03.A2",
+      "description": "脚本/externalBin/release.yml/断言四面一致（bin 名 r-code-tui 全链一致）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "confOk": true,
+        "releaseOk": true,
+        "devtuiOk": true
+      },
+      "task": "M6-03"
+    },
+    {
+      "id": "M6-03.A3",
+      "description": "累计门禁 --through M6 --profile implementation exit 0（全 24 任务收口）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "total": 75,
+        "failed": 0
+      },
+      "task": "M6-03"
     }
   ],
   "failed_assertions": [],
@@ -961,11 +996,16 @@
     {
       "task": "M6-01",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-01.yaml",
-      "exists": false
+      "exists": true
     },
     {
       "task": "M6-02",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-02.yaml",
+      "exists": true
+    },
+    {
+      "task": "M6-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-03.yaml",
       "exists": false
     }
   ],
