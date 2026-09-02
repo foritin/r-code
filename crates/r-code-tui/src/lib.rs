@@ -27,6 +27,8 @@ pub mod interaction;
 pub mod mention;
 pub mod model_selector;
 pub mod paste;
+pub mod session_ops;
+pub mod session_picker;
 pub mod slash_menu;
 pub mod snapshot;
 pub mod status_bar;

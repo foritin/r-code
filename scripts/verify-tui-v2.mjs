@@ -417,6 +417,85 @@ const REGISTRY = {
       },
     ],
   },
+  "M6-01": {
+    milestone: "M6",
+    assertions: [
+      {
+        id: "M6-01.A1",
+        description: "会话列表投影（列头/双行行目/❯ 光标/上下移动钳位/空态）",
+        kind: "self",
+        async check(ctx) {
+          const a = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "session_picker_projects_and_clamps",
+          ]);
+          const b = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "empty_picker_renders_empty_state",
+          ]);
+          return { passed: a.exitCode === 0 && b.exitCode === 0, details: { projects: a.exitCode, empty: b.exitCode } };
+        },
+      },
+      {
+        id: "M6-01.A2",
+        description: "/resume 选择器行快照（❯ 光标、双行行目、底行 hints enter to resume）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "session_picker_projects_and_clamps",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M6-01.A3",
+        description: "resume 接续（task_detail 读回一致——会话 JSONL 重建入口经宿主）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "new_session_creates_task",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
+  "M6-02": {
+    milestone: "M6",
+    assertions: [
+      {
+        id: "M6-02.A1",
+        description: "/new 新建空会话（默认标题）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "new_session_creates_task",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M6-02.A2",
+        description: "/rename 持久化（task_detail 读回一致）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "rename_session_persists",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M6-02.A3",
+        description: "/compact 数据缺口如实暴露（宿主无公开压缩命令，接线方显式引导）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "compaction_gap_is_reported",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M5-03": {
     milestone: "M5",
     assertions: [

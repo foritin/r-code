@@ -65,10 +65,13 @@ pub fn display_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
             lines.push(styled);
         }
     }
-    // 模型/思考选择浮层或斜杠菜单。
+    // 模型/思考/会话选择浮层或斜杠菜单。
     match view.overlay {
         Some(Overlay::Model(picker)) => lines.extend(model_picker_lines(picker)),
         Some(Overlay::Thinking(picker)) => lines.extend(thinking_picker_lines(picker)),
+        Some(Overlay::Resume(picker)) => {
+            lines.extend(picker.visible_rows().into_iter().map(|row| fg(&row, "2")))
+        }
         None => {
             if let Some(menu) = view.slash_menu {
                 lines.extend(slash_menu_lines(menu));

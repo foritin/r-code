@@ -15,10 +15,11 @@ use crate::model_selector::ModelPicker;
 use crate::thinking::ThinkingPicker;
 use crate::TuiState;
 
-/// 底部插入式浮层（同一时刻至多一层；模型/思考选择器）。
+/// 底部插入式浮层（同一时刻至多一层；模型/思考/会话选择器）。
 pub enum Overlay {
     Model(ModelPicker),
     Thinking(ThinkingPicker),
+    Resume(crate::session_picker::SessionPicker),
 }
 
 /// 交互循环的宿主回调（发送/steer/abort 的真实语义由 main.rs 装配）。
@@ -44,6 +45,14 @@ pub struct RunController {
     pub status_report: Arc<dyn Fn() -> (Vec<String>, String) + Send + Sync>,
     /// !command 直通执行（宿主 shell 链；输出进 Shell 行）。
     pub run_bang: Arc<dyn Fn(String) + Send + Sync>,
+    /// 打开 /resume 列表（无会话时 None）。
+    pub open_resume: Arc<dyn Fn() -> Option<crate::session_picker::SessionPicker> + Send + Sync>,
+    /// 接续会话（task_id；JSONL 重建 transcript）。
+    pub resume_session: Arc<dyn Fn(String) + Send + Sync>,
+    /// 新建会话（/new）。
+    pub new_session: Arc<dyn Fn() + Send + Sync>,
+    /// 重命名会话（/rename <title>）。
+    pub rename_session: Arc<dyn Fn(String) + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -59,6 +68,10 @@ impl Default for RunController {
             decide_approval: Arc::new(|_| {}),
             status_report: Arc::new(|| (Vec::new(), String::new())),
             run_bang: Arc::new(|_| {}),
+            open_resume: Arc::new(|| None),
+            resume_session: Arc::new(|_| {}),
+            new_session: Arc::new(|| {}),
+            rename_session: Arc::new(|_| {}),
         }
     }
 }
@@ -245,6 +258,17 @@ pub async fn run_interactive(
                         }
                         _ => close = true,
                     },
+                    Overlay::Resume(active) => match action {
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev => active.move_up(),
+                        KeyAction::ScrollDown | KeyAction::HistoryNext => active.move_down(),
+                        KeyAction::Send => {
+                            if let Some(entry) = active.selection().cloned() {
+                                (controller.resume_session)(entry.task_id);
+                            }
+                            close = true;
+                        }
+                        _ => close = true,
+                    },
                 }
                 if close {
                     overlay = None;
@@ -380,6 +404,26 @@ pub async fn run_interactive(
                         let mut st = state.lock().unwrap();
                         for line in crate::slash_menu::help_panel_lines() {
                             st.push_system(line);
+                        }
+                    } else if trimmed == "/resume" {
+                        overlay = (controller.open_resume)().map(Overlay::Resume);
+                        if overlay.is_none() {
+                            status = Some("没有可恢复的会话".to_string());
+                        }
+                    } else if trimmed == "/new" {
+                        (controller.new_session)();
+                    } else if trimmed.starts_with("/rename ") {
+                        (controller.rename_session)(
+                            trimmed
+                                .strip_prefix("/rename ")
+                                .unwrap_or_default()
+                                .to_string(),
+                        );
+                    } else if trimmed == "/compact" {
+                        if !crate::session_ops::compaction_supported() {
+                            state.lock().unwrap().push_system(
+                                "自动压缩随 run 结束触发，暂无可显式调用的压缩入口".to_string(),
+                            );
                         }
                     } else if trimmed == "/quit" {
                         return LoopOutcome::Quit;

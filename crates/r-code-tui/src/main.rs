@@ -490,6 +490,92 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         });
     });
 
+    // M6-01/M6-02：会话操作（task_list 列表、resume 接管、new/rename）。
+    let resume_state = state.clone();
+    let open_resume: Arc<
+        dyn Fn() -> Option<r_code_tui::session_picker::SessionPicker> + Send + Sync,
+    > = Arc::new(move || {
+        let state = resume_state.clone();
+        let tasks = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(r_code_host::commands::task_list(&state, None, false))
+        })
+        .unwrap_or_default();
+        let entries: Vec<r_code_tui::session_picker::SessionEntry> = tasks
+            .iter()
+            .map(r_code_tui::session_picker::entry_from_task)
+            .collect();
+        if entries.is_empty() {
+            None
+        } else {
+            Some(r_code_tui::session_picker::SessionPicker::new(entries))
+        }
+    });
+
+    let resume_session_state = state.clone();
+    let resume_session_tui = tui_state.clone();
+    let resume_session: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |task_id| {
+        let state = resume_session_state.clone();
+        let tui = resume_session_tui.clone();
+        tokio::runtime::Handle::current().spawn(async move {
+            match r_code_host::commands::task_detail(&state, &task_id).await {
+                Ok(detail) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("已接续会话：{}", detail.task.title));
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("接续会话失败：{error}"));
+                    }
+                }
+            }
+        });
+    });
+
+    let new_session_state = state.clone();
+    let new_session_tui = tui_state.clone();
+    let new_session: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let state = new_session_state.clone();
+        let tui = new_session_tui.clone();
+        tokio::runtime::Handle::current().spawn(async move {
+            match r_code_tui::session_ops::new_session(&state).await {
+                Ok(_) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system("已新建空白会话".to_string());
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("新建会话失败：{error}"));
+                    }
+                }
+            }
+        });
+    });
+
+    let rename_session_state = state.clone();
+    let rename_session_tui = tui_state.clone();
+    let rename_session: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |title| {
+        let state = rename_session_state.clone();
+        let task_id = task_id.clone();
+        let tui = rename_session_tui.clone();
+        tokio::runtime::Handle::current().spawn(async move {
+            match r_code_tui::session_ops::rename_session(&state, &task_id, &title).await {
+                Ok(()) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("已重命名会话：{title}"));
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("重命名失败：{error}"));
+                    }
+                }
+            }
+        });
+    });
+
     let controller = RunController {
         send,
         abort,
@@ -501,6 +587,10 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         decide_approval,
         status_report,
         run_bang,
+        open_resume,
+        resume_session,
+        new_session,
+        rename_session,
     };
 
     // M5-02：inline 模式——只进 raw + bracketed paste，不进备用屏

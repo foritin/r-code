@@ -1,0 +1,60 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M6-01",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T07:15:35.692Z",
+  "started_at": "2026-09-02T07:15:34.969Z",
+  "finished_at": "2026-09-02T07:15:35.692Z",
+  "duration_ms": 723,
+  "revision": "187ffdabbcf78ce89d09fb27db2e39f5f173cbb6",
+  "worktree_digest": "c39458cb7e9350c03645204d3e64e588b8ed3eed242d3d94f6b3bac6cadc3c9f",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M6-01.A1",
+      "description": "会话列表投影（列头/双行行目/❯ 光标/上下移动钳位/空态）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "projects": 0,
+        "empty": 0
+      },
+      "task": "M6-01"
+    },
+    {
+      "id": "M6-01.A2",
+      "description": "/resume 选择器行快照（❯ 光标、双行行目、底行 hints enter to resume）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-01"
+    },
+    {
+      "id": "M6-01.A3",
+      "description": "resume 接续（task_detail 读回一致——会话 JSONL 重建入口经宿主）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M6-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

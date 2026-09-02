@@ -1,0 +1,56 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M6-02
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m6-02-new-rename-compact
+
+revision:
+  git_revision: 187ffda
+  worktree_digest: recorded-in-report-M6-02.json
+
+deliverables:
+  - crates/r-code-tui/src/session_ops.rs（new/rename/compaction_supported + 3 单测）
+  - crates/r-code-tui/src/app.rs（/new /rename /compact 命令分派）
+  - crates/r-code-tui/src/slash_menu.rs（登记 4 个会话命令、清空 PENDING）
+  - crates/r-code-tui/src/main.rs（new_session/rename_session 装配）
+  - scripts/verify-tui-v2.mjs M6-02 断言注册
+changed_paths:
+  - crates/r-code-tui/src/session_ops.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/slash_menu.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M6-02.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib new_session_creates_task
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-02.json
+    note: "/new 经宿主 task_create（默认标题新会话）"
+  - id: "M6-02.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib rename_session_persists
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-02.json
+    note: "/rename 经宿主 task_rename 持久化（读回一致）"
+  - id: "M6-02.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib compaction_gap_is_reported
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-02.json
+    note: "/compact 数据缺口如实暴露：宿主无公开压缩命令（automatic_compaction 由 run 结束触发），TUI 显式引导"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M6 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6.json
+
+decisions:
+  - DM1: /compact 不新造宿主 API——宿主压缩由 automatic_compaction 在 run 结束自动触发，无显式公开命令；TUI 侧 compaction_supported()=false 如实暴露，命令分派给用户显式引导（PRD M6-02 决策空间"走宿主既有压缩入口，不自研摘要"）。
+  - DM2: /rename 参数 = `/rename <title>`（空格后全量作新标题）；宿主校验空/超 96 字符/归档。
+external_gates_remaining: []
+notes: []

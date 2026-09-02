@@ -30,6 +30,22 @@ pub const COMMANDS: &[SlashCommand] = &[
         desc: "累计用量与成本",
     },
     SlashCommand {
+        name: "/resume",
+        desc: "恢复历史会话",
+    },
+    SlashCommand {
+        name: "/new",
+        desc: "新建空白会话",
+    },
+    SlashCommand {
+        name: "/rename",
+        desc: "重命名会话（/rename <名称>）",
+    },
+    SlashCommand {
+        name: "/compact",
+        desc: "压缩上下文（自动随 run 触发）",
+    },
+    SlashCommand {
         name: "/clear",
         desc: "清空当前 transcript 视图",
     },
@@ -44,7 +60,7 @@ pub const COMMANDS: &[SlashCommand] = &[
 ];
 
 /// 计划中、尚未实现的命令（不出现在菜单；M6-01/M6-02 落地后移入 COMMANDS）。
-pub const PENDING_COMMANDS: &[&str] = &["/new", "/resume", "/rename", "/compact"];
+pub const PENDING_COMMANDS: &[&str] = &[];
 
 /// 查询是否命中命令（子串、大小写不敏感；空查询全量）。
 fn matches(command: &SlashCommand, query: &str) -> bool {
@@ -217,11 +233,15 @@ mod tests {
                 "/thinking",
                 "/status",
                 "/usage",
+                "/resume",
+                "/new",
+                "/rename",
+                "/compact",
                 "/clear",
                 "/help",
                 "/quit"
             ],
-            "已实现命令集（冻结）"
+            "已实现命令集（M6 收口后）"
         );
         for command in COMMANDS {
             assert!(

@@ -1,0 +1,56 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M6-01
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m6-01-resume-会话列表
+
+revision:
+  git_revision: 187ffda
+  worktree_digest: recorded-in-report-M6-01.json
+
+deliverables:
+  - crates/r-code-tui/src/session_picker.rs（SessionPicker/SessionEntry/渲染 + 2 单测）
+  - crates/r-code-tui/src/app.rs（Overlay::Resume + 命令分派 /resume）
+  - crates/r-code-tui/src/display.rs（Resume 浮层渲染）
+  - crates/r-code-tui/src/main.rs（open_resume/resume_session 装配）
+  - scripts/verify-tui-v2.mjs M6-01 断言注册
+changed_paths:
+  - crates/r-code-tui/src/session_picker.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/display.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M6-01.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib session_picker_projects_and_clamps + empty_picker_renders_empty_state
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-01.json
+    note: "列头 Created/Updated/Mode/Conversation、❯ 光标默认首条、上下移动钳位、空态渲染"
+  - id: "M6-01.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib session_picker_projects_and_clamps
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-01.json
+    note: "底行 hints enter to resume / esc to start new / ↑↓ to move"
+  - id: "M6-01.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib new_session_creates_task
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6-01.json
+    note: "宿主 task_detail 读回一致（JSONL 重建入口经宿主，桌面可 resume TUI 会话的共享 data-dir 语义保持）"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M6 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6.json
+
+decisions:
+  - DM1: 数据源 = 宿主 task_list（共享 data-dir tasks，与桌面互通），不直连 SQLite 绕过宿主。
+  - DM2: resume 语义 = task_detail 读回 title 并进 transcript 提示（JSONL 重建由宿主 session 层在下一个 run 时完成，TUI 只投递意图）——一期不整段重放历史 transcript 行（M5-02 的 snapshot 权威重建已由宿主承担）。
+external_gates_remaining: []
+notes: []

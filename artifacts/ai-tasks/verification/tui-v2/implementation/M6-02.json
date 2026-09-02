@@ -1,0 +1,59 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M6-02",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T07:15:36.469Z",
+  "started_at": "2026-09-02T07:15:35.710Z",
+  "finished_at": "2026-09-02T07:15:36.469Z",
+  "duration_ms": 759,
+  "revision": "187ffdabbcf78ce89d09fb27db2e39f5f173cbb6",
+  "worktree_digest": "8e9475cf213372b22997bbfbf13a90d89a036cc4f20df84c6a009516661f8690",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M6-02.A1",
+      "description": "/new 新建空会话（默认标题）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-02"
+    },
+    {
+      "id": "M6-02.A2",
+      "description": "/rename 持久化（task_detail 读回一致）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-02"
+    },
+    {
+      "id": "M6-02.A3",
+      "description": "/compact 数据缺口如实暴露（宿主无公开压缩命令，接线方显式引导）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M6-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}
