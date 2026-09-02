@@ -41,6 +41,10 @@ pub struct RunController {
     pub select_model: Arc<dyn Fn(crate::model_selector::ModelEntry) + Send + Sync>,
     /// 思考档位写回（task_set_inference + footer 联动；升降与弹层共用）。
     pub set_thinking: Arc<dyn Fn(&'static str) + Send + Sync>,
+    /// 任务模式写回（Shift+Tab 循环）。
+    pub set_mode: Arc<dyn Fn(&'static str) + Send + Sync>,
+    /// 运行中排队发送（宿主 AgentSendMode::Queue）。
+    pub queue_send: Arc<dyn Fn(String) + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -51,6 +55,8 @@ impl Default for RunController {
             open_model_picker: Arc::new(|| None),
             select_model: Arc::new(|_| {}),
             set_thinking: Arc::new(|_| {}),
+            set_mode: Arc::new(|_| {}),
+            queue_send: Arc::new(|_| {}),
         }
     }
 }
@@ -176,11 +182,21 @@ pub async fn run_interactive(
                         let current = state.lock().unwrap().thinking().map(str::to_string);
                         overlay = Some(Overlay::Thinking(ThinkingPicker::new(current.as_deref())));
                     } else if !trimmed.is_empty() {
-                        {
+                        // M2-04：运行中 Enter = 排队（不打断当前 run），
+                        // 空闲 = 正常发送。
+                        let route = {
                             let mut st = state.lock().unwrap();
+                            let route = crate::route_send(st.is_running());
                             st.push_user(text.clone());
+                            if route == crate::SendRoute::Queue {
+                                st.queue_message(text.clone());
+                            }
+                            route
+                        };
+                        match route {
+                            crate::SendRoute::Queue => (controller.queue_send)(text),
+                            crate::SendRoute::Send => (controller.send)(text),
                         }
-                        (controller.send)(text);
                     }
                 }
                 KeyAction::Abort => {
@@ -198,6 +214,11 @@ pub async fn run_interactive(
                     } else {
                         return LoopOutcome::Quit;
                     }
+                }
+                KeyAction::CycleMode => {
+                    let current = state.lock().unwrap().task_mode().to_string();
+                    let next = crate::task_mode::cycle_mode(&current);
+                    (controller.set_mode)(next);
                 }
                 KeyAction::ToggleThinking => {
                     let current = state.lock().unwrap().thinking().map(str::to_string);
@@ -234,12 +255,14 @@ fn render(
         st.flush_streaming();
         st.rows().to_vec()
     };
-    let (running, model_selection, thinking) = {
+    let (running, model_selection, thinking, mode_badge, queue_block) = {
         let st = state.lock().unwrap();
         (
             st.is_running(),
             st.model_selection().cloned(),
             st.thinking().map(str::to_string),
+            crate::task_mode::mode_badge(st.task_mode()),
+            crate::queue_lines(st.queued()),
         )
     };
 
@@ -260,6 +283,8 @@ fn render(
             status,
             scroll_offset,
             label,
+            mode_badge,
+            queue_block,
             overlay,
         );
     }
@@ -335,15 +360,20 @@ fn render_regular(
     status: Option<&str>,
     _scroll_offset: usize,
     model_label: Option<String>,
+    mode_badge: Option<(&'static str, crate::task_mode::BadgeColor)>,
+    queue_block: Vec<String>,
     overlay: Option<&Overlay>,
 ) {
-    // 浮层打开时：底部预留插入式列表（≤8 行 + 查询行），列表在输入区上方。
+    // 浮层打开时：底部预留插入式列表（≤8 行 + 查询行），列表在输入区上方；
+    // 排队块（M2-04）在其上。
     let overlay_height = overlay.map(|_| 9).unwrap_or(0);
+    let queue_height = queue_block.len();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
                 Constraint::Min(3),
+                Constraint::Length(queue_height as u16),
                 Constraint::Length(overlay_height),
                 Constraint::Length(3),
             ]
@@ -356,19 +386,44 @@ fn render_regular(
         .wrap(Wrap { trim: false });
     frame.render_widget(transcript, chunks[0]);
 
+    if !queue_block.is_empty() {
+        let queue_paragraph = Paragraph::new(
+            queue_block
+                .iter()
+                .map(|line| {
+                    Line::from(Span::styled(
+                        line.clone(),
+                        Style::default().fg(Color::DarkGray),
+                    ))
+                })
+                .collect::<Vec<_>>(),
+        );
+        frame.render_widget(queue_paragraph, chunks[1]);
+    }
+
     if let (Some(overlay), true) = (overlay, overlay_height > 0) {
         match overlay {
-            Overlay::Model(picker) => render_model_picker(frame, chunks[1], picker),
-            Overlay::Thinking(picker) => render_thinking_picker(frame, chunks[1], picker),
+            Overlay::Model(picker) => render_model_picker(frame, chunks[2], picker),
+            Overlay::Thinking(picker) => render_thinking_picker(frame, chunks[2], picker),
         }
     }
 
     let input_text = input.text();
     let prompt = if running { "⏳ steer > " } else { "> " };
-    let mut input_line = vec![
-        Span::styled(prompt, Style::default().fg(Color::Blue)),
-        Span::raw(input_text.clone()),
-    ];
+    let mut input_line = vec![Span::styled(prompt, Style::default().fg(Color::Blue))];
+    // M2-03：模式徽章（plan=magenta / edit=cyan / auto=yellow；ask 无徽章）。
+    if let Some((badge, color)) = mode_badge {
+        let semantic = match color {
+            crate::task_mode::BadgeColor::Cyan => Color::Cyan,
+            crate::task_mode::BadgeColor::Yellow => Color::Yellow,
+            crate::task_mode::BadgeColor::Magenta => Color::Magenta,
+        };
+        input_line.push(Span::styled(
+            format!("{badge} "),
+            Style::default().fg(semantic),
+        ));
+    }
+    input_line.push(Span::raw(input_text.clone()));
     // footer 右侧标签 `(provider) model • thinking`（M2-01/M2-02 联动；未定时不占位）。
     if let Some(label) = model_label {
         let used: usize = prompt.chars().count() + input_text.chars().count();
@@ -458,5 +513,17 @@ fn render_fullscreen(
     // 窗口化：turn 级（PRD R-TUI-05），窗口 = 最近 50 turn。
     let windowed = windowed(rows, 50);
     let owned: Vec<TranscriptRow> = windowed.iter().map(|row| (*row).clone()).collect();
-    render_regular(frame, area, &owned, input, running, status, 0, None, None);
+    render_regular(
+        frame,
+        area,
+        &owned,
+        input,
+        running,
+        status,
+        0,
+        None,
+        None,
+        Vec::new(),
+        None,
+    );
 }

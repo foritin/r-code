@@ -1,0 +1,55 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M2-04
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m2-04-运行中排队-follow-up
+
+revision:
+  git_revision: a26c296
+  worktree_digest: recorded-in-report-M2-04.json
+
+deliverables:
+  - crates/r-code-tui/src/lib.rs（queue_lines/route_send/TuiState.queued 镜像 + 3 单测）
+  - crates/r-code-tui/src/app.rs（Send 路由分叉 + 排队块渲染 + controller.queue_send）
+  - crates/r-code-tui/src/main.rs（queue_send 装配：agent_send_with_mode Queue）
+  - scripts/verify-tui-v2.mjs M2-04 断言注册
+changed_paths:
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M2-04.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib queue_mirror_lifecycle + queue_mode_passes_host_send_path
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-04.json
+    note: "route_send(running)=Queue（不打断当前 run；v1 Auto/steer 语义让位）；Queue 模式经宿主发送链路（含 mock 场景回放）集成通过——空闲时宿主立即分发（不孤儿化）"
+  - id: "M2-04.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib queue_lines_follow_codex_format
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-04.json
+    note: "• Queued follow-up inputs + '  ↳ <msg>'（codex 形态）"
+  - id: "M2-04.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib queue_mirror_lifecycle
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-04.json
+    note: "镜像生命周期：入队可见 → 新 run Activity 即清空；宿主在 run 结束（含中止）自动 dispatch_next_queued（commands.rs:9240 一带代码契约）"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M2 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2.json
+
+decisions:
+  - DM1: 排队写回用宿主 agent_send_with_mode(Queue)（PRD 冻结决策 §2.9）；"中止后立即派发"由宿主 run 结束路径的 dispatch_next_queued 保证，TUI 不自行调度。
+  - DM2: 展示镜像 TuiState.queued 仅渲染投影（权威在宿主持久化队列）；新 run Activity 事件清空——宿主队列事件面（TaskEventType::UserMessageQueued/QueueDispatched）不经 AgentEvent sink 下发，不复制权威状态（任务卡 DM 预案）。
+  - DM3: "运行中入队不打断"的双保险：TUI 路由层 route_send 只在 running 时选 Queue（绝不 Steer/SendNow）；宿主 Queue 语义本身对 active run 只入队不中止。
+external_gates_remaining: []
+notes: []

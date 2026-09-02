@@ -208,12 +208,15 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
                     .unwrap()
                     .set_model_selection(provider, model);
             }
-            // M2-02：初始思考档位投影（task.inference.reasoning_effort）。
+            // M2-02/M2-03：初始思考档位与任务模式投影。
             if let Some(effort) = detail
                 .as_ref()
                 .and_then(|item| item.task.inference.reasoning_effort.clone())
             {
                 tui_state.lock().unwrap().set_thinking(Some(effort));
+            }
+            if let Some(mode) = detail.as_ref().map(|item| item.task.mode.to_string()) {
+                tui_state.lock().unwrap().set_task_mode(mode);
             }
         }
     }
@@ -303,12 +306,66 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         });
     });
 
+    // M2-03：Shift+Tab 模式循环写回（运行中/Plan+Codex 由宿主拒绝）。
+    let mode_state = state.clone();
+    let mode_task = task_id.clone();
+    let mode_handle = handle.clone();
+    let mode_tui = tui_state.clone();
+    let set_mode: Arc<dyn Fn(&'static str) + Send + Sync> = Arc::new(move |mode| {
+        let state = mode_state.clone();
+        let task_id = mode_task.clone();
+        let tui = mode_tui.clone();
+        mode_handle.spawn(async move {
+            match r_code_tui::task_mode::apply_mode(&state, &task_id, mode).await {
+                Ok(()) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.set_task_mode(mode.to_string());
+                        st.push_system(format!("模式：{mode}"));
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("切换模式失败：{error}"));
+                    }
+                }
+            }
+        });
+    });
+
+    // M2-04：运行中排队（宿主 AgentSendMode::Queue；run 结束自动派发）。
+    let queue_state = state.clone();
+    let queue_task = task_id.clone();
+    let queue_handle = handle.clone();
+    let queue_tui = tui_state.clone();
+    let queue_send: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |text| {
+        let state = queue_state.clone();
+        let task_id = queue_task.clone();
+        let tui = queue_tui.clone();
+        queue_handle.spawn(async move {
+            use r_code_core::dto::AgentSendMode;
+            if let Err(error) = r_code_host::commands::agent_send_with_mode(
+                &state,
+                &task_id,
+                &text,
+                AgentSendMode::Queue,
+            )
+            .await
+            {
+                if let Ok(mut st) = tui.lock() {
+                    st.push_system(format!("排队失败：{error}"));
+                }
+            }
+        });
+    });
+
     let controller = RunController {
         send,
         abort,
         open_model_picker,
         select_model,
         set_thinking,
+        set_mode,
+        queue_send,
     };
 
     crossterm::terminal::enable_raw_mode().expect("raw mode");

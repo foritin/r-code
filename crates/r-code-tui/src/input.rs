@@ -111,6 +111,8 @@ pub enum KeyAction {
     ThinkingDown,
     /// 思考升一档（alt+.）。
     ThinkingUp,
+    /// TaskMode 循环（Shift+Tab）。
+    CycleMode,
     /// 忽略（未映射键）。
     Ignore,
 }
@@ -136,6 +138,7 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('.') if alt => KeyAction::ThinkingUp,
         KeyCode::F(10) => KeyAction::ToggleFullscreen,
         KeyCode::Char(ch) => KeyAction::Insert(ch),
+        KeyCode::BackTab => KeyAction::CycleMode,
         KeyCode::Enter => KeyAction::Send,
         KeyCode::Backspace => KeyAction::Backspace,
         KeyCode::Delete => KeyAction::DeleteForward,

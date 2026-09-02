@@ -1,0 +1,58 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M2-03
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m2-03-taskmode-循环与输入区模式态
+
+revision:
+  git_revision: a26c296
+  worktree_digest: recorded-in-report-M2-03.json
+
+deliverables:
+  - crates/r-code-tui/src/task_mode.rs（循环序/徽章语义色/写回 + 3 单测）
+  - crates/r-code-tui/src/input.rs（BackTab → CycleMode）
+  - crates/r-code-tui/src/app.rs（controller.set_mode、模式徽章渲染）
+  - crates/r-code-tui/src/lib.rs（TuiState.task_mode 投影）
+  - crates/r-code-tui/src/main.rs（set_mode 装配、初始模式投影）
+  - scripts/verify-tui-v2.mjs M2-03 断言注册
+changed_paths:
+  - crates/r-code-tui/src/task_mode.rs
+  - crates/r-code-tui/src/input.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M2-03.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib cycle_follows_host_enum_order
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-03.json
+    note: "循环序 = 宿主枚举序；未知值回落 ask"
+  - id: "M2-03.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib mode_persists_on_task
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-03.json
+    note: "task_set_mode 写回 plan/auto，task_detail 读回一致（运行中拒绝/Plan+Codex 引擎约束由宿主保证）"
+  - id: "M2-03.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib plan_badge_uses_magenta_semantic
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-03.json
+    note: "plan=magenta、edit=cyan、auto=yellow、ask 无徽章"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M2 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2.json
+
+decisions:
+  - DM1: 徽章语义色在 lib 层用自有 BadgeColor 枚举（保持 lib 纯逻辑无 ratatui 依赖），app.rs 映射终端色。
+  - DM2: 循环键 = crossterm BackTab（Shift+Tab）；运行中切模式被宿主拒绝时错误进 transcript（M1-03 链路）。
+external_gates_remaining: []
+notes: []

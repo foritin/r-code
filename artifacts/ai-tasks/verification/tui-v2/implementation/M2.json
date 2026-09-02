@@ -3,16 +3,16 @@
   "scope": "milestone",
   "scope_id": "M2",
   "profile": "implementation",
-  "generated_at": "2026-09-02T04:13:18.793Z",
-  "started_at": "2026-09-02T04:13:09.233Z",
-  "finished_at": "2026-09-02T04:13:18.793Z",
-  "duration_ms": 9560,
-  "revision": "7f0d89d1460e71320a82ad9192440881d70d0b21",
-  "worktree_digest": "2a921ae7b7e04877c876aad1e4063230863e6049df2cc423df074574ff411707",
+  "generated_at": "2026-09-02T04:21:00.462Z",
+  "started_at": "2026-09-02T04:20:49.946Z",
+  "finished_at": "2026-09-02T04:21:00.462Z",
+  "duration_ms": 10516,
+  "revision": "a26c2960a8bbdb14f5060b8e458e8994074dc72f",
+  "worktree_digest": "acc60961796fc2e342bee25da183af7ef389bede3721e78eb6b4ec1fbd87d3e9",
   "worktree_dirty": true,
   "summary": {
-    "total": 25,
-    "passed": 25,
+    "total": 31,
+    "passed": 31,
     "failed": 0
   },
   "assertions": [
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "7f0d89d1460e71320a82ad9192440881d70d0b21",
+        "revision": "a26c2960a8bbdb14f5060b8e458e8994074dc72f",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-d37b11564fe3.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-5e680833900f.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-5e6eca065675.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-ea4a7987b2eb.log"
       },
       "task": "M1-01"
     },
@@ -306,6 +306,67 @@
         "exitCode": 0
       },
       "task": "M2-02"
+    },
+    {
+      "id": "M2-03.A1",
+      "description": "循环序 ask→edit→auto→plan→ask；未知值安全回落",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-03.A2",
+      "description": "模式写回 task（task_detail 读回一致：plan/auto）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-03.A3",
+      "description": "plan 态 magenta 语义徽章；ask 无徽章（色彩契约 §2.7）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-04.A1",
+      "description": "运行中 Enter 入队不打断当前 run（路由 + 宿主 Queue 链路集成）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "routing": 0,
+        "hostPath": 0
+      },
+      "task": "M2-04"
+    },
+    {
+      "id": "M2-04.A2",
+      "description": "排队渲染行格式（• Queued follow-up inputs + ↳ 缩进）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-04"
+    },
+    {
+      "id": "M2-04.A3",
+      "description": "中止/结束后队列派发（镜像随新 run Activity 清空；宿主 run 结束自动派发）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-04"
     }
   ],
   "failed_assertions": [],
@@ -348,6 +409,16 @@
     {
       "task": "M2-02",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-02.yaml",
+      "exists": true
+    },
+    {
+      "task": "M2-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-03.yaml",
+      "exists": true
+    },
+    {
+      "task": "M2-04",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-04.yaml",
       "exists": false
     }
   ],

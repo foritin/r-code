@@ -417,6 +417,85 @@ const REGISTRY = {
       },
     ],
   },
+  "M2-04": {
+    milestone: "M2",
+    assertions: [
+      {
+        id: "M2-04.A1",
+        description: "运行中 Enter 入队不打断当前 run（路由 + 宿主 Queue 链路集成）",
+        kind: "self",
+        async check(ctx) {
+          const a = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "queue_mirror_lifecycle",
+          ]);
+          const b = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "queue_mode_passes_host_send_path",
+          ]);
+          return { passed: a.exitCode === 0 && b.exitCode === 0, details: { routing: a.exitCode, hostPath: b.exitCode } };
+        },
+      },
+      {
+        id: "M2-04.A2",
+        description: "排队渲染行格式（• Queued follow-up inputs + ↳ 缩进）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "queue_lines_follow_codex_format",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-04.A3",
+        description: "中止/结束后队列派发（镜像随新 run Activity 清空；宿主 run 结束自动派发）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "queue_mirror_lifecycle",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
+  "M2-03": {
+    milestone: "M2",
+    assertions: [
+      {
+        id: "M2-03.A1",
+        description: "循环序 ask→edit→auto→plan→ask；未知值安全回落",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "cycle_follows_host_enum_order",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-03.A2",
+        description: "模式写回 task（task_detail 读回一致：plan/auto）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "mode_persists_on_task",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M2-03.A3",
+        description: "plan 态 magenta 语义徽章；ask 无徽章（色彩契约 §2.7）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "plan_badge_uses_magenta_semantic",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M2-02": {
     milestone: "M2",
     assertions: [

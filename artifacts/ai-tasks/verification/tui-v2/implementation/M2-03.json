@@ -1,0 +1,59 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M2-03",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:15:32.121Z",
+  "started_at": "2026-09-02T04:15:31.369Z",
+  "finished_at": "2026-09-02T04:15:32.121Z",
+  "duration_ms": 752,
+  "revision": "a26c2960a8bbdb14f5060b8e458e8994074dc72f",
+  "worktree_digest": "a48b32a3665bcc16788f2714c162ed7fb951da3e5109715fa17b544c6294c3cf",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M2-03.A1",
+      "description": "循环序 ask→edit→auto→plan→ask；未知值安全回落",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-03.A2",
+      "description": "模式写回 task（task_detail 读回一致：plan/auto）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-03"
+    },
+    {
+      "id": "M2-03.A3",
+      "description": "plan 态 magenta 语义徽章；ask 无徽章（色彩契约 §2.7）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M2-03"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M2-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M2-03.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

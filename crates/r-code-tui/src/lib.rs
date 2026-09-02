@@ -21,6 +21,7 @@ pub mod input;
 pub mod interaction;
 pub mod model_selector;
 pub mod snapshot;
+pub mod task_mode;
 pub mod thinking;
 pub mod window;
 
@@ -58,6 +59,11 @@ pub struct TuiState {
     model_selection: Option<(String, String)>,
     /// 当前思考档位（M2-02 footer `• thinking` 段；None = 未设/不支持省略段）。
     thinking: Option<String>,
+    /// 当前任务模式（M2-03 Shift+Tab 循环投影；权威在 Task.mode）。
+    task_mode: String,
+    /// 待发送队列的展示镜像（M2-04：权威在宿主持久化队列；此处仅渲染投影，
+    /// 新 run 启动（Activity）即清空——宿主在 run 结束时自动派发队列）。
+    queued: Vec<String>,
 }
 
 impl TuiState {
@@ -102,6 +108,8 @@ impl TuiState {
             }
             AgentEvent::Activity { .. } => {
                 self.running = true;
+                // 新 run 启动 = 队列已派发/排空（宿主 run 结束时自动派发）。
+                self.queued.clear();
             }
             AgentEvent::State {
                 state: TaskState::Idle | TaskState::ReviewReady,
@@ -163,6 +171,24 @@ impl TuiState {
     pub fn set_thinking(&mut self, level: Option<String>) {
         self.thinking = level;
     }
+
+    /// 当前任务模式投影（默认 ask）。
+    pub fn task_mode(&self) -> &str {
+        &self.task_mode
+    }
+
+    pub fn set_task_mode(&mut self, mode: String) {
+        self.task_mode = mode;
+    }
+
+    /// 运行中入队的展示镜像（发送经宿主 AgentSendMode::Queue）。
+    pub fn queue_message(&mut self, text: impl Into<String>) {
+        self.queued.push(text.into());
+    }
+
+    pub fn queued(&self) -> &[String] {
+        &self.queued
+    }
 }
 
 /// M1-03/R2：把宿主运行错误翻译成可操作文案。
@@ -182,6 +208,34 @@ pub fn provider_error_guidance(error: &str, config_dir: &std::path::Path) -> Str
         "{error}\n配置途径：桌面端 R-Code Dev「设置 → 模型服务」选择并保存，或直接编辑 {}。",
         config_file.display()
     )
+}
+
+/// M2-04：排队显示行（codex 形态：`• Queued follow-up inputs` + `  ↳`）。
+pub fn queue_lines(queued: &[String]) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !queued.is_empty() {
+        lines.push("• Queued follow-up inputs".to_string());
+        for text in queued {
+            lines.push(format!("  ↳ {text}"));
+        }
+    }
+    lines
+}
+
+/// M2-04：发送路由——运行中 Enter = 排队（不打断当前 run；v1 的 Auto/steer
+/// 语义让位），空闲 Enter = 正常发送。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendRoute {
+    Send,
+    Queue,
+}
+
+pub fn route_send(running: bool) -> SendRoute {
+    if running {
+        SendRoute::Queue
+    } else {
+        SendRoute::Send
+    }
 }
 
 /// R1/R2：无 provider 配置时的显式引导（不降级、不回放演示）。
@@ -270,6 +324,85 @@ impl EventBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use r_code_core::dto::AgentActivityPhase;
+
+    /// M2-04.A2：排队渲染行格式（• 标题 + ↳ 缩进条目；空队列为空）。
+    #[test]
+    fn queue_lines_follow_codex_format() {
+        assert!(queue_lines(&[]).is_empty());
+        let lines = queue_lines(&["先修这个".to_string(), "再加测试".to_string()]);
+        assert_eq!(lines[0], "• Queued follow-up inputs");
+        assert_eq!(lines[1], "  ↳ 先修这个");
+        assert_eq!(lines[2], "  ↳ 再加测试");
+    }
+
+    /// M2-04.A1/A3：运行中 Enter 走 Queue 路由；镜像随新 run（Activity）清空。
+    #[test]
+    fn queue_mirror_lifecycle() {
+        assert_eq!(route_send(false), SendRoute::Send);
+        assert_eq!(route_send(true), SendRoute::Queue, "运行中不打断当前 run");
+        let mut state = TuiState::new();
+        state.queue_message("follow-up");
+        assert_eq!(state.queued(), &["follow-up".to_string()]);
+        // 新 run 启动（宿主派发队列）→ 镜像清空。
+        state.apply(&AgentEvent::Activity {
+            phase: AgentActivityPhase::Requesting,
+            detail: None,
+        });
+        assert!(state.queued().is_empty(), "Activity 后队列镜像必须清空");
+    }
+
+    /// M2-04.A1 集成：Queue 模式经宿主发送链路接受（空闲 = 立即分发契约）。
+    #[tokio::test]
+    async fn queue_mode_passes_host_send_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = r_code_store::Database::open(dir.path().join("app.db")).expect("db");
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).expect("mkdir");
+        // 与 main.rs shared_state 同构：发送链路需要 sessions/blobs 目录就位。
+        std::fs::create_dir_all(dir.path().join("sessions")).expect("mkdir sessions");
+        std::fs::create_dir_all(dir.path().join("blobs")).expect("mkdir blobs");
+        let state = r_code_host::commands::CommandState::new_with_planning_release_control(
+            std::sync::Arc::new(db),
+            dir.path().join("blobs"),
+            dir.path().join("sessions"),
+            config_dir,
+            dir.path().join("project"),
+            Some(dir.path().join("app.db")),
+            r_code_host::plan_policy::PlanningReleaseControl {
+                provider_kind: "tui-test".to_string(),
+                release_state: r_code_host::plan_policy::PlanningReleaseState::Off,
+                emergency_off: false,
+                eligibility_profile_version: String::new(),
+                evidence_version: String::new(),
+                allowed_models: Vec::new(),
+                allowed_protocols: Vec::new(),
+                allowed_endpoint_classes: Vec::new(),
+                basis: "queue test".to_string(),
+            },
+        );
+        let task = r_code_host::commands::task_create(&state, None, "t", "goal", "ask")
+            .await
+            .expect("task");
+        r_code_host::commands::install_mock_scenario(
+            &state,
+            &task.id,
+            vec![r_code_core::dto::AgentEvent::Message {
+                text: "queued-ok".to_string(),
+                delta: false,
+            }],
+        )
+        .await
+        .expect("scenario");
+        r_code_host::commands::agent_send_with_mode(
+            &state,
+            &task.id,
+            "hello",
+            r_code_core::dto::AgentSendMode::Queue,
+        )
+        .await
+        .expect("queue send must pass host path");
+    }
 
     /// M1-04.A1：空配置 → 首屏引导行（System 投影，含两条配置途径）。
     #[test]
