@@ -1,0 +1,60 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M1-01
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m1-01-真实-runtime-接线与禁-mock-红线
+
+revision:
+  git_revision: 06330a8b317642d2708632cdf11324b5a7e3694c
+  worktree_digest: recorded-in-report-M1-01.json
+
+deliverables:
+  - crates/r-code-tui/src/main.rs（--mock 参数、真实装配、无配置引导）
+  - crates/r-code-tui/src/main.rs m1_tests（4 契约单测）
+  - scripts/verify-tui-v2.mjs M1-01 断言注册
+changed_paths:
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: M1-01.A1
+    passed: true
+    command: node scripts/verify-tui-v2.mjs --task M1-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-01.json
+    note: "m1_tests 4/4（mock+tui 拒绝 / print 无 mock 默认真实 / 空配置引导含 config.toml 与设置页 / 已配置不误报）；静态断言：main.rs 含 enable_real_agent_mode 且 install_mock_scenario(&state 仅出现 1 次于 if mock 块"
+  - id: M1-01.A2
+    passed: true
+    command: cargo run -q -p r-code-tui --bin r-code-tui -- --mode print --mock --message hello --data-dir <tmp>
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-01.json
+    note: "评估线路确定性回放（R-Code > [r-code-tui] 已收到：hello）"
+  - id: M1-01.A3
+    passed: true
+    command: cargo run -q -p r-code-tui --bin r-code-tui -- --mode print --message hello --data-dir <tmp>
+    exit_code: 2
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-01.json
+    note: "空 data-dir：显式引导（未找到默认模型服务 + 两条途径：桌面设置页/config.toml 绝对路径），exit 2，不回放演示"
+  - id: M1-01.A4
+    passed: true
+    command: cargo run -q -p r-code-tui --bin r-code-tui -- --mock
+    exit_code: 2
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-01.json
+    note: "交互模式拒绝 --mock（红线 R1），错误信息含「交互模式」与用法"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M1 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1.json
+
+decisions:
+  - DM1: 无配置判定只做轻量级（config.toml 缺失/providers 空/默认服务不在表内），不复刻宿主 provider_readiness_error——密钥可能在 OS 凭据库，深校验留给 ensure_real_runtime 真实装配路径，避免误报已配置服务。
+  - DM2: agent_send 失败从 expect panic 改为 eprintln + exit 1（M1-03 再升级为 transcript System 行）。
+  - DM3: M0-02.A4 print 冒烟断言按 0|2 双合法态设计——M1-01 后同一环境从 exit 0（mock 回放）切到 exit 2（显式引导），断言保持稳定，行为变化可解释（对照基线日志在 M0-02 证据）。
+  - DM4: 修复自引入的 clippy redundant_closure（or_else 闭包改函数引用）。
+external_gates_remaining: []
+notes:
+  - dev-tui.sh/ps1 无需改动：--mock 属评估线路，直达 bin 参数。

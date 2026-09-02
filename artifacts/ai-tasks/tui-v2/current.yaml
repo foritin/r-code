@@ -1,0 +1,70 @@
+schema_version: ai-task-packet.v1
+project_id: tui-v2
+task_id: M2-01
+status: pending
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m2-01-model-模型选择器弹层
+
+objective: /model 弹层（fuzzy + provider 分组 + 预选当前 + 选中写 task + footer 右侧联动）
+depends_on: ["M1-01"]
+fixed_constraints:
+  - 弹层内联于底部面板上方（不居中模态）；选中行 `›` + cyan bold（非反色）
+  - 键位 ↑↓/enter/esc；预选当前值
+decision_criteria:
+  - 模型切换写回宿主的既有命令以宿主公开面为准（检索 r_code_host::commands 的 provider 设置入口并记录）
+  - fuzzy 算法自实现简单子串/评分即可
+
+inputs:
+  - src-tauri/src/provider_catalog.rs（30 Preset 目录）
+  - 共享 data-dir config providers（健康集过滤）
+
+deliverables:
+  - 弹层组件、数据投影、键位接驳、footer 联动、单测
+  - scripts/verify-tui-v2.mjs M2-01 断言注册
+
+steps:
+  - id: M2-01.S1
+    status: pending
+    action: 预检宿主 provider 切换命令与目录健康集数据源
+    expected_result: 确定写回命令与目录投影入口
+  - id: M2-01.S2
+    status: pending
+    action: 目录投影（分组/fuzzy/预选）
+    expected_result: 纯逻辑层可单测
+  - id: M2-01.S3
+    status: pending
+    action: 弹层渲染 + 键位 + 选中写回 + footer 联动
+    expected_result: A1-A3 断言绿
+
+acceptance_assertions:
+  - id: M2-01.A1
+    level: unit
+    command: node scripts/verify-tui-v2.mjs --task M2-01 --profile implementation
+    expected: 目录投影/分组/fuzzy 过滤单测通过
+    evidence_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-01.json
+  - id: M2-01.A2
+    level: integration
+    command: node scripts/verify-tui-v2.mjs --task M2-01 --profile implementation
+    expected: 选中写 task 且 footer 右侧联动
+    evidence_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-01.json
+  - id: M2-01.A3
+    level: unit
+    command: node scripts/verify-tui-v2.mjs --task M2-01 --profile implementation
+    expected: 弹层键位与预选当前值
+    evidence_path: artifacts/ai-tasks/verification/tui-v2/implementation/M2-01.json
+
+completed_assertions: []
+remaining_assertions:
+  - M2-01.A1
+  - M2-01.A2
+  - M2-01.A3
+
+changed_paths: []
+decisions:
+  - context: M0+M1 切片已完成（--through M1 18/18 绿，2026-09-02）
+attempts: []
+evidence: []
+last_verified_revision: null

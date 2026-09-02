@@ -1,6 +1,6 @@
 # R-Code CLI（TUI v2）PRD / AI 实施清单
 
-> 文档状态：`draft`（M0-01 通过文档门禁后固化为 `frozen`；只表示执行合同完整，不表示产品功能已实现）
+> 文档状态：`frozen`（只表示执行合同已完整、通过文档门禁，不表示产品功能已经实现）
 > 执行合同：`prd-to-ai-worklist` v1.1.0
 > 取证基线：2026-09-02；调研与选型依据 [`pi-tui-deep-research.md`](./pi-tui-deep-research.md)（pi / Claude Code / Codex CLI 三方对照，§10 codex 快照级取证）；视觉 ground truth：[`tui-v4-prototype.html`](./tui-v4-prototype.html)（codex 风，唯一保留原型）；R-Code 现状来自源码逐条核查（见 §3）
 > 固化清单：`docs/tui-v2/tui-v2-freeze.yaml`（M0-01 交付）
@@ -21,9 +21,9 @@
 
 <!-- AI_WORKLIST_VOLATILE_START -->
 
-- 当前进度：`0 / 24` 项完成。
-- 下一执行项：M0-01（建立统一验收 Harness 与文档门禁）。
-- 当前任务包：`artifacts/ai-tasks/tui-v2/current.yaml`（M0-01 建立；根 `current.yaml` 与 `artifacts/ai-tasks/pi-alignment/current.yaml` 属于其他 worklist 的活跃资产，不得占用或覆盖）。
+- 当前进度：`6 / 24` 项完成。
+- 下一执行项：M2-01（`/model` 模型选择器弹层）。
+- 当前任务包：`artifacts/ai-tasks/tui-v2/current.yaml`（M1-01 进行中时建立；根 `current.yaml` 与 `artifacts/ai-tasks/pi-alignment/current.yaml` 属于其他 worklist 的活跃资产，不得占用或覆盖）。
 - 注意：工作区可能存在未提交改动（含 `docs/tui-v2/` 下文档与原型），一律视为用户资产，任何任务不得 reset/覆盖/回滚它们。
 
 <!-- AI_WORKLIST_VOLATILE_END -->
@@ -121,35 +121,33 @@ v1（pi-alignment M8）交付了 `r-code-tui` 骨架：独立 bin、Host 编排�
 
 ### 4.1 规范性需求登记
 
-| ID | 需求（MUST） | 级别 |
-| --- | --- | --- |
-| R-GEN-01 | 统一验收 Harness 与文档门禁（`verify-tui-v2.mjs` + freeze 固化） | MUST |
-| R-GEN-02 | 改造前回归基线登记且可复跑 | MUST |
-| R-REAL-01 | 三模式装配即真实 provider；无 `--mock` 时 mock 不可达 | MUST |
-| R-REAL-02 | print/json 真实化：无 provider 配置时显式报错引导（exit≠0 + 指引） | MUST |
-| R-REAL-03 | 键盘事件单次性：仅 `KeyEventKind::Press` 产生动作 | MUST |
-| R-REAL-04 | 发送/运行错误进 transcript（System 行），alt-screen 下不可见的 `eprintln!` 不得作为用户可见错误通道 | MUST |
-| R-REAL-05 | provider 不可用 → 可操作指引（config 绝对路径 + 桌面设置页途径） | MUST |
-| R-REAL-06 | 无配置首屏引导卡；配置就位后引导消失 | MUST |
-| R-MODEL-01 | `/model` 弹层：fuzzy + provider 分组 + 预选当前 + 选中写 task | MUST |
-| R-THINK-01 | 思考级别弹层 + `alt+,`/`alt+.` 升降 + per-task 记忆 + 能力 clamp | MUST |
-| R-MODE-01 | `Shift+Tab` TaskMode 循环 + 输入区模式态呈现 + 写回 task | MUST |
-| R-QUEUE-01 | 运行中 Enter = 排队（`AgentSendMode::Queue`）+ 排队显示 + 中止后派发 | MUST |
-| R-APPR-01 | codex 风审批浮层：y/a/esc 语义、前缀放行注记、决策经 PermissionEngine | MUST |
-| R-STAT-01 | footer 统计：token/成本/上下文%/compaction 标记 + 阈值变色 | MUST |
-| R-STAT-02 | `/status` 卡与 `/usage`（含 footer 右侧 context 余量） | MUST |
-| R-EDIT-01 | 多行编辑器：undo/redo、词导航、CJK/grapheme 安全折行、多行换行键 | MUST |
-| R-EDIT-02 | 粘贴折叠（>1000 字符）+ Ctrl+G 外部编辑器回填 | MUST |
-| R-CMD-01 | 斜杠菜单（上方插入式、fuzzy、Tab 补全、no matches dim italic）+ `?` 面板 + 一期命令集 | MUST |
-| R-SHELL-01 | `!` bash 直通（输出进 transcript dim）+ `@` 文件提及补全 | MUST |
-| R-HIST-01 | 历史导航（↑/↓、Ctrl+P/N）+ Ctrl+T transcript 浮层（q/esc 关闭、滚动） | MUST |
-| R-INL-01 | inline 渲染路线 PoC 定案（带基准数据，可复跑） | MUST |
-| R-INL-02 | inline 落地：scrollback 历史、行差分、CSI ?2026、编辑器/footer 贴底 | MUST |
-| R-INL-03 | alt-screen 独立路径退役 + IME 假光标 inline 适配 | MUST |
-| R-SESS-01 | `/resume` 会话列表（共享 data-dir、`❯` 光标、双行行目、enter 接续） | MUST |
-| R-SESS-02 | `/new` `/rename` `/compact` 命令 | MUST |
-| R-SHIP-01 | bin 命名决策落地 + 脚本/文档/分发同步 + 累计门禁收口 | MUST |
-| R-NICE-01 | Emacs kill-ring、Ctrl+R 反搜、vim 模式、/theme | MAY（后置，不建任务卡） |
+- **R-GEN-01（MUST）**：统一非交互验收 Harness（`scripts/verify-tui-v2.mjs`）支持 `--task <TASK_ID>`、`--through <MILESTONE_ID>`、`--profile implementation|production`；0 仅表示全部 required assertion 通过；输出 `artifacts/ai-tasks/verification/tui-v2/<profile>/<task-or-milestone>.json` 与日志；记录 revision/worktree digest 与失败断言列表；required fixture/metric 缺失视为失败。
+- **R-GEN-02（MUST）**：改造前回归基线登记（r-code-tui 测试、clippy、release.test.mjs、print 冒烟形态对照）且在累计门禁中持续可复跑。
+- **R-REAL-01（MUST）**：交互/print/json 三模式装配即真实 provider（`enable_real_agent_mode`）；无 `--mock` 显式旗标时 mock 演示场景不可达；交互模式不接受 `--mock`。
+- **R-REAL-02（MUST）**：print/json 无 provider 配置时显式报错引导（exit≠0 + config 绝对路径 + 桌面设置页途径），不降级、不回放演示。
+- **R-REAL-03（MUST）**：键盘事件单次性——仅 `KeyEventKind::Press`（及明确的 Repeat 语义）产生 `KeyAction`，Windows 双写消除。
+- **R-REAL-04（MUST）**：发送/运行错误进 transcript（`TranscriptRow::System` 行）；`eprintln!` 不得作为用户可见错误通道（alt-screen 下不可见）。
+- **R-REAL-05（MUST）**：provider 不可用 → 可操作指引（config 绝对路径 + 桌面设置页途径）。
+- **R-REAL-06（MUST）**：无 provider 配置时 TUI 首屏为引导卡且不可发送；配置就位后引导消失。
+- **R-MODEL-01（MUST）**：`/model` 弹层（fuzzy + provider 分组 + 预选当前 + 选中写 task + footer 右侧联动）。
+- **R-THINK-01（MUST）**：思考级别弹层 + `alt+,`/`alt+.` 升降 + per-task 记忆（`task_set_inference`）+ 能力 clamp + footer `• thinking` 联动。
+- **R-MODE-01（MUST）**：`Shift+Tab` 循环 TaskMode（ask→edit→auto→plan）+ 输入区模式态呈现 + 写回 task。
+- **R-QUEUE-01（MUST）**：运行中 Enter = 排队（宿主 `AgentSendMode::Queue`）+ `• Queued follow-up inputs`/`↳` 显示 + 中止后宿主派发语义。
+- **R-APPR-01（MUST）**：codex 风内联审批浮层（带面、编号选项、`›` cyan bold、y/a/esc、前缀放行注记），决策经 `ApprovalDecision` → PermissionEngine 同源落账。
+- **R-STAT-01（MUST）**：footer 统计（token/成本/上下文百分比/compaction 标记）来自会话 usage 投影 + >70%/90% 阈值变色。
+- **R-STAT-02（MUST）**：`/status` 状态卡 + `/usage` 成本汇总 + footer 右侧 context 余量。
+- **R-EDIT-01（MUST）**：多行编辑器内核（显式换行、undo/redo、词导航、CJK/grapheme 安全折行、光标完备）。
+- **R-EDIT-02（MUST）**：粘贴折叠（>1000 字符 `[Pasted Content N chars]`）+ Ctrl+G 外部编辑器（`$VISUAL/$EDITOR`）回填，折叠原文不丢失。
+- **R-CMD-01（MUST）**：斜杠命令菜单（上方插入式、fuzzy、Tab 补全、no matches dim italic）+ 空输入 `?` 两列快捷键面板 + 一期命令集注册表。
+- **R-SHELL-01（MUST）**：`!` bash 直通（经宿主 shell 链、输出进 transcript dim）+ `@` 文件提及补全。
+- **R-HIST-01（MUST）**：历史导航（↑/↓、Ctrl+P/N）+ Ctrl+T transcript 浮层（全屏语义载体，q/esc 关闭、滚动）。
+- **R-INL-01（MUST）**：inline 渲染路线 PoC 定案（ratatui InlineViewport vs 自研行差分，带可复跑基准数据与决策记录）。
+- **R-INL-02（MUST）**：inline 落地——历史进终端 scrollback、行差分重绘 + CSI ?2026 同步输出、编辑器/footer 贴底、M1–M4 交互回归。
+- **R-INL-03（MUST）**：alt-screen 独立路径退役（主路径无 EnterAlternateScreen）+ IME 假光标 inline 适配。
+- **R-SESS-01（MUST）**：`/resume` 会话列表（共享 data-dir、`❯` 光标、双行行目、排序、enter 接续）。
+- **R-SESS-02（MUST）**：`/new` `/rename`（持久化 + footer 更新）`/compact`（宿主压缩入口）。
+- **R-SHIP-01（MUST）**：bin 命名决策落地（含分发影响分析）+ 脚本/文档/externalBin/断言四面一致 + `--through M6` 累计门禁 exit 0。
+- **R-NICE-01（MAY）**：Emacs kill-ring、Ctrl+R 反搜、vim 模式、`/theme`（后置，不建任务卡；升级为 MUST 需按解冻条件走 §12 流程）。
 
 ### 4.2 关键机器合同
 
@@ -173,34 +171,39 @@ v1（pi-alignment M8）交付了 `r-code-tui` 骨架：独立 bin、Host 编排�
 
 ## 6. 需求追踪表
 
-| 需求 | 任务 | 断言前缀 |
+| 需求 | 任务 | 验收断言 |
 | --- | --- | --- |
-| R-GEN-01 | M0-01 | M0-01.A* |
-| R-GEN-02 | M0-02 | M0-02.A* |
-| R-REAL-01/02 | M1-01 | M1-01.A* |
-| R-REAL-03 | M1-02 | M1-02.A* |
-| R-REAL-04/05 | M1-03 | M1-03.A* |
-| R-REAL-06 | M1-04 | M1-04.A* |
-| R-MODEL-01 | M2-01 | M2-01.A* |
-| R-THINK-01 | M2-02 | M2-02.A* |
-| R-MODE-01 | M2-03 | M2-03.A* |
-| R-QUEUE-01 | M2-04 | M2-04.A* |
-| R-APPR-01 | M2-05 | M2-05.A* |
-| R-STAT-01 | M3-01 | M3-01.A* |
-| R-STAT-02 | M3-02 | M3-02.A* |
-| R-EDIT-01 | M4-01 | M4-01.A* |
-| R-EDIT-02 | M4-02 | M4-02.A* |
-| R-CMD-01 | M4-03 | M4-03.A* |
-| R-SHELL-01 | M4-04 | M4-04.A* |
-| R-HIST-01 | M4-05 | M4-05.A* |
-| R-INL-01 | M5-01 | M5-01.A* |
-| R-INL-02 | M5-02 | M5-02.A* |
-| R-INL-03 | M5-03 | M5-03.A* |
-| R-SESS-01 | M6-01 | M6-01.A* |
-| R-SESS-02 | M6-02 | M6-02.A* |
-| R-SHIP-01 | M6-03 | M6-03.A* |
+| R-GEN-01 | M0-01 | `M0-01.A1`、`M0-01.A2`、`M0-01.A3` |
+| R-GEN-02 | M0-02 | `M0-02.A1`、`M0-02.A2`、`M0-02.A3`、`M0-02.A4` |
+| R-REAL-01 | M1-01 | `M1-01.A1`、`M1-01.A2`、`M1-01.A4` |
+| R-REAL-02 | M1-01 | `M1-01.A3` |
+| R-REAL-03 | M1-02 | `M1-02.A1`、`M1-02.A2` |
+| R-REAL-04 | M1-03 | `M1-03.A1`、`M1-03.A3` |
+| R-REAL-05 | M1-03 | `M1-03.A2` |
+| R-REAL-06 | M1-04 | `M1-04.A1`、`M1-04.A2` |
+| R-MODEL-01 | M2-01 | `M2-01.A1`、`M2-01.A2`、`M2-01.A3` |
+| R-THINK-01 | M2-02 | `M2-02.A1`、`M2-02.A2`、`M2-02.A3`、`M2-02.A4` |
+| R-MODE-01 | M2-03 | `M2-03.A1`、`M2-03.A2`、`M2-03.A3` |
+| R-QUEUE-01 | M2-04 | `M2-04.A1`、`M2-04.A2`、`M2-04.A3` |
+| R-APPR-01 | M2-05 | `M2-05.A1`、`M2-05.A2`、`M2-05.A3`、`M2-05.A4` |
+| R-STAT-01 | M3-01 | `M3-01.A1`、`M3-01.A2`、`M3-01.A3` |
+| R-STAT-02 | M3-02 | `M3-02.A1`、`M3-02.A2`、`M3-02.A3` |
+| R-EDIT-01 | M4-01 | `M4-01.A1`、`M4-01.A2`、`M4-01.A3`、`M4-01.A4` |
+| R-EDIT-02 | M4-02 | `M4-02.A1`、`M4-02.A2`、`M4-02.A3` |
+| R-CMD-01 | M4-03 | `M4-03.A1`、`M4-03.A2`、`M4-03.A3`、`M4-03.A4` |
+| R-SHELL-01 | M4-04 | `M4-04.A1`、`M4-04.A2`、`M4-04.A3` |
+| R-HIST-01 | M4-05 | `M4-05.A1`、`M4-05.A2`、`M4-05.A3`、`M4-05.A4` |
+| R-INL-01 | M5-01 | `M5-01.A1`、`M5-01.A2`、`M5-01.A3` |
+| R-INL-02 | M5-02 | `M5-02.A1`、`M5-02.A2`、`M5-02.A3`、`M5-02.A4` |
+| R-INL-03 | M5-03 | `M5-03.A1`、`M5-03.A2`、`M5-03.A3` |
+| R-SESS-01 | M6-01 | `M6-01.A1`、`M6-01.A2`、`M6-01.A3` |
+| R-SESS-02 | M6-02 | `M6-02.A1`、`M6-02.A2`、`M6-02.A3` |
+| R-SHIP-01 | M6-03 | `M6-03.A1`、`M6-03.A2`、`M6-03.A3` |
+| R-NICE-01 | —（MAY 后置，不建任务卡） | — |
 
 <!-- AI_WORKLIST_NORMATIVE_END -->
+
+<!-- AI_WORKLIST_CONTRACT_START -->
 
 ## 7. Verification Harness 与里程碑
 
@@ -240,12 +243,12 @@ M0-01 自身在 Harness 尚未存在时，先用任务卡列出的直接命令�
 
 ## 8. 主 Checklist（唯一状态源）
 
-- [ ] **M0-01** 建立统一验收 Harness 与文档门禁。证据：待生成
-- [ ] **M0-02** 回归基线登记。证据：待生成
-- [ ] **M1-01** 真实 runtime 接线与禁 mock 红线。证据：待生成
-- [ ] **M1-02** 键盘事件单次性修复。证据：待生成
-- [ ] **M1-03** 错误进 transcript 与 provider 不可用引导。证据：待生成
-- [ ] **M1-04** 无配置首屏引导。证据：待生成
+- [x] **M0-01** 建立统一验收 Harness 与文档门禁。证据：`artifacts/ai-tasks/evidence/tui-v2/M0-01.yaml`
+- [x] **M0-02** 回归基线登记。证据：`artifacts/ai-tasks/evidence/tui-v2/M0-02.yaml`
+- [x] **M1-01** 真实 runtime 接线与禁 mock 红线。证据：`artifacts/ai-tasks/evidence/tui-v2/M1-01.yaml`
+- [x] **M1-02** 键盘事件单次性修复。证据：`artifacts/ai-tasks/evidence/tui-v2/M1-02.yaml`
+- [x] **M1-03** 错误进 transcript 与 provider 不可用引导。证据：`artifacts/ai-tasks/evidence/tui-v2/M1-03.yaml`
+- [x] **M1-04** 无配置首屏引导。证据：`artifacts/ai-tasks/evidence/tui-v2/M1-04.yaml`
 - [ ] **M2-01** `/model` 模型选择器弹层。证据：待生成
 - [ ] **M2-02** 思考级别弹层、升降与 per-task 记忆。证据：待生成
 - [ ] **M2-03** TaskMode 循环与输入区模式态。证据：待生成
@@ -264,8 +267,6 @@ M0-01 自身在 Harness 尚未存在时，先用任务卡列出的直接命令�
 - [ ] **M6-01** `/resume` 会话列表。证据：待生成
 - [ ] **M6-02** `/new` `/rename` `/compact`。证据：待生成
 - [ ] **M6-03** CLI 收口（命名决策、脚本与文档同步、累计门禁）。证据：待生成
-
-<!-- AI_WORKLIST_CONTRACT_START -->
 
 ## 9. 详细任务卡
 

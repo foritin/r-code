@@ -111,10 +111,10 @@ impl CommandExecutionBackend for LocalShellBackend {
         spec: &CommandSpec,
         _abort_flag: Option<&AtomicBool>,
     ) -> Result<CommandHandle, ProductError> {
-        use std::process::Stdio;
-        use tokio::process::Command;
         #[cfg(unix)]
         use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+        use tokio::process::Command;
 
         let plan = crate::tools_command::plan_shell(&spec.command, self.shell_override.as_deref())?;
         let mut cmd = Command::new(plan.program());

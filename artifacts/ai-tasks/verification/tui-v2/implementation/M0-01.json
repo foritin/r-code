@@ -1,0 +1,67 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M0-01",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:00:44.135Z",
+  "started_at": "2026-09-02T04:00:44.025Z",
+  "finished_at": "2026-09-02T04:00:44.135Z",
+  "duration_ms": 110,
+  "revision": "06330a8b317642d2708632cdf11324b5a7e3694c",
+  "worktree_digest": "8ae0b8e39b299261cd4ae28587ee82d45b659b3c46e7d117226a4353d6066a43",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "description": "Harness 三参数解析、缺参/未知任务/未知里程碑 exit 2",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "noArgs": 2,
+        "missingProfile": 2,
+        "unknownTask": 2,
+        "unknownMilestone": 2
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-01.A2",
+      "description": "文档门禁 check 通过：freeze digest 一致、blocking=0、major=0",
+      "required": true,
+      "status": "passed",
+      "evidence": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-e9969a657a18.log",
+      "details": {
+        "exitCode": 0,
+        "gatePassed": true
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-01.A3",
+      "description": "报告含 revision/worktree digest 与失败断言列表（子进程定向复跑后检查报告结构）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "innerExit": 0,
+        "revision": "06330a8b317642d2708632cdf11324b5a7e3694c",
+        "worktreeDigestPresent": true,
+        "failedAssertionsIsArray": true
+      },
+      "task": "M0-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M0-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M0-01.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

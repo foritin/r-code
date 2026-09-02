@@ -1,0 +1,54 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M0-01
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m0-01-建立统一验收-harness-与文档门禁
+
+revision:
+  git_revision: 06330a8b317642d2708632cdf11324b5a7e3694c
+  worktree_digest: recorded-in-report-M0-01.json
+
+deliverables:
+  - scripts/verify-tui-v2.mjs
+  - docs/tui-v2/tui-v2-freeze.yaml
+  - artifacts/ai-tasks/verification/tui-v2/implementation/worklist-gate.json
+changed_paths:
+  - scripts/verify-tui-v2.mjs
+  - docs/tui-v2/tui-v2-freeze.yaml
+  - docs/tui-v2/r-code-cli-prd.md
+assertions:
+  - id: M0-01.A1
+    passed: true
+    command: node scripts/verify-tui-v2.mjs --task M0-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0-01.json
+    note: "无参/缺 --profile/未知任务/未知里程碑 四个子进程自测均 exit 2"
+  - id: M0-01.A2
+    passed: true
+    command: node scripts/verify-ai-worklist.mjs --document docs/tui-v2/r-code-cli-prd.md --freeze docs/tui-v2/tui-v2-freeze.yaml --report artifacts/ai-tasks/verification/tui-v2/implementation/worklist-gate.json --mode check
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/worklist-gate.json
+    note: "27 requirements / 24 checklist / 24 cards / 78 assertions / issues=[]；freeze frozen"
+  - id: M0-01.A3
+    passed: true
+    command: node scripts/verify-tui-v2.mjs --task M0-01 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0-01.json
+    note: "子进程 --assertions M0-01.A1 定向复跑后检查报告结构：revision/worktree_digest/failed_assertions/summary 齐备"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --task M0-01 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0-01.json
+
+decisions:
+  - DM1: Harness 复用 v1 verify-r-code-alignment.mjs 形状（REGISTRY + --task/--through/--profile/--assertions + CommandRunner 去重缓存），去掉 frontendSuite/codexInteraction 两个 tui-v2 用不到的 kind。
+  - DM2: M0-01.A3 用"子进程 --assertions M0-01.A1 定向复跑 → 读报告结构"方式自验，避免无限自递归；外层运行最终覆盖报告为全量断言。
+  - DM3: 修 PRD 标记位置——CONTRACT_START 原误置 §9 前（§8 checklist 落在 contract 段外，门禁报 24 张孤儿卡）；对齐 v1（§7 起全在 contract 段）。§4.1 改为 - **R-XXX-NN（MUST）**： 列表格式、§6 断言列改具体 ID（匹配 verify-ai-worklist.mjs 识别正则）。
+external_gates_remaining: []
+notes:
+  - 文档状态已 draft → frozen；PRD 头部状态行在标记外，不影响 digest。

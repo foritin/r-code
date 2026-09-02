@@ -1,0 +1,49 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M1-02",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T03:54:36.224Z",
+  "started_at": "2026-09-02T03:54:34.651Z",
+  "finished_at": "2026-09-02T03:54:36.224Z",
+  "duration_ms": 1573,
+  "revision": "06330a8b317642d2708632cdf11324b5a7e3694c",
+  "worktree_digest": "a48c0ce641ea8146d6ffcfdd0d05161fa30a2f2f391cc4be0acd7fc06a239fe6",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-02.A1",
+      "description": "Release 事件不产生 KeyAction（Windows/kitty 双写根因消除）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-02.A2",
+      "description": "Press+Release 成对事件恰好映射一个动作；Repeat 保留长按语义",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M1-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-02.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

@@ -1,0 +1,52 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M1-03
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m1-03-错误进-transcript-与-provider-不可用引导
+
+revision:
+  git_revision: 06330a8b317642d2708632cdf11324b5a7e3694c
+  worktree_digest: recorded-in-report-M1-03.json
+
+deliverables:
+  - crates/r-code-tui/src/lib.rs（push_system + provider_error_guidance + 2 单测）
+  - crates/r-code-tui/src/main.rs（send/abort 闭包改投 transcript）
+  - scripts/verify-tui-v2.mjs M1-03 断言注册
+changed_paths:
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: M1-03.A1
+    passed: true
+    command: cargo test -p r-code-tui --lib system_errors_project_into_transcript
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-03.json
+    note: "错误经 push_system 投影为 TranscriptRow::System"
+  - id: M1-03.A2
+    passed: true
+    command: cargo test -p r-code-tui --lib provider_errors_carry_actionable_guidance
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-03.json
+    note: "provider 类错误（模型服务/未找到默认/尚未就绪/provider 话术）附 config.toml 绝对路径 + 设置 → 模型服务；非 provider 错误原样返回"
+  - id: M1-03.A3
+    passed: true
+    command: node scripts/verify-tui-v2.mjs --task M1-03 --profile implementation
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-03.json
+    note: "静态断言：run_interactive_tui 函数体无 eprintln（交互路径错误通道全部走 transcript）"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M1 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1.json
+
+decisions:
+  - DM1: provider 错误识别用宿主 ensure_real_runtime 稳定话术关键词（模型服务/未找到默认/尚未就绪/provider），不解析错误结构——宿主错误类型为 String。
+  - DM2: config_dir 经 CommandState 公开字段 state.config_dir（无 accessor），闭包内 clone 传入。
+external_gates_remaining: []
+notes: []

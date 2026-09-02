@@ -1,0 +1,56 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M0-02
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m0-02-回归基线登记
+
+revision:
+  git_revision: 06330a8b317642d2708632cdf11324b5a7e3694c
+  worktree_digest: recorded-in-report-M0-02.json
+
+deliverables:
+  - artifacts/ai-tasks/verification/tui-v2/implementation/M0-02.json
+  - artifacts/ai-tasks/verification/tui-v2/implementation/M0.json
+changed_paths:
+  - src-tauri/src/commands.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: M0-02.A1
+    passed: true
+    command: cargo test -p r-code-tui --lib --bins --tests
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0-02.json
+    note: "19/19 单测绿（lib 19、main 0）。环境边界：本容器 cargo 1.95.0 向稳定版 rustdoc 注入 --check-cfg 报 nightly-only，全部 crate 的 doctest 均无法运行（r-code-core 同挂验证）；r-code-tui 源码零 doc 代码块，--lib/--bins/--tests 覆盖面与全量等价；CI 口径（cargo test --workspace --all-features）不受影响"
+  - id: M0-02.A2
+    passed: true
+    command: cargo clippy -p r-code-tui --all-targets -- -D warnings
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0-02.json
+    note: "存量 lint 修复后绿：clippy 1.95 新检出的 collapsible_match（commands.rs:12756，M1-01 之前即存在，非本清单引入），机械折叠为 match guard，零行为变化"
+  - id: M0-02.A3
+    passed: true
+    command: node --test scripts/release.test.mjs
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0-02.json
+    note: "32/32（含 dev-tui.sh Dev 命名空间漂移断言）"
+  - id: M0-02.A4
+    passed: true
+    command: bash dev-tui.sh --print --message baseline
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0-02.json
+    note: "M1-01 前基线形态 = mock 演示回放 exit 0（输出 R-Code > [r-code-tui] 已收到：baseline），cmd 日志为对照基线；M1-01 后预期切换为无配置显式引导 exit 2，断言按 0|2 双合法态设计保持累计稳定"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M0 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M0.json
+
+decisions:
+  - DM1: A1 命令定为 --lib --bins --tests（容器 rustdoc 限制 + 零 doctest 等价覆盖），非缩面修绿；证据记录环境边界。
+  - DM2: 既有 collapsible_match lint（clippy 1.95 新检出、宿主 commands.rs 存量代码）做机械修复而非 waiver——CI stable 迟早升到 1.95，提前对齐；修复不改变任何行为。
+external_gates_remaining: []
+notes: []

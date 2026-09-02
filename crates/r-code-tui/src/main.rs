@@ -30,14 +30,16 @@ fn ensure_utf8_console() {
 fn ensure_utf8_console() {}
 
 fn usage() -> &'static str {
-    "usage: r-code-tui [--mode tui|print|json] [--data-dir <path>] [--message <text>]\n\
-     --mode print/json 需要预装脚本化场景（评估/演示线路）或真实 provider 配置"
+    "usage: r-code-tui [--mode tui|print|json] [--data-dir <path>] [--message <text>] [--mock]\n\
+     --mode print/json 默认走真实 provider（无配置时输出引导并以 exit 2 退出）\n\
+     --mock 仅限 --mode print|json：注入确定性演示场景（评估/演示线路），交互模式不可用"
 }
 
-fn parse_args(args: &[String]) -> Result<(String, Option<PathBuf>, Option<String>), String> {
+fn parse_args(args: &[String]) -> Result<(String, Option<PathBuf>, Option<String>, bool), String> {
     let mut mode = "tui".to_string();
     let mut data_dir: Option<PathBuf> = None;
     let mut message: Option<String> = None;
+    let mut mock = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -56,11 +58,19 @@ fn parse_args(args: &[String]) -> Result<(String, Option<PathBuf>, Option<String
                 index += 1;
                 message = Some(args.get(index).ok_or("--message 缺值")?.clone());
             }
+            // 红线 R1：mock 只允许出现在非交互评估线路；交互模式必须真实 provider。
+            "--mock" => mock = true,
             other => return Err(format!("未知参数：{other}")),
         }
         index += 1;
     }
-    Ok((mode, data_dir, message))
+    if mock && mode == "tui" {
+        return Err(
+            "--mock 仅支持 --mode print|json（评估/演示线路）；交互模式必须使用真实 provider"
+                .to_string(),
+        );
+    }
+    Ok((mode, data_dir, message, mock))
 }
 
 /// 装配共享 data-dir 的宿主状态（与桌面同一 AppData 根；config/sessions/db
@@ -112,6 +122,13 @@ fn constant_reply(text: &str) -> Vec<AgentEvent> {
 async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiState>>) {
     use r_code_tui::app::{run_interactive, RunController};
 
+    // M1-04：无配置首屏引导（已配置时为空，首屏不出现）。
+    for line in r_code_tui::onboarding_lines(&state.config_dir) {
+        if let Ok(mut st) = tui_state.lock() {
+            st.push_system(line);
+        }
+    }
+
     // 会话 task：TUI 打开即一个会话，首个发送 = 新 run。
     let task = task_create(&state, None, "tui", "", "ask")
         .await
@@ -131,16 +148,26 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     let handle = tokio::runtime::Handle::current();
 
+    // M1-03：交互路径错误一律进 transcript（alt-screen 下 eprintln 不可见）。
     let send_state = state.clone();
     let send_task = task_id.clone();
     let send_handle = handle.clone();
+    let send_tui = tui_state.clone();
+    let send_config = state.config_dir.clone();
     let send: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |text| {
         let state = send_state.clone();
         let task_id = send_task.clone();
+        let tui = send_tui.clone();
+        let config_dir = send_config.clone();
         send_handle.spawn(async move {
             // agent_send 的 Auto 语义：运行中自动 steer，空闲时启动新 run。
             if let Err(error) = agent_send(&state, &task_id, &text).await {
-                eprintln!("r-code-tui: 发送失败：{error}");
+                if let Ok(mut st) = tui.lock() {
+                    st.push_system(format!(
+                        "发送失败：{}",
+                        r_code_tui::provider_error_guidance(&error, &config_dir)
+                    ));
+                }
             }
         });
     });
@@ -148,12 +175,16 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     let abort_state = state.clone();
     let abort_task = task_id.clone();
     let abort_handle = handle.clone();
+    let abort_tui = tui_state.clone();
     let abort: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let state = abort_state.clone();
         let task_id = abort_task.clone();
+        let tui = abort_tui.clone();
         abort_handle.spawn(async move {
             if let Err(error) = agent_abort(&state, &task_id).await {
-                eprintln!("r-code-tui: 中止失败：{error}");
+                if let Ok(mut st) = tui.lock() {
+                    st.push_system(format!("中止失败：{error}"));
+                }
             }
         });
     });
@@ -187,7 +218,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 async fn main() {
     ensure_utf8_console();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mode, data_dir, message) = match parse_args(&args) {
+    let (mode, data_dir, message, mock) = match parse_args(&args) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("r-code-tui: {error}\n{}", usage());
@@ -195,6 +226,9 @@ async fn main() {
         }
     };
 
+    let data_root = data_dir
+        .clone()
+        .or_else(r_code_host::app_paths::default_data_dir);
     let state = Arc::new(match shared_state(data_dir.as_deref()) {
         Ok(state) => state,
         Err(error) => {
@@ -202,6 +236,12 @@ async fn main() {
             std::process::exit(1);
         }
     });
+
+    // R1 真实化：除显式 --mock 评估线路外，装配即真实 provider；
+    // 配置缺失/无效由宿主 ensure_real_runtime 直接报错，不降级到演示回放。
+    if !mock {
+        state.enable_real_agent_mode().await;
+    }
 
     // 事件桥：宿主 sink → 共享 TUI 状态。
     let tui_state = Arc::new(Mutex::new(TuiState::new()));
@@ -221,6 +261,20 @@ async fn main() {
         eprintln!("r-code-tui: {} 模式需要 --message", mode);
         std::process::exit(2);
     };
+
+    // R2 显式引导：无 provider 配置时报出两条可操作途径并 exit 2，
+    // 不进入任何演示回放。
+    if !mock {
+        let config_dir = data_root
+            .as_deref()
+            .map(|root| root.join("config"))
+            .unwrap_or_else(|| std::path::PathBuf::from("config"));
+        if let Some(guidance) = r_code_tui::provider_config_guidance(&config_dir) {
+            eprintln!("r-code-tui: {guidance}");
+            std::process::exit(2);
+        }
+    }
+
     let task = task_create(&state, None, "tui", &message, "ask")
         .await
         .expect("task_create");
@@ -235,18 +289,17 @@ async fn main() {
     )
     .await
     .expect("thinking off");
-    // 脚本化场景（无 provider 的确定性演示线路；真实 provider 配置存在时
-    // 同样可跑——场景注入仅 Mock runtime 接受）。
-    let reply = format!("[r-code-tui] 已收到：{message}");
-    if !install_mock_scenario(&state, &task.id, constant_reply(&reply))
-        .await
-        .unwrap_or(false)
-    {
-        // 真实 runtime：直接发送（provider 配置来自共享 data-dir）。
+    if mock {
+        // 评估/演示线路：确定性场景回放（仅 Mock runtime 接受注入）。
+        let reply = format!("[r-code-tui] 已收到：{message}");
+        install_mock_scenario(&state, &task.id, constant_reply(&reply))
+            .await
+            .unwrap_or(false);
     }
-    agent_send(&state, &task.id, &message)
-        .await
-        .expect("agent_send");
+    if let Err(error) = agent_send(&state, &task.id, &message).await {
+        eprintln!("r-code-tui: 发送失败：{error}");
+        std::process::exit(1);
+    }
     // 等待收敛。
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -283,5 +336,37 @@ async fn main() {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod m1_tests {
+    use super::*;
+
+    fn arg_list(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn mock_flag_is_rejected_for_interactive_mode() {
+        // 默认 tui 模式 + --mock：拒绝（红线 R1）。
+        let error = parse_args(&arg_list(&["--mock"])).expect_err("must reject");
+        assert!(error.contains("交互模式"), "unexpected: {error}");
+        assert!(error.contains("--mock"), "unexpected: {error}");
+        // 显式 tui + --mock：同样拒绝。
+        assert!(parse_args(&arg_list(&["--mode", "tui", "--mock"])).is_err());
+        // print/json + --mock：接受。
+        for mode in ["print", "json"] {
+            let parsed = parse_args(&arg_list(&["--mode", mode, "--mock", "--message", "x"]))
+                .expect("eval line must accept --mock");
+            assert!(parsed.3, "mock flag must parse for {mode}");
+        }
+    }
+
+    #[test]
+    fn mock_flag_defaults_to_false_for_plain_print() {
+        let (_, _, _, mock) =
+            parse_args(&arg_list(&["--mode", "print", "--message", "x"])).expect("parse");
+        assert!(!mock, "print without --mock must be real mode");
     }
 }

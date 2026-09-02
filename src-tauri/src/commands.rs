@@ -12752,15 +12752,13 @@ fn push_visible_session_message(
     for block in &msg.content {
         match block {
             agent_contract::ContentBlock::Text { text: value } => text.push_str(value),
-            agent_contract::ContentBlock::Custom { type_name, data } => {
-                if type_name == "file_ref" {
-                    if let Some(path) = data.get("path").and_then(|value| value.as_str()) {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push('@');
-                        text.push_str(path);
+            agent_contract::ContentBlock::Custom { type_name, data } if type_name == "file_ref" => {
+                if let Some(path) = data.get("path").and_then(|value| value.as_str()) {
+                    if !text.is_empty() {
+                        text.push('\n');
                     }
+                    text.push('@');
+                    text.push_str(path);
                 }
             }
             agent_contract::ContentBlock::Image { source } => {

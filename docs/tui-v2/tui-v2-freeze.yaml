@@ -1,0 +1,54 @@
+schema_version: ai-worklist-freeze.v1
+skill_contract:
+  name: prd-to-ai-worklist
+  version: 1.1.0
+
+status: frozen
+source_document: docs/tui-v2/r-code-cli-prd.md
+
+normative_input:
+  files:
+    - docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#1-背景目标终态与非目标
+    - docs/tui-v2/r-code-cli-prd.md#2-已冻结决策
+    - docs/tui-v2/r-code-cli-prd.md#3-仓库事实表
+    - docs/tui-v2/r-code-cli-prd.md#4-机器合同与规范性需求
+    - docs/tui-v2/r-code-cli-prd.md#5-质量性能与安全门禁
+    - docs/tui-v2/r-code-cli-prd.md#6-需求追踪表
+  digest_algorithm: sha256
+  normalization: ai-worklist-markers-v1
+  digest: c9b9c4560938942232673b1b5e9499037cdcdd8f1b0ef745eee0c75bcd44de0c
+
+worklist:
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#7-verification-harness-与里程碑
+    - docs/tui-v2/r-code-cli-prd.md#8-主-checklist唯一状态源
+    - docs/tui-v2/r-code-cli-prd.md#9-详细任务卡
+    - docs/tui-v2/r-code-cli-prd.md#10-连续执行恢复与证据协议
+    - docs/tui-v2/r-code-cli-prd.md#11-风险兼容与外部放行
+  task_count: 24
+  required_task_count: 24
+  digest_algorithm: sha256
+  normalization: ai-worklist-contract-markers-v1
+  digest: c104da226ee870dad1479d70fdfbb377a9b600b38267066330eab03475733222
+
+completion_gate:
+  passed: true
+  blocking_issues: 0
+  major_issues: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/worklist-gate.json
+
+material_change_triggers:
+  - normative_requirement_changed
+  - repository_fact_invalidates_task
+  - blocking_or_major_gate_failure
+  - state_or_evidence_contradiction
+  - explicit_scope_change
+
+volatile_fields_excluded:
+  - checkbox_state
+  - progress_counts
+  - current_task
+  - evidence_paths
+  - run_metadata

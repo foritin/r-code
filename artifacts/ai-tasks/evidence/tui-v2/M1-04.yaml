@@ -1,0 +1,47 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M1-04
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m1-04-无配置首屏引导
+
+revision:
+  git_revision: 06330a8b317642d2708632cdf11324b5a7e3694c
+  worktree_digest: recorded-in-report-M1-04.json
+
+deliverables:
+  - crates/r-code-tui/src/lib.rs（provider_config_guidance 下沉 + onboarding_lines + 2 单测）
+  - crates/r-code-tui/src/main.rs（交互启动投首屏引导行）
+  - scripts/verify-tui-v2.mjs M1-04 断言注册
+changed_paths:
+  - crates/r-code-tui/src/lib.rs
+  - crates/r-code-tui/src/main.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: M1-04.A1
+    passed: true
+    command: cargo test -p r-code-tui --lib onboarding_lines_empty_config_lists_guidance
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-04.json
+    note: "空配置首屏 = 引导卡 System 行（尚未配置状态 + config.toml 路径 + 设置 → 模型服务）"
+  - id: M1-04.A2
+    passed: true
+    command: cargo test -p r-code-tui --lib onboarding_lines_configured_is_empty
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-04.json
+    note: "已配置（有效 config.toml fixture）→ onboarding 为空，首屏不出现引导"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M1 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1.json
+
+decisions:
+  - DM1: 引导形态 = transcript 头部 System 行集合（v4 视觉语言的框形态留给 M5 inline 渲染统一升级）；"不进入可发送状态"经真实模式兜底——发送即出 provider 引导错误（M1-03 链路）。
+  - DM2: provider_config_guidance 从 bin 下沉到 lib（pub），print/json 与交互首屏共用同一判定，避免两份漂移。
+  - DM3: 修复下沉引入的 bin 编译错误（main.rs 残留裸调用改 r_code_tui:: 前缀）——由 --through M1 累计门禁捕获。
+external_gates_remaining: []
+notes: []

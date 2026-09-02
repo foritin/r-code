@@ -1,0 +1,274 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "milestone",
+  "scope_id": "M1",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:01:06.167Z",
+  "started_at": "2026-09-02T04:00:43.879Z",
+  "finished_at": "2026-09-02T04:01:06.167Z",
+  "duration_ms": 22288,
+  "revision": "06330a8b317642d2708632cdf11324b5a7e3694c",
+  "worktree_digest": "8ae0b8e39b299261cd4ae28587ee82d45b659b3c46e7d117226a4353d6066a43",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 18,
+    "passed": 18,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M0-01.A1",
+      "description": "Harness 三参数解析、缺参/未知任务/未知里程碑 exit 2",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "noArgs": 2,
+        "missingProfile": 2,
+        "unknownTask": 2,
+        "unknownMilestone": 2
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-01.A2",
+      "description": "文档门禁 check 通过：freeze digest 一致、blocking=0、major=0",
+      "required": true,
+      "status": "passed",
+      "evidence": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-e9969a657a18.log",
+      "details": {
+        "exitCode": 0,
+        "gatePassed": true
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-01.A3",
+      "description": "报告含 revision/worktree digest 与失败断言列表（子进程定向复跑后检查报告结构）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "innerExit": 0,
+        "revision": "06330a8b317642d2708632cdf11324b5a7e3694c",
+        "worktreeDigestPresent": true,
+        "failedAssertionsIsArray": true
+      },
+      "task": "M0-01"
+    },
+    {
+      "id": "M0-02.A1",
+      "description": "cargo test -p r-code-tui 全绿（--lib --bins --tests：本容器 cargo 1.95 向稳定版 rustdoc 注入 --check-cfg 导致 doctest 无法运行；r-code-tui 无任何 doctest，覆盖面等价，CI 全量口径不受影响）",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo test -p r-code-tui --lib --bins --tests",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo test -p r-code-tui --lib --bins --tests",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A2",
+      "description": "cargo clippy -p r-code-tui --all-targets -D warnings 绿",
+      "required": true,
+      "status": "passed",
+      "evidence": "cargo clippy -p r-code-tui --all-targets -- -D warnings",
+      "details": {
+        "commands": [
+          {
+            "cmd": "cargo clippy -p r-code-tui --all-targets -- -D warnings",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A3",
+      "description": "node --test scripts/release.test.mjs 绿",
+      "required": true,
+      "status": "passed",
+      "evidence": "node --test scripts/release.test.mjs",
+      "details": {
+        "commands": [
+          {
+            "cmd": "node --test scripts/release.test.mjs",
+            "cwd": "",
+            "exitCode": 0
+          }
+        ]
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M0-02.A4",
+      "description": "print 冒烟输出形态已记录为基线对照（M1-01 前后 exit 0→2 均合法，输出必须非空）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 2,
+        "baselineFormRecorded": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-68390e6bc07b.log",
+        "note": "M1-01 前 = mock 回放 exit 0；M1-01 后无配置 = 显式引导 exit 2。基线形态以 cmd 日志为准。"
+      },
+      "task": "M0-02"
+    },
+    {
+      "id": "M1-01.A1",
+      "description": "装配契约：真实模式调用链单测 + main.rs 无条件 mock 注入静态断言（enable_real_agent_mode 在装配、install_mock_scenario 仅 if mock 块内）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "testExit": 0,
+        "enablesReal": true,
+        "mockInstallGated": true
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A2",
+      "description": "--mode print --mock 评估线路 exit 0（确定性演示回放）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0,
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-30572545c616.log"
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A3",
+      "description": "空 data-dir 无配置：--mode print 显式引导 exit 2，输出含 config 路径与设置页途径",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 2,
+        "hasConfigPath": true,
+        "hasSettingsHint": true,
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-72ff8628c92a.log"
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A4",
+      "description": "交互模式传 --mock 被拒：exit 2 + 用法提示（红线 R1）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 2,
+        "rejected": true,
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-0b7cf3463585.log"
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-02.A1",
+      "description": "Release 事件不产生 KeyAction（Windows/kitty 双写根因消除）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-02.A2",
+      "description": "Press+Release 成对事件恰好映射一个动作；Repeat 保留长按语义",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-02"
+    },
+    {
+      "id": "M1-03.A1",
+      "description": "运行错误 → TranscriptRow::System 行投影（push_system）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-03.A2",
+      "description": "provider 不可用错误附 config 绝对路径与设置页途径；其余错误不追加",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-03.A3",
+      "description": "交互路径不再以 eprintln 作为用户可见错误通道（run_interactive_tui 函数体无 eprintln）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "interactiveBodyFound": true,
+        "hasEprintln": false
+      },
+      "task": "M1-03"
+    },
+    {
+      "id": "M1-04.A1",
+      "description": "空配置首屏渲染行 = 引导卡（System 投影：未配置状态 + config 路径 + 设置页途径）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-04"
+    },
+    {
+      "id": "M1-04.A2",
+      "description": "已配置时引导行不存在（fixture：有效 config.toml → onboarding 为空）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M0-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M0-01.yaml",
+      "exists": true
+    },
+    {
+      "task": "M0-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M0-02.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-01.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-02",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-02.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-03",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-03.yaml",
+      "exists": true
+    },
+    {
+      "task": "M1-04",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-04.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

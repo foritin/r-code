@@ -112,6 +112,13 @@ pub enum KeyAction {
 /// crossterm KeyEvent → KeyAction（键位与桌面 App 惯用一致）。
 pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
     use crossterm::event::{KeyCode, KeyModifiers};
+    // Windows/kitty 协议下同一按键会上报 Press 与 Release 两个事件
+    //（v1 未过滤导致每键双写，调研报告 §4 差距 #6）。仅 Press 与 Repeat
+    // 产生动作；Release 一律忽略——Repeat 保留长按重发语义（退格连删）。
+    match key.kind {
+        crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat => {}
+        crossterm::event::KeyEventKind::Release => return KeyAction::Ignore,
+    }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Char(ch) if ctrl && (ch == 'c' || ch == 'C') => KeyAction::Abort,
@@ -177,5 +184,58 @@ mod tests {
         assert_eq!(key(KeyCode::Right), KeyAction::CursorRight);
         assert_eq!(key(KeyCode::Home), KeyAction::CursorHome);
         assert_eq!(key(KeyCode::End), KeyAction::CursorEnd);
+    }
+
+    /// M1-02.A1：Release 事件不产生任何动作（Windows/kitty 双写根因）。
+    #[test]
+    fn release_events_do_not_produce_actions() {
+        use crossterm::event::{KeyEventKind, KeyEventState};
+        let release = |code| KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        };
+        assert_eq!(map_key(release(KeyCode::Char('a'))), KeyAction::Ignore);
+        assert_eq!(map_key(release(KeyCode::Enter)), KeyAction::Ignore);
+        assert_eq!(map_key(release(KeyCode::Backspace)), KeyAction::Ignore);
+        assert_eq!(map_key(release(KeyCode::Esc)), KeyAction::Ignore);
+    }
+
+    /// M1-02.A2：一次物理按键（Press+Release 成对）恰好映射一个动作；
+    /// Repeat 保留（长按重发）。
+    #[test]
+    fn press_events_produce_exactly_one_action() {
+        use crossterm::event::{KeyEventKind, KeyEventState};
+        let press = |code| KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let repeat = |code| KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Repeat,
+            state: KeyEventState::NONE,
+        };
+        let release = |code| KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        };
+        for code in [KeyCode::Char('a'), KeyCode::Enter, KeyCode::Backspace] {
+            let actions = [map_key(press(code)), map_key(release(code))]
+                .into_iter()
+                .filter(|action| !matches!(action, KeyAction::Ignore))
+                .count();
+            assert_eq!(
+                actions, 1,
+                "press+release pair must yield one action for {code:?}"
+            );
+        }
+        // Repeat 与 Press 同语义（退格长按连删）。
+        assert_eq!(map_key(repeat(KeyCode::Backspace)), KeyAction::Backspace);
     }
 }

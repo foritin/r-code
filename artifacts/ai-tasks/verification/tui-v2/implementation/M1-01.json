@@ -1,0 +1,77 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M1-01",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T03:51:41.919Z",
+  "started_at": "2026-09-02T03:51:38.861Z",
+  "finished_at": "2026-09-02T03:51:41.919Z",
+  "duration_ms": 3058,
+  "revision": "06330a8b317642d2708632cdf11324b5a7e3694c",
+  "worktree_digest": "b217651ee68795628ef7e524fcfddab1409d46b66acdeef58b0d5654a8ace6d0",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-01.A1",
+      "description": "装配契约：真实模式调用链单测 + main.rs 无条件 mock 注入静态断言（enable_real_agent_mode 在装配、install_mock_scenario 仅 if mock 块内）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "testExit": 0,
+        "enablesReal": true,
+        "mockInstallGated": true
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A2",
+      "description": "--mode print --mock 评估线路 exit 0（确定性演示回放）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0,
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-630a4054e572.log"
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A3",
+      "description": "空 data-dir 无配置：--mode print 显式引导 exit 2，输出含 config 路径与设置页途径",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 2,
+        "hasConfigPath": true,
+        "hasSettingsHint": true,
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-6dc2a4e211a8.log"
+      },
+      "task": "M1-01"
+    },
+    {
+      "id": "M1-01.A4",
+      "description": "交互模式传 --mock 被拒：exit 2 + 用法提示（红线 R1）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 2,
+        "rejected": true,
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-0b7cf3463585.log"
+      },
+      "task": "M1-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M1-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

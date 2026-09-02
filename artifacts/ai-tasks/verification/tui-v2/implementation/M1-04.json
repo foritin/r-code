@@ -1,0 +1,49 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M1-04",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T03:59:36.723Z",
+  "started_at": "2026-09-02T03:59:36.247Z",
+  "finished_at": "2026-09-02T03:59:36.723Z",
+  "duration_ms": 476,
+  "revision": "06330a8b317642d2708632cdf11324b5a7e3694c",
+  "worktree_digest": "b262e738b3a22348b5a4a7d545ba154d9b87beac3ee69673cb083670db41bc45",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M1-04.A1",
+      "description": "空配置首屏渲染行 = 引导卡（System 投影：未配置状态 + config 路径 + 设置页途径）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-04"
+    },
+    {
+      "id": "M1-04.A2",
+      "description": "已配置时引导行不存在（fixture：有效 config.toml → onboarding 为空）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M1-04"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M1-04",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M1-04.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

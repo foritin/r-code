@@ -1,0 +1,45 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M1-02
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m1-02-键盘事件单次性修复
+
+revision:
+  git_revision: 06330a8b317642d2708632cdf11324b5a7e3694c
+  worktree_digest: recorded-in-report-M1-02.json
+
+deliverables:
+  - crates/r-code-tui/src/input.rs（map_key KeyEventKind 过滤 + 2 单测）
+  - scripts/verify-tui-v2.mjs M1-02 断言注册
+changed_paths:
+  - crates/r-code-tui/src/input.rs
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: M1-02.A1
+    passed: true
+    command: cargo test -p r-code-tui --lib release_events_do_not_produce_actions
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-02.json
+    note: "a/Enter/Backspace/Esc 的 Release 事件全部映射 Ignore"
+  - id: M1-02.A2
+    passed: true
+    command: cargo test -p r-code-tui --lib press_events_produce_exactly_one_action
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1-02.json
+    note: "Press+Release 成对恰产生 1 个非 Ignore 动作；Repeat 与 Press 同语义（长按连删保留）"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M1 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M1.json
+
+decisions:
+  - DM1: 过滤点放 input.rs::map_key 归一层入口（PRD 推荐位），app.rs 读取处零改动；单测直接覆盖。
+  - DM2: Repeat 保留为有效事件（长按退格连删语义）；Windows 默认未开 kitty 增强标志时 crossterm 不发 Repeat，无副作用。
+external_gates_remaining:
+  - Windows Terminal / legacy conhost 双环境实测（本容器为 Linux PTY，无法复现 Windows 双写场景；单测已按事件对覆盖根因）
+notes: []
