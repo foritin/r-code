@@ -1,0 +1,69 @@
+{
+  "schema_version": "tui-v2-verification.v1",
+  "scope": "task",
+  "scope_id": "M4-01",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T04:42:27.492Z",
+  "started_at": "2026-09-02T04:42:26.408Z",
+  "finished_at": "2026-09-02T04:42:27.492Z",
+  "duration_ms": 1084,
+  "revision": "da2d42230a2d81522e0f190147847c50c7a46fcc",
+  "worktree_digest": "7681ce206f50af6ece5c5d9d4f73e5d187bca40ee8db48c40dbb5f3ef49911e3",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M4-01.A1",
+      "description": "多行编辑与显式换行（newline/跨行退格合并/take 全文/行首行尾=当前行）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-01"
+    },
+    {
+      "id": "M4-01.A2",
+      "description": "undo/redo（编辑序列回退重做、栈底/栈顶安全、take 后可找回）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-01"
+    },
+    {
+      "id": "M4-01.A3",
+      "description": "词导航（CJK 连续段=一个词）+ grapheme 原子退格 + CJK=2 列折行",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-01"
+    },
+    {
+      "id": "M4-01.A4",
+      "description": "光标移动/编辑不越界（空缓冲 no-op、连按钳位、跨行右移）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M4-01"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M4-01",
+      "evidence": "artifacts/ai-tasks/evidence/tui-v2/M4-01.yaml",
+      "exists": false
+    }
+  ],
+  "exit_code": 0
+}

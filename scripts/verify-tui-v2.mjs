@@ -417,6 +417,55 @@ const REGISTRY = {
       },
     ],
   },
+  "M4-01": {
+    milestone: "M4",
+    assertions: [
+      {
+        id: "M4-01.A1",
+        description: "多行编辑与显式换行（newline/跨行退格合并/take 全文/行首行尾=当前行）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "multi_line_editing_with_explicit_newline",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-01.A2",
+        description: "undo/redo（编辑序列回退重做、栈底/栈顶安全、take 后可找回）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "undo_redo_roundtrip",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-01.A3",
+        description: "词导航（CJK 连续段=一个词）+ grapheme 原子退格 + CJK=2 列折行",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "word_navigation_and_cjk_wrap_boundaries",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+      {
+        id: "M4-01.A4",
+        description: "光标移动/编辑不越界（空缓冲 no-op、连按钳位、跨行右移）",
+        kind: "self",
+        async check(ctx) {
+          const record = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "cursor_never_escapes_bounds",
+          ]);
+          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+        },
+      },
+    ],
+  },
   "M3-02": {
     milestone: "M3",
     assertions: [

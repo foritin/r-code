@@ -173,6 +173,15 @@ pub async fn run_interactive(
             let action_variant = map_key(key);
             match action_variant {
                 KeyAction::Insert(ch) => input.insert(ch),
+                KeyAction::Newline => input.newline(),
+                KeyAction::Undo => {
+                    input.undo();
+                }
+                KeyAction::Redo => {
+                    input.redo();
+                }
+                KeyAction::WordLeft => input.move_word_left(),
+                KeyAction::WordRight => input.move_word_right(),
                 KeyAction::Backspace => input.backspace(),
                 KeyAction::DeleteForward => input.delete_forward(),
                 KeyAction::CursorLeft => input.move_left(),
@@ -400,6 +409,11 @@ fn render_regular(
     // 排队块（M2-04）在其上。
     let overlay_height = overlay.map(|_| 9).unwrap_or(0);
     let queue_height = queue_block.len();
+    // 输入区自动增高（M4-01：折行行数 + 边框，上限 10 行）。
+    let input_height = {
+        let lines = crate::input::wrap_lines(&input.text(), area.width.saturating_sub(2) as usize);
+        (lines.len().max(1) + 2).min(10) as u16
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
@@ -407,7 +421,7 @@ fn render_regular(
                 Constraint::Min(3),
                 Constraint::Length(queue_height as u16),
                 Constraint::Length(overlay_height),
-                Constraint::Length(3),
+                Constraint::Length(input_height),
             ]
             .as_ref(),
         )

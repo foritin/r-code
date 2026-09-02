@@ -1,0 +1,67 @@
+schema_version: ai-task-evidence.v1
+project_id: tui-v2
+task_id: M4-01
+status: passed
+
+source:
+  document: docs/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/tui-v2/r-code-cli-prd.md#m4-01-多行编辑器内核
+
+revision:
+  git_revision: da2d422
+  worktree_digest: recorded-in-report-M4-01.json
+
+deliverables:
+  - crates/r-code-tui/src/input.rs（InputBuffer 多行内核：undo/redo 栈、grapheme 原子编辑、词导航、行级 home/end、wrap_lines CJK 折行 + 4 断言单测）
+  - crates/r-code-tui/src/input.rs（KeyAction：Newline/Undo/Redo/WordLeft/WordRight + Shift+Enter/Ctrl+J/Ctrl+Z/Y/Ctrl+方向键）
+  - crates/r-code-tui/src/app.rs（新键位接线 + 输入区自动增高（折行行数+边框，上限 10 行））
+  - Cargo.toml + crates/r-code-tui/Cargo.toml（unicode-segmentation 1.12 / unicode-width 0.2 workspace 声明，lock 已有 1.13.3/0.2.2 零新下载）
+  - scripts/verify-tui-v2.mjs M4-01 断言注册
+changed_paths:
+  - crates/r-code-tui/src/input.rs
+  - crates/r-code-tui/src/app.rs
+  - crates/r-code-tui/Cargo.toml
+  - Cargo.toml
+  - Cargo.lock
+  - scripts/verify-tui-v2.mjs
+assertions:
+  - id: "M4-01.A1"
+    passed: true
+    command: cargo test -p r-code-tui --lib multi_line_editing_with_explicit_newline
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-01.json
+    note: "newline/take 全文/跨行退格合并/home-end=当前行语义"
+  - id: "M4-01.A2"
+    passed: true
+    command: cargo test -p r-code-tui --lib undo_redo_roundtrip
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-01.json
+    note: "逐步回退/重做；栈底/栈顶 no-op；take（发送）后可 undo 找回草稿"
+  - id: "M4-01.A3"
+    passed: true
+    command: cargo test -p r-code-tui --lib word_navigation_and_cjk_wrap_boundaries
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-01.json
+    note: "CJK 连续段=一个词；组合字符（e+U+0301）一次删净不撕裂；wrap_lines 你好=4 列、宽 1 时超宽 CJK 逐字独占行"
+  - id: "M4-01.A4"
+    passed: true
+    command: cargo test -p r-code-tui --lib cursor_never_escapes_bounds
+    exit_code: 0
+    report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4-01.json
+    note: "空缓冲编辑 no-op、连按钳位、行尾右移跨 \\n 到下一行首"
+
+cumulative_verification:
+  command: node scripts/verify-tui-v2.mjs --through M4 --profile implementation
+  exit_code: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M4.json
+
+decisions:
+  - DM1: 换行键集 = Shift+Enter + Ctrl+J（crossterm 两者的修饰符/键码都可靠）；`\\`+Enter 不实现（与字面反斜杠歧义）。
+  - DM2: undo 粒度 = 每个变更动作一快照（insert_str 整段一快照），上限 200；take 也入栈（发送后可找回）。
+  - DM3: grapheme 边界用 unicode-segmentation（grapheme_indices 的字节索引必须换算 char 索引再与光标比较——首版混用导致 CJK 退格清空全缓冲，已修并有回归测试覆盖）。
+  - DM4: 词定义 = 字母数字/下划线/CJK 连续段（空格与标点是边界）。
+  - DM5: 输入区自动增高 = wrap_lines(宽-2) 行数 + 2 边框，上限 10 行。
+external_gates_remaining:
+  - Shift+Enter 在部分终端映射为 Enter（无 SHIFT 修饰）——Windows Terminal/iTerm2 实测（Ctrl+J 为回退键）
+notes: []

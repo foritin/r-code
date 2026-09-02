@@ -4316,6 +4316,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "unicode-segmentation",
+ "unicode-width",
  "windows-sys 0.59.0",
 ]
 

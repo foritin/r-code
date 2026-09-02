@@ -119,6 +119,8 @@ notify-rust = "4"
 # 内部公共 crate（agent-contracts 公共合同）
 agent-error = { path = "vendor/agent-contracts/crates/agent-error" }
 agent-contract = { path = "vendor/agent-contracts/crates/agent-contract" }
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
 agent-llm = { path = "vendor/agent-contracts/crates/agent-llm" }
 agent-mcp = { path = "vendor/agent-contracts/crates/agent-mcp" }
 agent-store = { path = "vendor/agent-contracts/crates/agent-store" }
