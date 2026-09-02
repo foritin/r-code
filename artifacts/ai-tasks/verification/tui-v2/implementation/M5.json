@@ -3,12 +3,12 @@
   "scope": "milestone",
   "scope_id": "M5",
   "profile": "implementation",
-  "generated_at": "2026-09-02T07:12:10.275Z",
-  "started_at": "2026-09-02T07:11:52.739Z",
-  "finished_at": "2026-09-02T07:12:10.274Z",
-  "duration_ms": 17535,
-  "revision": "253a3921b076367ce71dcf5309ea7bde3d4a3b94",
-  "worktree_digest": "db6c10af61eb07baf2b85ddab96c919a19ea1770b5d1cf07bbf3a7913da02913",
+  "generated_at": "2026-09-02T07:49:26.642Z",
+  "started_at": "2026-09-02T07:49:06.972Z",
+  "finished_at": "2026-09-02T07:49:26.642Z",
+  "duration_ms": 19670,
+  "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
+  "worktree_digest": "c4525d4aa54d2324123569ae3bd6a2eea38574ec987e96d76097f85cf597ac84",
   "worktree_dirty": true,
   "summary": {
     "total": 69,
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "253a3921b076367ce71dcf5309ea7bde3d4a3b94",
+        "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-ca3a35551f7b.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-855658b8cc8e.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-8bf692fd82be.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-c3c14af2cd60.log"
       },
       "task": "M1-01"
     },
@@ -895,7 +895,7 @@
     {
       "task": "M5-03",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M5-03.yaml",
-      "exists": false
+      "exists": true
     }
   ],
   "exit_code": 0

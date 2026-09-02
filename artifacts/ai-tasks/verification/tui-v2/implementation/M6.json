@@ -3,12 +3,12 @@
   "scope": "milestone",
   "scope_id": "M6",
   "profile": "implementation",
-  "generated_at": "2026-09-02T07:19:01.475Z",
-  "started_at": "2026-09-02T07:18:41.436Z",
-  "finished_at": "2026-09-02T07:19:01.475Z",
-  "duration_ms": 20039,
-  "revision": "373f0d257a27e61b188dba049eaf1a3a7a0ceb9b",
-  "worktree_digest": "f0932f70c50d050eb4d148b70da1ceced0506a0c4636fa0bb24dad7fc5cd12d0",
+  "generated_at": "2026-09-02T07:49:28.316Z",
+  "started_at": "2026-09-02T07:48:45.848Z",
+  "finished_at": "2026-09-02T07:49:28.316Z",
+  "duration_ms": 42468,
+  "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
+  "worktree_digest": "c4525d4aa54d2324123569ae3bd6a2eea38574ec987e96d76097f85cf597ac84",
   "worktree_dirty": true,
   "summary": {
     "total": 78,
@@ -48,7 +48,7 @@
       "status": "passed",
       "details": {
         "innerExit": 0,
-        "revision": "373f0d257a27e61b188dba049eaf1a3a7a0ceb9b",
+        "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
         "worktreeDigestPresent": true,
         "failedAssertionsIsArray": true
       },
@@ -136,7 +136,7 @@
       "status": "passed",
       "details": {
         "exitCode": 0,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-c30be4775590.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-37bf2ce2ce85.log"
       },
       "task": "M1-01"
     },
@@ -149,7 +149,7 @@
         "exitCode": 2,
         "hasConfigPath": true,
         "hasSettingsHint": true,
-        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-386ce1b07de9.log"
+        "log": "artifacts/ai-tasks/verification/tui-v2/implementation/logs/cmd-754e8105d7ed.log"
       },
       "task": "M1-01"
     },
@@ -876,12 +876,13 @@
     },
     {
       "id": "M6-03.A3",
-      "description": "累计门禁 --through M6 --profile implementation exit 0（全 24 任务收口）",
+      "description": "累计门禁 —— M0-M5 全绿 + M6-01 + M6-02 全绿（24 任务收口；不含本品自身，无递归）",
       "required": true,
       "status": "passed",
       "details": {
-        "total": 75,
-        "failed": 0
+        "m5": 0,
+        "m6a": 0,
+        "m6b": 0
       },
       "task": "M6-03"
     }
@@ -1006,7 +1007,7 @@
     {
       "task": "M6-03",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-03.yaml",
-      "exists": false
+      "exists": true
     }
   ],
   "exit_code": 0

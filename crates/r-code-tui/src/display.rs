@@ -84,7 +84,8 @@ pub fn display_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
     }
     // 输入行（贴底：prompt + 徽章 + 输入 + 右侧统计/模型标签）。
     lines.push(input_line(view, width));
-    lines
+    // M6-03 修复：所有行拆物理行 + 截断（diff 引擎要求"行=物理行"）。
+    normalize_lines(&lines, width)
 }
 
 fn transcript_row_line(row: &crate::TranscriptRow) -> String {
@@ -210,12 +211,10 @@ fn input_line(view: &DisplayInput<'_>, width: usize) -> String {
         badge.unwrap_or_default(),
         view.input.text()
     );
-    let right = format!(
-        "{stats_text}{}",
-        view.model_label.clone().unwrap_or_default()
-    );
+    // right = 模型标签（stats 已作为独立右段拼一次，避免 "used ↑0 ↓0 used" 重复）。
+    let right = view.model_label.clone().unwrap_or_default();
     let left_len = plain_len(&left);
-    let right_len = plain_len(&right);
+    let right_len = plain_len(&right) + plain_len(&stats_text);
     let padding = width
         .saturating_sub(left_len + right_len + 1)
         .saturating_sub(1);
@@ -226,6 +225,80 @@ fn input_line(view: &DisplayInput<'_>, width: usize) -> String {
         fg(&stats_text, stats_color),
         fg(&right, "2")
     )
+}
+
+/// M6-03 修复：把含 `\n` 的显示行拆成多物理行、超宽行截断、去尾随空白。
+/// 差分引擎假设"一行 = 一个终端物理行"，任何多物理行/自动折行都会让
+/// `\x1b[{n}A` / `\x1b[1B` 光标跳行错位（截图撕裂根因）。
+pub fn normalize_lines(lines: &[String], width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in lines.iter() {
+        for segment in split_physical(line, width) {
+            out.push(segment);
+        }
+    }
+    out
+}
+
+/// 拆 `\n` 并逐段截断到 width（CJK 双宽 + ANSI 感知；超宽截断加省略号）。
+pub fn split_physical(line: &str, width: usize) -> Vec<String> {
+    let mut result = Vec::new();
+    for segment in line.split('\n') {
+        let mut current = segment.to_string();
+        // 去尾随空白（消费多余的 padding）。
+        loop {
+            let stripped = strip_ansi(&current);
+            if stripped.len() <= width {
+                break;
+            }
+            if let Some(ch) = current.pop() {
+                let _ = ch;
+            } else {
+                break;
+            }
+        }
+        if plot_width(&current) > width {
+            current = truncate_styled(&current, width);
+        }
+        result.push(current);
+    }
+    result
+}
+
+/// 可视宽度（ANSI 感知 + CJK 双宽）。
+fn plot_width(text: &str) -> usize {
+    strip_ansi(text).chars().map(cjk_width).sum()
+}
+
+/// 保留 ANSI 序列前提下截断到 width 可视列（尾部加 `…`）。
+fn truncate_styled(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            out.push(ch);
+            // 原样复制 ANSI 转义序列。
+            if let Some(&'[') = chars.peek() {
+                out.push(chars.next().unwrap());
+                for inner in chars.by_ref() {
+                    out.push(inner);
+                    if inner.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        let w = cjk_width(ch);
+        if used + w > width.saturating_sub(1) && used > 0 {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 /// 去 ANSI 后的可视宽度（CJK 按宽表计）。
@@ -262,6 +335,67 @@ fn cjk_width(ch: char) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M6-03 复现：输入行统计只能出现一次（截图 "used ↑0 ↓0 used" 重复是 stats 双拼）。
+    #[test]
+    fn input_line_stats_not_duplicated() {
+        let input = InputBuffer::new();
+        let view = DisplayInput {
+            rows: vec![],
+            running: false,
+            input: &input,
+            status: None,
+            queue_block: vec![],
+            approval_lines: None,
+            model_label: None,
+            mode_badge: None,
+            usage: Some(crate::status_bar::UsageStats {
+                input_tokens: 1000,
+                output_tokens: 900,
+                ..Default::default()
+            }),
+            overlay: None,
+            slash_menu: None,
+            transcript_view: &TranscriptView::new(),
+        };
+        let line = input_line(&view, 80);
+        let text = strip_ansi(&line);
+        // footer_stats_line 一次调用产出 tokens 段 + 占用段，二者都应各出现一次。
+        let token_count = text.matches("↑1.0K").count();
+        let used_count = text.matches("1.9K used").count();
+        assert_eq!(token_count, 1, "token 段不重复：{text}");
+        assert_eq!(used_count, 1, "占用段不重复：{text}");
+    }
+
+    /// M6-03 复现：含 \n 的引导行必须拆成多物理行（否则差分光标错位）。
+    #[test]
+    fn embedded_newlines_split_into_physical_lines() {
+        let lines = vec![fg(
+            "R-Code CLI 尚未配置模型服务\n  1) 桌面端设置\n  2) 直接编辑 config.toml",
+            "2",
+        )];
+        let normalized = normalize_lines(&lines, 80);
+        assert_eq!(
+            normalized.len(),
+            3,
+            "引导行含 2 个换行应拆成 3 行：{normalized:?}"
+        );
+    }
+
+    /// M6-03 复现：超宽行必须截断（否则终端自动折行 → 差分引擎光标跳行错位）。
+    #[test]
+    fn overwide_lines_are_truncated() {
+        let long = "x".repeat(200);
+        let lines = vec![fg(&long, "36")];
+        let normalized = normalize_lines(&lines.clone(), 60);
+        assert_eq!(normalized.len(), 1, "单行超宽截断为 1 物理行");
+        let text = strip_ansi(&normalized[0]);
+        assert!(
+            text.chars().count() <= 61,
+            "截断后含省略号 ≤ 宽+1：{text:?} (len={})",
+            text.chars().count()
+        );
+    }
 
     /// M5-02.A3：resize 稳定——输入行贴底且宽度自适应（窄宽不越界、统计/标签右对齐）。
     #[test]

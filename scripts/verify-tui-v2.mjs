@@ -487,17 +487,38 @@ const REGISTRY = {
       },
       {
         id: "M6-03.A3",
-        description: "累计门禁 --through M6 --profile implementation exit 0（全 24 任务收口）",
+        description: "累计门禁 —— M0-M5 全绿 + M6-01 + M6-02 全绿（24 任务收口；不含本品自身，无递归）",
         kind: "self",
         async check(ctx) {
-          const report = await readFile(
-            path.join(PROFILE_DIR_BASE, "implementation", "M6.json"),
-            "utf8",
-          ).then((text) => JSON.parse(text)).catch(() => null);
-          const allPassed = Boolean(report && report.summary?.failed === 0 && report.summary?.total > 0);
+          // 分别跑不含 M6-03 的累计段，避免 A3 内自证递归。
+          const m5 = await ctx.runner.run([
+            "node",
+            "scripts/verify-tui-v2.mjs",
+            "--through",
+            "M5",
+            "--profile",
+            "implementation",
+          ]);
+          const m6a = await ctx.runner.run([
+            "node",
+            "scripts/verify-tui-v2.mjs",
+            "--task",
+            "M6-01",
+            "--profile",
+            "implementation",
+          ]);
+          const m6b = await ctx.runner.run([
+            "node",
+            "scripts/verify-tui-v2.mjs",
+            "--task",
+            "M6-02",
+            "--profile",
+            "implementation",
+          ]);
+          const allPassed = m5.exitCode === 0 && m6a.exitCode === 0 && m6b.exitCode === 0;
           return {
             passed: allPassed,
-            details: { total: report?.summary?.total ?? 0, failed: report?.summary?.failed ?? -1 },
+            details: { m5: m5.exitCode, m6a: m6a.exitCode, m6b: m6b.exitCode },
           };
         },
       },

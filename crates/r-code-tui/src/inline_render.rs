@@ -60,6 +60,20 @@ impl InlineRenderer {
                 out.push_str(&cursor_up(prev_len));
             }
             out.push_str("\x1b[J");
+        } else if next.len() < prev_len {
+            // 行数减少（如浮层/菜单收起）：上移到块首后，重写所有剩余行，
+            // 并清除比新块多的旧尾行（ED），否则残留叠加成错位。
+            out.push_str(&cursor_up(prev_len));
+            for line in next.iter() {
+                out.push_str("\x1b[2K");
+                out.push_str(line);
+                out.push_str("\r\n");
+            }
+            out.push_str("\x1b[J"); // 清掉旧块多出的尾行
+                                    // 回到块首（下一帧基准）。
+            if !next.is_empty() {
+                out.push_str(&cursor_up(next.len()));
+            }
         } else {
             // 行内变化：上移到块首，重写差分区间，其余行跳过（↓）。
             out.push_str(&cursor_up(prev_len));
@@ -131,6 +145,21 @@ mod tests {
         );
         assert!(out.contains("\x1b[4A"), "上移整块 4 行：{out:?}");
         assert!(out.contains("\x1b[2K"), "清行重写：{out:?}");
+    }
+
+    /// M6-03 修复：行数减少（浮层收起）时清除旧的多余尾行，不残留。
+    #[test]
+    fn shrink_clears_old_tail_lines() {
+        let mut renderer = InlineRenderer::new();
+        renderer.update(&["h1".into(), "h2".into(), "h3".into(), "h4".into()]);
+        let out = renderer.update(&["h1".into(), "h2".into()]);
+        // 上移 4 行 + 重写 2 行 + ED 清除残留尾行。
+        assert!(out.contains("\x1b[4A"), "上移整块：{out:?}");
+        assert!(out.contains("\x1b[J"), "清掉旧尾行：{out:?}");
+        assert!(out.contains("h1") && out.contains("h2"), "{out:?}");
+        // 再恢复 append：行数变多时仍走差分。
+        let out2 = renderer.update(&["h1".into(), "h2".into(), "h3".into()]);
+        assert!(out2.contains("h3"), "恢复后 append：{out2:?}");
     }
 
     /// 块清空：上移 + ED 清除。

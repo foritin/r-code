@@ -3,12 +3,12 @@
   "scope": "task",
   "scope_id": "M6-01",
   "profile": "implementation",
-  "generated_at": "2026-09-02T07:15:35.692Z",
-  "started_at": "2026-09-02T07:15:34.969Z",
-  "finished_at": "2026-09-02T07:15:35.692Z",
-  "duration_ms": 723,
-  "revision": "187ffdabbcf78ce89d09fb27db2e39f5f173cbb6",
-  "worktree_digest": "c39458cb7e9350c03645204d3e64e588b8ed3eed242d3d94f6b3bac6cadc3c9f",
+  "generated_at": "2026-09-02T07:49:27.450Z",
+  "started_at": "2026-09-02T07:49:26.663Z",
+  "finished_at": "2026-09-02T07:49:27.449Z",
+  "duration_ms": 786,
+  "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
+  "worktree_digest": "c4525d4aa54d2324123569ae3bd6a2eea38574ec987e96d76097f85cf597ac84",
   "worktree_dirty": true,
   "summary": {
     "total": 3,
@@ -53,7 +53,7 @@
     {
       "task": "M6-01",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-01.yaml",
-      "exists": false
+      "exists": true
     }
   ],
   "exit_code": 0

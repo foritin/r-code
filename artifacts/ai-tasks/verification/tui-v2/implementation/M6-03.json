@@ -3,12 +3,12 @@
   "scope": "task",
   "scope_id": "M6-03",
   "profile": "implementation",
-  "generated_at": "2026-09-02T07:18:37.897Z",
-  "started_at": "2026-09-02T07:18:37.873Z",
-  "finished_at": "2026-09-02T07:18:37.897Z",
-  "duration_ms": 24,
-  "revision": "373f0d257a27e61b188dba049eaf1a3a7a0ceb9b",
-  "worktree_digest": "1627631ce6f5fd606d6c22581827b4f4454e6c643d38f67d50c3bffc3b8836ec",
+  "generated_at": "2026-09-02T07:48:41.754Z",
+  "started_at": "2026-09-02T07:48:23.955Z",
+  "finished_at": "2026-09-02T07:48:41.754Z",
+  "duration_ms": 17799,
+  "revision": "88bb2ac3d538d8a2b73de5e6fc24d76c02dd11a5",
+  "worktree_digest": "fd21bb8a75fd9e759b8571249ba9b9cc614e952693e4c1f25dcbb874ca3223c5",
   "worktree_dirty": true,
   "summary": {
     "total": 3,
@@ -42,12 +42,13 @@
     },
     {
       "id": "M6-03.A3",
-      "description": "累计门禁 --through M6 --profile implementation exit 0（全 24 任务收口）",
+      "description": "累计门禁 —— M0-M5 全绿 + M6-01 + M6-02 全绿（24 任务收口；不含本品自身，无递归）",
       "required": true,
       "status": "passed",
       "details": {
-        "total": 75,
-        "failed": 0
+        "m5": 0,
+        "m6a": 0,
+        "m6b": 0
       },
       "task": "M6-03"
     }
@@ -57,7 +58,7 @@
     {
       "task": "M6-03",
       "evidence": "artifacts/ai-tasks/evidence/tui-v2/M6-03.yaml",
-      "exists": false
+      "exists": true
     }
   ],
   "exit_code": 0

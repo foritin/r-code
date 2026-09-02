@@ -36,7 +36,7 @@ assertions:
     command: node scripts/verify-tui-v2.mjs --through M6 --profile implementation
     exit_code: 0
     report_path: artifacts/ai-tasks/verification/tui-v2/implementation/M6.json
-    note: "78/78 全部 required 断言通过（24 任务全部收口）"
+    note: "78/78 全部 required 断言通过（24 任务全部收口）。断言修正：原实现读旧 M6.json 导致 `--through M6` 内递归自证卡死，改为分别跑 M0-M5 累计 + M6-01 + M6-02（不含自身，无递归）"
 
 cumulative_verification:
   command: node scripts/verify-tui-v2.mjs --through M6 --profile implementation
@@ -49,4 +49,5 @@ decisions:
 external_gates_remaining:
   - 四平台 bundle 产物实机验证（CI release 腿；externalBin 路径已由 v1 M8-04 验证）
 notes:
+  - 修复用户实测（2026-09-03 截图）inline 渲染三缺陷：① input_line 统计双拼（used ↑0 ↓0 used 重复）；② 显示行含 \n/超宽未拆物理行+未截断，导致 diff 光标跳行错位（整屏撕裂）；③ 行数减少（浮层收起）时旧尾行残留。均在 display.rs normalize_lines + inline_render shrink 分支修复，并有单测+PTY 回归（startup_sequence/inline_scrollback）。
   - 至此 docs/tui-v2/r-code-cli-prd.md 的 24 任务全部 implementation_verified；production_release_ready 项见 PRD §11.3。
