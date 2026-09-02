@@ -36,15 +36,15 @@
 | G4 ✅ | auth 检查 CLI | `r-code-tui auth check [--data-dir]`：逐 provider 打印认证状态，默认服务已认证 exit 0 否则 exit 1（口径与 /model 选择器同源 build_snapshot） |
 | G5 ✅ | /compact [prompt] | 接线宿主已有 `task_compact_context(state, task, focus)`——focus 即自定义压缩指令；结果行进 transcript（N→M 条消息/低于阈值/错误）；`compaction_supported()` 翻 true |
 
-### P1 — 高价值功能面（✅ 2026-09-02 M8 已落地 G7/G9/G11；G6/G8/G10 专项待立项）
+### P1 — 高价值功能面（✅ 2026-09-02 M8 已落地 G7/G9/G11；✅ 2026-09-03 专项收口 G6/G8/G10）
 
 | # | 缺口 | pi 证据 | 工作量估 |
 |---|---|---|---|
-| G6 | **图片支持**：剪贴板粘贴图片 + `@file` 图片附件 + kitty/iterm2 内联渲染 | `terminal-image.ts`、`cli/file-processor.ts` | 大（专项） |
+| G6 ✅ | **图片支持**（2026-09-03 专项）：① **Ctrl+V 读系统剪贴板图片**（Windows 走 CF_PNG/CF_DIBV5/CF_DIB——DIB 手动解析 24/32bpp + 全零 alpha 按不透明；macOS 走 `osascript` PNGf hex；Linux 走 wl-paste/xclip；bracketed paste 只能传文本，图片字节必须走 OS 剪贴板）；② **`@file` 图片提及**（白名单扩展名 + 中英文标点分隔符容错，发送时读文件入附件）；③ **transcript 半块 ANSI 预览**（pi terminal-image 形态：`▀` 上前景/下背景 truecolor、48×16 行内等比缩放永不放大、透明合成黑底——字符网格原生，零 kitty/sixel 终端依赖）。发送走宿主既有附件管线 `agent_send_with_mode_and_attachments`（魔数校验/主模型无 vision 时 OCR 转换/排队持久化），单图 8MiB 上限与宿主一致；agent-contracts 契约层零改动 | `terminal-image.ts`、`cli/file-processor.ts` | 已落地 |
 | G7 ✅ | **/export /copy**（M8）：`/export [路径]` 按扩展名导出 `.md`（默认）/`.html`（单文件自包含）/`.jsonl`（TranscriptRow 原生序列化）；`/copy` 复制最后一条回复（OSC 52 终端剪贴板，零依赖、SSH 生效、64KiB 上限）；附带修复 ShellRow serde tag 与 TranscriptRow 撞名（`kind`→`shell_kind`）导致 JSONL 无法反序列化的缺陷。pi 的 /import /share 未做（导入走既有 resume 链路即可，share 无服务端载体） | `slash-commands.ts` | 已落地 |
-| G8 | **会话树 /tree + /fork /clone**（分支跳转、标签） | `interactive-mode.ts` | 大（专项） |
+| G8 ✅ | **会话树 /tree + /fork /clone**（2026-09-03 专项）：**/fork** = 消息级分叉（选择器列活跃分支 user 消息 → 文本回填编辑器可改写 → `agent_resend` 前缀复制 + 新分支激活 + 重发，原分支保留）；**/tree** = 分支树导航（宿主新增 `session_branch_list` + `task_switch_branch` 薄命令；树形缩进渲染、❯ 光标、活跃标记、分叉锚点注记；切换后从 JSONL 重放前缀）；**/clone** = 克隆当前会话为新任务（宿主 `task_clone`：活跃分支整文件复制 + Meta 改指 + 模型绑定随行，源会话不动）。附带修复两个存量缺陷：**/resume //new 此前只提示不切换**（task 句柄改 `Arc<Mutex<String>>` 动态读取 + `adopt_task` 真正装回：切换句柄 → JSONL 重建 transcript → footer 投影刷新）；**浮层闪关**（Windows Press+Release 双事件下 Release→`KeyAction::Ignore` 落进浮层 `_ => close` 兜底，浮层被打开键的 Release 瞬间关闭——PTY 取证靠 R_CODE_TUI_RECORD 应用侧字节流才定位，ConPTY 同步更新合并让闪关内容在流里不可见） | `interactive-mode.ts` | 已落地 |
 | G9 ✅ | **/session 统计卡**（M8）：与 /status 同款圆角框——id（截断）/标题/模型/创建时间/消息计数（user·assistant·tool，System/Shell 不计）/runs/token/成本/JSONL 会话文件路径（最近 run 的 external_session_id 解析；未发送过显示"未落盘"） | `slash-commands.ts` | 已落地 |
-| G10 | **OAuth 登录流**（pi /login 账号订阅路线；设备码/浏览器回调） | `oauth-selector.ts`、`login-dialog.ts` | 大（专项，依赖 provider 侧 OAuth 支持） |
+| G10 ✅(收窄) | **OAuth 登录流 → /login Codex 委托登录**（2026-09-03 拍板收窄）：调研结论——30 个 provider 预设无一提供第三方 TUI 可用的 OAuth/device-code 端点（Anthropic OAuth 需官方客户端白名单有 ToS 风险；OpenRouter/DeepSeek/国内厂全部 API key；pi 的 oauth-selector 证据也仅组件名级别），**通用 OAuth 做了就是 dead code（踩禁 mock 红线）**。落地形态：`/login` 接线宿主**已存在的真实 OAuth 通道**——Codex CLI 委托登录（`codex_start_login` 浏览器 / `codex_start_device_login` 设备码，新开系统终端窗口完成 OAuth 交互，不读登录输出不碰 auth.json）+ 后台 5s 轮询登录完成自动确认 + 刷新状态；其余厂商浮层里诚实引导 `/setup`（Tab 可切环境变量鉴权），不出现假 OAuth 选项 | `oauth-selector.ts`、`login-dialog.ts` | 已落地（收窄） |
 | G11 ✅ | **环境变量 auth 模式**（M8）：/setup key 步 **Tab 切换环境变量鉴权**——空密钥落盘（不触碰平台凭据后端），加载链由宿主既有 `settings::apply_env` 回填（厂商别名 `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`DEEPSEEK_API_KEY` + profile 作用域 `R_CODE_PROVIDER_<ID>_API_KEY`）；渲染展示变量清单与当前设置态；pi `envApiKeyAuth()` 同款语义 | `auth/helpers.ts` `envApiKeyAuth()` | 已落地 |
 
 ### P2 — 外围/生态（远期，先记录不做）
@@ -56,7 +56,7 @@
 
 - ~~**M7**：P0 全部（G1-G5）~~ → **已完成（2026-09-03）**：ctrl+l / ctrl+s 双语义 / ↑↓ 边界导航 / auth check / /compact [prompt]，全量测试+clippy+门禁 78/78 绿。
 - ~~**M8**：G7 + G9 + G11~~ → **已完成（2026-09-02）**：/export（md/html/jsonl）/copy（OSC 52）/session 统计卡/setup 环境变量鉴权模式；测试 104 单测 + 11 PTY e2e 全绿，clippy -D warnings 零告警。
-- **专项**：G6 图片、G8 会话树、G10 OAuth 各自单独立项（大件，先出 PoC）。
+- ~~**专项**：G6 图片、G8 会话树、G10 OAuth~~ → **已完成（2026-09-03）**：G6（剪贴板 Ctrl+V + @file 图片 + 半块预览 + 宿主附件管线复用）、G8（/tree /fork /clone + /resume //new 真切换修复 + 浮层闪关修复 + 事件按当前任务过滤 + 视图代际清屏重排）、G10（收窄为 Codex 委托 /login，通用 OAuth 判不可行并记录理由）。TUI 134 单测 + PTY e2e 全绿，宿主 746 单测全绿，clippy -D warnings 零告警。
 
 ## 4. 与 pi 的架构差异备忘（不是缺口，是选型差异）
 

@@ -97,6 +97,15 @@ pub fn live_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
         Some(Overlay::Setup(flow)) => {
             lines.extend(flow.render_rows().into_iter().map(|row| fg(&row, "2")))
         }
+        Some(Overlay::Tree(tree)) => {
+            lines.extend(tree.visible_rows().into_iter().map(|row| fg(&row, "2")))
+        }
+        Some(Overlay::Fork(picker)) => {
+            lines.extend(picker.visible_rows().into_iter().map(|row| fg(&row, "2")))
+        }
+        Some(Overlay::Login(picker)) => {
+            lines.extend(picker.visible_rows().into_iter().map(|row| fg(&row, "2")))
+        }
         None => {
             if let Some(menu) = view.slash_menu {
                 lines.extend(slash_menu_lines(menu));
@@ -154,6 +163,21 @@ fn transcript_row_line(row: &crate::TranscriptRow) -> String {
                 fg(&format!("  {text} (exit {exit_code:?})"), "2")
             }
         },
+        TranscriptRow::Image {
+            name,
+            width,
+            height,
+            preview,
+        } => {
+            // G6：头部占位行 + 半块 ANSI 预览块（多物理行由 commit 拆行处理——
+            // 预览行自身不含 \n）。
+            let mut lines = vec![fg(
+                &crate::image_attach::placeholder_line(name, *width, *height),
+                "2",
+            )];
+            lines.extend(preview.iter().cloned());
+            lines.join("\n")
+        }
     }
 }
 
@@ -364,6 +388,29 @@ mod tests {
             slash_menu: None,
             transcript_view,
         }
+    }
+
+    /// G6：图片行 = dim 占位头 + 半块预览块逐行原样输出（ANSI 不截断）。
+    #[test]
+    fn image_row_renders_placeholder_header_and_preview() {
+        let row = crate::TranscriptRow::Image {
+            name: "shot.png".to_string(),
+            width: 100,
+            height: 50,
+            preview: vec!["\x1b[38;2;1;2;3m\x1b[48;2;4;5;6m▀\x1b[0m".to_string()],
+        };
+        let lines = transcript_commit_lines(std::slice::from_ref(&row));
+        assert_eq!(lines.len(), 2, "头行 + 1 预览行：{lines:?}");
+        assert!(lines[0].contains("[图片 shot.png 100x50]"), "{lines:?}");
+        assert!(lines[1].contains('▀'), "{lines:?}");
+        // 空预览 = 仅占位头（重建历史的元数据形态）。
+        let empty = crate::TranscriptRow::Image {
+            name: "shot.png".to_string(),
+            width: 0,
+            height: 0,
+            preview: Vec::new(),
+        };
+        assert_eq!(transcript_commit_lines(&[empty]).len(), 1);
     }
 
     /// commit 区：含 \n 的行拆物理行；超宽**不截断**（wrap 无害，打印一次）。

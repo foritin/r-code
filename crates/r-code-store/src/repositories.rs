@@ -1619,6 +1619,30 @@ impl<'a> SessionBranchRepository<'a> {
         Ok(branches)
     }
 
+    /// 原子地把任务切回一个既有分支（/tree 分支导航）。目标分支必须属于该任务；
+    /// 不存在时整体回滚并报错，避免出现零活跃分支的中间态。
+    pub fn activate(&self, task_id: &str, branch_id: &str) -> Result<(), ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn.transaction().map_err(db_err)?;
+        tx.execute(
+            "UPDATE session_branches SET is_active = 0 WHERE task_id = ?1 AND is_active = 1",
+            params![task_id],
+        )
+        .map_err(db_err)?;
+        let activated = tx
+            .execute(
+                "UPDATE session_branches SET is_active = 1 WHERE task_id = ?1 AND id = ?2",
+                params![task_id, branch_id],
+            )
+            .map_err(db_err)?;
+        if activated != 1 {
+            return Err(ProductError::DatabaseError(format!(
+                "branch not found for task: {task_id}/{branch_id}"
+            )));
+        }
+        tx.commit().map_err(db_err)
+    }
+
     /// 原子地将新分支设为活跃分支，旧分支元数据和 JSONL 都不改写。
     pub fn create_fork(&self, branch: &SessionBranch) -> Result<(), ProductError> {
         let mut conn = self.db.conn()?;

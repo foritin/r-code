@@ -50,6 +50,22 @@ pub const COMMANDS: &[SlashCommand] = &[
         desc: "重命名会话（/rename <名称>）",
     },
     SlashCommand {
+        name: "/tree",
+        desc: "会话分支树（切换分支）",
+    },
+    SlashCommand {
+        name: "/fork",
+        desc: "从某条消息分叉重发（消息级分支）",
+    },
+    SlashCommand {
+        name: "/clone",
+        desc: "克隆当前会话（保留现状再试验）",
+    },
+    SlashCommand {
+        name: "/login",
+        desc: "账号登录（Codex/ChatGPT OAuth；API key 走 /setup）",
+    },
+    SlashCommand {
         name: "/export",
         desc: "导出会话（/export [路径]，.md/.html/.jsonl）",
     },
@@ -203,9 +219,14 @@ pub fn help_panel_lines() -> Vec<String> {
             key("ctrl+← / →")
         ),
         format!(
-            "{}多行换行             {}外部编辑器",
-            key("shift+enter"),
-            key("ctrl+g")
+            "{}粘贴剪贴板图片        {}多行换行",
+            key("ctrl+v"),
+            key("shift+enter")
+        ),
+        format!(
+            "{}外部编辑器            {}transcript 浮层",
+            key("ctrl+g"),
+            key("ctrl+t")
         ),
         format!(
             "{}历史上一条/下一条    {}transcript 滚动",
@@ -239,7 +260,8 @@ mod tests {
     use super::*;
 
     /// M4-03.A1：注册表 = 冻结的已实现命令集；计划中命令不在其中。
-    /// 2026-09-03 增补 /setup；2026-09-02 M8 增补 /session /export /copy。
+    /// 2026-09-03 增补 /setup；2026-09-02 M8 增补 /session /export /copy；
+    /// 2026-09-03 G8/G10 增补 /tree /fork /clone /login。
     #[test]
     fn registry_matches_frozen_implemented_set() {
         let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
@@ -255,6 +277,10 @@ mod tests {
                 "/resume",
                 "/new",
                 "/rename",
+                "/tree",
+                "/fork",
+                "/clone",
+                "/login",
                 "/export",
                 "/copy",
                 "/compact",
@@ -262,7 +288,7 @@ mod tests {
                 "/help",
                 "/quit"
             ],
-            "已实现命令集（M6 收口 + /setup + M8 G7/G9）"
+            "已实现命令集（M6 收口 + /setup + M8 G7/G9 + G8/G10）"
         );
         for command in COMMANDS {
             assert!(

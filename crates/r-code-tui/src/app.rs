@@ -21,7 +21,16 @@ pub enum Overlay {
     Thinking(ThinkingPicker),
     Resume(crate::session_picker::SessionPicker),
     Setup(crate::setup_flow::SetupFlow),
+    /// G8：/tree 分支树导航。
+    Tree(crate::session_tree::BranchTree),
+    /// G8：/fork 消息级分叉选择器。
+    Fork(crate::session_tree::ForkPicker),
+    /// G10：/login 账号登录。
+    Login(crate::login_flow::LoginPicker),
 }
+
+/// G10：启动登录回调类型（"browser"/"device" → 状态行或错误）。
+pub type StartLoginOp = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
 /// 交互循环的宿主回调（发送/steer/abort 的真实语义由 main.rs 装配）。
 #[derive(Clone)]
@@ -63,6 +72,25 @@ pub struct RunController {
     /// /compact [prompt]：显式压缩当前会话上下文（G5；宿主
     /// task_compact_context，focus=自定义指令）。返回状态行或错误。
     pub compact_context: Arc<dyn Fn(Option<String>) -> Result<String, String> + Send + Sync>,
+    /// G8：/tree 打开分支树（None = 宿主侧不可用）。
+    pub open_tree: Arc<dyn Fn() -> Option<crate::session_tree::BranchTree> + Send + Sync>,
+    /// G8：切换活跃分支（同步；成功后 transcript 已由壳层重建，返回状态行）。
+    pub switch_branch: Arc<dyn Fn(String) -> Result<String, String> + Send + Sync>,
+    /// G8：/fork 打开 user 消息选择器（None = 还没有可分叉的消息）。
+    pub open_fork: Arc<dyn Fn() -> Option<crate::session_tree::ForkPicker> + Send + Sync>,
+    /// G8：从历史消息分叉重发（message_id + 改写文本 → agent_resend）。
+    pub fork_send: Arc<dyn Fn(String, String) -> Result<String, String> + Send + Sync>,
+    /// G8：克隆当前会话为新任务（返回状态行）。
+    pub clone_session: Arc<dyn Fn() -> Result<String, String> + Send + Sync>,
+    /// G10：/login 选择器快照（Codex 状态 + 选项）。
+    pub open_login: Arc<dyn Fn() -> Option<crate::login_flow::LoginPicker> + Send + Sync>,
+    /// G10：启动登录（"browser" / "device"；Codex 委托，新开系统终端）。
+    pub start_login: StartLoginOp,
+    /// G10：刷新登录状态（返回 transcript 行）。
+    pub refresh_login: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// G6：带图片附件发送（文本， 图片， 运行中=排队）。
+    pub send_attachments:
+        Arc<dyn Fn(String, Vec<crate::image_attach::PendingImage>, bool) + Send + Sync>,
 }
 
 impl Default for RunController {
@@ -86,6 +114,15 @@ impl Default for RunController {
             config_dir: std::path::PathBuf::new(),
             persist_default_model: Arc::new(|_| {}),
             compact_context: Arc::new(|_| Err("未装配压缩入口".to_string())),
+            open_tree: Arc::new(|| None),
+            switch_branch: Arc::new(|_| Err("未装配分支切换入口".to_string())),
+            open_fork: Arc::new(|| None),
+            fork_send: Arc::new(|_, _| Err("未装配分叉入口".to_string())),
+            clone_session: Arc::new(|| Err("未装配克隆入口".to_string())),
+            open_login: Arc::new(|| None),
+            start_login: Arc::new(|_| Err("未装配登录入口".to_string())),
+            refresh_login: Arc::new(Vec::new),
+            send_attachments: Arc::new(|_, _, _| {}),
         }
     }
 }
@@ -115,6 +152,13 @@ pub async fn run_interactive(
     // M4-05：已发消息历史 + transcript 浮层（Ctrl+T）。
     let mut history = crate::history::History::new();
     let mut transcript_view = crate::transcript_view::TranscriptView::new();
+    // G8：/fork 待发状态——Some(message_id) 时 Enter = 从该消息分叉重发
+    //（pi 语义：选中文本回填编辑器，可改写；Esc 取消）。
+    let mut pending_fork: Option<String> = None;
+    // G6：粘贴图片缓冲（发送时随文本一起走宿主附件管线）。
+    let mut attachments: Vec<crate::image_attach::PendingImage> = Vec::new();
+    // G8：视图代际——transcript 整体重建（resume/分支切换/分叉）时清屏重排。
+    let mut last_epoch: u64 = 0;
 
     // M5-02（2026-09-03 重构）：commit/live 双区渲染——历史行只打印一次进
     // scrollback（永不重写），live 区（流式预览/浮层/输入）每帧原位重绘。
@@ -132,7 +176,7 @@ pub async fn run_interactive(
                 .ok()
         });
     loop {
-        let (commit, live, caret_col, rows_len) = {
+        let (epoch, commit, live, caret_col, rows_len) = {
             let (
                 rows,
                 running,
@@ -143,6 +187,7 @@ pub async fn run_interactive(
                 approval,
                 usage,
                 streaming,
+                epoch,
             ) = {
                 let mut st = state.lock().unwrap();
                 st.flush_streaming();
@@ -156,6 +201,7 @@ pub async fn run_interactive(
                     st.pending_approval().cloned(),
                     st.usage(),
                     st.streaming_preview().map(|s| s.to_string()),
+                    st.view_epoch(),
                 )
             };
             let model_label = model_selection
@@ -183,6 +229,10 @@ pub async fn run_interactive(
             let (width, height) = crossterm::terminal::size()
                 .map(|(w, h)| (w as usize, h as usize))
                 .unwrap_or((80, 24));
+            // G8：视图代际变化 = transcript 已整体重建——全部行重印。
+            if epoch != last_epoch {
+                committed = 0;
+            }
             let commit = if rows.len() > committed {
                 crate::display::transcript_commit_lines(&rows[committed..])
             } else {
@@ -196,11 +246,18 @@ pub async fn run_interactive(
             }
             let caret_col = crate::display::input_caret_col(&view, width);
             let rows_len = rows.len();
-            (commit, live, caret_col, rows_len)
+            (epoch, commit, live, caret_col, rows_len)
         };
 
         // 无新历史且 live 未变：跳过重绘（省字节；终端无扰动）。
-        if !commit.is_empty() || live != last_live {
+        if epoch != last_epoch || !commit.is_empty() || live != last_live {
+            // G8：重建视图 = 清屏（含 scrollback）+ 渲染器几何重置。
+            if epoch != last_epoch {
+                let _ = stdout.write_all(b"\x1b[2J\x1b[3J\x1b[H");
+                renderer.invalidate();
+                last_live.clear();
+                last_epoch = epoch;
+            }
             let bytes = renderer.frame(&commit, &live);
             let _ = stdout.write_all(bytes.as_bytes());
             // 硬件光标放回输入位（IME 跟随）。
@@ -280,6 +337,13 @@ pub async fn run_interactive(
             // 浮层打开期间独占键位（↑↓/enter/esc/字符过滤/backspace）。
             if overlay.is_some() {
                 let action = map_key(key);
+                // Windows/kitty 协议同一按键上报 Press+Release 双事件；Release
+                // 归一为 Ignore——绝不能落进浮层的 `_ => close` 兜底，否则浮层
+                // 被打开它的那枚按键的 Release 瞬间闪关（2026-09-03 /tree PTY
+                // 取证：record 里浮层帧完整写出、ConPTY 流里不可见）。
+                if matches!(action, KeyAction::Ignore) {
+                    continue;
+                }
                 let mut close = false;
                 match overlay.as_mut().expect("overlay") {
                     Overlay::Model(active) => match action {
@@ -445,6 +509,78 @@ pub async fn run_interactive(
                         KeyAction::Quit => close = active.back(),
                         _ => {}
                     },
+                    // G8：/tree——Enter 切换分支（宿主重建 transcript + 代际 +1）。
+                    Overlay::Tree(active) => match action {
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
+                            active.move_up()
+                        }
+                        KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
+                            active.move_down()
+                        }
+                        KeyAction::Send => {
+                            if let Some(node) = active.selection() {
+                                let branch_id = node.id.clone();
+                                match (controller.switch_branch)(branch_id) {
+                                    Ok(line) => {
+                                        state.lock().unwrap().push_system(line);
+                                    }
+                                    Err(error) => status = Some(error),
+                                }
+                            }
+                            close = true;
+                        }
+                        _ => close = true,
+                    },
+                    // G8：/fork——选中消息回填编辑器（可改写），Enter 走分叉重发。
+                    Overlay::Fork(active) => match action {
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
+                            active.move_up()
+                        }
+                        KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
+                            active.move_down()
+                        }
+                        KeyAction::Send => {
+                            if let Some(entry) = active.selection().cloned() {
+                                input.set_text(&entry.text);
+                                pending_fork = Some(entry.message_id);
+                                status = Some(
+                                    "fork 模式：enter 从该消息分叉重发 · esc 取消".to_string(),
+                                );
+                            }
+                            close = true;
+                        }
+                        _ => close = true,
+                    },
+                    // G10：/login——Codex 委托登录（浏览器/设备码）+ 状态刷新。
+                    Overlay::Login(active) => match action {
+                        KeyAction::ScrollUp | KeyAction::HistoryPrev | KeyAction::CursorUp => {
+                            active.move_up()
+                        }
+                        KeyAction::ScrollDown | KeyAction::HistoryNext | KeyAction::CursorDown => {
+                            active.move_down()
+                        }
+                        KeyAction::Send => {
+                            if let Some(option) = active.selection() {
+                                match option.key {
+                                    "refresh" => {
+                                        let lines = (controller.refresh_login)();
+                                        let mut st = state.lock().unwrap();
+                                        for line in lines {
+                                            st.push_system(line);
+                                        }
+                                    }
+                                    key => match (controller.start_login)(key) {
+                                        Ok(line) => {
+                                            state.lock().unwrap().push_system(line);
+                                        }
+                                        Err(error) => status = Some(error),
+                                    },
+                                }
+                            }
+                            close = true;
+                        }
+                        _ => close = true,
+                    },
                 }
                 if close {
                     overlay = None;
@@ -477,6 +613,10 @@ pub async fn run_interactive(
                     KeyAction::Send if input.text().trim() == "/clear" => {}
                     KeyAction::Send if input.text().trim() == "/help" => {}
                     KeyAction::Send if input.text().trim() == "/quit" => {}
+                    KeyAction::Send if input.text().trim() == "/tree" => {}
+                    KeyAction::Send if input.text().trim() == "/fork" => {}
+                    KeyAction::Send if input.text().trim() == "/clone" => {}
+                    KeyAction::Send if input.text().trim() == "/login" => {}
                     KeyAction::Send if input.text().trim() == "?" => {}
                     // 非完整命令的回车 = 取菜单选中补全后再交给下方命令分派。
                     KeyAction::Send => {
@@ -545,6 +685,15 @@ pub async fn run_interactive(
                         status = Some("没有可用的模型服务——已进入配置向导（Esc 取消）".to_string());
                     }
                 }
+                // pi 对齐 G6：Ctrl+V 读系统剪贴板图片为附件（终端粘贴通道只有文本）。
+                KeyAction::PasteImage => match crate::image_attach::read_clipboard_image() {
+                    Ok(Some(pending)) => {
+                        state.lock().unwrap().push_row(image_row(&pending));
+                        attachments.push(pending);
+                    }
+                    Ok(None) => status = Some("剪贴板没有图片".to_string()),
+                    Err(error) => status = Some(error),
+                },
                 KeyAction::ToggleTranscript => transcript_view.toggle(),
                 KeyAction::ExternalEditor => {
                     // 临时退出 raw mode 给编辑器，回来后回填。
@@ -709,9 +858,45 @@ pub async fn run_interactive(
                         }
                     } else if trimmed == "/quit" {
                         return LoopOutcome::Quit;
+                    } else if trimmed == "/tree" {
+                        // G8：分支树导航。
+                        overlay = (controller.open_tree)().map(Overlay::Tree);
+                        if overlay.is_none() {
+                            status = Some("分支列表不可用".to_string());
+                        }
+                    } else if trimmed == "/fork" {
+                        // G8：消息级分叉（pi /fork：选 user 消息 → 回填编辑器改写重发）。
+                        overlay = (controller.open_fork)().map(Overlay::Fork);
+                        if overlay.is_none() {
+                            status = Some("还没有可分叉的消息（先发送一条）".to_string());
+                        }
+                    } else if trimmed == "/clone" {
+                        // G8：克隆当前会话（新任务承载同历史；留在当前会话）。
+                        match (controller.clone_session)() {
+                            Ok(line) => {
+                                state.lock().unwrap().push_system(line);
+                            }
+                            Err(error) => status = Some(error),
+                        }
+                    } else if trimmed == "/login" {
+                        // G10：账号登录（Codex OAuth 委托；其余厂商引导 /setup）。
+                        overlay = (controller.open_login)().map(Overlay::Login);
                     } else if trimmed == "/thinking" {
                         let current = state.lock().unwrap().thinking().map(str::to_string);
                         overlay = Some(Overlay::Thinking(ThinkingPicker::new(current.as_deref())));
+                    } else if pending_fork.is_some() && !trimmed.is_empty() {
+                        // G8：fork 模式发送——从选中的历史消息分叉重发（文本可改写）。
+                        let Some(message_id) = pending_fork.take() else {
+                            unreachable!("pending_fork 已判 Some");
+                        };
+                        let text = pastes.expand(&text);
+                        history.record(&text);
+                        match (controller.fork_send)(message_id, text) {
+                            Ok(line) => {
+                                state.lock().unwrap().push_system(line);
+                            }
+                            Err(error) => status = Some(error),
+                        }
                     } else if !trimmed.is_empty() {
                         // M2-04：运行中 Enter = 排队（不打断当前 run），
                         // 空闲 = 正常发送。
@@ -719,6 +904,22 @@ pub async fn run_interactive(
                         let text = pastes.expand(&text);
                         // M4-05：进历史栈（! 命令与斜杠命令同样可 ↑ 找回）。
                         history.record(&text);
+                        // G6：@file 图片提及随发送读取加入附件（ctrl+V 粘贴的已在缓冲）。
+                        let mut images = std::mem::take(&mut attachments);
+                        if let Ok(cwd) = std::env::current_dir() {
+                            for path in crate::image_attach::collect_image_mentions(&text, &cwd) {
+                                match crate::image_attach::load_image_file(&path) {
+                                    Ok(pending) => {
+                                        let mut st = state.lock().unwrap();
+                                        st.push_row(image_row(&pending));
+                                        images.push(pending);
+                                    }
+                                    Err(error) => {
+                                        state.lock().unwrap().push_system(error);
+                                    }
+                                }
+                            }
+                        }
                         let route = {
                             let mut st = state.lock().unwrap();
                             let route = crate::route_send(st.is_running());
@@ -728,9 +929,18 @@ pub async fn run_interactive(
                             }
                             route
                         };
-                        match route {
-                            crate::SendRoute::Queue => (controller.queue_send)(text),
-                            crate::SendRoute::Send => (controller.send)(text),
+                        if images.is_empty() {
+                            match route {
+                                crate::SendRoute::Queue => (controller.queue_send)(text),
+                                crate::SendRoute::Send => (controller.send)(text),
+                            }
+                        } else {
+                            // G6：带附件走宿主附件管线（校验/OCR 转换/排队持久化）。
+                            (controller.send_attachments)(
+                                text,
+                                images,
+                                route == crate::SendRoute::Queue,
+                            );
                         }
                     }
                 }
@@ -744,7 +954,10 @@ pub async fn run_interactive(
                     }
                 }
                 KeyAction::Quit => {
-                    if !input.is_empty() {
+                    if pending_fork.take().is_some() {
+                        // G8：fork 模式下 Esc 优先取消分叉（不退出）。
+                        status = Some("已取消分叉".to_string());
+                    } else if !input.is_empty() {
                         input.take();
                     } else {
                         return LoopOutcome::Quit;
@@ -793,5 +1006,15 @@ fn approval_decision_for_key(action: KeyAction) -> Option<crate::approval::Appro
         KeyAction::Insert(ch) => crate::approval_overlay::map_decision(ch),
         KeyAction::Quit | KeyAction::Abort => Some(crate::approval::ApprovalDecision::Deny),
         _ => None,
+    }
+}
+
+/// G6：待发图片 → transcript 行（半块预览或占位）。
+fn image_row(pending: &crate::image_attach::PendingImage) -> crate::TranscriptRow {
+    crate::TranscriptRow::Image {
+        name: pending.name.clone(),
+        width: pending.width,
+        height: pending.height,
+        preview: pending.preview.clone(),
     }
 }

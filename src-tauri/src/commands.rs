@@ -3124,6 +3124,144 @@ pub async fn task_fork_context(
     Ok(branch)
 }
 
+/// 列出任务的全部分支（/tree 分支树数据源）。惰性建立主分支，保证旧任务也有
+/// main 可展示。返回顺序与仓库一致（创建时间倒序）。
+pub async fn session_branch_list(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<Vec<SessionBranch>, String> {
+    let repository = SessionBranchRepository::new(&state.db);
+    repository.ensure_active(task_id).map_err(err_str)?;
+    repository.list_by_task(task_id).map_err(err_str)
+}
+
+/// 切换任务的活跃分支（/tree 选中既有分支跳转）。运行中拒绝切换——JSONL 前缀
+/// 重放语义要求发送链路看到的是静止的历史。切换后丢弃内存 session 缓存，下一次
+/// 发送自动从新分支 JSONL 重放完整前缀。
+pub async fn task_switch_branch(
+    state: &CommandState,
+    task_id: &str,
+    branch_id: &str,
+) -> Result<SessionBranch, String> {
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let mut bridge = task_agent.lock().await;
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能切换分支".to_string());
+    }
+    if task_has_active_main_run(&state.db, task_id, &bridge)? {
+        return Err("当前运行尚未结束，请先停止或等待完成后再切换分支".to_string());
+    }
+    let repository = SessionBranchRepository::new(&state.db);
+    let branches = repository.list_by_task(task_id).map_err(err_str)?;
+    let target = branches
+        .iter()
+        .find(|branch| branch.id == branch_id)
+        .ok_or_else(|| "会话分支不存在或已失效".to_string())?;
+    if target.is_active {
+        return Ok(target.clone());
+    }
+    repository.activate(task_id, branch_id).map_err(err_str)?;
+    TaskEventStore::new(&state.db)
+        .append_for_branch(task_id, branch_id, TaskEventType::SessionBranched)
+        .map_err(err_str)?;
+    bridge.sessions.remove(task_id);
+    Ok(target.clone())
+}
+
+/// 把任务当前活跃分支完整复制为一个新任务（/clone，pi 语义：保留现状再大胆试验）。
+/// 新任务的 main 分支 JSONL = 源活跃分支内容（Meta 指向新任务）；模型绑定、引擎、
+/// 模式随源任务。源任务不动，当前视图也不切换——用户可用 /resume 打开克隆。
+pub async fn task_clone(state: &CommandState, task_id: &str) -> Result<Task, String> {
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let source = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    {
+        let bridge = task_agent.lock().await;
+        if task_has_active_main_run(&state.db, task_id, &bridge)? {
+            return Err("当前运行尚未结束，请先停止或等待完成后再克隆".to_string());
+        }
+    }
+    let source_branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    ensure_session_log(
+        &state.session_store,
+        &state.sessions_dir,
+        &source_branch.storage_id,
+    )
+    .await?;
+    let source_path = session_file_path(&state.sessions_dir, &source_branch.storage_id);
+    let source_content = tokio::fs::read_to_string(&source_path)
+        .await
+        .map_err(err_str)?;
+    let mut events = Vec::new();
+    for line in source_content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str::<SessionEvent>(line)
+            .map_err(|_| "会话历史存在无法恢复的记录".to_string())?;
+        events.push(event);
+    }
+
+    let title = if source.title.trim().is_empty() {
+        "克隆会话".to_string()
+    } else {
+        format!("{}（克隆）", source.title.trim())
+    };
+    let clone = task_create_with_agent_typed(
+        state,
+        source.workspace_path.as_deref(),
+        &title,
+        "",
+        &source.mode.to_string(),
+        source.provider_name.as_deref(),
+        Some(source.agent_engine.to_string().as_str()),
+    )
+    .await
+    .map_err(err_str)?;
+    // task_create 已建 main 分支（storage_id = 新任务 id）并绑定源 provider；
+    // 模型与推理参数走仓库补写，随后把 main JSONL 整文件覆写为源分支内容
+    // （Meta 指向新任务），克隆后首轮发送沿用同一模型。
+    let task_repo = TaskRepository::new(&state.db);
+    if source
+        .model
+        .as_deref()
+        .is_some_and(|model| !model.trim().is_empty())
+    {
+        task_repo
+            .set_model(&clone.id, source.model.as_deref())
+            .map_err(err_str)?;
+    }
+    if source.inference != agent_contract::InferenceOptions::default() {
+        task_repo
+            .set_inference(&clone.id, &source.inference)
+            .map_err(err_str)?;
+    }
+    match events.first_mut() {
+        Some(SessionEvent::Meta(meta)) => {
+            meta.id = clone.id.clone();
+            meta.created_at = chrono::Utc::now();
+        }
+        _ => return Err("会话缺少元数据，无法克隆".to_string()),
+    }
+    state
+        .session_store
+        .write_session_atomic(&clone.id, &events)
+        .await
+        .map_err(err_str)?;
+    TaskRepository::new(&state.db)
+        .get(&clone.id)
+        .map_err(err_str)?
+        .ok_or_else(|| "克隆会话创建后不可读".to_string())
+}
+
 const COMPACTION_KEEP_FIRST: usize = 1;
 const COMPACTION_KEEP_RECENT: usize = 10;
 const COMPACTION_MIN_MESSAGES: usize = COMPACTION_KEEP_FIRST + COMPACTION_KEEP_RECENT + 3;
@@ -27089,6 +27227,149 @@ mod tests {
         assert_eq!(repo.list_by_task(&task.id).unwrap().len(), 2);
         assert_eq!(source_history.messages.len(), 2);
         assert_eq!(fork_history.messages.len(), 2);
+    }
+
+    /// G8：/tree 数据源——session_branch_list 惰性建 main；fork 后双分支可读。
+    #[tokio::test]
+    async fn session_branch_list_returns_lazy_main_and_forks() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Tree", "", "ask").await.unwrap();
+        // 惰性：未发送过的任务也必须列出 main。
+        let branches = session_branch_list(&state, &task.id).await.unwrap();
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].id, "main");
+        assert!(branches[0].is_active);
+        // 未知任务报错（不静默空表）。
+        assert!(session_branch_list(&state, "ghost").await.is_err());
+    }
+
+    /// G8：/tree 切换——激活目标分支、重复切换幂等、未知分支报错不破坏现状。
+    #[tokio::test]
+    async fn task_switch_branch_activates_target_and_rejects_unknown() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Switch", "", "ask")
+            .await
+            .unwrap();
+        let main = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        ensure_session_log(&state.session_store, &state.sessions_dir, &main.storage_id)
+            .await
+            .unwrap();
+        state
+            .session_store
+            .append(
+                &main.storage_id,
+                SessionEvent::Message(Message::user_text("first")),
+            )
+            .await
+            .unwrap();
+        // 手工造一条 fork 分支（task_fork_context 已有独立测试覆盖）。
+        let fork = SessionBranch::fork(&task.id, &main.id, format!("{}:2", main.storage_id));
+        state
+            .session_store
+            .write_session_atomic(
+                &fork.storage_id,
+                &[SessionEvent::Meta(SessionMeta {
+                    id: fork.storage_id.clone(),
+                    created_at: chrono::Utc::now(),
+                    model: String::new(),
+                    provider: String::new(),
+                    title: None,
+                })],
+            )
+            .await
+            .unwrap();
+        SessionBranchRepository::new(&state.db)
+            .create_fork(&SessionBranch {
+                is_active: false,
+                ..fork.clone()
+            })
+            .unwrap();
+
+        // main → fork。
+        let switched = task_switch_branch(&state, &task.id, &fork.id)
+            .await
+            .unwrap();
+        assert_eq!(switched.id, fork.id);
+        let active = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        assert_eq!(active.id, fork.id, "活跃指针必须切到目标分支");
+        // 已活跃分支再切 = no-op 成功。
+        task_switch_branch(&state, &task.id, &fork.id)
+            .await
+            .unwrap();
+        // 未知分支：报错且不破坏现状。
+        assert!(task_switch_branch(&state, &task.id, "ghost").await.is_err());
+        let active = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        assert_eq!(active.id, fork.id);
+        // 切回 main（往返）。
+        task_switch_branch(&state, &task.id, "main").await.unwrap();
+        let active = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        assert_eq!(active.id, "main");
+    }
+
+    /// G8：/clone——活跃分支历史完整复制到新任务（Meta 指向新任务、模型绑定随行、
+    /// 源任务不动）。
+    #[tokio::test]
+    async fn task_clone_copies_history_model_binding_and_leaves_source() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Clone", "", "ask").await.unwrap();
+        let main = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        ensure_session_log(&state.session_store, &state.sessions_dir, &main.storage_id)
+            .await
+            .unwrap();
+        state
+            .session_store
+            .append(
+                &main.storage_id,
+                SessionEvent::Message(Message::user_text("first")),
+            )
+            .await
+            .unwrap();
+        state
+            .session_store
+            .append(
+                &main.storage_id,
+                SessionEvent::Message(Message::assistant_text("answer")),
+            )
+            .await
+            .unwrap();
+        TaskRepository::new(&state.db)
+            .set_model(&task.id, Some("deepseek-chat"))
+            .unwrap();
+
+        let clone = task_clone(&state, &task.id).await.unwrap();
+        assert_ne!(clone.id, task.id);
+        assert_eq!(clone.title, "Clone（克隆）");
+        assert_eq!(
+            clone.model.as_deref(),
+            Some("deepseek-chat"),
+            "模型绑定随行"
+        );
+        // 克隆的 main JSONL = 源内容（Meta.id 指向新任务）。
+        let history = state.session_store.load(&clone.id).await.unwrap();
+        assert_eq!(history.messages.len(), 2);
+        let clone_branches = session_branch_list(&state, &clone.id).await.unwrap();
+        assert_eq!(clone_branches.len(), 1);
+        assert_eq!(clone_branches[0].id, "main");
+        assert!(clone_branches[0].is_active);
+        // 源任务原样（活跃分支仍是原 main，历史未动）。
+        let source_active = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        assert_eq!(source_active.id, main.id);
+        let source_history = state.session_store.load(&main.storage_id).await.unwrap();
+        assert_eq!(source_history.messages.len(), 2);
+        // 未知任务克隆报错。
+        assert!(task_clone(&state, "ghost").await.is_err());
     }
 
     #[tokio::test]

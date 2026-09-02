@@ -87,6 +87,18 @@ pub fn render_markdown(rows: &[TranscriptRow], meta: &ExportMeta) -> String {
             TranscriptRow::System { text } => {
                 out.push_str(&format!("\n> · {text}\n"));
             }
+            TranscriptRow::Image {
+                name,
+                width,
+                height,
+                ..
+            } => {
+                // 图片字节不在导出里（体积/安全）；写占位说明。
+                out.push_str(&format!(
+                    "\n> 🖼 {}\n",
+                    crate::image_attach::placeholder_line(name, *width, *height)
+                ));
+            }
             TranscriptRow::Shell(shell) => match shell {
                 crate::bang_command::ShellRow::Prompt { command } => {
                     out.push_str(&format!("\n```bash\n$ {command}\n"));
@@ -130,6 +142,20 @@ pub fn render_html(rows: &[TranscriptRow], meta: &ExportMeta) -> String {
                 )
             }
             TranscriptRow::System { text } => ("system", html_escape(text)),
+            TranscriptRow::Image {
+                name,
+                width,
+                height,
+                ..
+            } => (
+                "image",
+                format!(
+                    "<code>{}</code>",
+                    html_escape(&crate::image_attach::placeholder_line(
+                        name, *width, *height
+                    ))
+                ),
+            ),
             TranscriptRow::Shell(shell) => match shell {
                 crate::bang_command::ShellRow::Prompt { command } => {
                     ("shell", format!("<code>$ {}</code>", html_escape(command)))

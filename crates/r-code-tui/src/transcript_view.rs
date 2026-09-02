@@ -96,6 +96,15 @@ pub fn render_rows(rows: &[TranscriptRow]) -> Vec<String> {
                 if *is_error { "（失败）" } else { "" }
             )),
             TranscriptRow::System { text } => lines.push(format!("· {text}")),
+            TranscriptRow::Image {
+                name,
+                width,
+                height,
+                ..
+            } => lines.push(format!(
+                "🖼 {}",
+                crate::image_attach::placeholder_line(name, *width, *height)
+            )),
             TranscriptRow::Shell(shell) => match shell {
                 crate::bang_command::ShellRow::Prompt { command } => {
                     lines.push(format!("$ {command}"))

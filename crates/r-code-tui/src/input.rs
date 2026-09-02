@@ -379,6 +379,9 @@ pub enum KeyAction {
     OpenModelPicker,
     /// 浮层选中项持久为全局默认（Ctrl+S，pi 对齐 G2）。
     PersistSelection,
+    /// 读系统剪贴板图片为附件（Ctrl+V，pi 对齐 G6——bracketed paste 只能
+    /// 传文本，图片字节必须走 OS 剪贴板）。
+    PasteImage,
     /// 垂直上移（↑：多行编辑先移动光标，首行边界翻历史）。
     CursorUp,
     /// 垂直下移（↓：多行编辑先移动光标，末行边界翻历史）。
@@ -413,6 +416,7 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('t') | KeyCode::Char('T') if ctrl => KeyAction::ToggleTranscript,
         KeyCode::Char('l') | KeyCode::Char('L') if ctrl => KeyAction::OpenModelPicker,
         KeyCode::Char('s') | KeyCode::Char('S') if ctrl => KeyAction::PersistSelection,
+        KeyCode::Char('v') | KeyCode::Char('V') if ctrl => KeyAction::PasteImage,
         KeyCode::PageUp => KeyAction::ScrollUp,
         KeyCode::PageDown => KeyAction::ScrollDown,
         KeyCode::Left if ctrl => KeyAction::WordLeft,
@@ -479,6 +483,7 @@ mod tests {
         assert_eq!(ctrl(KeyCode::Char('t')), KeyAction::ToggleTranscript);
         assert_eq!(ctrl(KeyCode::Char('l')), KeyAction::OpenModelPicker);
         assert_eq!(ctrl(KeyCode::Char('s')), KeyAction::PersistSelection);
+        assert_eq!(ctrl(KeyCode::Char('v')), KeyAction::PasteImage);
         assert_eq!(ctrl(KeyCode::Char('p')), KeyAction::HistoryPrev);
         assert_eq!(ctrl(KeyCode::Char('n')), KeyAction::HistoryNext);
         assert_eq!(key(KeyCode::Char('你')), KeyAction::Insert('你'));

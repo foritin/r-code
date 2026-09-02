@@ -22,15 +22,18 @@ pub mod display;
 pub mod export;
 pub mod external_editor;
 pub mod history;
+pub mod image_attach;
 pub mod ime;
 pub mod inline_render;
 pub mod input;
 pub mod interaction;
+pub mod login_flow;
 pub mod mention;
 pub mod model_selector;
 pub mod paste;
 pub mod session_ops;
 pub mod session_picker;
+pub mod session_tree;
 pub mod setup_flow;
 pub mod slash_menu;
 pub mod snapshot;
@@ -59,6 +62,15 @@ pub enum TranscriptRow {
     /// !command 本地 shell 直执行（OSC 133 prompt/output 段；与 ToolCard
     /// 类型层区分——Agent 工具输出走 ToolCard）。
     Shell(crate::bang_command::ShellRow),
+    /// 图片附件（G6：粘贴/`@file` 图片）。`preview` 是已渲染的半块 ANSI 行
+    /// （pi terminal-image 形态；空 = 占位行——重建历史时无字节只有元数据）。
+    Image {
+        name: String,
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        preview: Vec<String>,
+    },
 }
 
 /// TUI 会话状态（纯逻辑；单线程模型——事件经 Mutex 共享投递）。
@@ -83,6 +95,11 @@ pub struct TuiState {
     pending_approval: Option<crate::approval_overlay::PendingApproval>,
     /// 会话累计用量投影（M3-01：权威在 TaskDetail.runs.usage_json）。
     usage: Option<crate::status_bar::UsageStats>,
+    /// 当前任务 ID（G8：resume/分叉后切换；空 = 不过滤事件，print 模式/测试）。
+    task_id: String,
+    /// 视图代际（G8：transcript 整体重建时 +1——渲染壳层据此清屏重排，
+    /// 而不是把重建行增量追加进 scrollback）。
+    view_epoch: u64,
 }
 
 impl TuiState {
@@ -239,6 +256,45 @@ impl TuiState {
         self.streaming = None;
     }
 
+    /// 当前任务 ID（事件过滤 + 会话操作目标）。
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    /// 设置当前任务（resume/新建/克隆切换；同步事件过滤口径）。
+    pub fn set_task_id(&mut self, task_id: impl Into<String>) {
+        self.task_id = task_id.into();
+    }
+
+    /// 视图代际（渲染壳层检测整体重建）。
+    pub fn view_epoch(&self) -> u64 {
+        self.view_epoch
+    }
+
+    /// 用宿主 `session_messages`（活跃分支 JSONL 投影）整体重建 transcript 视图
+    /// （G8：/resume 接续、/tree 分支切换、/fork 分叉后调用）。重建视图与旧
+    /// scrollback 内容天然重复——代际 +1 让渲染壳层清屏后重排整棵视图树。
+    pub fn rebuild_from_session(&mut self, messages: &[r_code_host::commands::SessionMessage]) {
+        self.rows.clear();
+        self.streaming = None;
+        self.queued.clear();
+        for message in messages {
+            // tool_result 不产新行：错误位回写最后一张工具卡（对齐 apply 语义）。
+            if message.kind == "tool_result" {
+                if message.is_error == Some(true) {
+                    if let Some(TranscriptRow::ToolCard { is_error: slot, .. }) =
+                        self.rows.last_mut()
+                    {
+                        *slot = true;
+                    }
+                }
+                continue;
+            }
+            self.rows.extend(rows_from_session_message(message));
+        }
+        self.view_epoch += 1;
+    }
+
     /// 用量投影（footer 统计；由壳层周期性从 task_detail 刷新）。
     pub fn usage(&self) -> Option<crate::status_bar::UsageStats> {
         self.usage
@@ -246,6 +302,62 @@ impl TuiState {
 
     pub fn set_usage(&mut self, stats: crate::status_bar::UsageStats) {
         self.usage = Some(stats);
+    }
+}
+
+/// 单条 SessionMessage → transcript 行（0..=2 行：用户消息可附图片占位）。
+fn rows_from_session_message(
+    message: &r_code_host::commands::SessionMessage,
+) -> Vec<TranscriptRow> {
+    match message.kind.as_str() {
+        "message" => match message.role.as_deref() {
+            Some("user") => {
+                let mut rows = vec![TranscriptRow::User {
+                    text: message.text.clone().unwrap_or_default(),
+                }];
+                // 图片附件字节永不回传（安全边界）；用元数据补占位行。
+                if let Some(attachments) = message.attachments.as_ref() {
+                    for attachment in attachments {
+                        if attachment.kind == "image" {
+                            rows.push(TranscriptRow::Image {
+                                name: attachment.name.clone(),
+                                width: 0,
+                                height: 0,
+                                preview: Vec::new(),
+                            });
+                        }
+                    }
+                }
+                rows
+            }
+            Some("assistant") => vec![TranscriptRow::Assistant {
+                text: message.text.clone().unwrap_or_default(),
+                complete: true,
+            }],
+            _ => Vec::new(),
+        },
+        "tool_call" => {
+            let input = message
+                .input_json
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                .unwrap_or(serde_json::Value::Null);
+            vec![TranscriptRow::ToolCard {
+                name: message.tool_name.clone().unwrap_or_default(),
+                summary: summarize_input(&input),
+                is_error: false,
+            }]
+        }
+        "tool_result" => Vec::new(),
+        "system" => match message.text.as_deref() {
+            Some(text) if !text.is_empty() => {
+                vec![TranscriptRow::System {
+                    text: text.to_string(),
+                }]
+            }
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
     }
 }
 
@@ -372,8 +484,14 @@ impl EventBridge {
     }
 
     /// 作为 AgentEventSink 闭包体（host set_agent_event_sink）。
+    ///
+    /// 按 TuiState.task_id 过滤（G8：resume/克隆切换后，旧任务的尾随事件
+    /// 不得混入新会话 transcript；task_id 为空时不过滤——print 模式/测试）。
     pub fn forward(&self, _task_id: &str, event: &AgentEvent) {
         if let Ok(mut state) = self.state.lock() {
+            if !state.task_id.is_empty() && state.task_id != _task_id {
+                return;
+            }
             state.apply(event);
         }
     }
@@ -649,5 +767,103 @@ mod tests {
             },
         );
         assert_eq!(state.lock().unwrap().rows().len(), 1);
+    }
+
+    /// G8：事件按当前任务过滤——旧任务的尾随事件不得混入切换后的 transcript；
+    /// task_id 为空（print 模式/测试）不过滤。
+    #[test]
+    fn event_bridge_filters_by_current_task() {
+        let state = Arc::new(Mutex::new(TuiState::new()));
+        state.lock().unwrap().set_task_id("new-task");
+        let bridge = EventBridge::new(state.clone());
+        bridge.forward(
+            "old-task",
+            &AgentEvent::Message {
+                text: "旧任务残留".into(),
+                delta: false,
+            },
+        );
+        assert!(
+            state.lock().unwrap().rows().is_empty(),
+            "旧任务事件必须被过滤"
+        );
+        bridge.forward(
+            "new-task",
+            &AgentEvent::Message {
+                text: "当前任务".into(),
+                delta: false,
+            },
+        );
+        assert_eq!(state.lock().unwrap().rows().len(), 1);
+        // 空 task_id = 不过滤（兼容）。
+        state.lock().unwrap().set_task_id("");
+        bridge.forward(
+            "any",
+            &AgentEvent::Message {
+                text: "无过滤态".into(),
+                delta: false,
+            },
+        );
+        assert_eq!(state.lock().unwrap().rows().len(), 2);
+    }
+
+    /// G8：rebuild_from_session——SessionMessage 投影 + 代际 +1 + 旧视图清空。
+    #[test]
+    fn rebuild_from_session_projects_rows_and_bumps_epoch() {
+        use r_code_host::commands::SessionAttachmentMeta;
+        let session_message =
+            |id: Option<&str>, kind: &str, role: Option<&str>, text: Option<&str>| {
+                r_code_host::commands::SessionMessage {
+                    id: id.map(str::to_string),
+                    branch_id: "main".to_string(),
+                    kind: kind.to_string(),
+                    role: role.map(str::to_string),
+                    text: text.map(str::to_string),
+                    image_count: None,
+                    image_media_types: None,
+                    attachments: None,
+                    tool_name: None,
+                    call_id: None,
+                    input_json: None,
+                    output_json: None,
+                    is_error: None,
+                    timestamp: None,
+                }
+            };
+        let mut state = TuiState::new();
+        state.push_user("旧视图残留");
+        let epoch_before = state.view_epoch();
+        let mut messages = vec![
+            session_message(None, "meta", None, None),
+            session_message(Some("t:2"), "message", Some("user"), Some("第一条")),
+            session_message(Some("t:3"), "message", Some("assistant"), Some("回答")),
+            session_message(None, "tool_call", None, None),
+            session_message(None, "tool_result", None, None),
+            session_message(None, "system", None, Some("系统事件")),
+        ];
+        // 最后一张工具卡带工具名/输入；tool_result 标错误。
+        messages[3].tool_name = Some("bash".to_string());
+        messages[3].input_json = Some(r#"{"command":"ls"}"#.to_string());
+        messages[4].is_error = Some(true);
+        // user 消息带图片附件元数据 → 占位 Image 行。
+        messages[1].attachments = Some(vec![SessionAttachmentMeta {
+            name: "shot.png".to_string(),
+            media_type: "image/png".to_string(),
+            kind: "image".to_string(),
+            preview_id: None,
+        }]);
+        state.rebuild_from_session(&messages);
+        let rows = state.rows();
+        assert_eq!(rows.len(), 5, "meta/tool_result 不产行：{rows:?}");
+        assert!(matches!(&rows[0], TranscriptRow::User { text } if text == "第一条"));
+        assert!(matches!(&rows[1], TranscriptRow::Image { name, .. } if name == "shot.png"));
+        assert!(matches!(&rows[2], TranscriptRow::Assistant { complete, .. } if *complete));
+        assert!(
+            matches!(&rows[3], TranscriptRow::ToolCard { name, is_error, .. } if name == "bash" && *is_error),
+            "tool_result 错误位回写最后一张工具卡"
+        );
+        assert!(matches!(&rows[4], TranscriptRow::System { text } if text == "系统事件"));
+        assert!(state.view_epoch() > epoch_before, "重建必须提升视图代际");
+        assert!(state.streaming_preview().is_none());
     }
 }

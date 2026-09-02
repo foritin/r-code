@@ -10,8 +10,10 @@ use std::sync::{Arc, Mutex};
 
 use r_code_core::dto::{AgentEvent, TaskState};
 use r_code_host::commands::{
-    agent_abort, agent_send, install_mock_scenario, task_create, task_detail, task_set_inference,
-    CommandState,
+    agent_abort, agent_resend, agent_send, agent_send_with_mode_and_attachments,
+    codex_integration_status, codex_start_device_login, codex_start_login, install_mock_scenario,
+    session_branch_list, session_messages, task_clone, task_create, task_detail,
+    task_set_inference, task_switch_branch, AttachmentInput, CommandState,
 };
 use r_code_tui::{EventBridge, TuiState};
 
@@ -173,6 +175,67 @@ fn constant_reply(text: &str) -> Vec<AgentEvent> {
     }]
 }
 
+/// 新任务默认推理参数（与启动任务一致：显式关闭 thinking）。
+fn disabled_inference() -> agent_contract::InferenceOptions {
+    agent_contract::InferenceOptions {
+        thinking: Some("disabled".to_string()),
+        reasoning_effort: None,
+        verbosity: None,
+    }
+}
+
+/// footer 投影刷新：任务绑定优先，回落全局默认（启动 / resume / 分支切换共用）。
+async fn refresh_projection(state: &CommandState, tui: &Arc<Mutex<TuiState>>, task_id: &str) {
+    let settings = r_code_host::settings::SettingsService::new(state.config_dir.clone());
+    let Ok(config) = settings.load_global_unvalidated() else {
+        return;
+    };
+    let Ok(detail) = task_detail(state, task_id).await else {
+        return;
+    };
+    let provider = detail
+        .task
+        .provider_name
+        .clone()
+        .unwrap_or_else(|| config.default_provider.clone());
+    let model = detail
+        .task
+        .model
+        .clone()
+        .or_else(|| config.providers.get(&provider).map(|p| p.model.clone()));
+    if let Ok(mut st) = tui.lock() {
+        if let Some(model) = model {
+            st.set_model_selection(provider, model);
+        }
+        st.set_thinking(detail.task.inference.reasoning_effort.clone());
+        st.set_task_mode(detail.task.mode.to_string());
+    }
+}
+
+/// 装入某任务为当前会话（G8：/resume 接续、/new 切换、克隆后打开）：
+/// 切 current_task 句柄 + 事件过滤口径 → 活跃分支 JSONL 重建 transcript →
+/// 刷新 footer 投影。顺序有意先切句柄再重建——重建期间流入的事件归新任务。
+async fn adopt_task(
+    state: &CommandState,
+    tui: &Arc<Mutex<TuiState>>,
+    current_task: &Arc<Mutex<String>>,
+    task_id: &str,
+    note: String,
+) {
+    if let Ok(mut id) = current_task.lock() {
+        *id = task_id.to_string();
+    }
+    if let Ok(mut st) = tui.lock() {
+        st.set_task_id(task_id);
+    }
+    let messages = session_messages(state, task_id).await.unwrap_or_default();
+    if let Ok(mut st) = tui.lock() {
+        st.rebuild_from_session(&messages);
+        st.push_system(note);
+    }
+    refresh_projection(state, tui, task_id).await;
+}
+
 /// 交互 TUI：进入备用屏 + 渲染循环；发送（运行中 = steer）、Ctrl-C 中止、
 /// Esc 退出。会话复用共享 state 的同一 task。
 async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiState>>) {
@@ -189,30 +252,25 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     let task = task_create(&state, None, "tui", "", "ask")
         .await
         .expect("task_create");
-    task_set_inference(
-        &state,
-        &task.id,
-        agent_contract::InferenceOptions {
-            thinking: Some("disabled".to_string()),
-            reasoning_effort: None,
-            verbosity: None,
-        },
-    )
-    .await
-    .expect("thinking off");
-    let task_id = task.id.clone();
+    task_set_inference(&state, &task.id, disabled_inference())
+        .await
+        .expect("thinking off");
+    // G8：当前任务句柄——/new /resume /clone 切换后更新；所有会话操作
+    // 闭包在**调用时**读取（不再克隆固定值，修复 /resume 后发送仍进旧会话）。
+    let current_task: Arc<Mutex<String>> = Arc::new(Mutex::new(task.id.clone()));
+    tui_state.lock().unwrap().set_task_id(task.id.clone());
 
     let handle = tokio::runtime::Handle::current();
 
     // M1-03：交互路径错误一律进 transcript（alt-screen 下 eprintln 不可见）。
     let send_state = state.clone();
-    let send_task = task_id.clone();
+    let send_current = current_task.clone();
     let send_handle = handle.clone();
     let send_tui = tui_state.clone();
     let send_config = state.config_dir.clone();
     let send: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |text| {
         let state = send_state.clone();
-        let task_id = send_task.clone();
+        let task_id = send_current.lock().unwrap().clone();
         let tui = send_tui.clone();
         let config_dir = send_config.clone();
         send_handle.spawn(async move {
@@ -229,12 +287,12 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     });
 
     let abort_state = state.clone();
-    let abort_task = task_id.clone();
+    let abort_current = current_task.clone();
     let abort_handle = handle.clone();
     let abort_tui = tui_state.clone();
     let abort: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let state = abort_state.clone();
-        let task_id = abort_task.clone();
+        let task_id = abort_current.lock().unwrap().clone();
         let tui = abort_tui.clone();
         abort_handle.spawn(async move {
             if let Err(error) = agent_abort(&state, &task_id).await {
@@ -245,37 +303,9 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         });
     });
 
-    // 初始模型投影（footer 右侧）：任务绑定优先，回落全局默认。
-    {
-        let settings = r_code_host::settings::SettingsService::new(state.config_dir.clone());
-        if let Ok(config) = settings.load_global_unvalidated() {
-            let detail = task_detail(&state, &task_id).await.ok();
-            let provider = detail
-                .as_ref()
-                .and_then(|item| item.task.provider_name.clone())
-                .unwrap_or_else(|| config.default_provider.clone());
-            let model = detail
-                .as_ref()
-                .and_then(|item| item.task.model.clone())
-                .or_else(|| config.providers.get(&provider).map(|p| p.model.clone()));
-            if let Some(model) = model {
-                tui_state
-                    .lock()
-                    .unwrap()
-                    .set_model_selection(provider, model);
-            }
-            // M2-02/M2-03：初始思考档位与任务模式投影。
-            if let Some(effort) = detail
-                .as_ref()
-                .and_then(|item| item.task.inference.reasoning_effort.clone())
-            {
-                tui_state.lock().unwrap().set_thinking(Some(effort));
-            }
-            if let Some(mode) = detail.as_ref().map(|item| item.task.mode.to_string()) {
-                tui_state.lock().unwrap().set_task_mode(mode);
-            }
-        }
-    }
+    // 初始模型投影（footer 右侧）：任务绑定优先，回落全局默认
+    //（G8 起 /resume //new 切换共用 refresh_projection）。
+    refresh_projection(&state, &tui_state, &task.id).await;
 
     // M2-01：/model 选择器数据源（可用集 = model_availability 的 available，
     // 与设置页/`--list-models` 同一口径；快照构建是同步纯函数）。
@@ -309,13 +339,13 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     });
 
     let select_state = state.clone();
-    let select_task = task_id.clone();
+    let select_current = current_task.clone();
     let select_handle = handle.clone();
     let select_tui = tui_state.clone();
     let select_model: Arc<dyn Fn(r_code_tui::model_selector::ModelEntry) + Send + Sync> =
         Arc::new(move |entry| {
             let state = select_state.clone();
-            let task_id = select_task.clone();
+            let task_id = select_current.lock().unwrap().clone();
             let tui = select_tui.clone();
             select_handle.spawn(async move {
                 match r_code_tui::model_selector::apply_model_selection(&state, &task_id, &entry)
@@ -338,12 +368,12 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     // M2-02：思考档位写回（alt+T 弹层与 alt+,/alt+. 升降共用；per-task 持久）。
     let think_state = state.clone();
-    let think_task = task_id.clone();
+    let think_current = current_task.clone();
     let think_handle = handle.clone();
     let think_tui = tui_state.clone();
     let set_thinking: Arc<dyn Fn(&'static str) + Send + Sync> = Arc::new(move |level| {
         let state = think_state.clone();
-        let task_id = think_task.clone();
+        let task_id = think_current.lock().unwrap().clone();
         let tui = think_tui.clone();
         think_handle.spawn(async move {
             match r_code_tui::thinking::apply_thinking(&state, &task_id, level).await {
@@ -364,12 +394,12 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     // M2-03：Shift+Tab 模式循环写回（运行中/Plan+Codex 由宿主拒绝）。
     let mode_state = state.clone();
-    let mode_task = task_id.clone();
+    let mode_current = current_task.clone();
     let mode_handle = handle.clone();
     let mode_tui = tui_state.clone();
     let set_mode: Arc<dyn Fn(&'static str) + Send + Sync> = Arc::new(move |mode| {
         let state = mode_state.clone();
-        let task_id = mode_task.clone();
+        let task_id = mode_current.lock().unwrap().clone();
         let tui = mode_tui.clone();
         mode_handle.spawn(async move {
             match r_code_tui::task_mode::apply_mode(&state, &task_id, mode).await {
@@ -390,12 +420,12 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     // M2-04：运行中排队（宿主 AgentSendMode::Queue；run 结束自动派发）。
     let queue_state = state.clone();
-    let queue_task = task_id.clone();
+    let queue_current = current_task.clone();
     let queue_handle = handle.clone();
     let queue_tui = tui_state.clone();
     let queue_send: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |text| {
         let state = queue_state.clone();
-        let task_id = queue_task.clone();
+        let task_id = queue_current.lock().unwrap().clone();
         let tui = queue_tui.clone();
         queue_handle.spawn(async move {
             use r_code_core::dto::AgentSendMode;
@@ -477,11 +507,12 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     // resume 后仍准确。上下文窗口数据源暂缺——未知窗口按 codex 形态回退 used）。
     {
         let refresh_state = state.clone();
-        let refresh_task = task_id.clone();
+        let refresh_current = current_task.clone();
         let refresh_tui = tui_state.clone();
         handle.spawn(async move {
             loop {
-                if let Ok(detail) = task_detail(&refresh_state, &refresh_task).await {
+                let task_id = refresh_current.lock().unwrap().clone();
+                if let Ok(detail) = task_detail(&refresh_state, &task_id).await {
                     let stats = r_code_tui::status_bar::accumulate_usage(&detail.runs);
                     if let Ok(mut st) = refresh_tui.lock() {
                         st.set_usage(stats);
@@ -494,7 +525,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     // M3-02：/status 与 /usage 数据装配（模型标签 + 目录缩写 + 用量/成本）。
     let status_state = state.clone();
-    let status_task = task_id.clone();
+    let status_current = current_task.clone();
     let status_tui = tui_state.clone();
     let status_report: Arc<dyn Fn() -> (Vec<String>, String) + Send + Sync> = Arc::new(move || {
         let model_label = status_tui
@@ -515,6 +546,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
                 }
             })
             .unwrap_or_else(|_| "?".to_string());
+        let status_task = status_current.lock().unwrap().clone();
         let Ok(detail) = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(task_detail(&status_state, &status_task))
         }) else {
@@ -531,9 +563,10 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     // G9：/session 会话统计卡装配（TuiState 消息计数 + task_detail 会话维度 +
     // 最近 run 的 JSONL 会话文件路径）。
     let session_card_state = state.clone();
-    let session_card_task = task_id.clone();
+    let session_card_current = current_task.clone();
     let session_card_tui = tui_state.clone();
     let session_report: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || {
+        let session_card_task = session_card_current.lock().unwrap().clone();
         let (rows, model_label) = session_card_tui
             .lock()
             .ok()
@@ -629,15 +662,24 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     let resume_session_state = state.clone();
     let resume_session_tui = tui_state.clone();
+    let resume_session_current = current_task.clone();
     let resume_session: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |task_id| {
         let state = resume_session_state.clone();
         let tui = resume_session_tui.clone();
+        let current = resume_session_current.clone();
         tokio::runtime::Handle::current().spawn(async move {
             match r_code_host::commands::task_detail(&state, &task_id).await {
                 Ok(detail) => {
-                    if let Ok(mut st) = tui.lock() {
-                        st.push_system(format!("已接续会话：{}", detail.task.title));
-                    }
+                    // G8：真正接续——切换当前任务 + JSONL 重建 transcript + 投影刷新
+                    //（此前只提示不切换，发送仍进旧会话）。
+                    adopt_task(
+                        &state,
+                        &tui,
+                        &current,
+                        &task_id,
+                        format!("已接续会话：{}", detail.task.title),
+                    )
+                    .await;
                 }
                 Err(error) => {
                     if let Ok(mut st) = tui.lock() {
@@ -650,15 +692,24 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     let new_session_state = state.clone();
     let new_session_tui = tui_state.clone();
+    let new_session_current = current_task.clone();
     let new_session: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let state = new_session_state.clone();
         let tui = new_session_tui.clone();
+        let current = new_session_current.clone();
         tokio::runtime::Handle::current().spawn(async move {
             match r_code_tui::session_ops::new_session(&state).await {
-                Ok(_) => {
-                    if let Ok(mut st) = tui.lock() {
-                        st.push_system("已新建空白会话".to_string());
-                    }
+                Ok(new_id) => {
+                    let _ = task_set_inference(&state, &new_id, disabled_inference()).await;
+                    // G8：/new 真正切换到新会话（此前只建任务，发送仍进旧会话）。
+                    adopt_task(
+                        &state,
+                        &tui,
+                        &current,
+                        &new_id,
+                        "已新建空白会话".to_string(),
+                    )
+                    .await;
                 }
                 Err(error) => {
                     if let Ok(mut st) = tui.lock() {
@@ -671,11 +722,10 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     let rename_session_state = state.clone();
     let rename_session_tui = tui_state.clone();
-    // compact（G5）与 rename 都要 task_id，先各自留克隆。
-    let compact_task = task_id.clone();
+    let rename_session_current = current_task.clone();
     let rename_session: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |title| {
         let state = rename_session_state.clone();
-        let task_id = task_id.clone();
+        let task_id = rename_session_current.lock().unwrap().clone();
         let tui = rename_session_tui.clone();
         tokio::runtime::Handle::current().spawn(async move {
             match r_code_tui::session_ops::rename_session(&state, &task_id, &title).await {
@@ -733,12 +783,13 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
 
     // G5：/compact [prompt] —— 宿主显式压缩（focus=自定义指令）。
     let compact_state = state.clone();
+    let compact_current = current_task.clone();
     let compact_handle = handle.clone();
     let compact_context: Arc<dyn Fn(Option<String>) -> Result<String, String> + Send + Sync> =
         Arc::new(move |focus| {
             let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
             let state = compact_state.clone();
-            let task_id = compact_task.clone();
+            let task_id = compact_current.lock().unwrap().clone();
             compact_handle.spawn(async move {
                 let focus = focus.as_deref();
                 let outcome = match r_code_host::commands::task_compact_context(
@@ -767,6 +818,275 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
                 .unwrap_or_else(|_| Err("压缩超时（120s）".to_string()))
         });
 
+    // G8：/tree 分支树（同步读取 SQLite 分支元数据）。
+    let tree_state = state.clone();
+    let tree_current = current_task.clone();
+    let open_tree: Arc<dyn Fn() -> Option<r_code_tui::session_tree::BranchTree> + Send + Sync> =
+        Arc::new(move || {
+            let state = tree_state.clone();
+            let task_id = tree_current.lock().unwrap().clone();
+            let branches = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(session_branch_list(&state, &task_id))
+            })
+            .unwrap_or_default();
+            Some(r_code_tui::session_tree::BranchTree::new(&branches))
+        });
+
+    // G8：切换分支（宿主激活目标分支 + JSONL 重放语义；成功即重建 transcript）。
+    let switch_state = state.clone();
+    let switch_current = current_task.clone();
+    let switch_tui = tui_state.clone();
+    let switch_handle = handle.clone();
+    let switch_branch: Arc<dyn Fn(String) -> Result<String, String> + Send + Sync> =
+        Arc::new(move |branch_id| {
+            let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+            let state = switch_state.clone();
+            let task_id = switch_current.lock().unwrap().clone();
+            let tui = switch_tui.clone();
+            switch_handle.spawn(async move {
+                let outcome = match task_switch_branch(&state, &task_id, &branch_id).await {
+                    Ok(branch) => {
+                        let messages = session_messages(&state, &task_id).await.unwrap_or_default();
+                        if let Ok(mut st) = tui.lock() {
+                            st.rebuild_from_session(&messages);
+                        }
+                        Ok(format!(
+                            "已切换到分支 {}",
+                            r_code_tui::session_tree::short_id(&branch.id)
+                        ))
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = tx.send(outcome);
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap_or_else(|_| Err("切换分支超时（30s）".to_string()))
+        });
+
+    // G8：/fork 消息选择器（活跃分支 JSONL 的 user 消息投影）。
+    let fork_state = state.clone();
+    let fork_current = current_task.clone();
+    let open_fork: Arc<dyn Fn() -> Option<r_code_tui::session_tree::ForkPicker> + Send + Sync> =
+        Arc::new(move || {
+            let state = fork_state.clone();
+            let task_id = fork_current.lock().unwrap().clone();
+            let messages = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(session_messages(&state, &task_id))
+            })
+            .unwrap_or_default();
+            let entries = r_code_tui::session_tree::fork_entries(&messages);
+            if entries.is_empty() {
+                None
+            } else {
+                Some(r_code_tui::session_tree::ForkPicker::new(entries))
+            }
+        });
+
+    // G8：分叉重发（agent_resend = 前缀复制 + 新分支激活 + 改写消息重发）。
+    let fork_send_state = state.clone();
+    let fork_send_current = current_task.clone();
+    let fork_send_tui = tui_state.clone();
+    let fork_send_handle = handle.clone();
+    let fork_send: Arc<dyn Fn(String, String) -> Result<String, String> + Send + Sync> =
+        Arc::new(move |message_id, text| {
+            let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+            let state = fork_send_state.clone();
+            let task_id = fork_send_current.lock().unwrap().clone();
+            let tui = fork_send_tui.clone();
+            fork_send_handle.spawn(async move {
+                let outcome = match agent_resend(&state, &task_id, &message_id, &text).await {
+                    Ok(()) => {
+                        // 分叉成功：重建视图（新分支前缀 + 刚重发的消息）；
+                        // run 事件经事件桥继续追加。
+                        let messages = session_messages(&state, &task_id).await.unwrap_or_default();
+                        if let Ok(mut st) = tui.lock() {
+                            st.rebuild_from_session(&messages);
+                        }
+                        Ok(format!(
+                            "已从消息 {} 分叉并重发（原分支保留，/tree 可切回）",
+                            message_id
+                                .rsplit_once(':')
+                                .map(|(_, line)| format!("#{line}"))
+                                .unwrap_or_else(|| message_id.clone())
+                        ))
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = tx.send(outcome);
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap_or_else(|_| Err("分叉超时（30s）".to_string()))
+        });
+
+    // G8：/clone 克隆当前会话（新任务承载同历史；留在当前会话）。
+    let clone_state = state.clone();
+    let clone_current = current_task.clone();
+    let clone_handle = handle.clone();
+    let clone_session: Arc<dyn Fn() -> Result<String, String> + Send + Sync> =
+        Arc::new(move || {
+            let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+            let state = clone_state.clone();
+            let task_id = clone_current.lock().unwrap().clone();
+            clone_handle.spawn(async move {
+                let outcome = task_clone(&state, &task_id)
+                    .await
+                    .map(|clone| format!("已克隆会话：{}（/resume 可打开）", clone.title));
+                let _ = tx.send(outcome);
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap_or_else(|_| Err("克隆超时（30s）".to_string()))
+        });
+
+    // G10：/login 选择器快照（Codex CLI 可用性 + 登录态；宿主全局探测，无 state）。
+    let open_login: Arc<dyn Fn() -> Option<r_code_tui::login_flow::LoginPicker> + Send + Sync> =
+        Arc::new(move || {
+            let status = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(codex_integration_status())
+            })
+            .ok()?;
+            let available = status
+                .get("cli_available")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let authenticated = status
+                .get("authenticated")
+                .and_then(|value| value.as_bool());
+            let method = status
+                .get("auth_method")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            Some(r_code_tui::login_flow::LoginPicker::new(
+                available,
+                authenticated,
+                method,
+            ))
+        });
+
+    // G10：启动 Codex 登录（宿主委托：新开系统终端窗口跑 OAuth，不读输出）。
+    let login_start_tui = tui_state.clone();
+    let login_start_handle = handle.clone();
+    let start_login: r_code_tui::app::StartLoginOp = Arc::new(move |mode| {
+        let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        let mode = mode.to_string();
+        let tui = login_start_tui.clone();
+        login_start_handle.spawn(async move {
+            let started = if mode == "device" {
+                codex_start_device_login().await
+            } else {
+                codex_start_login().await
+            };
+            let outcome = started.map(|()| {
+                "已在新终端窗口启动 Codex 登录——完成浏览器/设备码步骤后，这里会自动确认".to_string()
+            });
+            // 后台轮询确认（5s 间隔，最长 5 分钟；只读状态，不碰凭据）。
+            if outcome.is_ok() {
+                let tui = tui.clone();
+                tokio::spawn(async move {
+                    for _ in 0..60 {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        if let Ok(status) = codex_integration_status().await {
+                            if status
+                                .get("authenticated")
+                                .and_then(|value| value.as_bool())
+                                == Some(true)
+                            {
+                                if let Ok(mut st) = tui.lock() {
+                                    st.push_system("Codex 登录完成 ✓（/model 可切换使用）");
+                                }
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+            let _ = tx.send(outcome);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap_or_else(|_| Err("启动登录超时（60s）".to_string()))
+    });
+
+    // G10：刷新登录状态。
+    let refresh_login: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || {
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(codex_integration_status())
+        }) {
+            Ok(status) => {
+                let available = status
+                    .get("cli_available")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                let line = if !available {
+                    "未检测到 Codex CLI（ChatGPT 账号登录需要它；桌面设置页可安装）".to_string()
+                } else {
+                    match status
+                        .get("authenticated")
+                        .and_then(|value| value.as_bool())
+                    {
+                        Some(true) => format!(
+                            "Codex 已登录（{}）",
+                            status
+                                .get("auth_method")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("方式未知")
+                        ),
+                        Some(false) => "Codex 未登录（/login 走浏览器或设备码登录）".to_string(),
+                        None => "Codex 登录状态未知（稍后重试）".to_string(),
+                    }
+                };
+                vec![
+                    line,
+                    "其余模型服务为 API key 鉴权：/setup（Tab 可切环境变量模式）".to_string(),
+                ]
+            }
+            Err(error) => vec![format!("登录状态查询失败：{error}")],
+        }
+    });
+
+    // G6：带图片附件发送（宿主附件管线：魔数校验 / OCR 转换 / 排队持久化）。
+    let attach_state = state.clone();
+    let attach_current = current_task.clone();
+    let attach_tui = tui_state.clone();
+    let attach_config = state.config_dir.clone();
+    let attach_handle = handle.clone();
+    let send_attachments: Arc<
+        dyn Fn(String, Vec<r_code_tui::image_attach::PendingImage>, bool) + Send + Sync,
+    > = Arc::new(move |text, images, queue| {
+        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+        use base64::Engine as _;
+        use r_code_core::dto::AgentSendMode;
+        let attachments: Vec<AttachmentInput> = images
+            .iter()
+            .map(|pending| AttachmentInput {
+                name: pending.name.clone(),
+                media_type: pending.media_type.to_string(),
+                data: BASE64_STANDARD.encode(&pending.data),
+                native_ocr: false,
+            })
+            .collect();
+        let state = attach_state.clone();
+        let task_id = attach_current.lock().unwrap().clone();
+        let tui = attach_tui.clone();
+        let config_dir = attach_config.clone();
+        attach_handle.spawn(async move {
+            let mode = if queue {
+                AgentSendMode::Queue
+            } else {
+                AgentSendMode::Auto
+            };
+            if let Err(error) =
+                agent_send_with_mode_and_attachments(&state, &task_id, &text, mode, &attachments)
+                    .await
+            {
+                if let Ok(mut st) = tui.lock() {
+                    st.push_system(format!(
+                        "发送失败：{}",
+                        r_code_tui::provider_error_guidance(&error, &config_dir)
+                    ));
+                }
+            }
+        });
+    });
+
     let controller = RunController {
         send,
         abort,
@@ -786,6 +1106,15 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         config_dir: state.config_dir.clone(),
         persist_default_model,
         compact_context,
+        open_tree,
+        switch_branch,
+        open_fork,
+        fork_send,
+        clone_session,
+        open_login,
+        start_login,
+        refresh_login,
+        send_attachments,
     };
 
     // M5-02：inline 模式——只进 raw + bracketed paste，不进备用屏
@@ -934,6 +1263,15 @@ async fn main() {
                     println!("  [tool] {name}{}", if *is_error { " (失败)" } else { "" })
                 }
                 r_code_tui::TranscriptRow::System { text } => println!("· {text}"),
+                r_code_tui::TranscriptRow::Image {
+                    name,
+                    width,
+                    height,
+                    ..
+                } => println!(
+                    "🖼 {}",
+                    r_code_tui::image_attach::placeholder_line(name, *width, *height)
+                ),
                 r_code_tui::TranscriptRow::Shell(shell) => match shell {
                     r_code_tui::bang_command::ShellRow::Prompt { command } => {
                         println!("$ {command}")

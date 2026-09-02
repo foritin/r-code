@@ -29,9 +29,12 @@ agent-config = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 chrono = { workspace = true }
+# G6 图片附件：base64 载荷 + 解码/缩放/半块预览（image 已随 tauri 编译，零新增包）。
+base64 = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Globalization", "Win32_System_Console"] }
+windows-sys = { version = "0.59", features = ["Win32_Globalization", "Win32_System_Console", "Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
