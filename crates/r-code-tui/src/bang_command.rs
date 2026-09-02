@@ -37,8 +37,12 @@ pub fn prompt_semantic(input: &str) -> PromptSemantic {
 }
 
 /// shell 直执行的 transcript 行（与 ToolCard 不同类——渲染与检索都区分）。
+///
+/// serde tag 用 `shell_kind` 而非 `kind`：本枚举嵌套在 `TranscriptRow::Shell`
+/// （内部 tag 也是 `kind`）里，同名 tag 会序列化出两个 `kind` 键、反序列化
+/// 直接报 duplicate field——JSONL 导出与 `--mode json` 的往返依赖此命名。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "shell_kind", rename_all = "snake_case")]
 pub enum ShellRow {
     /// OSC 133 语义三段：prompt（命令行本身）/ command / output。
     Prompt { command: String },

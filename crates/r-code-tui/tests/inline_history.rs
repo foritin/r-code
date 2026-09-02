@@ -73,7 +73,11 @@ impl Vt {
     }
 
     fn line_text(&self, r: usize) -> String {
-        self.screen[r].iter().collect::<String>().trim_end().to_string()
+        self.screen[r]
+            .iter()
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     }
 
     /// 喂字节流（增量解析；未完成的 CSI 尾巴缓存到下一批）。
@@ -226,7 +230,10 @@ fn spawn_tui(record_path: &str, rows: u16) -> Option<Session> {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if tx.send(String::from_utf8_lossy(&buf[..n]).to_string()).is_err() {
+                    if tx
+                        .send(String::from_utf8_lossy(&buf[..n]).to_string())
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -274,9 +281,7 @@ impl Session {
     fn drain(&mut self, dur: Duration) {
         let deadline = Instant::now() + dur;
         while Instant::now() < deadline {
-            let _ = self
-                .output
-                .recv_timeout(Duration::from_millis(50));
+            let _ = self.output.recv_timeout(Duration::from_millis(50));
         }
     }
 }
@@ -305,7 +310,10 @@ fn typing_does_not_rewrite_history_above() {
         eprintln!("pty 不可用，跳过");
         return;
     };
-    assert!(session.wait_for("尚未配置", Duration::from_secs(20)), "启动引导出现");
+    assert!(
+        session.wait_for("尚未配置", Duration::from_secs(20)),
+        "启动引导出现"
+    );
     session.drain(Duration::from_millis(300));
 
     for ch in "hello world".chars() {
@@ -351,7 +359,10 @@ fn startup_does_not_bulk_scroll() {
         eprintln!("pty 不可用，跳过");
         return;
     };
-    assert!(session.wait_for("尚未配置", Duration::from_secs(20)), "启动引导出现");
+    assert!(
+        session.wait_for("尚未配置", Duration::from_secs(20)),
+        "启动引导出现"
+    );
     session.drain(Duration::from_millis(500));
     session.send("\x03");
     session.send("\x03");
@@ -381,7 +392,10 @@ fn history_survives_in_scrollback() {
         eprintln!("pty 不可用，跳过");
         return;
     };
-    assert!(session.wait_for("尚未配置", Duration::from_secs(20)), "启动引导出现");
+    assert!(
+        session.wait_for("尚未配置", Duration::from_secs(20)),
+        "启动引导出现"
+    );
     for i in 0..8 {
         let needle = format!("msg-{i:02}");
         session.send(&format!("{needle}\r"));

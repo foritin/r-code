@@ -36,16 +36,16 @@
 | G4 ✅ | auth 检查 CLI | `r-code-tui auth check [--data-dir]`：逐 provider 打印认证状态，默认服务已认证 exit 0 否则 exit 1（口径与 /model 选择器同源 build_snapshot） |
 | G5 ✅ | /compact [prompt] | 接线宿主已有 `task_compact_context(state, task, focus)`——focus 即自定义压缩指令；结果行进 transcript（N→M 条消息/低于阈值/错误）；`compaction_supported()` 翻 true |
 
-### P1 — 高价值功能面
+### P1 — 高价值功能面（✅ 2026-09-02 M8 已落地 G7/G9/G11；G6/G8/G10 专项待立项）
 
 | # | 缺口 | pi 证据 | 工作量估 |
 |---|---|---|---|
-| G6 | **图片支持**：剪贴板粘贴图片 + `@file` 图片附件 + kitty/iterm2 内联渲染 | `terminal-image.ts`、`cli/file-processor.ts` | 大 |
-| G7 | **/export /import /copy /share**（会话 HTML/JSONL 导出） | slash-commands.ts | 中（JSONL 已有，序列化+写盘） |
-| G8 | **会话树 /tree + /fork /clone**（分支跳转、标签） | interactive-mode.ts | 大 |
-| G9 | **/session 统计卡**（文件/ID/消息数/token/成本） | slash-commands.ts | 小（/status 部分覆盖，补会话维度） |
-| G10 | **OAuth 登录流**（pi /login 账号订阅路线；设备码/浏览器回调） | `oauth-selector.ts`、`login-dialog.ts` | 大（依赖 provider 侧 OAuth 支持） |
-| G11 | **环境变量 auth 解析**（pi：auth.json → 环境变量回退；我们 config `$ENV:VAR` 已支持引用，但 /setup 不提供 env-var-only 模式） | `auth/helpers.ts` `envApiKeyAuth()` | 小 |
+| G6 | **图片支持**：剪贴板粘贴图片 + `@file` 图片附件 + kitty/iterm2 内联渲染 | `terminal-image.ts`、`cli/file-processor.ts` | 大（专项） |
+| G7 ✅ | **/export /copy**（M8）：`/export [路径]` 按扩展名导出 `.md`（默认）/`.html`（单文件自包含）/`.jsonl`（TranscriptRow 原生序列化）；`/copy` 复制最后一条回复（OSC 52 终端剪贴板，零依赖、SSH 生效、64KiB 上限）；附带修复 ShellRow serde tag 与 TranscriptRow 撞名（`kind`→`shell_kind`）导致 JSONL 无法反序列化的缺陷。pi 的 /import /share 未做（导入走既有 resume 链路即可，share 无服务端载体） | `slash-commands.ts` | 已落地 |
+| G8 | **会话树 /tree + /fork /clone**（分支跳转、标签） | `interactive-mode.ts` | 大（专项） |
+| G9 ✅ | **/session 统计卡**（M8）：与 /status 同款圆角框——id（截断）/标题/模型/创建时间/消息计数（user·assistant·tool，System/Shell 不计）/runs/token/成本/JSONL 会话文件路径（最近 run 的 external_session_id 解析；未发送过显示"未落盘"） | `slash-commands.ts` | 已落地 |
+| G10 | **OAuth 登录流**（pi /login 账号订阅路线；设备码/浏览器回调） | `oauth-selector.ts`、`login-dialog.ts` | 大（专项，依赖 provider 侧 OAuth 支持） |
+| G11 ✅ | **环境变量 auth 模式**（M8）：/setup key 步 **Tab 切换环境变量鉴权**——空密钥落盘（不触碰平台凭据后端），加载链由宿主既有 `settings::apply_env` 回填（厂商别名 `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`DEEPSEEK_API_KEY` + profile 作用域 `R_CODE_PROVIDER_<ID>_API_KEY`）；渲染展示变量清单与当前设置态；pi `envApiKeyAuth()` 同款语义 | `auth/helpers.ts` `envApiKeyAuth()` | 已落地 |
 
 ### P2 — 外围/生态（远期，先记录不做）
 
@@ -55,7 +55,7 @@
 ## 3. 建议节奏
 
 - ~~**M7**：P0 全部（G1-G5）~~ → **已完成（2026-09-03）**：ctrl+l / ctrl+s 双语义 / ↑↓ 边界导航 / auth check / /compact [prompt]，全量测试+clippy+门禁 78/78 绿。
-- **M8（候选）**：G7 + G9 + G11（导出/统计/env-auth，中件）。
+- ~~**M8**：G7 + G9 + G11~~ → **已完成（2026-09-02）**：/export（md/html/jsonl）/copy（OSC 52）/session 统计卡/setup 环境变量鉴权模式；测试 104 单测 + 11 PTY e2e 全绿，clippy -D warnings 零告警。
 - **专项**：G6 图片、G8 会话树、G10 OAuth 各自单独立项（大件，先出 PoC）。
 
 ## 4. 与 pi 的架构差异备忘（不是缺口，是选型差异）

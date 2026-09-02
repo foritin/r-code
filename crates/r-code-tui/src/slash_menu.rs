@@ -34,6 +34,10 @@ pub const COMMANDS: &[SlashCommand] = &[
         desc: "累计用量与成本",
     },
     SlashCommand {
+        name: "/session",
+        desc: "会话统计卡（ID/消息数/token/成本/文件）",
+    },
+    SlashCommand {
         name: "/resume",
         desc: "恢复历史会话",
     },
@@ -44,6 +48,14 @@ pub const COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/rename",
         desc: "重命名会话（/rename <名称>）",
+    },
+    SlashCommand {
+        name: "/export",
+        desc: "导出会话（/export [路径]，.md/.html/.jsonl）",
+    },
+    SlashCommand {
+        name: "/copy",
+        desc: "复制最后一条回复到剪贴板",
     },
     SlashCommand {
         name: "/compact",
@@ -227,7 +239,7 @@ mod tests {
     use super::*;
 
     /// M4-03.A1：注册表 = 冻结的已实现命令集；计划中命令不在其中。
-    /// 2026-09-03 增补 /setup（症状3：无配置时 /model 死端 → 引导式配置）。
+    /// 2026-09-03 增补 /setup；2026-09-02 M8 增补 /session /export /copy。
     #[test]
     fn registry_matches_frozen_implemented_set() {
         let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
@@ -239,15 +251,18 @@ mod tests {
                 "/thinking",
                 "/status",
                 "/usage",
+                "/session",
                 "/resume",
                 "/new",
                 "/rename",
+                "/export",
+                "/copy",
                 "/compact",
                 "/clear",
                 "/help",
                 "/quit"
             ],
-            "已实现命令集（M6 收口 + /setup 引导配置）"
+            "已实现命令集（M6 收口 + /setup + M8 G7/G9）"
         );
         for command in COMMANDS {
             assert!(

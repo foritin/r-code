@@ -528,6 +528,65 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         (card, summary)
     });
 
+    // G9：/session 会话统计卡装配（TuiState 消息计数 + task_detail 会话维度 +
+    // 最近 run 的 JSONL 会话文件路径）。
+    let session_card_state = state.clone();
+    let session_card_task = task_id.clone();
+    let session_card_tui = tui_state.clone();
+    let session_report: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || {
+        let (rows, model_label) = session_card_tui
+            .lock()
+            .ok()
+            .and_then(|st| {
+                st.model_selection().map(|(provider, model)| {
+                    (
+                        st.rows().to_vec(),
+                        r_code_tui::model_selector::model_label(provider, model),
+                    )
+                })
+            })
+            .unwrap_or_default();
+        let model_label = if model_label.is_empty() {
+            "未选择".to_string()
+        } else {
+            model_label
+        };
+        let Ok(detail) = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(task_detail(&session_card_state, &session_card_task))
+        }) else {
+            return Vec::new();
+        };
+        let stats = r_code_tui::status_bar::accumulate_usage(&detail.runs);
+        let cost = r_code_tui::status_bar::accumulate_cost(&detail.runs);
+        let session_file = detail.runs.iter().rev().find_map(|run| {
+            run.external_session_id.as_deref().map(|session_id| {
+                session_card_state
+                    .sessions_dir
+                    .join(format!("{session_id}.jsonl"))
+                    .display()
+                    .to_string()
+            })
+        });
+        let input = r_code_tui::status_bar::SessionCardInput {
+            task_id: detail.task.id.clone(),
+            title: detail.task.title.clone(),
+            model_label,
+            created_at: detail
+                .task
+                .created_at
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string(),
+            messages: r_code_tui::status_bar::count_messages(&rows),
+            runs: detail.runs.len(),
+            stats,
+            cost,
+            session_file,
+        };
+        r_code_tui::status_bar::session_card_lines(&input)
+    });
+
     // M4-04：! 直通（宿主 LocalShellBackend 五级 shell 链；cwd = 当前目录）。
     let bang_tui = tui_state.clone();
     let run_bang: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |command| {
@@ -638,40 +697,39 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
     // 的写回口径：load → 改 default_provider + 该服务默认模型 → save_global）。
     let persist_state = state.clone();
     let persist_tui = tui_state.clone();
-    let persist_default_model: Arc<
-        dyn Fn(r_code_tui::model_selector::ModelEntry) + Send + Sync,
-    > = Arc::new(move |entry| {
-        let settings =
-            r_code_host::settings::SettingsService::new(persist_state.config_dir.clone());
-        let mut config = match settings.load_global_unvalidated() {
-            Ok(config) => config,
-            Err(error) => {
-                if let Ok(mut st) = persist_tui.lock() {
-                    st.push_system(format!("持久化默认模型失败：{error}"));
+    let persist_default_model: Arc<dyn Fn(r_code_tui::model_selector::ModelEntry) + Send + Sync> =
+        Arc::new(move |entry| {
+            let settings =
+                r_code_host::settings::SettingsService::new(persist_state.config_dir.clone());
+            let mut config = match settings.load_global_unvalidated() {
+                Ok(config) => config,
+                Err(error) => {
+                    if let Ok(mut st) = persist_tui.lock() {
+                        st.push_system(format!("持久化默认模型失败：{error}"));
+                    }
+                    return;
                 }
-                return;
+            };
+            config.default_provider = entry.provider.clone();
+            if let Some(provider) = config.providers.get_mut(&entry.provider) {
+                provider.model = entry.model.clone();
             }
-        };
-        config.default_provider = entry.provider.clone();
-        if let Some(provider) = config.providers.get_mut(&entry.provider) {
-            provider.model = entry.model.clone();
-        }
-        match settings.save_global(&config) {
-            Ok(()) => {
-                if let Ok(mut st) = persist_tui.lock() {
-                    st.push_system(format!(
-                        "已设为全局默认：({}) {}（新会话沿用）",
-                        entry.provider, entry.model
-                    ));
+            match settings.save_global(&config) {
+                Ok(()) => {
+                    if let Ok(mut st) = persist_tui.lock() {
+                        st.push_system(format!(
+                            "已设为全局默认：({}) {}（新会话沿用）",
+                            entry.provider, entry.model
+                        ));
+                    }
+                }
+                Err(error) => {
+                    if let Ok(mut st) = persist_tui.lock() {
+                        st.push_system(format!("持久化默认模型失败：{error}"));
+                    }
                 }
             }
-            Err(error) => {
-                if let Ok(mut st) = persist_tui.lock() {
-                    st.push_system(format!("持久化默认模型失败：{error}"));
-                }
-            }
-        }
-    });
+        });
 
     // G5：/compact [prompt] —— 宿主显式压缩（focus=自定义指令）。
     let compact_state = state.clone();
@@ -719,6 +777,7 @@ async fn run_interactive_tui(state: Arc<CommandState>, tui_state: Arc<Mutex<TuiS
         queue_send,
         decide_approval,
         status_report,
+        session_report,
         run_bang,
         open_resume,
         resume_session,

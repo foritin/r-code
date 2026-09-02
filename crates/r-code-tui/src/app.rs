@@ -44,6 +44,8 @@ pub struct RunController {
     pub decide_approval: Arc<dyn Fn(crate::approval::ApprovalDecision) + Send + Sync>,
     /// /status 与 /usage 的数据装配（卡行 + 汇总行）。
     pub status_report: Arc<dyn Fn() -> (Vec<String>, String) + Send + Sync>,
+    /// /session 会话统计卡装配（G9；ID/消息数/token/成本/会话文件行）。
+    pub session_report: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// !command 直通执行（宿主 shell 链；输出进 Shell 行）。
     pub run_bang: Arc<dyn Fn(String) + Send + Sync>,
     /// 打开 /resume 列表（无会话时 None）。
@@ -75,6 +77,7 @@ impl Default for RunController {
             queue_send: Arc::new(|_| {}),
             decide_approval: Arc::new(|_| {}),
             status_report: Arc::new(|| (Vec::new(), String::new())),
+            session_report: Arc::new(Vec::new),
             run_bang: Arc::new(|_| {}),
             open_resume: Arc::new(|| None),
             resume_session: Arc::new(|_| {}),
@@ -257,9 +260,7 @@ pub async fn run_interactive(
                         let total = state.lock().unwrap().rows().len();
                         transcript_view.scroll_up(total);
                     }
-                    KeyAction::HistoryNext | KeyAction::CursorDown => {
-                        transcript_view.scroll_down()
-                    }
+                    KeyAction::HistoryNext | KeyAction::CursorDown => transcript_view.scroll_down(),
                     KeyAction::ScrollUp => {
                         let total = state.lock().unwrap().rows().len();
                         transcript_view.page_up(total, 20);
@@ -353,6 +354,8 @@ pub async fn run_interactive(
                             active.move_down()
                         }
                         KeyAction::Backspace => active.backspace(),
+                        // G11：key 步 Tab 切换环境变量鉴权模式（PickProvider 态无效）。
+                        KeyAction::ToggleSearch => active.toggle_env_mode(),
                         KeyAction::Insert(ch) => active.input_char(ch),
                         KeyAction::Send => {
                             if let Some(outcome) = active.advance() {
@@ -395,6 +398,47 @@ pub async fn run_interactive(
                                             }
                                         }
                                     }
+                                    // G11：环境变量鉴权——空密钥落盘，不碰凭据后端。
+                                    crate::setup_flow::SubmitOutcome::AppliedEnv {
+                                        provider,
+                                        model,
+                                        env_vars,
+                                    } => {
+                                        let preset = crate::setup_flow::setup_presets()
+                                            .into_iter()
+                                            .find(|preset| preset.id == provider);
+                                        let applied = preset.map(|preset| {
+                                            crate::setup_flow::apply_env_mode(
+                                                &controller.config_dir,
+                                                preset,
+                                            )
+                                        });
+                                        match applied.unwrap_or_else(|| {
+                                            Err("预设缺失，配置未保存".to_string())
+                                        }) {
+                                            Ok(()) => {
+                                                let any_set = env_vars.iter().any(|var| {
+                                                    std::env::var(var)
+                                                        .map(|value| !value.trim().is_empty())
+                                                        .unwrap_or(false)
+                                                });
+                                                status = Some(if any_set {
+                                                    format!(
+                                                        "已配置并设为默认（环境变量鉴权）：({provider}) {model}——/model 可切换"
+                                                    )
+                                                } else {
+                                                    format!(
+                                                        "已设为默认（环境变量鉴权）：({provider}) {model}——但 {} 未设置，首次发送会失败",
+                                                        env_vars.join(" / ")
+                                                    )
+                                                });
+                                                close = true;
+                                            }
+                                            Err(error) => {
+                                                status = Some(error);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -427,6 +471,9 @@ pub async fn run_interactive(
                     KeyAction::Send if input.text().trim() == "/thinking" => {}
                     KeyAction::Send if input.text().trim() == "/status" => {}
                     KeyAction::Send if input.text().trim() == "/usage" => {}
+                    KeyAction::Send if input.text().trim() == "/session" => {}
+                    KeyAction::Send if input.text().trim() == "/export" => {}
+                    KeyAction::Send if input.text().trim() == "/copy" => {}
                     KeyAction::Send if input.text().trim() == "/clear" => {}
                     KeyAction::Send if input.text().trim() == "/help" => {}
                     KeyAction::Send if input.text().trim() == "/quit" => {}
@@ -495,8 +542,7 @@ pub async fn run_interactive(
                     overlay = (controller.open_model_picker)().map(Overlay::Model);
                     if overlay.is_none() {
                         overlay = Some(Overlay::Setup(crate::setup_flow::SetupFlow::new()));
-                        status =
-                            Some("没有可用的模型服务——已进入配置向导（Esc 取消）".to_string());
+                        status = Some("没有可用的模型服务——已进入配置向导（Esc 取消）".to_string());
                     }
                 }
                 KeyAction::ToggleTranscript => transcript_view.toggle(),
@@ -561,6 +607,71 @@ pub async fn run_interactive(
                             }
                         } else {
                             st.push_system(summary);
+                        }
+                    } else if trimmed == "/session" {
+                        // G9：会话统计卡（ID/标题/消息数/token/成本/会话文件）。
+                        let card = (controller.session_report)();
+                        let mut st = state.lock().unwrap();
+                        if card.is_empty() {
+                            st.push_system("会话状态不可用".to_string());
+                        } else {
+                            for line in card {
+                                st.push_system(line);
+                            }
+                        }
+                    } else if trimmed == "/export" || trimmed.starts_with("/export ") {
+                        // G7：导出当前 transcript（.md 默认 / .html / .jsonl）。
+                        let arg = trimmed
+                            .strip_prefix("/export")
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty());
+                        let now = chrono::Local::now();
+                        let (rows, model_label) = {
+                            let st = state.lock().unwrap();
+                            (
+                                st.rows().to_vec(),
+                                st.model_selection().map(|(provider, model)| {
+                                    crate::model_selector::model_label(provider, model)
+                                }),
+                            )
+                        };
+                        let meta = crate::export::ExportMeta {
+                            model_label: model_label.unwrap_or_default(),
+                            exported_at: now.format("%Y-%m-%d %H:%M:%S").to_string(),
+                        };
+                        let path = crate::export::resolve_path(
+                            arg,
+                            &now.format("%Y%m%d-%H%M%S").to_string(),
+                        );
+                        match crate::export::write_export(&path, &rows, &meta) {
+                            Ok(written) => {
+                                state.lock().unwrap().push_system(format!(
+                                    "已导出会话（{} 行）→ {written}",
+                                    rows.len()
+                                ));
+                            }
+                            Err(error) => status = Some(error),
+                        }
+                    } else if trimmed == "/copy" {
+                        // G7：复制最后一条 assistant 回复（OSC 52 终端剪贴板）。
+                        let last = {
+                            let st = state.lock().unwrap();
+                            crate::clipboard::last_assistant_text(st.rows()).map(str::to_string)
+                        };
+                        match last {
+                            Some(text) => match crate::clipboard::copy_check(&text) {
+                                Ok(()) => {
+                                    let _ = stdout.write_all(
+                                        crate::clipboard::osc52_sequence(&text).as_bytes(),
+                                    );
+                                    let _ = stdout.flush();
+                                    state.lock().unwrap().push_system(
+                                        "已复制最后一条回复（经终端剪贴板）".to_string(),
+                                    );
+                                }
+                                Err(error) => status = Some(error),
+                            },
+                            None => status = Some("没有可复制的回复".to_string()),
                         }
                     } else if trimmed == "/clear" {
                         state.lock().unwrap().clear_transcript();

@@ -188,12 +188,111 @@ pub fn status_card_lines(
         ),
         format!("{}{}", label("Context window:"), context),
     ];
+    rounded_card(rows, 56)
+}
+
+/// /session 统计卡输入（pi 对齐 G9：会话维度——ID/标题/消息数/token/成本/
+/// 会话文件）。由壳层从 TuiState（消息计数）+ task_detail（task/runs）装配。
+#[derive(Debug, Clone, Default)]
+pub struct SessionCardInput {
+    /// 任务（会话）ID，原样展示。
+    pub task_id: String,
+    /// 会话标题。
+    pub title: String,
+    /// `(provider) model` 形态标签。
+    pub model_label: String,
+    /// 创建时间（本地时区人类可读，壳层格式化）。
+    pub created_at: String,
+    /// 消息计数（user/assistant/tool）。
+    pub messages: SessionMessageCounts,
+    /// run 次数。
+    pub runs: usize,
+    /// 累计用量。
+    pub stats: UsageStats,
+    /// 累计成本（无定价数据 None）。
+    pub cost: Option<f64>,
+    /// JSONL 会话文件绝对路径（新会话首次发送前为 None）。
+    pub session_file: Option<String>,
+}
+
+/// transcript 行型计数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionMessageCounts {
+    pub user: usize,
+    pub assistant: usize,
+    pub tool: usize,
+}
+
+/// 从 transcript 行统计消息计数（System/Shell 不计——非会话消息）。
+pub fn count_messages(rows: &[crate::TranscriptRow]) -> SessionMessageCounts {
+    let mut counts = SessionMessageCounts::default();
+    for row in rows {
+        match row {
+            crate::TranscriptRow::User { .. } => counts.user += 1,
+            crate::TranscriptRow::Assistant { .. } => counts.assistant += 1,
+            crate::TranscriptRow::ToolCard { .. } => counts.tool += 1,
+            _ => {}
+        }
+    }
+    counts
+}
+
+/// /session 会话统计卡（与 /status 同款圆角框形态）。
+pub fn session_card_lines(input: &SessionCardInput) -> Vec<String> {
+    let label = |name: &str| format!("{name:<18}");
+    let short_id = if input.task_id.chars().count() > 8 {
+        let prefix: String = input.task_id.chars().take(8).collect();
+        format!("{prefix}…")
+    } else {
+        input.task_id.clone()
+    };
+    let cost = match input.cost {
+        Some(cost) => format!("${cost:.4}"),
+        None => "无定价数据".to_string(),
+    };
+    let rows = vec![
+        " >_ R-Code CLI 会话".to_string(),
+        String::new(),
+        format!("{}{}", label("id:"), short_id),
+        format!("{}{}", label("title:"), input.title),
+        format!("{}{}", label("model:"), input.model_label),
+        format!("{}{}", label("created:"), input.created_at),
+        format!(
+            "{}{} user · {} assistant · {} tool（{} runs）",
+            label("messages:"),
+            input.messages.user,
+            input.messages.assistant,
+            input.messages.tool,
+            input.runs,
+        ),
+        format!(
+            "{}↑{} ↓{} · {} total",
+            label("tokens:"),
+            format_compact(input.stats.input_tokens + input.stats.cache_read_tokens),
+            format_compact(input.stats.output_tokens),
+            format_compact(input.stats.total_tokens()),
+        ),
+        format!("{}{}", label("cost:"), cost),
+        format!(
+            "{}{}",
+            label("session file:"),
+            input
+                .session_file
+                .clone()
+                .unwrap_or_else(|| "未落盘".to_string()),
+        ),
+    ];
+    rounded_card(rows, 100)
+}
+
+/// 圆角框渲染（内宽自适应，钳在 `max_width`；标签 padEnd 对齐由调用方保证）。
+fn rounded_card(rows: Vec<String>, max_width: usize) -> Vec<String> {
     let width = rows
         .iter()
         .map(|row| row.chars().count())
         .max()
         .unwrap_or(0)
-        .min(56);
+        .min(max_width);
     let mut lines = vec![format!("╭{}╮", "─".repeat(width + 2))];
     for row in rows {
         let pad = width.saturating_sub(row.chars().count());
@@ -361,5 +460,106 @@ mod tests {
         assert_eq!(compaction_marker(false), "");
         let (text, _) = footer_stats_line(&UsageStats::default(), Some(1000), true);
         assert!(text.contains("(auto)"), "auto 压缩标记随行：{text}");
+    }
+
+    /// G9.A1：消息计数（System/Shell 不计为消息）。
+    #[test]
+    fn count_messages_skips_non_message_rows() {
+        let rows = vec![
+            crate::TranscriptRow::User {
+                text: "q".to_string(),
+            },
+            crate::TranscriptRow::Assistant {
+                text: "a".to_string(),
+                complete: true,
+            },
+            crate::TranscriptRow::Assistant {
+                text: "a2".to_string(),
+                complete: false,
+            },
+            crate::TranscriptRow::ToolCard {
+                name: "bash".to_string(),
+                summary: "ls".to_string(),
+                is_error: false,
+            },
+            crate::TranscriptRow::System {
+                text: "s".to_string(),
+            },
+            crate::TranscriptRow::Shell(crate::bang_command::ShellRow::Prompt {
+                command: "ls".to_string(),
+            }),
+        ];
+        assert_eq!(
+            count_messages(&rows),
+            SessionMessageCounts {
+                user: 1,
+                assistant: 2,
+                tool: 1,
+            }
+        );
+    }
+
+    /// G9.A2：/session 卡形态（id 截断、消息/成本/会话文件行、无定价回退）。
+    #[test]
+    fn session_card_matches_pi_session_shape() {
+        let input = SessionCardInput {
+            task_id: "01234567-89ab-cdef-0123-456789abcdef".to_string(),
+            title: "调试 inline 渲染".to_string(),
+            model_label: "(openai) gpt-5.6".to_string(),
+            created_at: "2026-09-02 15:30".to_string(),
+            messages: SessionMessageCounts {
+                user: 3,
+                assistant: 2,
+                tool: 5,
+            },
+            runs: 2,
+            stats: UsageStats {
+                input_tokens: 1000,
+                output_tokens: 900,
+                ..UsageStats::default()
+            },
+            cost: Some(0.4123),
+            session_file: Some("C:/data/sessions/abc.jsonl".to_string()),
+        };
+        let lines = session_card_lines(&input);
+        assert!(lines.first().is_some_and(|line| line.starts_with("╭")));
+        assert!(lines.last().is_some_and(|line| line.starts_with("╰")));
+        let body = lines.join("\n");
+        assert!(body.contains(" >_ R-Code CLI 会话"), "头行：{body}");
+        assert!(
+            body.contains("id:               01234567…"),
+            "长 id 截断：{body}"
+        );
+        assert!(
+            body.contains("title:            调试 inline 渲染"),
+            "{body}"
+        );
+        assert!(
+            body.contains("messages:         3 user · 2 assistant · 5 tool（2 runs）"),
+            "{body}"
+        );
+        assert!(
+            body.contains("tokens:           ↑1.0K ↓900 · 1.9K total"),
+            "{body}"
+        );
+        assert!(body.contains("cost:             $0.4123"), "{body}");
+        assert!(
+            body.contains("session file:     C:/data/sessions/abc.jsonl"),
+            "{body}"
+        );
+        // 无定价/未落盘回退。
+        let fresh = SessionCardInput {
+            task_id: "short".to_string(),
+            cost: None,
+            session_file: None,
+            ..input
+        };
+        let body = session_card_lines(&fresh).join("\n");
+        assert!(body.contains("无定价数据"), "{body}");
+        assert!(body.contains("未落盘"), "新会话首次发送前无 JSONL：{body}");
+        assert!(
+            body.contains("id:               short"),
+            "短 id 不截断：{body}"
+        );
     }
 }
