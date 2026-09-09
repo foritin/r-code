@@ -316,6 +316,11 @@ export function permissionRiskLabel(risk: RiskLevel): string {
   }
 }
 
+/** 与 PermissionEngine::RiskLevel::can_persist_standing 保持一致。 */
+export function canPersistPermissionGrant(risk: RiskLevel): boolean {
+  return risk === "R0" || risk === "R1" || risk === "R2";
+}
+
 /** 任务状态 → 灯变体。 */
 export function lampFor(state: string, needsYou: boolean): "run" | "attn" | "done" | "fail" | "" {
   if (needsYou) return "attn";

@@ -4,6 +4,7 @@
  * Changes 以本轮记录为可操作范围，并合并当前项目的 Git 未提交变更作为只读上下文。
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -75,6 +76,7 @@ import { isTypingTarget, keyLabel, useGlobalKeys, useSceneKeys } from "../../lib
 import {
   clockSeconds,
   clockTime,
+  canPersistPermissionGrant,
   displayPath,
   elapsedMinutes,
   elapsedSince,
@@ -252,6 +254,7 @@ export function Canvas({
   onAbortSubagent,
   onTaskChanged,
 }: Props) {
+  const { t } = useTranslation();
   const tab = useAppStore((s) => s.canvasTab);
   const setTab = useAppStore((s) => s.setCanvasTab);
   const closeTab = useAppStore((s) => s.closeWorkbenchTab);
@@ -328,20 +331,28 @@ export function Canvas({
   if (mode === "hidden") return null;
 
   if (mode === "collapsed") {
+    const collapsedStatus = detail
+      ? taskStateLabel(detail.task, detail)
+      : running
+        ? t("approvals.statusRunning")
+        : t("approvals.statusLoading");
     return (
-      <aside className="workbench-review-rail" data-testid="review-collapsed" aria-label="审核工作台已收起">
-        <button type="button" className="workbench-review-rail-button" onClick={expandReview} aria-label="展开审核工作台">
+      <aside className="workbench-review-rail" data-testid="review-collapsed" aria-label={t("approvals.collapsedWorkbench", { status: collapsedStatus })}>
+        <button type="button" className="workbench-review-rail-button" onClick={expandReview} aria-label={t("approvals.expandWorkbench", { count: displayedReviewChangeCount })}>
           <span className="workbench-review-rail-icon"><IconShield width={19} height={19} /><b>{displayedReviewChangeCount}</b></span>
           <span>审核</span>
         </button>
         <span className="workbench-review-rail-spacer" />
-        <i className="workbench-review-rail-status" aria-label="等待审核" />
+        <i className="workbench-review-rail-status" aria-hidden="true" />
+        <span className="sr-only">{collapsedStatus}</span>
       </aside>
     );
   }
 
   const activeToolId = workbenchToolTab(tab);
-  const reviewIsPending = detail?.task.state === "review_ready";
+  const reviewIsPending = detail
+    ? ["review_ready", "verification_required"].includes(taskDisplayState(detail.task, detail))
+    : false;
   const subagentPageOpen = subagentPanelOpen && tab === "summary" && !launcherOpen;
   const hideWorkbenchPanel = () => {
     onCloseSubagents();
@@ -615,12 +626,14 @@ function SummaryPanel({
   workspaceAccessMode: ProjectAccessMode | null;
   onShowSubagents: () => void;
 }) {
+  const { t } = useTranslation();
   const setTab = useAppStore((s) => s.setCanvasTab);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [auditOpen, setAuditOpen] = useState(false);
   const [permBusyId, setPermBusyId] = useState<string | null>(null);
   const [permError, setPermError] = useState<string | null>(null);
+  const permissionHeadingId = useId();
   const taskId = detail?.task.id ?? null;
   // 运行中 1s 一跳刷新 LIVE 耗时；空闲时 30s 足够维持相对时间（「3 分钟前」）不失真。
   const [now, setNow] = useState(() => Date.now());
@@ -681,6 +694,9 @@ function SummaryPanel({
   const { task, runs, changes, permissions, verifications, queued_messages: queuedMessages } = detail;
   const pendingList = permissions.filter((p) => p.decision === "pending");
   const pending = pendingList.length;
+  const canPersistPermission = pending > 0
+    && canPersistPermissionGrant(pendingList[0].risk_level);
+  const waitingForApproval = pending > 0 || taskDisplayState(task, detail) === "waiting_for_approval";
   const passed = verifications.filter((v) => v.status === "passed").length;
   const verifying = verifications.some((v) => v.status === "running");
   const queued = queuedMessages.filter((message) => message.state === "queued" || message.state === "dispatching").length;
@@ -718,7 +734,7 @@ function SummaryPanel({
     <div className="sum-wrap">
       <div className="sum-head">
         <span className={"st-chip " + statusChipClass(detail)}>
-          {taskStateLabel(task.state, detail)}
+          {taskStateLabel(task, detail)}
         </span>
         <span className="sum-title" title={title}>{title}</span>
         <span className="sum-age" title={`会话开始于 ${clockSeconds(task.created_at)}`}>
@@ -736,7 +752,7 @@ function SummaryPanel({
         </span>
       </div>
 
-      {running && activeMainRun && (
+      {running && activeMainRun && !waitingForApproval && (
         <div className="sum-live-card">
           <div className="sum-live-top">
             <span className="sum-live-dot" />
@@ -753,9 +769,15 @@ function SummaryPanel({
       )}
 
       {pending > 0 && (
-        <div className="sum-perm">
+        <section className="sum-perm" role="region" aria-labelledby={permissionHeadingId}>
+          <p className="sr-only" aria-live="assertive" aria-atomic="true">
+            {t("approvals.waitingAnnouncement", {
+              risk: permissionRiskLabel(pendingList[0].risk_level),
+              tool: pendingList[0].tool_name,
+            })}
+          </p>
           <div className="sum-perm-top">
-            <b>待批权限 · {pending}</b>
+            <b id={permissionHeadingId}>{t("approvals.pausedHeading", { count: pending })}</b>
             <span className="sum-perm-risk">{permissionRiskLabel(pendingList[0].risk_level)}</span>
           </div>
           <div className="sum-perm-cmd" title={pendingList[0].input_summary}>
@@ -763,21 +785,34 @@ function SummaryPanel({
           </div>
           <div className="sum-perm-why">
             {permissionAttribution(pendingList[0], runs).label} · {pendingList[0].tool_name}
-            {pending > 1 ? ` · 其余 ${pending - 1} 项在「验证与决策」` : ""}
+            {pending > 1 ? t("approvals.additionalPending", { count: pending - 1 }) : ""}
+          </div>
+          <div className="sum-perm-scope">
+            {canPersistPermission
+              ? t("approvals.persistentScope", {
+                  tool: pendingList[0].tool_name,
+                  target: pendingList[0].target?.trim()
+                    || pendingList[0].input_summary.trim()
+                    || t("approvals.currentAction"),
+                  risk: pendingList[0].risk_level,
+                })
+              : t("approvals.singleUseScope", { risk: pendingList[0].risk_level })}
           </div>
           <div className="sum-perm-actions">
-            <button type="button" className="deny" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "deny")}>
-              拒绝
-            </button>
-            <button type="button" className="ghost" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "allow_always")}>
-              总是允许
-            </button>
             <button type="button" className="approve" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "allow")}>
-              允许一次
+              {t("approvals.allowOnce")}
+            </button>
+            {canPersistPermission && (
+              <button type="button" className="ghost" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "allow_always")}>
+                {t("approvals.allowAlways")}
+              </button>
+            )}
+            <button type="button" className="deny" disabled={permBusyId === pendingList[0].id} onClick={() => void decidePermission(pendingList[0].id, "deny")}>
+              {t("approvals.deny")}
             </button>
           </div>
-          {permError && <div className="sum-perm-error">批复失败：{permError}</div>}
-        </div>
+          {permError && <div className="sum-perm-error" role="alert">{t("approvals.error", { error: permError })}</div>}
+        </section>
       )}
 
       <div className="zone-head">运行简报</div>

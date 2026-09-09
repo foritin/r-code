@@ -198,13 +198,14 @@ struct Session {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     // ConPTY：master drop = 子进程输入挂断，必须保活到会话结束。
     _master: Box<dyn MasterPty + Send>,
+    env: daemon_common::DaemonEnv,
 }
+
+mod daemon_common;
 
 fn spawn_tui(record_path: &str, rows: u16) -> Option<Session> {
     let bin = std::env::var("CARGO_BIN_EXE_r-code-tui").ok()?;
-    let dir = tempfile::tempdir().ok()?;
-    let keep = String::from(dir.path().to_str()?);
-    std::mem::forget(dir);
+    let (env, extra) = daemon_common::daemon_env("inline");
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -215,9 +216,17 @@ fn spawn_tui(record_path: &str, rows: u16) -> Option<Session> {
         })
         .ok()?;
     let mut cmd = CommandBuilder::new(bin);
-    cmd.args(["--data-dir", &keep]);
+    cmd.args([
+        "--data-dir",
+        env.data_dir.to_str()?,
+        "--ipc-name",
+        &env.ipc_name,
+    ]);
     cmd.env("RUST_BACKTRACE", "0");
     cmd.env("R_CODE_TUI_RECORD", record_path);
+    for (key, value) in extra {
+        cmd.env(key, value);
+    }
     let child = pair.slave.spawn_command(cmd).ok()?;
     let writer = pair.master.take_writer().ok()?;
     let reader = pair.master.try_clone_reader().ok()?;
@@ -246,13 +255,16 @@ fn spawn_tui(record_path: &str, rows: u16) -> Option<Session> {
         output,
         child,
         _master: master,
+        env,
     })
 }
 
 impl Session {
     fn send(&mut self, keys: &str) {
-        let _ = self.writer.write_all(keys.as_bytes());
-        let _ = self.writer.flush();
+        self.writer
+            .write_all(keys.as_bytes())
+            .expect("write PTY input");
+        self.writer.flush().expect("flush PTY input");
     }
 
     /// 同步用：在 ConPTY（合成）输出里等 needle。断言不基于此流。
@@ -306,10 +318,7 @@ fn temp_record_path(tag: &str) -> String {
 #[test]
 fn typing_does_not_rewrite_history_above() {
     let record = temp_record_path("typing");
-    let Some(mut session) = spawn_tui(&record, 30) else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui(&record, 30).expect("r-code-tui must start inside a PTY");
     assert!(
         session.wait_for("尚未配置", Duration::from_secs(20)),
         "启动引导出现"
@@ -325,6 +334,7 @@ fn typing_does_not_rewrite_history_above() {
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session.env);
 
     let vt = recorded_vt(&record, 30);
     // 引导历史仍在屏上（未被吃掉）。
@@ -355,10 +365,7 @@ fn typing_does_not_rewrite_history_above() {
 #[test]
 fn startup_does_not_bulk_scroll() {
     let record = temp_record_path("startup");
-    let Some(mut session) = spawn_tui(&record, 30) else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui(&record, 30).expect("r-code-tui must start inside a PTY");
     assert!(
         session.wait_for("尚未配置", Duration::from_secs(20)),
         "启动引导出现"
@@ -367,6 +374,7 @@ fn startup_does_not_bulk_scroll() {
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session.env);
 
     let vt = recorded_vt(&record, 30);
     assert!(
@@ -388,10 +396,7 @@ fn startup_does_not_bulk_scroll() {
 #[test]
 fn history_survives_in_scrollback() {
     let record = temp_record_path("scroll");
-    let Some(mut session) = spawn_tui(&record, 20) else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui(&record, 20).expect("r-code-tui must start inside a PTY");
     assert!(
         session.wait_for("尚未配置", Duration::from_secs(20)),
         "启动引导出现"
@@ -407,6 +412,7 @@ fn history_survives_in_scrollback() {
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session.env);
 
     let vt = recorded_vt(&record, 20);
     assert!(

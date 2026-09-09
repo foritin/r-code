@@ -12,7 +12,7 @@
     "test:popover": "node --test scripts/popover-viewport.test.mjs",
     "test:mcp": "node --test scripts/mcp-management.test.mjs",
     "test:onboarding": "node --test scripts/onboarding-campaign.test.mjs",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/check-bundle-budget.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -1,0 +1,48 @@
+{
+  "schema_version": "1",
+  "id": "native.r-code",
+  "version": "1.0.1",
+  "apiMajor": 1,
+  "apiMinor": 0,
+  "displayName": "R-Code Native Harness",
+  "description": "Built-in native harness: multi-turn model/tool loop, Plan/HITL, steer and cross-harness delegation over public host services.",
+  "supportedPlatforms": [
+    { "platform": "windows-x64", "executable": "bin/r-code-harness-native" },
+    { "platform": "macos-arm64", "executable": "bin/r-code-harness-native" },
+    { "platform": "macos-x64", "executable": "bin/r-code-harness-native" },
+    { "platform": "linux-x64", "executable": "bin/r-code-harness-native" }
+  ],
+  "supportedFeatures": [
+    "multi-turn-tools",
+    "stream-caching",
+    "compaction",
+    "plan-hitl",
+    "steer-queue",
+    "reviewer",
+    "cross-harness-delegation"
+  ],
+  "requestedHostServices": [
+    "host.model.stream",
+    "host.tools.list",
+    "host.tools.call",
+    "host.context.read",
+    "host.artifacts.put",
+    "host.artifacts.read",
+    "host.plan.publish",
+    "host.plan.update",
+    "host.questions.ask",
+    "host.children.spawn",
+    "host.children.wait",
+    "host.children.cancel",
+    "host.checkpoint.save",
+    "host.completion.propose"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "modelSelection": { "type": "string" },
+      "maxTurns": { "type": "integer", "default": 25 },
+      "systemPrompt": { "type": "string" }
+    }
+  }
+}

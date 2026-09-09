@@ -1,6 +1,6 @@
 # R-Code 发布手册
 
-本文是维护者从“准备版本”到“GitHub Release 可下载、客户端可更新”的唯一操作入口。架构背景见 [ARCHITECTURE.md](../../architecture.md)，用户可见变化见根目录 [CHANGELOG.md](../../../CHANGELOG.md)。
+本文是维护者从“准备版本”到“GitHub Release 可下载、客户端可更新”的唯一操作入口。架构背景见 [重构前实现基线](../archive/architecture-before-harness-v2.md)，后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md)，用户可见变化见根目录 [CHANGELOG.md](../../../CHANGELOG.md)。
 
 ## 1. 发布链路
 
@@ -191,14 +191,17 @@ cd ../..
 ./scripts/build-branded-installer.ps1
 
 # Windows：同时实构建并核验 WiX MSI；PowerShell 中执行
-Push-Location src-tauri
-cargo tauri build --bundles msi --config tauri.local-package.conf.json
-Pop-Location
+$target = "x86_64-pc-windows-msvc"
+cargo build --release -p r-code-tui --bin r-code-tui --target $target
+Copy-Item "target/$target/release/r-code-tui.exe" "src-tauri/binaries/r-code-tui-$target.exe" -Force
+pwsh -NoProfile -Command '$env:R_CODE_TAURI_PACKAGING = "1"; Set-Location src-tauri; cargo tauri build --bundles msi --target x86_64-pc-windows-msvc --config tauri.local-package.conf.json'
 
 # macOS：本机 ad-hoc 候选包；正式候选包追加 --signed
 # Intel 本地包可追加 --target x86_64-apple-darwin
 bash ./scripts/manual/package-macos.sh
 ```
+
+所有 Tauri 打包入口都必须设置 `R_CODE_TAURI_PACKAGING=1`。该门禁会在生成安装包前拒绝缺失的 TUI sidecar、开发占位文件和目标平台格式不匹配的二进制；普通 `cargo build` / `cargo test` 不设置此变量。
 
 至少在目标平台做一次安装包 smoke test：安装、启动、创建纯聊天任务、打开工作区、触发一次审批、执行只读工具、验证 updater 检查不会报签名/manifest 错误。`0.3.x` 还必须覆盖 Codex 同树委派（不新增 session）、RequestApproval 下的 Bash 审批、逐个取消 child、公开 reasoning summary、文件链接右侧跳行、约 1 秒计时刷新，以及重启后的三态权限恢复。缺少外部 Provider 或 Codex 账号时，应在可用环境完成这组联网验收；本机至少验证能力不可用时会隐藏动态工具且主任务继续。
 

@@ -73,7 +73,14 @@
       }
     },
     "externalBin": [
-      "binaries/r-code-tui"
+      "binaries/r-code-tui",
+      "binaries/r-code-service",
+      "binaries/r-code-harness-native",
+      "binaries/r-code-harness-codex"
+    ],
+    "resources": [
+      "plugins/native/*",
+      "plugins/codex/*"
     ]
   },
   "plugins": {

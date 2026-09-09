@@ -1,4 +1,18 @@
 {
+  "conversationUI": {
+    "unstarted": "Not started",
+    "startHint": "Send your first message to start the conversation",
+    "imageHint": "Images go directly to models with confirmed image support. Text-only models use the option below.",
+    "ocrHint": "Extract text from PNG/JPEG images offline, at no cost.",
+    "visionHint": "Describe the entire image using calls to the selected service.",
+    "welcome": "What would you like to do?",
+    "welcomeHint": "Describe your goal, attach a file, or choose a project.",
+    "firstMessage": "Describe a task, ask a question, or type @ to reference a file…",
+    "technicalDetails": "Technical details",
+    "lastUpdate": "Updated {{time}}",
+    "model": "Model",
+    "unconfigured": "Not configured"
+  },
   "app": {
     "skipToMain": "Skip to main content",
     "opening": "Opening…"
@@ -122,7 +136,39 @@
         "restartLater": "Restart later",
         "restarting": "Restarting…"
       }
+    },
+    "harness": {
+      "title": "Harness Plugins",
+      "description": "Install and manage trusted local harness plugins; tasks may switch harnesses while idle (running tasks keep their pinned version).",
+      "installPlaceholder": "Local plugin package directory",
+      "install": "Install",
+      "refresh": "Refresh",
+      "loading": "Loading plugin catalog…",
+      "empty": "No harness plugins installed yet.",
+      "enable": "Enable",
+      "disable": "Disable",
+      "remove": "Remove"
     }
+  },
+  "approvals": {
+    "statusRunning": "Running",
+    "statusLoading": "Loading status",
+    "collapsedWorkbench": "Task workbench collapsed, {{status}}",
+    "expandWorkbench": "Expand task workbench, {{count}} changes to review",
+    "waitingAnnouncement": "Waiting for your approval. {{risk}}, tool {{tool}}.",
+    "waitingAnnouncementWithActions": "Waiting for your approval. {{risk}}, tool {{tool}}. Choose Allow once, Always allow for this task, or Deny.",
+    "waitingAnnouncementWithSingleUseActions": "Waiting for your approval. {{risk}}, tool {{tool}}. This risk level can only be allowed once or denied.",
+    "waitingLabel": "Waiting for your approval",
+    "pausedHeading": "Run paused · Waiting for approval · {{count}}",
+    "additionalPending": " · {{count}} more in Verification and decisions",
+    "currentAction": "current action",
+    "scopeLabel": "Authorization scope",
+    "persistentScope": "“Always allow for this task” applies only to {{tool}} · {{target}}, up to risk {{risk}}.",
+    "singleUseScope": "{{risk}} high-risk actions can only be allowed once; no persistent rule will be saved.",
+    "allowOnce": "Allow once",
+    "allowAlways": "Always allow for this task",
+    "deny": "Deny",
+    "error": "Approval failed: {{error}}"
   },
   "notifications": {
     "ariaLabel": "Notifications",
@@ -197,5 +243,12 @@
       "service_unavailable": "System notifications are temporarily unavailable. Alerts will still appear in the app.",
       "permission_request_failed": "R-Code could not request system notification permission. Check the operating system's notification settings and try again."
     }
+  },
+  "harness": {
+    "available": "Available",
+    "disabled": "Disabled",
+    "incompatibleApi": "Incompatible protocol version",
+    "missingEntrypoint": "Missing platform entrypoint",
+    "unavailable": "Unavailable"
   }
 }

@@ -1,57 +1,56 @@
 //! M5-02.A1/A3 PTY 集成测试：历史行进终端 scrollback、resize 稳定。
 //!
-//! 用 portable-pty 起真实 pty 跑 inline_scrollback_demo，读 master 输出断言
-//! scrollback 含完整历史（append-only 路径语义）；pty 不可用（Windows 非 pty
-//! 测试环境）时跳过并标注边界（PRD 允许确定性 harness 替代）。
+//! 用 portable-pty 起当前测试的子进程，读 master 输出断言 scrollback 含完整历史
+//!（append-only 路径语义）。PTY 创建或子进程启动失败必须让测试失败。
 
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+mod common;
 
-fn run_demo() -> Option<String> {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .ok()?;
-    let mut command =
-        CommandBuilder::new(std::env::var("CARGO_BIN_EXE_inline_scrollback_demo").ok()?);
-    command.env("RUST_BACKTRACE", "0");
-    let mut child = pair.slave.spawn_command(command).ok()?;
-    drop(pair.slave);
-    let mut output = String::new();
-    let mut reader = pair.master.try_clone_reader().ok()?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let mut buffer = [0u8; 4096];
-    loop {
-        if std::time::Instant::now() > deadline {
-            let _ = child.kill();
-            break;
-        }
-        if let Ok(n) = reader.read(&mut buffer) {
-            if n == 0 {
-                break;
-            }
-            output.push_str(&String::from_utf8_lossy(&buffer[..n]));
-            if output.contains("__SCROLLBACK_END__") {
-                break;
-            }
-        }
-    }
-    let _ = child.wait();
-    Some(output)
+const CHILD_ENV: &str = "R_CODE_INLINE_SCROLLBACK_PTY_CHILD";
+
+fn render_demo() {
+    use r_code_tui::inline_render::InlineRenderer;
+    use std::io::Write;
+
+    let mut renderer = InlineRenderer::new();
+    let mut stdout = std::io::stdout();
+    println!("__SCROLLBACK_BEGIN__");
+    let history: Vec<String> = (1..=5).map(|n| format!("history line {n}")).collect();
+    let live: Vec<String> = vec!["> ask anything".into()];
+    stdout
+        .write_all(renderer.frame(&history, &live).as_bytes())
+        .expect("write history frame");
+    let more: Vec<String> = vec!["appended line 6".into(), "appended line 7".into()];
+    stdout
+        .write_all(renderer.frame(&more, &live).as_bytes())
+        .expect("write appended frame");
+    println!("\n__SCROLLBACK_END__");
+    stdout.flush().expect("flush scrollback demo");
 }
 
 #[test]
 fn history_lines_reach_scrollback_and_resize_stable() {
-    let Some(output) = run_demo() else {
-        eprintln!(
-            "pty 不可用，跳过（PRD 允许确定性 harness 替代；语义已由 inline_render 单测覆盖）"
-        );
+    if std::env::var_os(CHILD_ENV).is_some() {
+        render_demo();
         return;
-    };
+    }
+    let output = common::run_current_test_in_pty(
+        "history_lines_reach_scrollback_and_resize_stable",
+        CHILD_ENV,
+        portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        "__SCROLLBACK_END__",
+        std::time::Duration::from_secs(20),
+    )
+    .expect("scrollback demo must run inside a PTY");
+    let output = output
+        .split_once("__SCROLLBACK_BEGIN__")
+        .and_then(|(_, output)| output.split_once("__SCROLLBACK_END__"))
+        .map(|(output, _)| output)
+        .expect("scrollback markers must delimit renderer output");
     // A1：scrollback 含完整历史（append-only 行真正写入终端输出流）。
     for line in [
         "history line 1",

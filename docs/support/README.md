@@ -1,6 +1,6 @@
 # R-Code 支持材料索引
 
-`docs/` 根目录只保留当前导航、当前架构和活跃产品体验合同。本目录收纳仍有维护或追溯价值、但不应与当前权威入口并列的指南、运维资料、平台清单、已完成合同、历史 UI 与归档。
+`docs/` 根目录保留导航、当前计划 `prd/` 与支持材料 `support/`。本目录收纳仍有维护或追溯价值的指南、运维资料、平台清单、已完成合同、历史 UI 与归档；当前可执行方案统一在 `docs/prd/`。
 
 ## 目录
 
@@ -16,8 +16,14 @@
 当前活跃入口：
 
 - [文档导航](../readme.md) / [English](../readme.en.md)
-- [当前架构](../architecture.md)
-- [Pi 对齐 + TUI 方案 PRD / AI 实施清单](../pi-alignment/pi-alignment-and-tui-prd.md)
+- [当前 PRD 索引](../prd/index.md)
+- [可插拔 Harness 重构计划](../prd/pluggable-harness/plan.md)
+
+实现取证与历史方案：
+
+- [重构前架构基线](./archive/architecture-before-harness-v2.md)
+- [Pi 对齐 + TUI 历史方案](./archive/pi-alignment/pi-alignment-and-tui-prd.md)
+- [TUI v2 历史方案与原型](./archive/tui-v2/)
 
 ## 旧路径迁移
 
@@ -32,6 +38,10 @@
 | `docs/windows-command-reliability-*` | `docs/support/contracts/windows-command-reliability-*` |
 | `docs/ui/**` | `docs/support/ui-reference/legacy/**` |
 | `docs/archive/**` | `docs/support/archive/**` |
+| `docs/architecture.md` | `docs/support/archive/architecture-before-harness-v2.md` |
+| `docs/tui-v2/**` | `docs/support/archive/tui-v2/**` |
+
+2026-09-09 的顶层整理保留了归档前的未提交内容。旧 TUI PRD 的规范／任务正文、digest、完成状态和历史 evidence 路径不改写；freeze 仅调整位置元数据。新基准运行写入 `artifacts/metrics/tui-v2/`，不覆盖归档报告。
 
 OCR 单测原来从 `docs/ui` 编译图片。该资产已按相同字节和 SHA-256 `10177db7cd6bb1265c95c66518385c50910d53e9d0cd94fea95ca7ed2d8723aa` 独立到 `fixtures/windows-ocr/deepseek-model-configuration-dark.png`，文档整理不再决定测试能否编译。
 

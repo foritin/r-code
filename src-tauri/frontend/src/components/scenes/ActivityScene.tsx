@@ -126,7 +126,7 @@ function ActivityTaskRow({ task }: { task: Task }) {
   const workspaces = useTasksStore((state) => state.workspaces);
   const openRoom = useAppStore((state) => state.openRoom);
   const subagentCount = detail?.runs.filter((run) => run.agent_kind === "subagent" && !run.ended_at).length ?? 0;
-  const status = subagentCount > 0 ? `${taskStateLabel(task.state, detail)} · ${subagentCount} 个子代理` : taskStateLabel(task.state, detail);
+  const status = subagentCount > 0 ? `${taskStateLabel(task, detail)} · ${subagentCount} 个子代理` : taskStateLabel(task, detail);
 
   return (
     <button className="activity-work-row" onClick={() => openRoom(task.id)}>

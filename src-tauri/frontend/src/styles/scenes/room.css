@@ -1210,6 +1210,7 @@
   font-family: var(--font-mono); font-size: var(--text-meta); color: var(--fg-muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom:var(--sp-4);
 }
+.perm-scope { margin:-2px 0 var(--sp-4); color:var(--fg-faint); font-size:var(--text-sm); line-height:1.45; }
 .perm-actions { display: flex; gap:var(--sp-4); }
 .perm-error, .panel-error {
   padding:var(--sp-3) var(--sp-6); border-radius: var(--radius-chip); font-size: var(--text-meta); color: var(--danger);
@@ -1648,7 +1649,7 @@
   border-bottom:1px solid var(--border); background:var(--bg-panel);
 }
 .subagent-page-header > strong { min-width:0; overflow:hidden; color:var(--fg); font-size:13px; font-weight:620; text-overflow:ellipsis; white-space:nowrap; }
-.subagent-page-header-spacer { min-width:8px; flex:1; }
+.subagent-page-header-spacer { flex:0 0 8px; }
 .subagent-page-icon-button {
   display:inline-grid; width:28px; height:28px; flex:none; place-items:center; padding:0; border:0; border-radius:6px;
   background:transparent; color:var(--fg-muted); cursor:pointer;
@@ -1688,7 +1689,7 @@
 .subagent-complete-mark { display:inline-grid; width:16px; height:16px; flex:none; place-items:center; border:1px solid color-mix(in srgb,var(--success) 58%,transparent); border-radius:50%; color:var(--success); }
 .subagent-incomplete-mark { width:12px; height:12px; flex:none; border:1px solid currentColor; border-radius:3px; color:var(--danger); }
 
-.subagent-tabs-header .workbench-tabs { max-width:min(76%,720px); }
+.subagent-tabs-header .workbench-tabs { max-width:none; }
 .subagent-tabs-header .workbench-tab { min-width:132px; }
 .subagent-tabs-header .subagent-session-tab { min-width:180px; max-width:260px; }
 .subagent-tabs-header .subagent-avatar { border-color:transparent; background:transparent; box-shadow:none; }
@@ -1750,15 +1751,16 @@
 .subagent-list-avatar.status-failed::after,.subagent-list-avatar.status-cancelled::after { background:var(--danger); }
 .subagent-list-row-copy { display:block; min-width:0; }
 .subagent-list-row-copy strong,.subagent-list-row-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.subagent-list-row-copy strong { color:var(--fg); font-size:13px; font-weight:600; line-height:18px; }
-.subagent-list-row-copy small { margin-top:3px; color:var(--fg-muted); font-size:11px; line-height:17px; }
-.subagent-tree-facts { display:flex; min-width:0; flex-wrap:wrap; gap:3px 8px; margin-top:5px; color:var(--fg-faint); font:9px/14px var(--font-mono); }
+.subagent-list-row-copy strong { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:normal; color:var(--fg); font-size:var(--text-sm); font-weight:600; line-height:1.55; overflow-wrap:anywhere; }
+.subagent-list-row-copy small { margin-top:4px; color:var(--fg-muted); font-size:var(--text-meta); line-height:1.5; }
+.subagent-tree-facts { display:flex; min-width:0; flex-wrap:wrap; gap:3px 8px; margin-top:5px; color:var(--fg-faint); font:var(--text-meta)/1.5 var(--font-ui); }
 .subagent-tree-facts > span { overflow:hidden; max-width:180px; text-overflow:ellipsis; white-space:nowrap; }
 .subagent-tree-facts > span + span::before { content:"·"; margin-right:8px; color:var(--border-strong); }
 .subagent-tree-facts .is-capability { color:var(--accent); }
 .subagent-tree-facts .is-peer { color:var(--accent-2); }
 .subagent-tree-facts .is-anomaly { color:var(--warning); }
-.subagent-list-row-meta { align-self:start; margin:10px 2px 0 10px; color:var(--fg-faint); font:var(--text-meta)/18px var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.subagent-list-row-meta { display:grid; gap:4px; align-self:start; margin:3px 0 0 4px; color:var(--fg-faint); font:var(--text-meta)/1.5 var(--font-ui); font-variant-numeric:tabular-nums; white-space:nowrap; text-align:right; }
+.subagent-list-row-meta small { font:inherit; }
 .subagent-tree-abort {
   display:inline-flex; min-width:72px; align-items:center; align-self:center; justify-content:center; gap:5px; margin:0 8px 0 2px; padding:6px 8px;
   border:1px solid transparent; border-radius:5px; background:transparent; color:var(--danger); cursor:pointer; font:10px var(--font-ui); white-space:nowrap;
@@ -1804,13 +1806,17 @@
 .subagent-session-meta span { display:inline-flex; align-items:baseline; gap:6px; min-width:0; }
 .subagent-session-meta b { color:var(--fg-muted); font-weight:var(--weight-strong); }
 .subagent-session-meta .subagent-routing-reason { flex:1 1 100%; }
+.subagent-routing-reason { overflow-wrap:anywhere; }
+.subagent-technical-details { margin:0 0 16px; color:var(--fg-muted); font-size:var(--text-sm); }
+.subagent-technical-details > summary { width:fit-content; min-height:28px; padding:4px 0; cursor:pointer; }
+.subagent-technical-details[open] > summary { margin-bottom:8px; }
 .subagent-session-meta .subagent-tree-anomaly { flex:1 1 100%; color:var(--warning); }
 
 /* 任务卡：主代理下发给此子代理的提示词全文（原型 C+ 的 .ag-d 任务区） */
 .subagent-session-task { margin:0 0 14px; padding:10px 13px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-panel); }
-.subagent-session-task header { display:flex; align-items:center; gap:7px; margin-bottom:6px; color:var(--fg-muted); font:600 10px var(--font-display); letter-spacing:.05em; }
+.subagent-session-task header { display:flex; align-items:center; gap:7px; margin-bottom:8px; color:var(--fg-muted); font:500 var(--text-meta) var(--font-ui); }
 .subagent-session-task-icon { display:grid; place-items:center; width:16px; height:16px; color:var(--subagent-run, var(--accent-2)); }
-.subagent-session-task p { margin:0; color:var(--fg-muted); font-size:12.5px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
+.subagent-session-task p { margin:0; color:var(--fg); font-size:var(--text-sm); line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
 
 .subagent-session-placeholder { color:var(--fg-faint); font-size:var(--text-sm); }
 .subagent-load-earlier {
@@ -1976,6 +1982,7 @@
   background:var(--bg-inset); color:var(--fg); font:var(--text-meta) var(--font-mono); text-overflow:ellipsis; white-space:nowrap;
 }
 .sum-perm-why { margin-top:6px; color:var(--fg-muted); font-size:var(--text-meta); }
+.sum-perm-scope { margin-top:5px; color:var(--fg-faint); font-size:var(--text-sm); line-height:1.45; }
 .sum-perm-actions { display:flex; gap:8px; margin-top:10px; }
 .sum-perm-actions button {
   flex:1; min-height:28px; border:1px solid var(--border-strong); border-radius:7px 7px 3px 7px;

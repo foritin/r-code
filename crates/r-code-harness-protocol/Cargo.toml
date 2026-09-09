@@ -1,0 +1,15 @@
+[package]
+name = "r-code-harness-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Versioned public wire contracts, manifest and capability negotiation for R-Code harness plugins."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+semver = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }

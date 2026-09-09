@@ -11,7 +11,9 @@ authors.workspace = true
 r-code-core = { path = "../r-code-core" }
 r-code-store = { path = "../r-code-store" }
 r-code-gateway = { path = "../r-code-gateway" }
-r-code-host = { path = "../../src-tauri" }
+r-code-kernel = { path = "../r-code-kernel" }
+r-code-runtime = { path = "../r-code-runtime" }
+r-code-harness-protocol = { path = "../r-code-harness-protocol" }
 agent-contract = { path = "../../vendor/agent-contracts/crates/agent-contract" }
 
 tokio = { workspace = true }
@@ -21,6 +23,10 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
+semver = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

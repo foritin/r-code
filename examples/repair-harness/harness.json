@@ -1,0 +1,29 @@
+{
+  "schema_version": "1",
+  "id": "repair-harness.example",
+  "version": "0.1.0",
+  "apiMajor": 1,
+  "apiMinor": 0,
+  "displayName": "Repair Harness (example)",
+  "description": "Example third-party harness implementing a plan-then-repair workflow.",
+  "supportedPlatforms": [
+    { "platform": "windows-x64", "executable": "bin/repair-harness" },
+    { "platform": "macos-arm64", "executable": "bin/repair-harness" },
+    { "platform": "macos-x64", "executable": "bin/repair-harness" },
+    { "platform": "linux-x64", "executable": "bin/repair-harness" }
+  ],
+  "supportedFeatures": ["multi-turn-tools", "plan-hitl"],
+  "requestedHostServices": [
+    "host.tools.list",
+    "host.tools.call",
+    "host.questions.ask",
+    "host.checkpoint.save",
+    "host.completion.propose"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "maxRepairSteps": { "type": "integer", "default": 8 }
+    }
+  }
+}

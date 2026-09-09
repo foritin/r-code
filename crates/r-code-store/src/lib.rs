@@ -30,6 +30,7 @@ pub mod plan_store;
 pub mod repositories;
 pub mod review;
 pub mod review_git;
+pub mod v2;
 pub mod verification;
 pub mod workspace_service;
 

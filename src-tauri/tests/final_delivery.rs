@@ -8,11 +8,8 @@
 //! - F-7:  DoD -- 每个功能具备 empty/loading/failure/recovery 状态
 //! - F-9:  DoD -- 权限 / 数据归属 / 隐私审查；写入有回滚或不可逆警告
 //! - F-11: DoD -- 文档链接到对应设计 / 合同 / 测试 / 发布条件
-//! - F-12..F-18: Work card 审计要求（goal/boundary/contract/failure/tests/evidence/rollback）
 //!
 //! 运行：`cargo test -p r-code-host --test final_delivery`
-
-use r_code_host::work_card::{FailureState, RequiredTest, TestStatus, TestType, WorkCard};
 
 /// F-1: User can configure from empty directory, open project, run safe read-only Agent
 #[test]
@@ -188,92 +185,6 @@ fn f11_dod_documentation_links() {
             doc
         );
     }
-}
-
-/// F-12: Work card goal
-#[test]
-fn f12_work_card_goal() {
-    let card = WorkCard::new("WC-001", "R1", "User can create tasks");
-    assert!(!card.goal.is_empty());
-}
-
-/// F-13: Work card boundary
-#[test]
-fn f13_work_card_boundary() {
-    let mut card = WorkCard::new("WC-001", "R1", "Test");
-    card.boundary.workspaces.push("/project".to_string());
-    card.boundary.processes.push("agent-worker".to_string());
-    assert!(!card.boundary.workspaces.is_empty());
-    assert!(!card.boundary.processes.is_empty());
-}
-
-/// F-14: Work card contract
-#[test]
-fn f14_work_card_contract() {
-    let mut card = WorkCard::new("WC-001", "R1", "Test");
-    card.contract.new_dtos.push("Task".to_string());
-    card.contract
-        .new_rpc_methods
-        .push("task.create".to_string());
-    assert!(!card.contract.new_dtos.is_empty());
-    assert!(!card.contract.new_rpc_methods.is_empty());
-}
-
-/// F-15: Work card failure states
-#[test]
-fn f15_work_card_failure_states() {
-    let mut card = WorkCard::new("WC-001", "R1", "Test");
-    card.failure_states.push(FailureState {
-        scenario: "User cancels during task creation".to_string(),
-        expected_behavior: "Task is not created, no side effects".to_string(),
-    });
-    assert!(!card.failure_states.is_empty());
-}
-
-/// F-16: Work card tests
-#[test]
-fn f16_work_card_tests() {
-    let mut card = WorkCard::new("WC-001", "R1", "Test");
-    card.tests.push(RequiredTest {
-        test_type: TestType::Unit,
-        description: "Task creation creates valid DTO".to_string(),
-        status: TestStatus::Passing,
-    });
-    assert!(!card.tests.is_empty());
-}
-
-/// F-17: Work card evidence
-#[test]
-fn f17_work_card_evidence() {
-    let mut card = WorkCard::new("WC-001", "R1", "Test");
-    card.evidence.push(r_code_host::work_card::EvidenceItem {
-        kind: "test".to_string(),
-        description: "760 tests passing".to_string(),
-        location: "cargo test --workspace".to_string(),
-    });
-    assert!(!card.evidence.is_empty());
-}
-
-/// F-18: Work card rollback
-#[test]
-fn f18_work_card_rollback() {
-    let mut card = WorkCard::new("WC-001", "R1", "Test");
-    card.rollback.code_rollback = "git revert <commit>".to_string();
-    card.rollback.data_rollback = "Drop tasks table, re-run migration".to_string();
-    assert!(!card.rollback.code_rollback.is_empty());
-    assert!(!card.rollback.data_rollback.is_empty());
-
-    // Validate work card
-    card.failure_states.push(FailureState {
-        scenario: "Test".to_string(),
-        expected_behavior: "Test".to_string(),
-    });
-    card.tests.push(RequiredTest {
-        test_type: TestType::Unit,
-        description: "Test".to_string(),
-        status: TestStatus::Passing,
-    });
-    assert!(card.validate().is_ok());
 }
 
 /// F-19: Windows release launches as a desktop GUI without opening a console window.

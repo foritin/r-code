@@ -20,9 +20,10 @@ pub mod commands;
 #[cfg(unix)] // Control Door 仅 Unix（Windows 不编译且 main.rs 未启动）
 pub mod control_door;
 pub mod event_coalesce;
-pub mod extensions;
 pub mod feature_flags;
 pub mod fs_util;
+pub mod harness_v2;
+pub mod harness_v2_chat;
 pub mod ipc;
 pub mod legacy_memory;
 pub mod lifecycle_commands;
@@ -44,12 +45,12 @@ pub mod plan_entry_commands;
 pub mod plan_policy;
 pub mod plan_review_tools;
 pub mod plan_tools;
-pub mod provider_catalog;
+pub use r_code_runtime::services::provider_catalog;
 pub mod provider_compat;
 pub mod provider_decl;
 pub mod provider_models;
 pub mod provider_readiness;
-pub mod provider_support;
+pub use r_code_runtime::services::provider_support;
 pub mod recovery;
 pub mod replay;
 pub mod rtk;
@@ -58,7 +59,9 @@ pub mod security_config;
 pub mod settings;
 pub mod shutdown_coordinator;
 pub mod skill_resources;
-pub mod skills;
+// SkillManager 已搬至 r-code-runtime（Codex CLI 探测/登录共用）；re-export 保持
+// `r_code_host::skills::*` 路径不变。
+pub use r_code_runtime::services::skills;
 pub mod subagent_providers;
 pub mod support_bundle;
 pub mod system_integration;
@@ -66,7 +69,6 @@ pub mod task_workspace_binding;
 pub mod updater;
 #[cfg(target_os = "windows")]
 mod windows_ocr;
-pub mod work_card;
 pub mod workflow_skills;
 
 // 重新导出核心类型
@@ -91,10 +93,6 @@ pub use security_config::{should_block_navigation, should_block_window_open, Sec
 pub use skills::{SkillManager, SkillStatus};
 pub use support_bundle::{
     BundleContents, ConfigSummary, DbStats, LogEntry, McpServerSupportSummary, SupportBundle,
-};
-pub use work_card::{
-    EvidenceItem, FailureState, RequiredTest, RollbackPlan, TestStatus, TestType, WorkCard,
-    WorkCardBoundary, WorkCardContract,
 };
 pub use workflow_skills::{
     SaveWorkflowSkillTool, ScopedWorkflowSkill, ScopedWorkflowSkillDraft, WorkflowSkill,

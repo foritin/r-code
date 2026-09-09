@@ -520,7 +520,7 @@ test.skip("legacy in-window Settings behavior was replaced by cross-window synch
     useAppStore.getState().setSettingsPane("preferences");
   });
 
-  const settingsPane = page.getByRole("button", { name: "外观与小助手", exact: true });
+  const settingsPane = page.getByRole("tab", { name: "外观与小助手", exact: true });
   await settingsPane.waitFor({ state: "visible" });
   const visibility = page.getByRole("switch", { name: "显示小助手", exact: true });
   assert.equal(await visibility.isChecked(), false);

@@ -68,7 +68,7 @@ export function ConversationsScene() {
         || (filter === "running" && visual === "running")
         || (filter === "attention" && visual === "attention")
         || (filter === "review" && visual === "review")
-        || (filter === "completed" && display === "idle")
+        || (filter === "completed" && visual === "done")
         || (filter === "archived" && display === "archived");
       const haystack = `${taskTitle(task)} ${task.goal} ${workspaceName(task.workspace_path, workspaces)}`.toLocaleLowerCase();
       return matchesFilter && (!normalized || haystack.includes(normalized));
@@ -80,7 +80,6 @@ export function ConversationsScene() {
       <div className="conversation-list-page">
         <header className="list-page-header">
           <div>
-            <p className="page-kicker">CONVERSATIONS</p>
             <h1>所有对话</h1>
             <p>跨项目查看任务状态，在需要时回到具体任务继续处理。</p>
           </div>
@@ -128,7 +127,7 @@ function ConversationRow({ task, needsAttention, onChanged }: { task: Task; need
       <span className={`conversation-status ${visual}`}><i /></span>
       <button className="conversation-main" onClick={() => openRoom(task.id)}><strong>{taskTitle(task)}</strong><small>{taskActivity(task, detail)}</small></button>
       <span className="conversation-project"><IconProjects width={15} height={15} />{workspaceName(task.workspace_path, workspaces)}</span>
-      <span className={`conversation-state ${highlighted ? "needs" : ""}`}>{taskStateLabel(task.state, detail)}</span>
+      <span className={`conversation-state ${highlighted ? "needs" : ""}`}>{taskStateLabel(task, detail)}</span>
       <time>{elapsedMinutes(task.updated_at)}</time>
       <span className="conversation-row-actions">
         <TaskActionsMenu task={task} detail={detail} onChanged={onChanged} />

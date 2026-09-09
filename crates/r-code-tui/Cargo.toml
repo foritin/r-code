@@ -16,8 +16,9 @@ path = "src/main.rs"
 r-code-core = { path = "../r-code-core" }
 r-code-store = { path = "../r-code-store" }
 r-code-gateway = { path = "../r-code-gateway" }
-r-code-agent-worker = { path = "../r-code-agent-worker" }
-r-code-host = { path = "../../src-tauri" }
+r-code-client = { path = "../r-code-client" }
+r-code-runtime = { path = "../r-code-runtime" }
+r-code-harness-protocol = { path = "../r-code-harness-protocol" }
 
 ratatui = { workspace = true }
 crossterm = { workspace = true }
@@ -39,3 +40,5 @@ windows-sys = { version = "0.59", features = ["Win32_Globalization", "Win32_Syst
 [dev-dependencies]
 tempfile = { workspace = true }
 portable-pty = { workspace = true }
+# 单测里 in-proc 组装 ApplicationService（setPreferences 等读回断言）。
+r-code-kernel = { workspace = true }

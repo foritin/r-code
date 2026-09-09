@@ -285,7 +285,8 @@
 .settings-block { padding:var(--sp-8) var(--sp-9); }
 .settings-block + .settings-block { border-top:1px solid var(--border); }
 .settings-block > h3 { margin:0 0 var(--sp-4); color:var(--fg); font-family:var(--font-display); font-size:var(--text-md); font-weight:var(--weight-strong); }
-.settings-block .desc { margin:0 0 var(--sp-6); color:var(--fg-faint); font-size:var(--text-meta); line-height:1.6; }
+.settings-block .desc { margin:0 0 var(--sp-6); color:var(--fg-faint); font-size:var(--text-sm); line-height:1.6; }
+.settings-detail .hint { font-size:var(--text-sm); }
 .settings-loading { padding:var(--sp-8) var(--sp-9); color:var(--fg-faint); font-size:var(--text-sm); }
 
 /* ---------- 实验功能 · 指引手册 ---------- */
@@ -817,8 +818,8 @@
 
 @media (max-width:1050px) {
   .settings-layout { grid-template-columns:1fr; gap:var(--sp-8); }
-  .settings-nav { position:static; grid-auto-flow:column; grid-auto-columns:max-content; grid-template-columns:none; overflow-x:auto; padding-bottom:var(--sp-3); }
-  .settings-nav button { padding:0 var(--sp-6); white-space:nowrap; }
+  .settings-nav { position:static; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); overflow:visible; padding-bottom:var(--sp-3); }
+  .settings-nav button { padding:0 var(--sp-5); text-align:center; white-space:normal; }
   .field.agent-prompt-field .hint { margin-left:0; }
 }
 
@@ -1468,13 +1469,13 @@
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  width:16px;
-  height:16px;
+  width:var(--control-h);
+  height:var(--control-h);
   border:1px solid var(--border);
   border-radius:var(--radius-pill);
   background:transparent;
   color:var(--fg-muted);
-  font-size:var(--text-meta);
+  font-size:var(--text-sm);
   line-height:1;
   cursor:help;
   vertical-align:middle;

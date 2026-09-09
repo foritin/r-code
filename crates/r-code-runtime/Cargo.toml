@@ -1,0 +1,67 @@
+[package]
+name = "r-code-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Headless service composition, plugin management and the shared r-code-service daemon for R-Code."
+
+[dependencies]
+r-code-harness-protocol = { workspace = true }
+r-code-kernel = { workspace = true }
+r-code-store = { workspace = true }
+r-code-gateway = { workspace = true }
+r-code-core = { workspace = true }
+rusqlite = { workspace = true }
+agent-contract = { workspace = true }
+agent-llm = { workspace = true }
+agent-config = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+dirs = { workspace = true }
+sha2 = { workspace = true }
+semver = { workspace = true }
+zip = { workspace = true }
+uuid = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+keyring = { workspace = true, features = ["windows-native"] }
+# Codex CLI 集成（services/codex_cli.rs，自 src-tauri 搬移）所需：
+# file_fingerprint 的内容寻址哈希。
+blake3 = { workspace = true }
+
+# macOS Codex Desktop bundle 校验（代码签名 + Info.plist）所需，与 src-tauri 版本保持一致。
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1.10"
+core-foundation = "0.10"
+security-framework = "3.7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+zip = { workspace = true }
+r-code-client = { workspace = true }
+
+# Test-only fixture binary; never shipped in installers (T38 packaging keeps
+# it out of bundles; it exists so transport tests exercise real processes).
+[[bin]]
+name = "harness-test-helper"
+path = "src/bin/harness-test-helper.rs"

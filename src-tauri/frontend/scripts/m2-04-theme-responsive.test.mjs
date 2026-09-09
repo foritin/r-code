@@ -77,7 +77,7 @@ const VIEWPORTS = [
 const THEMES = ["obsidian", "studio-light"];
 const PANE_NAMES = [
   "模型服务", "Agent 编排", "子代理配置", "工具与连接", "知识与指令", "权限",
-  "隐私与安全", "外观与语言", "通知", "启动与关闭", "更新", "诊断",
+  "隐私与安全", "外观与小助手", "通知", "启动与关闭", "更新", "诊断",
 ];
 
 async function newPage(theme) {
@@ -121,9 +121,9 @@ test("A1 三视口×亮暗：工作区与 12 个 SettingsPane 无横向溢出", 
       await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
       await page.waitForTimeout(400);
       await page.getByRole("button", { name: "设置", exact: true }).click();
-      const paneBtn = page.getByRole("button", { name: pane, exact: true }).first();
-      await paneBtn.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
-      await paneBtn.click().catch(() => {});
+      const paneBtn = page.getByRole("tab", { name: pane, exact: true }).first();
+      await paneBtn.waitFor({ state: "visible", timeout: 8000 });
+      await paneBtn.click();
       await page.waitForTimeout(250);
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -196,7 +196,7 @@ test("A4 960 宽度下 Settings 导航可键盘完成且焦点不进隐藏区", 
   await page.waitForTimeout(600);
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.waitForTimeout(300);
-  const navItem = page.getByRole("button", { name: "模型服务", exact: true }).first();
+  const navItem = page.getByRole("tab", { name: "模型服务", exact: true }).first();
   await navItem.waitFor({ state: "visible", timeout: 8000 });
   // 键盘聚焦并激活
   await navItem.focus();

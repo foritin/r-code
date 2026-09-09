@@ -37,9 +37,10 @@ import { IconAttach, IconHome, IconProjects, IconSidebar } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
 import { PlanShortcut } from "../plan/PlanPanel";
 import { useTaskPlan } from "../plan/useTaskPlan";
+import { taskStateLabel } from "../../lib/presentation";
 
 const ROOM_SPLIT_STORAGE_KEY = "r-code.room.split-pct";
-const DEFAULT_ROOM_SPLIT_PCT = 55;
+const DEFAULT_ROOM_SPLIT_PCT = 62;
 const ROOM_SPLITTER_WIDTH = 11;
 const MIN_CONVERSATION_WIDTH = 360;
 const MIN_CANVAS_WIDTH = 300;
@@ -579,7 +580,15 @@ export function RoomScene() {
           <IconProjects width={16} height={16} />
           <div className="room-conversation-title">
             <strong>{task?.title || "任务会话"}</strong>
-            <span>{workspace?.display_name ?? "用户路径"} · {historyBranchId ? "历史分支，只读" : archived ? "已归档，只读" : running ? "正在运行" : "会话就绪"}</span>
+            <span>
+              {workspace?.display_name ?? "用户路径"} · {historyBranchId
+                ? "历史分支，只读"
+                : archived
+                  ? "已归档，只读"
+                  : task
+                    ? taskStateLabel(task, detail)
+                    : "会话就绪"}
+            </span>
           </div>
           {historicalBranches.length > 0 && (
             <label className="room-history-picker">

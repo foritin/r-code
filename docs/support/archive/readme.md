@@ -9,6 +9,7 @@
 
 | 文档 | 归档原因 |
 | --- | --- |
+| [重构前架构基线](./architecture-before-harness-v2.md) | 2026-09-09 按文档整理决策归档，保留当时实际实现；后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md) |
 | [DeepSeek 前缀缓存 PRD](./deepseek-prefix-cache.md) | 分阶段方案已实施并完成主要验收，保留设计与例外记录 |
 | [DeepSeek 缓存基线](./deepseek-cache-baseline.md) | 一次性真实 API 测量已完成，保留发布门槛证据 |
 | [DeepSeek Harness 可借鉴性评估](./deepseek-harness.md) | 调研与差距分析已完成，相关能力已落地 |
@@ -38,3 +39,12 @@
 | --- | --- |
 | [`product-experience-redesign/`](./product-experience-redesign/) | 产品体验重构已完成闭环（`frozen`，42/42），可点击原型、PRD、设置能力盘点与门禁报告已由当前实现承接，不再作为活跃入口 |
 | [`code-review-2026-08-29/`](./code-review-2026-08-29/) | 2026-08-29 全仓 Code Review 已完成（21/21 修复、2332:0 全绿），证据与发现报告保留作历史审计 |
+
+## 顶层文档整理（2026-09-09）
+
+| 旧位置 | 归档位置 | 说明 |
+| --- | --- | --- |
+| `docs/architecture.md` | [architecture-before-harness-v2.md](./architecture-before-harness-v2.md) | 旧实现参考；归档不表示新架构已经落地 |
+| `docs/tui-v2/` | [tui-v2/](./tui-v2/) | 调研、决策、PRD、freeze、原型和基准报告一并保留；原有未提交内容随文件移动 |
+
+TUI 冻结正文和历史报告不因移动而重算或覆盖。代码／旧文档中的历史路径按本表解释；活跃脚本已改为读取归档位置，新生成的 inline 基准报告写入 `artifacts/metrics/tui-v2/`。

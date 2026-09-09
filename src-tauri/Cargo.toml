@@ -34,9 +34,10 @@ agent-llm = { workspace = true }
 # 产品私有
 r-code-core = { workspace = true }
 r-code-store = { workspace = true }
+r-code-client = { workspace = true }
+r-code-runtime = { workspace = true }
 r-code-gateway = { workspace = true }
 r-code-terminal = { workspace = true }
-r-code-agent-worker = { workspace = true }
 r-code-mcp = { workspace = true }
 
 # SQLite（启动期恢复 / 支持包直接访问，不走连接池）
@@ -127,3 +128,10 @@ objc2-vision = { version = "0.3.2", default-features = false, features = ["std",
 [build-dependencies]
 serde_json = { workspace = true }
 tauri-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+r-code-runtime = { workspace = true }
+r-code-harness-protocol = { workspace = true }
+serde_json = { workspace = true }

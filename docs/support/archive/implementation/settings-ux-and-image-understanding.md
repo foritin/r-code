@@ -3,7 +3,7 @@
 - 状态：已实施（2026-08-22；含 A/B/C/D/E 全部 P0-P2 条目与测试改写）
 - 日期：2026-08-22
 - 基线分支：`feat/request-audit-anchoring`（含 `706f131` DeepSeek 复杂任务 Plan 建议双轨 Phase 0）
-- 关联文档：[plan-mode-dual-track-gate.md](./plan-mode-dual-track-gate.md)、[plan-mode.md](../../guides/plan-mode.md)、[architecture.md](../../../architecture.md)
+- 关联文档：[plan-mode-dual-track-gate.md](./plan-mode-dual-track-gate.md)、[plan-mode.md](../../guides/plan-mode.md)、[architecture.md](../architecture-before-harness-v2.md)
 - 行号为撰写当日快照，实施时以符号搜索为准。
 
 本方案回答两个使用疑问（规划建议卡的"验证中"与"默认 provider"、子代理连通测试），并落地三项需求：

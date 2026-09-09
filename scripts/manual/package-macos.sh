@@ -110,9 +110,40 @@ else
   step "Building ad-hoc signed $target app/dmg"
 fi
 
+step "Building r-code-tui sidecar for $target"
+cargo build --release -p r-code-tui --bin r-code-tui --target "$target"
+mkdir -p "$repo_root/src-tauri/binaries"
+cp "$repo_root/target/$target/release/r-code-tui" \
+  "$repo_root/src-tauri/binaries/r-code-tui-$target"
+
+# T38: sidecar set = TUI + shared daemon + two built-in harness plugins.
+for spec in "r-code-runtime r-code-service"             "r-code-harness-native r-code-harness-native"             "r-code-harness-codex r-code-harness-codex"; do
+  set -- $spec
+  pkg="$1"; bin="$2"
+  step "Building $bin sidecar for $target"
+  cargo build --release -p "$pkg" --bin "$bin" --target "$target"
+  cp "$repo_root/target/$target/release/$bin"     "$repo_root/src-tauri/binaries/$bin-$target"
+done
+
+# T38: built-in plugin package resources (manifest + bin); the daemon
+# registers them through the normal immutable registry at startup.
+for builtin in native codex; do
+  case "$builtin" in
+    native) bin="r-code-harness-native" ;;
+    codex) bin="r-code-harness-codex" ;;
+  esac
+  staged="$repo_root/src-tauri/plugins/$builtin"
+  mkdir -p "$staged/bin"
+  cp "$repo_root/target/$target/release/$bin" "$staged/bin/$bin"
+  if [ ! -f "$staged/harness.json" ]; then
+    echo "Built-in manifest missing: src-tauri/plugins/$builtin/harness.json" >&2
+    exit 1
+  fi
+done
+
 (
   cd "$repo_root/src-tauri"
-  cargo tauri build --bundles app,dmg --target "$target"
+  R_CODE_TAURI_PACKAGING=1 cargo tauri build --bundles app,dmg --target "$target"
 )
 
 shopt -s nullglob

@@ -1,0 +1,4204 @@
+{
+  "objective": "Full replaceable Harness plugins; trusted locally installed third-party processes; built-in Native and Codex; GUI and TUI retain the complete coding workflow; new data model allowed.",
+  "end_state": "Install and select an independently built full Harness without changing/rebuilding core; Native and Codex use the same plugin path; GUI/TUI share a Tauri-free runtime; host evidence governs verified delivery and safe resume; legacy data remains read-only.",
+  "environment": {
+    "language": "Rust 2021 (MSRV 1.88), TypeScript/React",
+    "package_manager": "Cargo workspace + npm",
+    "runtime": "Tokio + Tauri desktop; independent headless TUI; NDJSON plugin processes",
+    "os": "Windows x64, macOS arm64/x64, Linux x64",
+    "test_command": "cargo fmt --all -- --check; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace --all-features; npm --prefix src-tauri/frontend test; npm --prefix src-tauri/frontend run build",
+    "notes": "Run shell commands through RTK; use PowerShell 7 on native Windows. No Harness V2 product code has been implemented by this publication."
+  },
+  "non_goals": [
+    "Malicious-plugin OS sandbox",
+    "Plugin marketplace/online automatic update",
+    "Rust dylib ABI/WASM/custom plugin UI",
+    "Automatic migration/resume of legacy runs",
+    "Autonomous memory learning in v1",
+    "Separate harness repository/submodule"
+  ],
+  "components": [
+    {
+      "id": "docs",
+      "name": "Plan and cutover",
+      "description": "Reviewable planning artifacts, baseline, docs and retirement."
+    },
+    {
+      "id": "protocol",
+      "name": "Public Harness protocol",
+      "description": "Versioned independent wire contracts and manifest."
+    },
+    {
+      "id": "kernel",
+      "name": "Task kernel",
+      "description": "Durable task lifecycle, Plan, delegation, cancellation and recovery."
+    },
+    {
+      "id": "services",
+      "name": "Host services",
+      "description": "Storage, tools, execution, model/context, workspace and review adapters."
+    },
+    {
+      "id": "plugins",
+      "name": "Plugin system",
+      "description": "Installation, catalog, process transport, SDK and packaging."
+    },
+    {
+      "id": "verification",
+      "name": "Verification and completion",
+      "description": "Pinned checks, candidate evidence and authoritative verdicts."
+    },
+    {
+      "id": "native",
+      "name": "Native Harness",
+      "description": "Built-in native plugin using public host services."
+    },
+    {
+      "id": "codex",
+      "name": "Codex Harness",
+      "description": "Built-in Codex plugin using App Server through public services."
+    },
+    {
+      "id": "apps",
+      "name": "GUI and TUI",
+      "description": "One headless application API, plugin management and legacy reader."
+    },
+    {
+      "id": "evals",
+      "name": "Conformance and evaluation",
+      "description": "Executable contract, fault and real coding task acceptance."
+    }
+  ],
+  "open_questions": [],
+  "decisions": {
+    "scope": "Full replaceable Harness plugins; trusted locally installed third-party processes; built-in Native and Codex; GUI and TUI retain the complete coding workflow; new data model allowed.",
+    "architecture": [
+      "New r-code-harness-protocol owns versioned wire DTOs only (serde/serde_json, no product/platform/Provider implementation dependencies). r-code-kernel owns task/run/attempt state machines and ports; it depends on protocol and neutral libraries only.",
+      "New r-code-runtime composes existing Gateway, storage, model providers, MCP, terminal, workspace, review, and external process services without Tauri. Desktop and TUI consume one ApplicationService; TUI must not depend on r-code-host/src-tauri.",
+      "New r-code-harness-sdk provides the Rust plugin client/server helper. plugins/native and plugins/codex are separately compiled executable Cargo packages. They use the same stdio protocol/manifest/registry as third-party harnesses; neither can import r-code-runtime, r-code-store, r-code-gateway or Tauri. Existing runtime strategy is ported into the Native plugin; platform/execution/storage services stay host-side.",
+      "Keep all new crates in this workspace; no new git submodule or separate repository. Reuse agent-contracts internally through adapters; do not expose its changing product-specific DTOs as the plugin wire contract.",
+      "User selected a shared background service. Each dev/production v2 profile has exactly one r-code-service daemon owning SQLite, leases, recovery and all runs. GUI/TUI/MCP are clients; closing a frontend does not stop it. Explicit service stop cancels/drains all work; no automatic idle shutdown in v1.",
+      "Add a thin r-code-client crate for local Application RPC. Reuse agent-ipc framing helpers, not its default unauthenticated listener/socket-unlink startup. Use profile-specific Unix sockets (0600) or current-user-only Windows named pipes, owner OS lock, a profile-protected random token, protocol handshake and independent command/event connections. Command calls return durable operation IDs for long work; events.read(after_seq) supports reconnect without duplicate effects.",
+      "Application RPC mutations carry (profile_id, client_id)-scoped client-generated command_id separate from plugin attempt operation_key. Clients persist an outbox entry before first send; retry/reconnect uses the same command_id. The daemon persists normalized input hash, acceptance and result atomically; same id/different payload is rejected. This covers task creation, message submission, plugin install, approvals and stop even before any attempt exists.",
+      "Client outboxes persist stable client_id/command_id before transmission and retain them until acknowledgement; sensitive settings carry credential-broker references, never plaintext secrets in the outbox. Receipt hashes include method and canonical payload."
+    ],
+    "plugin_contract": [
+      "Host-to-plugin methods: initialize, harness.start, harness.resume, harness.steer, harness.cancel, shutdown. Plugin-to-host methods: host.model.stream, host.tools.list/call, host.process.open/write/close, host.context.read, host.artifacts.put/read, host.plan.publish/update, host.questions.ask, host.children.spawn/wait/cancel, host.verification.run, host.checkpoint.save, host.completion.propose. Public progress uses harness.event; model/process streams use correlated notifications.",
+      "UTF-8 newline-delimited bidirectional JSON-RPC 2.0 over stdin/stdout. stdout contains protocol only; bounded stderr is diagnostics. Use 1 MiB maximum frames, blob references for larger content/attachments, a 16 MiB aggregate bounded queue, 10s initialize timeout, 5s graceful cancellation then process-tree termination. Long model/tool calls use typed operation deadlines and cancellation, not the control timeout. A separate protocol reader must continue serving callbacks while a request is pending.",
+      "Manifest harness.json: schema_version, id, version, api_major/min_minor, display_name, supported_platforms, entrypoint executable+argv per platform, supported_features, requested_host_services, config_schema. Host schema validation, negotiated capabilities and install grants determine the effective service set. A process cannot claim another run identity; the connection binds task/run/generation, all handles are run-scoped.",
+      "Local directory or zip install copies into an immutable AppData id/version/content-hash directory; reject path traversal, symlink/reparse escapes, duplicate changed content under an existing identity, missing entrypoint or incompatible protocol. Never auto-execute repository manifests, install hooks, or package-manager commands. Entry executable is package-relative native code (a language runtime may be bundled); launch with argv directly. No marketplace, online auto-update, Rust dylib ABI, WASM, custom plugin UI, or malicious-plugin sandbox in v1.",
+      "Pin package digest, configuration hash, capabilities, TaskContract and plugin checkpoint schema for each run. Updates apply to new runs; active or recoverable pinned versions cannot be removed. Each active run has its own process; children use their own runs. Harness switching is allowed only by creating a new branch from an idle task using the canonical transcript and TaskContract; opaque checkpoint state is never moved across harnesses.",
+      "Third-party plugins are trusted local programs: host mediation audits host API calls and avoids sending provider secrets, but is not an OS sandbox against direct plugin I/O. Codex uses the generic host process service and its App Server protocol; inner CLI actions are external observations, not falsely recorded as Gateway-enforced actions.",
+      "JSON-RPC ids are connection-local correlation only. Every effectful host method has an operation_key stable within attempt_id across generation changes; host stores canonical input hash and result. Safe queries may retry; completed effects replay receipts; file effects reconcile expected hashes; process.open/write and external acknowledgements with uncertain effects become indeterminate. Generation fencing does not erase dedup history.",
+      "User inputs have host-generated message_id/input_seq. Plugin checkpoint.save atomically stores opaque state and consumed_input_seq after validating delivered contiguous input. Host queue acceptance is exactly once; delivery to plugins may replay from checkpoint and external CLI application is never claimed exactly once. Lost Codex acknowledgement requires reconciliation or a user-requested new attempt.",
+      "Add host.approvals.request only for a host-created pending operation reference; generic host.questions.ask cannot create permission grants or change the TaskContract. Models/tools/checks/process launches share AuthorizationService(OperationDescriptor, TaskContract, WorkspaceCapability, effective permissions). A plugin service grant never authorizes a particular side effect.",
+      "Managed processes require host-resolved LaunchCapability, executable/argv/cwd and scoped secret references. Native tools, verification preparation and Codex launch all authorize before an operation intent or spawn. Codex uses a host-interpreted declarative process constraint profile that fixes cwd/sandbox/approval ceilings and validates permission-affecting outbound requests; opaque/raw process profiles are unavailable for read-only/Plan tasks. External inner actions remain explicitly externally controlled.",
+      "LaunchCapability uses a neutral ProcessProfile from the pinned plugin package: framing, method allowlist, field constraints and bindings to host-owned workspace/permission values. For NDJSON-RPC profiles, the host buffers complete frames and applies declarative method/JSON-pointer constraints before forwarding bytes; unknown or forbidden methods fail closed. The Codex package supplies its App Server schema/profile, so neither kernel nor generic process service hardcodes Codex method names. Only trusted/installed profiles that declare the needed controls are eligible for restricted task modes; raw profiles require non-restricted authorization."
+    ],
+    "domain_and_data": [
+      "TaskContract contains task kind, objective, constraints and required check definitions; WorkUnit contains description, dependencies and acceptance mappings; Attempt pins contract/plugin/context/workspace identities; OperationReceipt binds an idempotency key to request hash and outcome; EvidenceRecord binds check definition, content snapshot, toolchain/environment and host output; CompletionProposal is a request, never a final verdict.",
+      "Keep execution lifecycle, validation outcome, and user review disposition separate. Kernel alone issues verified/unverified/blocked/failed/cancelled outcomes. An answer or draft plan may finish without code checks; implementation without required evidence finishes unverified, never verified. Required check failures return actionable feedback; explicit budgets/blockers terminate with preserved progress.",
+      "The host freezes applicable user/project checks before the first mutation. A harness can propose additional checks; weakening required criteria needs a new user-authorized contract revision. Relevant input/check-definition changes invalidate evidence. Changed implementation tests remain supported; baseline acceptance verifier definitions are stored outside plugin-owned writable content. LLM review is advisory and cannot mint passing execution evidence.",
+      "SQLite v2 has authoritative tasks/branches/runs/work_units/operations/checks/evidence/questions/review and an append-only ordered event journal; durable mutation and its event commit in one transaction. Large payloads use existing content-addressed blobs. JSONL is an export/projection, not a second authoritative writer. Plugin-emitted observations and host-generated facts retain distinct provenance.",
+      "Use a new harness-v2 directory under each existing dev/production data root, and separate v2 credential service names. Do not migrate or mutate old databases/configuration. Legacy history is read-only/export-only; no resuming old runs or automatic provider credential import. GUI/TUI use the same v2 profile.",
+      "Workspace scope is bound at task creation. Reuse verified worktree/path capabilities; direct-workspace mode captures pre-existing tracked/untracked changes. Candidate evidence hashes content (not timestamps alone); verification uses immutable input snapshots, captures dirty/new/deleted files and a pinned check definition, and records the toolchain environment. Cache reuse is within the same unchanged attempt only in v1.",
+      "Before a host side effect, persist an operation intent. Completed operations replay their stored response; mismatched idempotency inputs are rejected. Crash recovery reconciles file writes by expected hashes. Unknown shell/network/CLI outcomes are surfaced as indeterminate, never automatically re-executed. Opaque plugin checkpoints are versioned, quota-bounded and only resume the same plugin package; stale package/contract/workspace is blocked.",
+      "Cancellation revokes the run generation first, stops child/model/tool/process work, drains to terminal, then releases the task lease. Late callbacks cannot mutate state. Budgets are root-owned and inherited by children; progress and liveness are separate. Native preserves current run-budget defaults through an adapter; Codex only claims metrics enforceable by the host.",
+      "Plan/HITL and delegation are host services called by any harness, not Native-only flags. Host validates Plan ownership/revision/dependencies and gates code-work completion on required evidence. Questions persist before suspension and answers resume idempotently. Children inherit permissions and budget; parents cannot finalize while uncollected child work is live. Review reuses baseline-aware changes and journaled inverse merge; no global reset-hard recovery.",
+      "RuntimeProfile is explicit and constructed before opening any service: GUI passes its current build flavor; TUI/service take --profile, with developer launchers selecting development and packaged binaries production. No Tauri feature inference inside runtime. Profile paths and v2 credential service names are resolved in T05 prerequisites; clients discover the same daemon by profile identity.",
+      "One OS profile lock prevents competing daemons; only the lock owner runs recovery. Also take user-wide OS workspace write locks keyed by canonical directory file identity, so different profiles cannot concurrently write the same physical workspace. Distinct managed worktrees have distinct content locks; Git metadata mutations additionally serialize by repository common_dir. If an old process might still write, persist a blocked/indeterminate barrier and do not acquire a new write run.",
+      "Guardian ownership is explicit: Windows managed run trees use kill-on-close Job Objects with assignment before child execution; Unix guardians monitor daemon pipe EOF, own child process groups and TERM/KILL them on owner loss. Store daemon instance nonce and PID/start identity plus process-group/job metadata. Reboot or recovery must verify termination, never act on PID alone; inability to prove termination blocks writes. This is lifecycle containment of trusted processes, not a malicious-plugin sandbox.",
+      "Candidate manifests include tracked files, non-ignored untracked files, deletions, executable modes and explicitly declared ignored/submodule inputs. Copy all bytes into blobs, verify a second live manifest equals the captured input before accepting the candidate, materialize only from those blobs, and re-check live content at completion. Undeclared required submodule/ignored/outside-workspace input yields unavailable, not verified.",
+      "CheckDefinition separates pinned acceptance-control files from candidate implementation/dependency files. Store control file bytes and entrypoint digest outside plugin write scope, run entrypoints directly instead of resolving candidate-redefinable npm script names, and record allowed source roots, dependency manifests/lockfiles, runtime/toolchain versions and declared external inputs. Rust/TS reference checks have frozen harness entrypoints; ordinary candidate tests may change and are supplementary evidence unless covered by the frozen acceptance controls.",
+      "Verification materialization uses a private directory per candidate; candidate dependency manifests/lockfiles are preserved. Standard v1 preparation uses Cargo --locked and npm ci --ignore-scripts in that directory, with caches keyed by lockfile+toolchain and host-authorized network/process policy. Required lifecycle hooks or additional inputs require an explicit project check profile; otherwise check unavailable. Preparation stdout/exit and any environment gaps are evidence. Never borrow mutable node_modules/target from the user's live workspace.",
+      "LegacyReader opens source SQLite with READ_ONLY, never Database::open/MigrationManager/SettingsService; starts a read transaction and uses SQLite online backup into v2 temporary storage for coherent WAL-aware querying/export. JSONL export freezes byte boundaries and includes complete records only, marking live exports with capture boundaries. If safe read-only WAL access is unavailable, return a clear close-old-app/export-needed state; never use immutable=1 against a live WAL DB. Test source DB/WAL/config/JSONL contents unchanged (normal lock bookkeeping is not product-data migration).",
+      "Main paired evaluation compares the same Harness/model/config baseline vs v2, or two strategies of the same v2 Harness. Cross-Native/Codex comparisons are separate exploratory reports; missing model/version/usage/cost facts remain unavailable. CI uses deterministic conformance and task fixtures as hard gates.",
+      "Cross-profile writer coordination has a durable user-wide barrier in addition to OS locks. Guardians retain the physical workspace lock while effects can run; barriers record process groups/owner-start identities before execution and remain until termination is confirmed. A newly available lock alone never proves an orphan stopped.",
+      "v1 verification caches reuse checksummed dependency downloads only (Cargo registry/npm package tarballs), never candidate build/test outputs or mutable target/node_modules. A source/build-script change always builds and verifies anew."
+    ],
+    "product": [
+      "Native implements multi-turn tools, stream/caching/compaction, Plan/HITL, steer/queue/branch, optional reviewer and cross-harness delegation via host services. Codex implements its App Server flow with approvals/questions/steer/cancel, child delegation and external thread checkpoint references; unsupported external capabilities are explicit.",
+      "Desktop and TUI share TaskView/EventEnvelope/PluginCatalog services. Provide install/enable/disable/remove/details, task Harness choice, version/control-capability display, validation evidence and recovery actions. Plugin UI is declarative data rendered by host components; no arbitrary HTML/JS contribution.",
+      "Retain core coding workflow plus current file/search/Git/Shell/MCP/skills/attachments and explicit memory context service. Autonomous memory learning, advanced marketplace, remote sandbox scheduling and arbitrary UI plugins are subsequent projects."
+    ],
+    "artifacts": {
+      "plan_file": "docs/prd/pluggable-harness/plan.md",
+      "tasks_file": "docs/prd/pluggable-harness/tasks.json",
+      "review_file": "docs/prd/pluggable-harness/review.json",
+      "status": "Published planning artifacts; implementation tasks remain to be executed."
+    }
+  },
+  "tasks": [
+    {
+      "id": "T00",
+      "title": "Freeze PRD and implementation baseline",
+      "serves": [
+        "docs"
+      ],
+      "depends_on": [],
+      "description": "Record accepted decisions and mirror this task DAG; capture source revision/dirty-file inventory and current targeted test results without staging user changes.",
+      "files": [
+        {
+          "path": "docs/prd/pluggable-harness/plan.md",
+          "action": "create",
+          "what": "Freeze PRD and implementation baseline"
+        },
+        {
+          "path": "docs/prd/pluggable-harness/tasks.json",
+          "action": "create",
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+        },
+        {
+          "path": "docs/prd/pluggable-harness/review.json",
+          "action": "create",
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+        },
+        {
+          "path": "docs/prd/index.md",
+          "action": "create",
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+        },
+        {
+          "path": "docs/readme.md",
+          "action": "modify",
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+        }
+      ],
+      "building_blocks": [
+        "docs"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T00.1",
+          "description": "Record accepted decisions and mirror this task DAG; capture source revision/dirty-file inventory and current targeted test results without staging user changes."
+        },
+        {
+          "id": "T00.2",
+          "description": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Document/schema validation and existing coding-flow smoke commands are recorded; no product implementation is performed in this task.",
+          "kind": "manual",
+          "command": "python .agents/skills/plan-loop/tools/validate_plan.py --tasks docs/prd/pluggable-harness/tasks.json"
+        }
+      ],
+      "acceptance_criteria": [
+        "Document/schema validation and existing coding-flow smoke commands are recorded; no product implementation is performed in this task."
+      ],
+      "estimated_loc": 160,
+      "publication_note": "plan.md/tasks.json/review.json are already published by the documentation task. At implementation start, validate them and refresh the code/test baseline; do not overwrite the agreed decisions or reset existing changes.",
+      "title_zh": "文档发布与实施基线复核"
+    },
+    {
+      "id": "T01",
+      "title": "Define plugin identity and capability contract",
+      "serves": [
+        "protocol"
+      ],
+      "depends_on": [
+        "T00"
+      ],
+      "description": "Create protocol crate and manifest/schema types; define string HarnessId, pinned PackageRef and negotiated features/services.",
+      "files": [
+        {
+          "path": "crates/r-code-harness-protocol/src/manifest.rs",
+          "action": "create",
+          "what": "Define plugin identity and capability contract"
+        },
+        {
+          "path": "crates/r-code-harness-protocol/Cargo.toml",
+          "action": "create",
+          "what": "Add serialization fixtures for supported platforms, version mismatch, duplicate IDs and required unsupported capabilities."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/lib.rs",
+          "action": "create",
+          "what": "Add serialization fixtures for supported platforms, version mismatch, duplicate IDs and required unsupported capabilities."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/schema/harness-v1.schema.json",
+          "action": "create",
+          "what": "Add serialization fixtures for supported platforms, version mismatch, duplicate IDs and required unsupported capabilities."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Add serialization fixtures for supported platforms, version mismatch, duplicate IDs and required unsupported capabilities."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/tests/t01_define_plugin_identity_and_capability_contract.rs",
+          "action": "create",
+          "what": "Manifest round trips; incompatible contracts fail before spawning any process."
+        }
+      ],
+      "building_blocks": [
+        "protocol"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T01.1",
+          "description": "Create protocol crate and manifest/schema types; define string HarnessId, pinned PackageRef and negotiated features/services."
+        },
+        {
+          "id": "T01.2",
+          "description": "Add serialization fixtures for supported platforms, version mismatch, duplicate IDs and required unsupported capabilities. Include optional declarative process profile metadata; no profile implies no raw-process capability in restricted modes."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Manifest round trips; incompatible contracts fail before spawning any process.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-protocol --test t01_define_plugin_identity_and_capability_contract",
+          "path": "crates/r-code-harness-protocol/tests/t01_define_plugin_identity_and_capability_contract.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Manifest round trips; incompatible contracts fail before spawning any process."
+      ],
+      "estimated_loc": 330,
+      "title_zh": "插件身份、Manifest 与能力合同"
+    },
+    {
+      "id": "T02",
+      "title": "Define RPC, stream and artifact envelopes",
+      "serves": [
+        "protocol"
+      ],
+      "depends_on": [
+        "T01"
+      ],
+      "description": "Define all lifecycle and host-service request/reply envelopes specified in decisions, correlated stream IDs and host/plugin provenance.",
+      "files": [
+        {
+          "path": "crates/r-code-harness-protocol/src/rpc.rs",
+          "action": "create",
+          "what": "Define RPC, stream and artifact envelopes"
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/services.rs",
+          "action": "create",
+          "what": "Use versioned opaque artifact refs for large content; implement frame-size and unknown-method error fixtures."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/events.rs",
+          "action": "create",
+          "what": "Use versioned opaque artifact refs for large content; implement frame-size and unknown-method error fixtures."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/lib.rs",
+          "action": "modify",
+          "what": "Use versioned opaque artifact refs for large content; implement frame-size and unknown-method error fixtures."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/tests/t02_define_rpc_stream_and_artifact_envelopes.rs",
+          "action": "create",
+          "what": "Native and external fixtures use identical wire shapes; no secret-bearing Provider or product DTO leaks onto the protocol."
+        }
+      ],
+      "building_blocks": [
+        "protocol"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T02.1",
+          "description": "Define all lifecycle and host-service request/reply envelopes specified in decisions, correlated stream IDs and host/plugin provenance."
+        },
+        {
+          "id": "T02.2",
+          "description": "Use versioned opaque artifact refs for large content; implement frame-size and unknown-method error fixtures."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Native and external fixtures use identical wire shapes; no secret-bearing Provider or product DTO leaks onto the protocol.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-protocol --test t02_define_rpc_stream_and_artifact_envelopes",
+          "path": "crates/r-code-harness-protocol/tests/t02_define_rpc_stream_and_artifact_envelopes.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Native and external fixtures use identical wire shapes; no secret-bearing Provider or product DTO leaks onto the protocol."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "RPC、流与大内容协议"
+    },
+    {
+      "id": "T03",
+      "title": "Implement kernel domain and transitions",
+      "serves": [
+        "kernel"
+      ],
+      "depends_on": [
+        "T02"
+      ],
+      "description": "Define TaskContract, WorkUnit, Attempt, OperationReceipt, EvidenceRecord and orthogonal execution/validation/review states.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/task.rs",
+          "action": "create",
+          "what": "Implement kernel domain and transitions"
+        },
+        {
+          "path": "crates/r-code-kernel/Cargo.toml",
+          "action": "create",
+          "what": "Implement pure transition decisions including stale revisions, waiting input, proposal/verification, cancellation and exactly one terminal result."
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "create",
+          "what": "Implement pure transition decisions including stale revisions, waiting input, proposal/verification, cancellation and exactly one terminal result."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Implement pure transition decisions including stale revisions, waiting input, proposal/verification, cancellation and exactly one terminal result."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t03_implement_kernel_domain_and_transitions.rs",
+          "action": "create",
+          "what": "State-machine tests reject plugin-issued terminal verdicts and late-generation transitions."
+        }
+      ],
+      "building_blocks": [
+        "kernel"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T03.1",
+          "description": "Define TaskContract, WorkUnit, Attempt, OperationReceipt, EvidenceRecord and orthogonal execution/validation/review states."
+        },
+        {
+          "id": "T03.2",
+          "description": "Implement pure transition decisions including stale revisions, waiting input, proposal/verification, cancellation and exactly one terminal result."
+        }
+      ],
+      "tests": [
+        {
+          "description": "State-machine tests reject plugin-issued terminal verdicts and late-generation transitions.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t03_implement_kernel_domain_and_transitions",
+          "path": "crates/r-code-kernel/tests/t03_implement_kernel_domain_and_transitions.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "State-machine tests reject plugin-issued terminal verdicts and late-generation transitions."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "任务领域模型与状态机"
+    },
+    {
+      "id": "T04",
+      "title": "Define persistence and runtime service ports",
+      "serves": [
+        "kernel"
+      ],
+      "depends_on": [
+        "T03"
+      ],
+      "description": "Define async JournalStore, WorkspaceService, ModelService, ToolService, ProcessService and HarnessSession ports using protocol/domain types.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/ports.rs",
+          "action": "create",
+          "what": "Define persistence and runtime service ports"
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Build in-memory fake services and cancellation/generation contracts used by kernel tests."
+        },
+        {
+          "path": "crates/r-code-kernel/src/testing.rs",
+          "action": "create",
+          "what": "Build in-memory fake services and cancellation/generation contracts used by kernel tests."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t04_define_persistence_and_runtime_service_ports.rs",
+          "action": "create",
+          "what": "Kernel Cargo dependency graph excludes Tauri, SQLite, Gateway, Provider implementations and harness binaries."
+        }
+      ],
+      "building_blocks": [
+        "kernel"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T04.1",
+          "description": "Define async JournalStore, WorkspaceService, ModelService, ToolService, ProcessService and HarnessSession ports using protocol/domain types."
+        },
+        {
+          "id": "T04.2",
+          "description": "Build in-memory fake services and cancellation/generation contracts used by kernel tests."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Kernel Cargo dependency graph excludes Tauri, SQLite, Gateway, Provider implementations and harness binaries.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t04_define_persistence_and_runtime_service_ports",
+          "path": "crates/r-code-kernel/tests/t04_define_persistence_and_runtime_service_ports.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Kernel Cargo dependency graph excludes Tauri, SQLite, Gateway, Provider implementations and harness binaries."
+      ],
+      "estimated_loc": 300,
+      "title_zh": "内核服务接口与测试替身"
+    },
+    {
+      "id": "T05",
+      "title": "Create v2 profile and durable storage schema",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T04",
+        "T04a"
+      ],
+      "description": "Add a fresh v2 database schema for domain aggregates, operation receipts, evidence, questions, reviews and ordered events; isolate its opening path from legacy migrations.",
+      "files": [
+        {
+          "path": "crates/r-code-store/src/v2/schema.rs",
+          "action": "create",
+          "what": "Create v2 profile and durable storage schema"
+        },
+        {
+          "path": "crates/r-code-store/src/v2/mod.rs",
+          "action": "create",
+          "what": "Create only v2 stores beneath RuntimeProfile; implement atomic aggregate-plus-event transactions, blob references and run lease constraints."
+        },
+        {
+          "path": "crates/r-code-store/src/v2/journal.rs",
+          "action": "create",
+          "what": "Create only v2 stores beneath RuntimeProfile; implement atomic aggregate-plus-event transactions, blob references and run lease constraints."
+        },
+        {
+          "path": "crates/r-code-store/src/lib.rs",
+          "action": "modify",
+          "what": "Create only v2 stores beneath RuntimeProfile; implement atomic aggregate-plus-event transactions, blob references and run lease constraints."
+        },
+        {
+          "path": "crates/r-code-store/Cargo.toml",
+          "action": "modify",
+          "what": "Create only v2 stores beneath RuntimeProfile; implement atomic aggregate-plus-event transactions, blob references and run lease constraints."
+        },
+        {
+          "path": "crates/r-code-store/tests/t05_create_v2_profile_and_durable_storage_schema.rs",
+          "action": "create",
+          "what": "Rollback/fault fixtures prove no aggregate/event split and no simultaneous active run for the same branch."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T05.1",
+          "description": "Add a fresh v2 database schema for domain aggregates, operation receipts, evidence, questions, reviews and ordered events; isolate its opening path from legacy migrations."
+        },
+        {
+          "id": "T05.2",
+          "description": "Create only v2 stores beneath RuntimeProfile; implement atomic aggregate-plus-event transactions, blob references and run lease constraints."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Rollback/fault fixtures prove no aggregate/event split and no simultaneous active run for the same branch.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-store --test t05_create_v2_profile_and_durable_storage_schema",
+          "path": "crates/r-code-store/tests/t05_create_v2_profile_and_durable_storage_schema.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Rollback/fault fixtures prove no aggregate/event split and no simultaneous active run for the same branch."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "v2 存储与原子事件日志"
+    },
+    {
+      "id": "T06",
+      "title": "Implement task, branch, queue and lease services",
+      "serves": [
+        "kernel"
+      ],
+      "depends_on": [
+        "T05",
+        "T02a"
+      ],
+      "description": "Implement task creation, canonical branch history, durable queued messages, steer acceptance boundaries and harness version selection.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/tasks.rs",
+          "action": "create",
+          "what": "Implement task, branch, queue and lease services"
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Pin package/config/contract and message sequence; use stable operation receipts for queue acceptance, explicit replay after checkpoints and idle-only harness branch switching."
+        },
+        {
+          "path": "crates/r-code-store/src/v2/tasks.rs",
+          "action": "create",
+          "what": "Pin package/config/contract and message sequence; use stable operation receipts for queue acceptance, explicit replay after checkpoints and idle-only harness branch switching."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t06_implement_task_branch_queue_and_lease_services.rs",
+          "action": "create",
+          "what": "Queue/steer race tests show exactly one delivery and no callbacks crossing task or harness identity."
+        }
+      ],
+      "building_blocks": [
+        "kernel"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T06.1",
+          "description": "Implement task creation, canonical branch history, durable queued messages, steer acceptance boundaries and harness version selection."
+        },
+        {
+          "id": "T06.2",
+          "description": "Pin package/config/contract and message sequence; use stable operation receipts for queue acceptance, explicit replay after checkpoints and idle-only harness branch switching."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Queue/steer race tests show exactly one delivery and no callbacks crossing task or harness identity.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t06_implement_task_branch_queue_and_lease_services",
+          "path": "crates/r-code-kernel/tests/t06_implement_task_branch_queue_and_lease_services.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Queue/steer race tests show exactly one delivery and no callbacks crossing task or harness identity."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "任务、分支、队列与运行租约"
+    },
+    {
+      "id": "T07",
+      "title": "Implement plugin package installer",
+      "serves": [
+        "plugins"
+      ],
+      "depends_on": [
+        "T01",
+        "T05",
+        "T04a"
+      ],
+      "description": "Implement local directory/zip validation and immutable package installation in the already-created headless runtime crate.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/plugins/package.rs",
+          "action": "create",
+          "what": "Implement plugin package installer"
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/mod.rs",
+          "action": "create",
+          "what": "Resolve package-relative executable per platform; reject traversal, link/reparse escapes and install-time execution."
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "modify",
+          "what": "Resolve package-relative executable per platform; reject traversal, link/reparse escapes and install-time execution."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Resolve package-relative executable per platform; reject traversal, link/reparse escapes and install-time execution."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t07_implement_plugin_package_installer.rs",
+          "action": "create",
+          "what": "Installing a valid package has no process side effects; corrupted or escaping archives leave no active registry entry."
+        }
+      ],
+      "building_blocks": [
+        "plugins"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T07.1",
+          "description": "Implement local directory/zip validation and immutable package installation in the already-created headless runtime crate."
+        },
+        {
+          "id": "T07.2",
+          "description": "Resolve package-relative executable per platform; reject traversal, link/reparse escapes and install-time execution."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Installing a valid package has no process side effects; corrupted or escaping archives leave no active registry entry.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t07_implement_plugin_package_installer",
+          "path": "crates/r-code-runtime/tests/t07_implement_plugin_package_installer.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Installing a valid package has no process side effects; corrupted or escaping archives leave no active registry entry."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "插件包安装与校验"
+    },
+    {
+      "id": "T08",
+      "title": "Implement plugin catalog and version lifecycle",
+      "serves": [
+        "plugins"
+      ],
+      "depends_on": [
+        "T07",
+        "T06"
+      ],
+      "description": "Persist installed/enabled versions, granted services and configuration; derive availability from platform/protocol/entrypoint checks.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/plugins/catalog.rs",
+          "action": "create",
+          "what": "Implement plugin catalog and version lifecycle"
+        },
+        {
+          "path": "crates/r-code-store/src/v2/plugins.rs",
+          "action": "create",
+          "what": "Apply upgrades to new runs only; reject removal of pinned active/recoverable packages and duplicate identity with different bytes."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/mod.rs",
+          "action": "modify",
+          "what": "Apply upgrades to new runs only; reject removal of pinned active/recoverable packages and duplicate identity with different bytes."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t08_implement_plugin_catalog_and_version_lifecycle.rs",
+          "action": "create",
+          "what": "Catalog tests prove stable run pinning, explicit unavailable states and reversible enable/disable without changing another task."
+        }
+      ],
+      "building_blocks": [
+        "plugins"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T08.1",
+          "description": "Persist installed/enabled versions, granted services and configuration; derive availability from platform/protocol/entrypoint checks."
+        },
+        {
+          "id": "T08.2",
+          "description": "Apply upgrades to new runs only; reject removal of pinned active/recoverable packages and duplicate identity with different bytes."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Catalog tests prove stable run pinning, explicit unavailable states and reversible enable/disable without changing another task.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t08_implement_plugin_catalog_and_version_lifecycle",
+          "path": "crates/r-code-runtime/tests/t08_implement_plugin_catalog_and_version_lifecycle.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Catalog tests prove stable run pinning, explicit unavailable states and reversible enable/disable without changing another task."
+      ],
+      "estimated_loc": 330,
+      "title_zh": "插件目录与版本生命周期"
+    },
+    {
+      "id": "T09",
+      "title": "Implement bounded bidirectional stdio transport",
+      "serves": [
+        "plugins"
+      ],
+      "depends_on": [
+        "T02",
+        "T07"
+      ],
+      "description": "Spawn one plugin per run with hidden Windows consoles and direct executable argv; implement initialize, NDJSON framing, independent reader/writer and correlated calls.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/plugins/transport.rs",
+          "action": "create",
+          "what": "Implement bounded bidirectional stdio transport"
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/harness-test-helper.rs",
+          "action": "create",
+          "what": "Enforce selected frame/queue/timeout limits, bounded stderr, cancellation acknowledgement then process-tree cleanup."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/mod.rs",
+          "action": "modify",
+          "what": "Enforce selected frame/queue/timeout limits, bounded stderr, cancellation acknowledgement then process-tree cleanup."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t09_implement_bounded_bidirectional_stdio_transport.rs",
+          "action": "create",
+          "what": "Real fixture processes exercise nested callbacks, malformed/oversized output, missing handshake, blocked writer and stderr floods."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Declare helper binary behind the test-support feature, excluded from installed bundles."
+        }
+      ],
+      "building_blocks": [
+        "plugins"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T09.1",
+          "description": "Spawn one plugin per run with hidden Windows consoles and direct executable argv; implement initialize, NDJSON framing, independent reader/writer and correlated calls."
+        },
+        {
+          "id": "T09.2",
+          "description": "Enforce selected frame/queue/timeout limits, bounded stderr, cancellation acknowledgement then process-tree cleanup."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Real fixture processes exercise nested callbacks, malformed/oversized output, missing handshake, blocked writer and stderr floods.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t09_implement_bounded_bidirectional_stdio_transport",
+          "path": "crates/r-code-runtime/tests/t09_implement_bounded_bidirectional_stdio_transport.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Real fixture processes exercise nested callbacks, malformed/oversized output, missing handshake, blocked writer and stderr floods."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "有界双向进程传输"
+    },
+    {
+      "id": "T10",
+      "title": "Implement session binding and host RPC router",
+      "serves": [
+        "plugins"
+      ],
+      "depends_on": [
+        "T04",
+        "T08",
+        "T09",
+        "T02a"
+      ],
+      "description": "Bind all calls to host-owned run identity/generation and service grants; map protocol methods to service ports.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/plugins/router.rs",
+          "action": "create",
+          "what": "Implement session binding and host RPC router"
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/session.rs",
+          "action": "create",
+          "what": "Implement asynchronous callbacks and generation-bound handles with attempt-stable operation keys; route host-owned approval references, never generic questions, to permission decisions."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/mod.rs",
+          "action": "modify",
+          "what": "Implement asynchronous callbacks and generation-bound handles with attempt-stable operation keys; route host-owned approval references, never generic questions, to permission decisions."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t10_implement_session_binding_and_host_rpc_router.rs",
+          "action": "create",
+          "what": "Cross-run handles, unsupported methods and late callbacks are rejected before reaching effectful services."
+        }
+      ],
+      "building_blocks": [
+        "plugins"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T10.1",
+          "description": "Bind all calls to host-owned run identity/generation and service grants; map protocol methods to service ports."
+        },
+        {
+          "id": "T10.2",
+          "description": "Implement asynchronous callbacks and generation-bound handles with attempt-stable operation keys; route host-owned approval references, never generic questions, to permission decisions."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Cross-run handles, unsupported methods and late callbacks are rejected before reaching effectful services.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t10_implement_session_binding_and_host_rpc_router",
+          "path": "crates/r-code-runtime/tests/t10_implement_session_binding_and_host_rpc_router.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Cross-run handles, unsupported methods and late callbacks are rejected before reaching effectful services."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "宿主调用路由与运行身份绑定"
+    },
+    {
+      "id": "T11",
+      "title": "Deliver Rust SDK and independent Harness fixture",
+      "serves": [
+        "plugins"
+      ],
+      "depends_on": [
+        "T09",
+        "T10"
+      ],
+      "description": "Implement lifecycle registration, host-call client, stream consumption and cancellation helpers over the public protocol.",
+      "files": [
+        {
+          "path": "crates/r-code-harness-sdk/src/lib.rs",
+          "action": "create",
+          "what": "Deliver Rust SDK and independent Harness fixture"
+        },
+        {
+          "path": "crates/r-code-harness-sdk/Cargo.toml",
+          "action": "create",
+          "what": "Add an independently built example Harness with a plan-then-repair workflow and manifest; it depends only on SDK/protocol."
+        },
+        {
+          "path": "examples/repair-harness/Cargo.toml",
+          "action": "create",
+          "what": "Add an independently built example Harness with a plan-then-repair workflow and manifest; it depends only on SDK/protocol."
+        },
+        {
+          "path": "examples/repair-harness/src/main.rs",
+          "action": "create",
+          "what": "Add an independently built example Harness with a plan-then-repair workflow and manifest; it depends only on SDK/protocol."
+        },
+        {
+          "path": "examples/repair-harness/harness.json",
+          "action": "create",
+          "what": "Add an independently built example Harness with a plan-then-repair workflow and manifest; it depends only on SDK/protocol."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Add an independently built example Harness with a plan-then-repair workflow and manifest; it depends only on SDK/protocol."
+        },
+        {
+          "path": "crates/r-code-harness-sdk/tests/t11_deliver_rust_sdk_and_independent_harness_fixture.rs",
+          "action": "create",
+          "what": "Install and execute the fixture through the actual registry/transport without modifying host source or selecting a built-in engine enum."
+        }
+      ],
+      "building_blocks": [
+        "plugins"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T11.1",
+          "description": "Implement lifecycle registration, host-call client, stream consumption and cancellation helpers over the public protocol."
+        },
+        {
+          "id": "T11.2",
+          "description": "Add an independently built example Harness with a plan-then-repair workflow and manifest; it depends only on SDK/protocol."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Install and execute the fixture through the actual registry/transport without modifying host source or selecting a built-in engine enum.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-sdk --test t11_deliver_rust_sdk_and_independent_harness_fixture",
+          "path": "crates/r-code-harness-sdk/tests/t11_deliver_rust_sdk_and_independent_harness_fixture.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Install and execute the fixture through the actual registry/transport without modifying host source or selecting a built-in engine enum."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "Rust SDK 与独立 Harness 示例"
+    },
+    {
+      "id": "T12",
+      "title": "Connect Gateway tools to host service ports",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T05",
+        "T10",
+        "T12a"
+      ],
+      "description": "Adapt existing tools, dynamic MCP and permission engine to host.tools; bind scope and persist operation intents before execution.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/tools.rs",
+          "action": "create",
+          "what": "Connect Gateway tools to host service ports"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Authorize through the common service, persist intents, then execute; reuse typed metadata/directives, baseline capture and blob output."
+        },
+        {
+          "path": "crates/r-code-gateway/src/gateway.rs",
+          "action": "modify",
+          "what": "Authorize through the common service, persist intents, then execute; reuse typed metadata/directives, baseline capture and blob output."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t12_connect_gateway_tools_to_host_service_ports.rs",
+          "action": "create",
+          "what": "Native and fixture calls exercise read-only enforcement, denied tools, scope escape, cancellation and original Gateway regressions."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T12.1",
+          "description": "Adapt existing tools, dynamic MCP and permission engine to host.tools; bind scope and persist operation intents before execution."
+        },
+        {
+          "id": "T12.2",
+          "description": "Authorize through the common service, persist intents, then execute; reuse typed metadata/directives, baseline capture and blob output."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Native and fixture calls exercise read-only enforcement, denied tools, scope escape, cancellation and original Gateway regressions.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t12_connect_gateway_tools_to_host_service_ports",
+          "path": "crates/r-code-runtime/tests/t12_connect_gateway_tools_to_host_service_ports.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Native and fixture calls exercise read-only enforcement, denied tools, scope escape, cancellation and original Gateway regressions."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "Gateway 工具服务适配"
+    },
+    {
+      "id": "T13",
+      "title": "Unify command execution for tools and verification",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T12"
+      ],
+      "description": "Extract a shared execution service around existing shell resolution, CommandExecutionBackend and process-tree cleanup.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/execution.rs",
+          "action": "create",
+          "what": "Unify command execution for tools and verification"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Route bash and future verification through it; preserve RTK/Windows dialect behavior and separate effect authorization from backend spawning."
+        },
+        {
+          "path": "crates/r-code-gateway/src/tools_command.rs",
+          "action": "modify",
+          "what": "Route bash and future verification through it; preserve RTK/Windows dialect behavior and separate effect authorization from backend spawning."
+        },
+        {
+          "path": "crates/r-code-gateway/src/execution_backend.rs",
+          "action": "modify",
+          "what": "Route bash and future verification through it; preserve RTK/Windows dialect behavior and separate effect authorization from backend spawning."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t13_unify_command_execution_for_tools_and_verificati.rs",
+          "action": "create",
+          "what": "Run the Windows command corpus through real default and selected backend routes; timeout/cancel leaves no child process."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T13.1",
+          "description": "Extract a shared execution service around existing shell resolution, CommandExecutionBackend and process-tree cleanup."
+        },
+        {
+          "id": "T13.2",
+          "description": "Route bash and future verification through it; preserve RTK/Windows dialect behavior and separate effect authorization from backend spawning."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Run the Windows command corpus through real default and selected backend routes; timeout/cancel leaves no child process.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t13_unify_command_execution_for_tools_and_verificati",
+          "path": "crates/r-code-runtime/tests/t13_unify_command_execution_for_tools_and_verificati.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Run the Windows command corpus through real default and selected backend routes; timeout/cancel leaves no child process."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "统一命令执行服务"
+    },
+    {
+      "id": "T14",
+      "title": "Expose managed interactive processes",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T13",
+        "T14a",
+        "T14b",
+        "T12a",
+        "T12b"
+      ],
+      "description": "Implement host.process.open/write/close with run-owned process handles, streaming output and bounded buffers.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/processes.rs",
+          "action": "create",
+          "what": "Expose managed interactive processes"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Use LaunchCapability authorization and guardian-managed child trees; freeze Codex launch/policy fields while plugin handles App Server workflow."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t14_expose_managed_interactive_processes.rs",
+          "action": "create",
+          "what": "Echo/App-Server-like fixture verifies bidirectional I/O, cross-run handle rejection, launch failure and descendant process cleanup."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T14.1",
+          "description": "Implement host.process.open/write/close with run-owned process handles, streaming output and bounded buffers."
+        },
+        {
+          "id": "T14.2",
+          "description": "Use LaunchCapability authorization and guardian-managed trees; apply a generic declarative process profile at the complete-frame boundary. Native tools and Codex App Server workflow remain separate plugins/services."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Echo/App-Server-like fixture verifies bidirectional I/O, cross-run handle rejection, launch failure and descendant process cleanup.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t14_expose_managed_interactive_processes",
+          "path": "crates/r-code-runtime/tests/t14_expose_managed_interactive_processes.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Echo/App-Server-like fixture verifies bidirectional I/O, cross-run handle rejection, launch failure and descendant process cleanup."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "受管交互进程服务"
+    },
+    {
+      "id": "T15",
+      "title": "Expose model providers through a broker",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T10",
+        "T05",
+        "T04a"
+      ],
+      "description": "Adapt existing agent-llm Providers to host.model.stream with stable request projection, usage records and opaque provider selections.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/models.rs",
+          "action": "create",
+          "what": "Expose model providers through a broker"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Keep credentials host-owned; preserve provider capability/inference settings and retry only requests proven safe for replay."
+        },
+        {
+          "path": "crates/r-code-runtime/src/providers/mod.rs",
+          "action": "create",
+          "what": "Keep credentials host-owned; preserve provider capability/inference settings and retry only requests proven safe for replay."
+        },
+        {
+          "path": "crates/r-code-runtime/src/settings.rs",
+          "action": "create",
+          "what": "Keep credentials host-owned; preserve provider capability/inference settings and retry only requests proven safe for replay."
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "modify",
+          "what": "Keep credentials host-owned; preserve provider capability/inference settings and retry only requests proven safe for replay."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Keep credentials host-owned; preserve provider capability/inference settings and retry only requests proven safe for replay."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t15_expose_model_providers_through_a_broker.rs",
+          "action": "create",
+          "what": "Provider mock and protocol fixtures verify streaming, images via artifact refs, tool messages, cancellation and no key disclosure."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T15.1",
+          "description": "Adapt existing agent-llm Providers to host.model.stream with stable request projection, usage records and opaque provider selections."
+        },
+        {
+          "id": "T15.2",
+          "description": "Keep credentials host-owned; preserve provider capability/inference settings and retry only requests proven safe for replay."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Provider mock and protocol fixtures verify streaming, images via artifact refs, tool messages, cancellation and no key disclosure.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t15_expose_model_providers_through_a_broker",
+          "path": "crates/r-code-runtime/tests/t15_expose_model_providers_through_a_broker.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Provider mock and protocol fixtures verify streaming, images via artifact refs, tool messages, cancellation and no key disclosure."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "模型请求代理与凭据隔离"
+    },
+    {
+      "id": "T16",
+      "title": "Implement artifacts and context projections",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T05",
+        "T10",
+        "T15"
+      ],
+      "description": "Expose canonical transcript, instruction/skill/MCP catalogs, attachments and explicitly configured frozen memory through versioned context/artifact services.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/context.rs",
+          "action": "create",
+          "what": "Implement artifacts and context projections"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/artifacts.rs",
+          "action": "create",
+          "what": "Move provider compaction/cache utilities behind neutral adapters while leaving context selection strategy to each Harness."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Move provider compaction/cache utilities behind neutral adapters while leaving context selection strategy to each Harness."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t16_implement_artifacts_and_context_projections.rs",
+          "action": "create",
+          "what": "Replay and retained-tail tests preserve complete tool pairs, attachment ownership and frozen context identity without duplicate transcript writers."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T16.1",
+          "description": "Expose canonical transcript, instruction/skill/MCP catalogs, attachments and explicitly configured frozen memory through versioned context/artifact services."
+        },
+        {
+          "id": "T16.2",
+          "description": "Move provider compaction/cache utilities behind neutral adapters while leaving context selection strategy to each Harness."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Replay and retained-tail tests preserve complete tool pairs, attachment ownership and frozen context identity without duplicate transcript writers.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t16_implement_artifacts_and_context_projections",
+          "path": "crates/r-code-runtime/tests/t16_implement_artifacts_and_context_projections.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Replay and retained-tail tests preserve complete tool pairs, attachment ownership and frozen context identity without duplicate transcript writers."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "上下文、附件与内容投影"
+    },
+    {
+      "id": "T17",
+      "title": "Implement workspace candidate capture",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T05",
+        "T12",
+        "T06a"
+      ],
+      "description": "Reuse TaskWorkspaceBinding and capability path checks to bind local/worktree roots; capture starting dirty tracked/untracked state.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/workspaces.rs",
+          "action": "create",
+          "what": "Implement workspace candidate capture"
+        },
+        {
+          "path": "crates/r-code-runtime/src/workspace_locks.rs",
+          "action": "create",
+          "what": "Add cross-profile canonical-workspace OS locks and common-Git-dir locks; capture immutable blob manifests and verify capture/live consistency."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Add cross-profile canonical-workspace OS locks and common-Git-dir locks; capture immutable blob manifests and verify capture/live consistency."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t17_implement_workspace_candidate_capture.rs",
+          "action": "create",
+          "what": "Fixtures preserve pre-existing user changes, reject foreign worktrees and produce different candidate IDs for relevant content changes."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T17.1",
+          "description": "Reuse TaskWorkspaceBinding and capability path checks to bind local/worktree roots; capture starting dirty tracked/untracked state."
+        },
+        {
+          "id": "T17.2",
+          "description": "Add cross-profile canonical-workspace OS locks and common-Git-dir locks; capture immutable blob manifests and verify capture/live consistency."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fixtures preserve pre-existing user changes, reject foreign worktrees and produce different candidate IDs for relevant content changes.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t17_implement_workspace_candidate_capture",
+          "path": "crates/r-code-runtime/tests/t17_implement_workspace_candidate_capture.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Fixtures preserve pre-existing user changes, reject foreign worktrees and produce different candidate IDs for relevant content changes."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "工作区快照与跨配置写锁"
+    },
+    {
+      "id": "T18",
+      "title": "Implement verification profiles and evidence store",
+      "serves": [
+        "verification"
+      ],
+      "depends_on": [
+        "T03",
+        "T05",
+        "T16",
+        "T17"
+      ],
+      "description": "Define task-kind-aware CheckDefinition, immutable acceptance profile revisions and evidence validity rules keyed by candidate/check/environment identity.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/verification.rs",
+          "action": "create",
+          "what": "Implement verification profiles and evidence store"
+        },
+        {
+          "path": "crates/r-code-store/src/v2/verification.rs",
+          "action": "create",
+          "what": "Pin acceptance control files/entrypoint bytes and declared source/dependency/environment inputs; candidate-redefinable script aliases cannot stand in for frozen required checks."
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Pin acceptance control files/entrypoint bytes and declared source/dependency/environment inputs; candidate-redefinable script aliases cannot stand in for frozen required checks."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t18_implement_verification_profiles_and_evidence_sto.rs",
+          "action": "create",
+          "what": "Tests cover absent checks, changed check definitions, stale evidence and refusal of plugin-authored pass assertions."
+        }
+      ],
+      "building_blocks": [
+        "verification"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T18.1",
+          "description": "Define task-kind-aware CheckDefinition, immutable acceptance profile revisions and evidence validity rules keyed by candidate/check/environment identity."
+        },
+        {
+          "id": "T18.2",
+          "description": "Pin acceptance control files/entrypoint bytes and declared source/dependency/environment inputs; candidate-redefinable script aliases cannot stand in for frozen required checks."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Tests cover absent checks, changed check definitions, stale evidence and refusal of plugin-authored pass assertions.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t18_implement_verification_profiles_and_evidence_sto",
+          "path": "crates/r-code-kernel/tests/t18_implement_verification_profiles_and_evidence_sto.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Tests cover absent checks, changed check definitions, stale evidence and refusal of plugin-authored pass assertions."
+      ],
+      "estimated_loc": 380,
+      "title_zh": "验收定义与证据有效性"
+    },
+    {
+      "id": "T19",
+      "title": "Implement host verification runner",
+      "serves": [
+        "verification"
+      ],
+      "depends_on": [
+        "T13",
+        "T17",
+        "T18",
+        "T17a",
+        "T12a"
+      ],
+      "description": "Run the prepared private candidate/check workspace through ExecutionService with authorization, typed deadlines and environment/output capture.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/verification.rs",
+          "action": "create",
+          "what": "Implement host verification runner"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Collect exit/log/toolchain evidence, detect changed inputs, distinguish failed checks from unavailable environments, and return structured repair feedback."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t19_implement_host_verification_runner.rs",
+          "action": "create",
+          "what": "Real Rust/TS fixtures cover multi-root checks, missing dependencies, timeout, source edits during checking and check-definition tampering."
+        }
+      ],
+      "building_blocks": [
+        "verification"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T19.1",
+          "description": "Run the prepared private candidate/check workspace through ExecutionService with authorization, typed deadlines and environment/output capture."
+        },
+        {
+          "id": "T19.2",
+          "description": "Collect exit/log/toolchain evidence, detect changed inputs, distinguish failed checks from unavailable environments, and return structured repair feedback."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Real Rust/TS fixtures cover multi-root checks, missing dependencies, timeout, source edits during checking and check-definition tampering.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t19_implement_host_verification_runner",
+          "path": "crates/r-code-runtime/tests/t19_implement_host_verification_runner.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Real Rust/TS fixtures cover multi-root checks, missing dependencies, timeout, source edits during checking and check-definition tampering."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "宿主验证执行器"
+    },
+    {
+      "id": "T20",
+      "title": "Implement completion arbitration",
+      "serves": [
+        "verification"
+      ],
+      "depends_on": [
+        "T06",
+        "T10",
+        "T18",
+        "T19"
+      ],
+      "description": "Handle CompletionProposal by looking up host-owned required evidence for the current contract/candidate; preserve independent review disposition.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/completion.rs",
+          "action": "create",
+          "what": "Implement completion arbitration"
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Return verified, unverified, repair-required or blocked verdicts; replies/plans can settle without pretending code verification occurred."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t20_implement_completion_arbitration.rs",
+          "action": "create",
+          "what": "A scripted Harness cannot finish verified after omitting a check, citing another run, or changing files after a passing check."
+        }
+      ],
+      "building_blocks": [
+        "verification"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T20.1",
+          "description": "Handle CompletionProposal by looking up host-owned required evidence for the current contract/candidate; preserve independent review disposition."
+        },
+        {
+          "id": "T20.2",
+          "description": "Return verified, unverified, repair-required or blocked verdicts; replies/plans can settle without pretending code verification occurred."
+        }
+      ],
+      "tests": [
+        {
+          "description": "A scripted Harness cannot finish verified after omitting a check, citing another run, or changing files after a passing check.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t20_implement_completion_arbitration",
+          "path": "crates/r-code-kernel/tests/t20_implement_completion_arbitration.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "A scripted Harness cannot finish verified after omitting a check, citing another run, or changing files after a passing check."
+      ],
+      "estimated_loc": 350,
+      "title_zh": "候选结果验收裁决"
+    },
+    {
+      "id": "T21",
+      "title": "Implement Plan and durable questions",
+      "serves": [
+        "kernel"
+      ],
+      "depends_on": [
+        "T06",
+        "T10",
+        "T20"
+      ],
+      "description": "Port Plan ownership/revision/dependency transitions and persistent question/answer continuation into host services available to all Harnesses.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/plans.rs",
+          "action": "create",
+          "what": "Implement Plan and durable questions"
+        },
+        {
+          "path": "crates/r-code-kernel/src/questions.rs",
+          "action": "create",
+          "what": "Require current evidence before completing code WorkUnits; no-op duplicate updates replay receipts; answered questions resume once."
+        },
+        {
+          "path": "crates/r-code-store/src/v2/plans.rs",
+          "action": "create",
+          "what": "Require current evidence before completing code WorkUnits; no-op duplicate updates replay receipts; answered questions resume once."
+        },
+        {
+          "path": "crates/r-code-store/src/v2/questions.rs",
+          "action": "create",
+          "what": "Require current evidence before completing code WorkUnits; no-op duplicate updates replay receipts; answered questions resume once."
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Require current evidence before completing code WorkUnits; no-op duplicate updates replay receipts; answered questions resume once."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t21_implement_plan_and_durable_questions.rs",
+          "action": "create",
+          "what": "Existing Plan/HITL fixtures plus both-Harness contract tests cover dependency order, stale update, crash-after-answer and missing acceptance evidence."
+        }
+      ],
+      "building_blocks": [
+        "kernel"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T21.1",
+          "description": "Port Plan ownership/revision/dependency transitions and persistent question/answer continuation into host services available to all Harnesses."
+        },
+        {
+          "id": "T21.2",
+          "description": "Require current evidence before completing code WorkUnits; no-op duplicate updates replay receipts; answered questions resume once."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Existing Plan/HITL fixtures plus both-Harness contract tests cover dependency order, stale update, crash-after-answer and missing acceptance evidence.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t21_implement_plan_and_durable_questions",
+          "path": "crates/r-code-kernel/tests/t21_implement_plan_and_durable_questions.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Existing Plan/HITL fixtures plus both-Harness contract tests cover dependency order, stale update, crash-after-answer and missing acceptance evidence."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "Plan 与持久化人工输入"
+    },
+    {
+      "id": "T22",
+      "title": "Implement child-run supervision and shared budgets",
+      "serves": [
+        "kernel"
+      ],
+      "depends_on": [
+        "T06",
+        "T10",
+        "T20"
+      ],
+      "description": "Implement host.children with plugin selection, read-only/approval/full permissions bounded by parent, shared resource accounting and collectable reports.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/children.rs",
+          "action": "create",
+          "what": "Implement child-run supervision and shared budgets"
+        },
+        {
+          "path": "crates/r-code-kernel/src/budget.rs",
+          "action": "create",
+          "what": "Preserve tree limits and parent/child cancellation ownership; only collected/settled descendants allow finalization."
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Preserve tree limits and parent/child cancellation ownership; only collected/settled descendants allow finalization."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t22_implement_child_run_supervision_and_shared_budge.rs",
+          "action": "create",
+          "what": "Cross-Harness child fixtures prove permission ceilings, parent cancellation, no orphan runs and budget exhaustion with usable partial results."
+        }
+      ],
+      "building_blocks": [
+        "kernel"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T22.1",
+          "description": "Implement host.children with plugin selection, read-only/approval/full permissions bounded by parent, shared resource accounting and collectable reports."
+        },
+        {
+          "id": "T22.2",
+          "description": "Preserve tree limits and parent/child cancellation ownership; only collected/settled descendants allow finalization."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Cross-Harness child fixtures prove permission ceilings, parent cancellation, no orphan runs and budget exhaustion with usable partial results.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t22_implement_child_run_supervision_and_shared_budge",
+          "path": "crates/r-code-kernel/tests/t22_implement_child_run_supervision_and_shared_budge.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Cross-Harness child fixtures prove permission ceilings, parent cancellation, no orphan runs and budget exhaustion with usable partial results."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "子任务监督与共享预算"
+    },
+    {
+      "id": "T23",
+      "title": "Implement review and scoped rollback",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T17",
+        "T21"
+      ],
+      "description": "Adapt baseline-aware review and journaled inverse merge to v2 WorkUnit-owned changes and current candidate identities.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/review.rs",
+          "action": "create",
+          "what": "Implement review and scoped rollback"
+        },
+        {
+          "path": "crates/r-code-store/src/v2/review.rs",
+          "action": "create",
+          "what": "Expose accept/reject/file/feature actions through the application service; retain unassigned external changes for ordinary review."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Expose accept/reject/file/feature actions through the application service; retain unassigned external changes for ordinary review."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t23_implement_review_and_scoped_rollback.rs",
+          "action": "create",
+          "what": "Rollback fixtures preserve later/user edits, handle conflicts without partial writes and recover an interrupted multi-file rejection."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T23.1",
+          "description": "Adapt baseline-aware review and journaled inverse merge to v2 WorkUnit-owned changes and current candidate identities."
+        },
+        {
+          "id": "T23.2",
+          "description": "Expose accept/reject/file/feature actions through the application service; retain unassigned external changes for ordinary review."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Rollback fixtures preserve later/user edits, handle conflicts without partial writes and recover an interrupted multi-file rejection.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t23_implement_review_and_scoped_rollback",
+          "path": "crates/r-code-runtime/tests/t23_implement_review_and_scoped_rollback.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Rollback fixtures preserve later/user edits, handle conflicts without partial writes and recover an interrupted multi-file rejection."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "变更审核与归属回滚"
+    },
+    {
+      "id": "T24",
+      "title": "Implement checkpoints and operation reconciliation",
+      "serves": [
+        "kernel"
+      ],
+      "depends_on": [
+        "T05",
+        "T14",
+        "T17",
+        "T23",
+        "T02a",
+        "T14a",
+        "T14b"
+      ],
+      "description": "Persist versioned plugin checkpoints and operation intent/result receipts; restore same-package state only after workspace/contract validation.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/recovery.rs",
+          "action": "create",
+          "what": "Implement checkpoints and operation reconciliation"
+        },
+        {
+          "path": "crates/r-code-store/src/v2/operations.rs",
+          "action": "create",
+          "what": "Reconcile attempt-stable operation receipts and consumed input checkpoint positions, confirm guardian/process termination and persist writer barriers for indeterminate effects."
+        },
+        {
+          "path": "crates/r-code-store/src/v2/checkpoints.rs",
+          "action": "create",
+          "what": "Reconcile attempt-stable operation receipts and consumed input checkpoint positions, confirm guardian/process termination and persist writer barriers for indeterminate effects."
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Reconcile attempt-stable operation receipts and consumed input checkpoint positions, confirm guardian/process termination and persist writer barriers for indeterminate effects."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t24_implement_checkpoints_and_operation_reconciliati.rs",
+          "action": "create",
+          "what": "Fault injection before/after side effects proves no duplicate execution, no global reset-hard, and explicit recovery when a pinned plugin is unavailable."
+        }
+      ],
+      "building_blocks": [
+        "kernel"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T24.1",
+          "description": "Persist versioned plugin checkpoints and operation intent/result receipts; restore same-package state only after workspace/contract validation."
+        },
+        {
+          "id": "T24.2",
+          "description": "Reconcile attempt-stable operation receipts and consumed input checkpoint positions, confirm guardian/process termination and persist writer barriers for indeterminate effects."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fault injection before/after side effects proves no duplicate execution, no global reset-hard, and explicit recovery when a pinned plugin is unavailable.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t24_implement_checkpoints_and_operation_reconciliati",
+          "path": "crates/r-code-kernel/tests/t24_implement_checkpoints_and_operation_reconciliati.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Fault injection before/after side effects proves no duplicate execution, no global reset-hard, and explicit recovery when a pinned plugin is unavailable."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "Checkpoint 与副作用恢复"
+    },
+    {
+      "id": "T25",
+      "title": "Implement terminal cancellation and generation fencing",
+      "serves": [
+        "kernel"
+      ],
+      "depends_on": [
+        "T14",
+        "T22",
+        "T24",
+        "T06a"
+      ],
+      "description": "Revoke run generations before cascading cancellation through children, model streams, tools and managed processes.",
+      "files": [
+        {
+          "path": "crates/r-code-kernel/src/cancellation.rs",
+          "action": "create",
+          "what": "Implement terminal cancellation and generation fencing"
+        },
+        {
+          "path": "crates/r-code-kernel/src/lib.rs",
+          "action": "modify",
+          "what": "Require guardian/job process termination confirmation before lease release; late callbacks cannot mutate; ownership or process uncertainty stays blocked."
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/mod.rs",
+          "action": "modify",
+          "what": "Require guardian/job process termination confirmation before lease release; late callbacks cannot mutate; ownership or process uncertainty stays blocked."
+        },
+        {
+          "path": "crates/r-code-kernel/tests/t25_implement_terminal_cancellation_and_generation_f.rs",
+          "action": "create",
+          "what": "Race tests cover late callbacks, plugin ignoring cancellation, queued next message and exactly one final outcome."
+        }
+      ],
+      "building_blocks": [
+        "kernel"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T25.1",
+          "description": "Revoke run generations before cascading cancellation through children, model streams, tools and managed processes."
+        },
+        {
+          "id": "T25.2",
+          "description": "Require guardian/job process termination confirmation before lease release; late callbacks cannot mutate; ownership or process uncertainty stays blocked."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Race tests cover late callbacks, plugin ignoring cancellation, queued next message and exactly one final outcome.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-kernel --test t25_implement_terminal_cancellation_and_generation_f",
+          "path": "crates/r-code-kernel/tests/t25_implement_terminal_cancellation_and_generation_f.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Race tests cover late callbacks, plugin ignoring cancellation, queued next message and exactly one final outcome."
+      ],
+      "estimated_loc": 320,
+      "title_zh": "取消、隔离代次与终态收束"
+    },
+    {
+      "id": "T26",
+      "title": "Port the Native model/tool loop to a Harness binary",
+      "serves": [
+        "native"
+      ],
+      "depends_on": [
+        "T11",
+        "T12",
+        "T15",
+        "T16",
+        "T20"
+      ],
+      "description": "Port pure loop/request-shaping logic from agent_loop.rs/llm_runtime.rs into r-code-harness-native, replacing direct tools/providers/store access with SDK host calls.",
+      "files": [
+        {
+          "path": "plugins/native/src/loop.rs",
+          "action": "create",
+          "what": "Port the Native model/tool loop to a Harness binary"
+        },
+        {
+          "path": "plugins/native/Cargo.toml",
+          "action": "create",
+          "what": "Wire the executable manifest and retain provider-specific request stability and summary/error behavior through tests."
+        },
+        {
+          "path": "plugins/native/harness.json",
+          "action": "create",
+          "what": "Wire the executable manifest and retain provider-specific request stability and summary/error behavior through tests."
+        },
+        {
+          "path": "plugins/native/src/main.rs",
+          "action": "create",
+          "what": "Wire the executable manifest and retain provider-specific request stability and summary/error behavior through tests."
+        },
+        {
+          "path": "plugins/native/src/lib.rs",
+          "action": "create",
+          "what": "Wire the executable manifest and retain provider-specific request stability and summary/error behavior through tests."
+        },
+        {
+          "path": "plugins/native/src/request_projection.rs",
+          "action": "create",
+          "what": "Wire the executable manifest and retain provider-specific request stability and summary/error behavior through tests."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Wire the executable manifest and retain provider-specific request stability and summary/error behavior through tests."
+        },
+        {
+          "path": "plugins/native/tests/t26_port_the_native_model_tool_loop_to_a_harness_bin.rs",
+          "action": "create",
+          "what": "Native binary performs real fixture editing through public host APIs; dependency guards reject Gateway/store/runtime/Tauri imports."
+        }
+      ],
+      "building_blocks": [
+        "native"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T26.1",
+          "description": "Port pure loop/request-shaping logic from agent_loop.rs/llm_runtime.rs into r-code-harness-native, replacing direct tools/providers/store access with SDK host calls."
+        },
+        {
+          "id": "T26.2",
+          "description": "Wire the executable manifest and retain provider-specific request stability and summary/error behavior through tests."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Native binary performs real fixture editing through public host APIs; dependency guards reject Gateway/store/runtime/Tauri imports.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-native --test t26_port_the_native_model_tool_loop_to_a_harness_bin",
+          "path": "plugins/native/tests/t26_port_the_native_model_tool_loop_to_a_harness_bin.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Native binary performs real fixture editing through public host APIs; dependency guards reject Gateway/store/runtime/Tauri imports."
+      ],
+      "estimated_loc": 600,
+      "sizing_note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch.",
+      "title_zh": "Native 模型／工具循环插件化"
+    },
+    {
+      "id": "T27",
+      "title": "Port Native Plan, steer and context recovery",
+      "serves": [
+        "native"
+      ],
+      "depends_on": [
+        "T21",
+        "T24",
+        "T26"
+      ],
+      "description": "Implement Native Plan/questions, durable continuation, steer application and canonical history/model projection reconstruction through host services.",
+      "files": [
+        {
+          "path": "plugins/native/src/session.rs",
+          "action": "create",
+          "what": "Port Native Plan, steer and context recovery"
+        },
+        {
+          "path": "plugins/native/src/lib.rs",
+          "action": "modify",
+          "what": "Persist only plugin-specific opaque state; host IDs, transcript and task completion stay authoritative."
+        },
+        {
+          "path": "plugins/native/tests/t27_port_native_plan_steer_and_context_recovery.rs",
+          "action": "create",
+          "what": "Port retained-tail/cache-guard and Plan continuation scenarios to executable-plugin tests, including restart and accepted steer before text-only finish."
+        }
+      ],
+      "building_blocks": [
+        "native"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T27.1",
+          "description": "Implement Native Plan/questions, durable continuation, steer application and canonical history/model projection reconstruction through host services."
+        },
+        {
+          "id": "T27.2",
+          "description": "Persist only plugin-specific opaque state; host IDs, transcript and task completion stay authoritative."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Port retained-tail/cache-guard and Plan continuation scenarios to executable-plugin tests, including restart and accepted steer before text-only finish.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-native --test t27_port_native_plan_steer_and_context_recovery",
+          "path": "plugins/native/tests/t27_port_native_plan_steer_and_context_recovery.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Port retained-tail/cache-guard and Plan continuation scenarios to executable-plugin tests, including restart and accepted steer before text-only finish."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "Native Plan、引导与上下文恢复"
+    },
+    {
+      "id": "T28",
+      "title": "Port Native delegation, review and strategy budgets",
+      "serves": [
+        "native"
+      ],
+      "depends_on": [
+        "T22",
+        "T25",
+        "T27"
+      ],
+      "description": "Port delegation routing, report collection and optional quality review; use host evidence in reviewer packets.",
+      "files": [
+        {
+          "path": "plugins/native/src/orchestration.rs",
+          "action": "create",
+          "what": "Port Native delegation, review and strategy budgets"
+        },
+        {
+          "path": "plugins/native/src/lib.rs",
+          "action": "modify",
+          "what": "Preserve existing strategy defaults via explicit config while root budgets remain host-owned; remove direct checkpoint/reset or terminal state writes."
+        },
+        {
+          "path": "plugins/native/src/main.rs",
+          "action": "modify",
+          "what": "Preserve existing strategy defaults via explicit config while root budgets remain host-owned; remove direct checkpoint/reset or terminal state writes."
+        },
+        {
+          "path": "plugins/native/tests/t28_port_native_delegation_review_and_strategy_budge.rs",
+          "action": "create",
+          "what": "Native-to-fixture and Native-to-Codex mock child scenarios verify evidence review, bounded retries and complete report collection."
+        }
+      ],
+      "building_blocks": [
+        "native"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T28.1",
+          "description": "Port delegation routing, report collection and optional quality review; use host evidence in reviewer packets."
+        },
+        {
+          "id": "T28.2",
+          "description": "Preserve existing strategy defaults via explicit config while root budgets remain host-owned; remove direct checkpoint/reset or terminal state writes."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Native-to-fixture and Native-to-Codex mock child scenarios verify evidence review, bounded retries and complete report collection.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-native --test t28_port_native_delegation_review_and_strategy_budge",
+          "path": "plugins/native/tests/t28_port_native_delegation_review_and_strategy_budge.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Native-to-fixture and Native-to-Codex mock child scenarios verify evidence review, bounded retries and complete report collection."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "Native 委派、复核与策略"
+    },
+    {
+      "id": "T29",
+      "title": "Port Codex App Server protocol adapter",
+      "serves": [
+        "codex"
+      ],
+      "depends_on": [
+        "T11",
+        "T14",
+        "T16",
+        "T12a",
+        "T12b"
+      ],
+      "description": "Move Codex-specific App Server protocol parsing and sequencing into r-code-harness-codex using managed process I/O.",
+      "files": [
+        {
+          "path": "plugins/codex/src/app_server.rs",
+          "action": "create",
+          "what": "Port Codex App Server protocol adapter"
+        },
+        {
+          "path": "plugins/codex/Cargo.toml",
+          "action": "create",
+          "what": "Reuse host-resolved executable/auth/config LaunchCapability and its enforced App Server permission ceilings; preserve external observations and thread identifiers."
+        },
+        {
+          "path": "plugins/codex/harness.json",
+          "action": "create",
+          "what": "Reuse host-resolved executable/auth/config LaunchCapability and its enforced App Server permission ceilings; preserve external observations and thread identifiers."
+        },
+        {
+          "path": "plugins/codex/src/main.rs",
+          "action": "create",
+          "what": "Reuse host-resolved executable/auth/config LaunchCapability and its enforced App Server permission ceilings; preserve external observations and thread identifiers."
+        },
+        {
+          "path": "plugins/codex/src/lib.rs",
+          "action": "create",
+          "what": "Reuse host-resolved executable/auth/config LaunchCapability and its enforced App Server permission ceilings; preserve external observations and thread identifiers."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Reuse host-resolved executable/auth/config LaunchCapability and its enforced App Server permission ceilings; preserve external observations and thread identifiers."
+        },
+        {
+          "path": "plugins/codex/tests/t29_port_codex_app_server_protocol_adapter.rs",
+          "action": "create",
+          "what": "Recorded App Server fixtures prove initialization, stream shape, startup failure, reconnect limits and no raw reasoning exposure."
+        }
+      ],
+      "building_blocks": [
+        "codex"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T29.1",
+          "description": "Move Codex-specific App Server protocol parsing and sequencing into r-code-harness-codex using managed process I/O."
+        },
+        {
+          "id": "T29.2",
+          "description": "Supply Codex-specific permission/cwd/approval constraints as pinned process-profile data interpreted by the generic host; use resolved executable/auth/config references, preserve external provenance."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Recorded App Server fixtures prove initialization, stream shape, startup failure, reconnect limits and no raw reasoning exposure.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-codex --test t29_port_codex_app_server_protocol_adapter",
+          "path": "plugins/codex/tests/t29_port_codex_app_server_protocol_adapter.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Recorded App Server fixtures prove initialization, stream shape, startup failure, reconnect limits and no raw reasoning exposure."
+      ],
+      "estimated_loc": 600,
+      "sizing_note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch.",
+      "title_zh": "Codex App Server 插件适配"
+    },
+    {
+      "id": "T30",
+      "title": "Port Codex interactions and completion",
+      "serves": [
+        "codex"
+      ],
+      "depends_on": [
+        "T20",
+        "T21",
+        "T25",
+        "T29"
+      ],
+      "description": "Map approvals, questions, steer, Plan/progress and cancellation into common host services and typed UI events.",
+      "files": [
+        {
+          "path": "plugins/codex/src/interactions.rs",
+          "action": "create",
+          "what": "Port Codex interactions and completion"
+        },
+        {
+          "path": "plugins/codex/src/lib.rs",
+          "action": "modify",
+          "what": "Submit candidate results for host verification; advertise negotiated unsupported capabilities and external-action control limits."
+        },
+        {
+          "path": "plugins/codex/tests/t30_port_codex_interactions_and_completion.rs",
+          "action": "create",
+          "what": "Current Codex interaction fixtures run through plugin transport; declined/expired questions, partial results and stale verification have correct outcomes."
+        }
+      ],
+      "building_blocks": [
+        "codex"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T30.1",
+          "description": "Map approvals, questions, steer, Plan/progress and cancellation into common host services and typed UI events."
+        },
+        {
+          "id": "T30.2",
+          "description": "Submit candidate results for host verification; advertise negotiated unsupported capabilities and external-action control limits."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Current Codex interaction fixtures run through plugin transport; declined/expired questions, partial results and stale verification have correct outcomes.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-codex --test t30_port_codex_interactions_and_completion",
+          "path": "plugins/codex/tests/t30_port_codex_interactions_and_completion.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Current Codex interaction fixtures run through plugin transport; declined/expired questions, partial results and stale verification have correct outcomes."
+      ],
+      "estimated_loc": 450,
+      "sizing_note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch.",
+      "title_zh": "Codex 交互与完成申请"
+    },
+    {
+      "id": "T31",
+      "title": "Port Codex delegation and resume",
+      "serves": [
+        "codex"
+      ],
+      "depends_on": [
+        "T22",
+        "T24",
+        "T30"
+      ],
+      "description": "Map in-session dynamic delegation to host.children and persist App Server thread resume references in versioned checkpoints.",
+      "files": [
+        {
+          "path": "plugins/codex/src/delegation.rs",
+          "action": "create",
+          "what": "Port Codex delegation and resume"
+        },
+        {
+          "path": "plugins/codex/src/lib.rs",
+          "action": "modify",
+          "what": "Resume only the same harness package/config identity; external thread unavailability produces a visible restart-required result."
+        },
+        {
+          "path": "plugins/codex/src/main.rs",
+          "action": "modify",
+          "what": "Resume only the same harness package/config identity; external thread unavailability produces a visible restart-required result."
+        },
+        {
+          "path": "plugins/codex/tests/t31_port_codex_delegation_and_resume.rs",
+          "action": "create",
+          "what": "Codex-to-Native delegation, per-child cancel, parent restart and missing external-thread tests pass through generic plugin interfaces."
+        }
+      ],
+      "building_blocks": [
+        "codex"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T31.1",
+          "description": "Map in-session dynamic delegation to host.children and persist App Server thread resume references in versioned checkpoints."
+        },
+        {
+          "id": "T31.2",
+          "description": "Resume only the same harness package/config identity; external thread unavailability produces a visible restart-required result."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Codex-to-Native delegation, per-child cancel, parent restart and missing external-thread tests pass through generic plugin interfaces.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-codex --test t31_port_codex_delegation_and_resume",
+          "path": "plugins/codex/tests/t31_port_codex_delegation_and_resume.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Codex-to-Native delegation, per-child cancel, parent restart and missing external-thread tests pass through generic plugin interfaces."
+      ],
+      "estimated_loc": 380,
+      "title_zh": "Codex 委派与恢复"
+    },
+    {
+      "id": "T32",
+      "title": "Compose the headless ApplicationService",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T08",
+        "T20",
+        "T21",
+        "T23",
+        "T25",
+        "T28",
+        "T31",
+        "T06a",
+        "T06b"
+      ],
+      "description": "Compose the ApplicationService inside the single r-code-service daemon, expose typed application RPC and the durable event journal to all clients.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "create",
+          "what": "Compose the headless ApplicationService"
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "modify",
+          "what": "Move non-UI composition out of CommandState; use one durable event stream for adapters and expose continuation/recovery actions."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Move non-UI composition out of CommandState; use one durable event stream for adapters and expose continuation/recovery actions."
+        },
+        {
+          "path": "crates/r-code-runtime/src/ipc.rs",
+          "action": "modify",
+          "what": "Move non-UI composition out of CommandState; use one durable event stream for adapters and expose continuation/recovery actions."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t32_compose_the_headless_applicationservice.rs",
+          "action": "create",
+          "what": "A headless end-to-end fixture runs Native, Codex-mock and third-party Harness with identical task lifecycle APIs."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T32.1",
+          "description": "Compose the ApplicationService inside the single r-code-service daemon, expose typed application RPC and the durable event journal to all clients."
+        },
+        {
+          "id": "T32.2",
+          "description": "Move non-UI composition out of CommandState; use one durable event stream for adapters and expose continuation/recovery actions."
+        }
+      ],
+      "tests": [
+        {
+          "description": "A headless end-to-end fixture runs Native, Codex-mock and third-party Harness with identical task lifecycle APIs.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t32_compose_the_headless_applicationservice",
+          "path": "crates/r-code-runtime/tests/t32_compose_the_headless_applicationservice.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "A headless end-to-end fixture runs Native, Codex-mock and third-party Harness with identical task lifecycle APIs."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "后台 ApplicationService 装配"
+    },
+    {
+      "id": "T33",
+      "title": "Adapt desktop task flow to ApplicationService",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T32",
+        "T06a",
+        "T06b"
+      ],
+      "description": "Replace task/run/Plan/review Tauri implementations with thin r-code-client calls to the shared daemon, retaining UI/system-only code in src-tauri.",
+      "files": [
+        {
+          "path": "src-tauri/src/tauri_commands.rs",
+          "action": "modify",
+          "what": "Adapt desktop task flow to ApplicationService"
+        },
+        {
+          "path": "src-tauri/Cargo.toml",
+          "action": "modify",
+          "what": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        },
+        {
+          "path": "src-tauri/src/main.rs",
+          "action": "modify",
+          "what": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        },
+        {
+          "path": "src-tauri/src/commands.rs",
+          "action": "modify",
+          "what": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        },
+        {
+          "path": "src-tauri/frontend/src/lib/ipc.ts",
+          "action": "modify",
+          "what": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        },
+        {
+          "path": "src-tauri/frontend/src/store/tasks.ts",
+          "action": "modify",
+          "what": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        },
+        {
+          "path": "src-tauri/tests/task_status_contract.rs",
+          "action": "modify",
+          "what": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        },
+        {
+          "path": "src-tauri/tests/plan_review_tools.rs",
+          "action": "modify",
+          "what": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        },
+        {
+          "path": "src-tauri/tests/t33_adapt_desktop_task_flow_to_applicationservice.rs",
+          "action": "create",
+          "what": "Desktop integration and existing scene fixtures cover send/steer/queue, branches, questions, review, verification and cancellation."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T33.1",
+          "description": "Replace task/run/Plan/review Tauri implementations with thin r-code-client calls to the shared daemon, retaining UI/system-only code in src-tauri."
+        },
+        {
+          "id": "T33.2",
+          "description": "Update frontend IPC DTO bindings while retaining current timeline, composer, Files/Terminal/Review workbench and attachment behavior."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Desktop integration and existing scene fixtures cover send/steer/queue, branches, questions, review, verification and cancellation.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-host --test t33_adapt_desktop_task_flow_to_applicationservice",
+          "path": "src-tauri/tests/t33_adapt_desktop_task_flow_to_applicationservice.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Desktop integration and existing scene fixtures cover send/steer/queue, branches, questions, review, verification and cancellation."
+      ],
+      "estimated_loc": 450,
+      "sizing_note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch.",
+      "title_zh": "桌面任务主流程接入客户端"
+    },
+    {
+      "id": "T34",
+      "title": "Add desktop plugin management and Harness selection",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T08",
+        "T33"
+      ],
+      "description": "Add local plugin install/details/enable/disable/remove and per-task Harness selection backed by catalog availability.",
+      "files": [
+        {
+          "path": "src-tauri/frontend/src/components/scenes/SettingsScene.tsx",
+          "action": "modify",
+          "what": "Add desktop plugin management and Harness selection"
+        },
+        {
+          "path": "src-tauri/frontend/src/components/room/ModelSwitcher.tsx",
+          "action": "modify",
+          "what": "Render version, supported features, control limitations, failed startup and active-version pinning through existing host-owned components."
+        },
+        {
+          "path": "src-tauri/frontend/src/i18n/locales/zh-CN.json",
+          "action": "modify",
+          "what": "Render version, supported features, control limitations, failed startup and active-version pinning through existing host-owned components."
+        },
+        {
+          "path": "src-tauri/frontend/src/i18n/locales/en-US.json",
+          "action": "modify",
+          "what": "Render version, supported features, control limitations, failed startup and active-version pinning through existing host-owned components."
+        },
+        {
+          "path": "src-tauri/frontend/scripts/harness-plugins.test.mjs",
+          "action": "create",
+          "what": "UI tests install an independent example, select it for a new branch and reject removal of a live pinned version."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T34.1",
+          "description": "Add local plugin install/details/enable/disable/remove and per-task Harness selection backed by catalog availability."
+        },
+        {
+          "id": "T34.2",
+          "description": "Render version, supported features, control limitations, failed startup and active-version pinning through existing host-owned components."
+        }
+      ],
+      "tests": [
+        {
+          "description": "UI tests install an independent example, select it for a new branch and reject removal of a live pinned version.",
+          "kind": "integration",
+          "command": "node --test src-tauri/frontend/scripts/harness-plugins.test.mjs"
+        }
+      ],
+      "acceptance_criteria": [
+        "UI tests install an independent example, select it for a new branch and reject removal of a live pinned version."
+      ],
+      "estimated_loc": 380,
+      "title_zh": "桌面插件管理与 Harness 选择"
+    },
+    {
+      "id": "T35",
+      "title": "Detach TUI from the Tauri host",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T32",
+        "T06a",
+        "T06b"
+      ],
+      "description": "Migrate every TUI host/worker/store use in app, main, session, model, setup, approval and tests to r-code-client and protocol views; then remove r-code-host and Tauri-transitive dependencies.",
+      "files": [
+        {
+          "path": "crates/r-code-tui/Cargo.toml",
+          "action": "modify",
+          "what": "Detach TUI from the Tauri host"
+        },
+        {
+          "path": "crates/r-code-tui/src/main.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/src/app.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/src/session_ops.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/src/setup_flow.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/src/model_selector.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/src/approval.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/src/lib.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/tests/startup_sequence.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/tests/common/mod.rs",
+          "action": "modify",
+          "what": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        },
+        {
+          "path": "crates/r-code-tui/tests/t35_detach_tui_from_the_tauri_host.rs",
+          "action": "create",
+          "what": "cargo tree for TUI has no Tauri/wry; current PTY smoke and scripted lifecycle tests pass using the shared service."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T35.1",
+          "description": "Migrate every TUI host/worker/store use in app, main, session, model, setup, approval and tests to r-code-client and protocol views; then remove r-code-host and Tauri-transitive dependencies."
+        },
+        {
+          "id": "T35.2",
+          "description": "Maintain terminal chat, Plan/questions, file/review/verification, run tree and print mode in the v2 profile."
+        }
+      ],
+      "tests": [
+        {
+          "description": "cargo tree for TUI has no Tauri/wry; current PTY smoke and scripted lifecycle tests pass using the shared service.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-tui --test t35_detach_tui_from_the_tauri_host",
+          "path": "crates/r-code-tui/tests/t35_detach_tui_from_the_tauri_host.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "cargo tree for TUI has no Tauri/wry; current PTY smoke and scripted lifecycle tests pass using the shared service."
+      ],
+      "estimated_loc": 450,
+      "sizing_note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch.",
+      "title_zh": "TUI 与 Tauri 宿主解耦"
+    },
+    {
+      "id": "T36",
+      "title": "Add TUI plugin catalog and selection commands",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T08",
+        "T35"
+      ],
+      "description": "Implement plugins list/install/enable/disable/remove and Harness selection/help using the same application operations as GUI.",
+      "files": [
+        {
+          "path": "crates/r-code-tui/src/commands.rs",
+          "action": "create",
+          "what": "Add TUI plugin catalog and selection commands"
+        },
+        {
+          "path": "crates/r-code-tui/src/main.rs",
+          "action": "modify",
+          "what": "Show missing runtime/protocol/capability failures and recovery choices consistently in interactive and print modes."
+        },
+        {
+          "path": "crates/r-code-tui/src/slash_menu.rs",
+          "action": "modify",
+          "what": "Show missing runtime/protocol/capability failures and recovery choices consistently in interactive and print modes."
+        },
+        {
+          "path": "crates/r-code-tui/src/lib.rs",
+          "action": "modify",
+          "what": "Show missing runtime/protocol/capability failures and recovery choices consistently in interactive and print modes."
+        },
+        {
+          "path": "crates/r-code-tui/tests/t36_add_tui_plugin_catalog_and_selection_commands.rs",
+          "action": "create",
+          "what": "Headless command tests install/use/remove fixtures with machine-readable outcomes; active-version constraints match GUI."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T36.1",
+          "description": "Implement plugins list/install/enable/disable/remove and Harness selection/help using the same application operations as GUI."
+        },
+        {
+          "id": "T36.2",
+          "description": "Show missing runtime/protocol/capability failures and recovery choices consistently in interactive and print modes."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Headless command tests install/use/remove fixtures with machine-readable outcomes; active-version constraints match GUI.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-tui --test t36_add_tui_plugin_catalog_and_selection_commands",
+          "path": "crates/r-code-tui/tests/t36_add_tui_plugin_catalog_and_selection_commands.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Headless command tests install/use/remove fixtures with machine-readable outcomes; active-version constraints match GUI."
+      ],
+      "estimated_loc": 300,
+      "title_zh": "TUI 插件管理命令"
+    },
+    {
+      "id": "T37",
+      "title": "Implement read-only legacy history access",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T05",
+        "T32"
+      ],
+      "description": "Implement isolated LegacyReader using READ_ONLY SQLite transaction+online backup into v2 temporary storage; freeze complete JSONL record boundaries and expose read/export only.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/legacy.rs",
+          "action": "create",
+          "what": "Implement read-only legacy history access"
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "modify",
+          "what": "Do not call legacy mutating constructors; safe WAL access failures require closing/exporting from the old app, never immutable live-WAL reads."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t37_implement_read_only_legacy_history_access.rs",
+          "action": "create",
+          "what": "Hash-based fixtures confirm old files remain unchanged while reading/exporting; dev/production/v2 data never cross."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Enable existing rusqlite 0.32 backup feature for read-only online backup; do not substitute VACUUM INTO inside the source transaction."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T37.1",
+          "description": "Implement isolated LegacyReader using READ_ONLY SQLite transaction+online backup into v2 temporary storage; freeze complete JSONL record boundaries and expose read/export only."
+        },
+        {
+          "id": "T37.2",
+          "description": "Do not call legacy mutating constructors; safe WAL access failures require closing/exporting from the old app, never immutable live-WAL reads. Enable rusqlite backup feature; online backup uses bounded busy retries, cancellation and a 30-second default deadline, never VACUUM INTO within a source transaction."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Hash-based fixtures confirm old files remain unchanged while reading/exporting; dev/production/v2 data never cross.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t37_implement_read_only_legacy_history_access",
+          "path": "crates/r-code-runtime/tests/t37_implement_read_only_legacy_history_access.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Hash-based fixtures confirm old files remain unchanged while reading/exporting; dev/production/v2 data never cross."
+      ],
+      "estimated_loc": 350,
+      "title_zh": "旧数据只读读取与导出"
+    },
+    {
+      "id": "T38",
+      "title": "Package built-in Harness executables and manifests",
+      "serves": [
+        "plugins"
+      ],
+      "depends_on": [
+        "T28",
+        "T31",
+        "T34",
+        "T36",
+        "T06a",
+        "T14a",
+        "T14b"
+      ],
+      "description": "Build and bundle r-code-service, process guardian mode, Native/Codex plugin executables and manifests for all supported platforms through existing packaging paths.",
+      "files": [
+        {
+          "path": "scripts/build-branded-installer.ps1",
+          "action": "modify",
+          "what": "Package built-in Harness executables and manifests"
+        },
+        {
+          "path": "scripts/manual/package-macos.sh",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": "src-tauri/tauri.conf.json",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": "src-tauri/build.rs",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": "src-tauri/build_support.rs",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": "src-tauri/src/packaging.rs",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": "dev-tui.ps1",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": "dev-tui.sh",
+          "action": "modify",
+          "what": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        },
+        {
+          "path": "scripts/harness-packaging.test.mjs",
+          "action": "create",
+          "what": "Package inspection verifies each platform executable/header/hash and installed startup with paths containing spaces."
+        }
+      ],
+      "building_blocks": [
+        "plugins"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T38.1",
+          "description": "Build and bundle r-code-service, process guardian mode, Native/Codex plugin executables and manifests for all supported platforms through existing packaging paths."
+        },
+        {
+          "id": "T38.2",
+          "description": "Register built-ins through the normal immutable registry with no source-code engine switch; preserve signing and dev/prod flavor checks."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Package inspection verifies each platform executable/header/hash and installed startup with paths containing spaces.",
+          "kind": "integration",
+          "command": "node --test scripts/harness-packaging.test.mjs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Package inspection verifies each platform executable/header/hash and installed startup with paths containing spaces."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "跨平台后台服务与插件打包"
+    },
+    {
+      "id": "T39",
+      "title": "Build plugin conformance and failure suite",
+      "serves": [
+        "evals"
+      ],
+      "depends_on": [
+        "T20",
+        "T24",
+        "T25",
+        "T32"
+      ],
+      "description": "Run fixture processes against version, lifecycle, callbacks, identity, grants, cancellation, recovery and completion contracts.",
+      "files": [
+        {
+          "path": "crates/r-code-evals/src/harness_conformance.rs",
+          "action": "create",
+          "what": "Build plugin conformance and failure suite"
+        },
+        {
+          "path": "crates/r-code-evals/src/lib.rs",
+          "action": "modify",
+          "what": "Publish reusable SDK conformance command and a language-neutral wire fixture set."
+        },
+        {
+          "path": "crates/r-code-evals/src/bin/harness-conformance.rs",
+          "action": "create",
+          "what": "Publish reusable SDK conformance command and a language-neutral wire fixture set."
+        },
+        {
+          "path": "crates/r-code-evals/Cargo.toml",
+          "action": "modify",
+          "what": "Publish reusable SDK conformance command and a language-neutral wire fixture set."
+        },
+        {
+          "path": "crates/r-code-evals/tests/t39_build_plugin_conformance_and_failure_suite.rs",
+          "action": "create",
+          "what": "A deliberately broken Harness fails for false completion, stale evidence, cross-run handles, duplicate side effects or hanging cancellation."
+        }
+      ],
+      "building_blocks": [
+        "evals"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T39.1",
+          "description": "Run fixture processes against version, lifecycle, callbacks, identity, grants, cancellation, recovery and completion contracts."
+        },
+        {
+          "id": "T39.2",
+          "description": "Publish reusable SDK conformance command and a language-neutral wire fixture set."
+        }
+      ],
+      "tests": [
+        {
+          "description": "A deliberately broken Harness fails for false completion, stale evidence, cross-run handles, duplicate side effects or hanging cancellation.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-evals --test t39_build_plugin_conformance_and_failure_suite",
+          "path": "crates/r-code-evals/tests/t39_build_plugin_conformance_and_failure_suite.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "A deliberately broken Harness fails for false completion, stale evidence, cross-run handles, duplicate side effects or hanging cancellation."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "插件协议一致性与故障测试"
+    },
+    {
+      "id": "T40",
+      "title": "Add coding-task paired evaluations",
+      "serves": [
+        "evals"
+      ],
+      "depends_on": [
+        "T28",
+        "T31",
+        "T39"
+      ],
+      "description": "Add fixed Rust+TypeScript task fixtures and baseline/candidate runner recording verified completion, false completion, interventions, recovery, time and cost.",
+      "files": [
+        {
+          "path": "crates/r-code-evals/src/harness_tasks.rs",
+          "action": "create",
+          "what": "Add coding-task paired evaluations"
+        },
+        {
+          "path": "crates/r-code-evals/src/lib.rs",
+          "action": "modify",
+          "what": "Compare same-Harness/backend baseline vs v2 or same-v2 strategy variants; separate cross-engine reporting and unavailable metrics. Cover omitted/tampered checks, dirty files, host crash and lost external ack."
+        },
+        {
+          "path": "crates/r-code-evals/src/bin/harness-task-eval.rs",
+          "action": "create",
+          "what": "Compare same-Harness/backend baseline vs v2 or same-v2 strategy variants; separate cross-engine reporting and unavailable metrics. Cover omitted/tampered checks, dirty files, host crash and lost external ack."
+        },
+        {
+          "path": "crates/r-code-evals/Cargo.toml",
+          "action": "modify",
+          "what": "Compare same-Harness/backend baseline vs v2 or same-v2 strategy variants; separate cross-engine reporting and unavailable metrics. Cover omitted/tampered checks, dirty files, host crash and lost external ack."
+        },
+        {
+          "path": "src-tauri/src/bin/plan_eval.rs",
+          "action": "modify",
+          "what": "Compare same-Harness/backend baseline vs v2 or same-v2 strategy variants; separate cross-engine reporting and unavailable metrics. Cover omitted/tampered checks, dirty files, host crash and lost external ack."
+        },
+        {
+          "path": "crates/r-code-evals/tests/t40_add_coding_task_paired_evaluations.rs",
+          "action": "create",
+          "what": "Repeated paired runs keep model/config/task fixed and separate host faults/unknown external metrics from successful outcomes."
+        }
+      ],
+      "building_blocks": [
+        "evals"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T40.1",
+          "description": "Add fixed Rust+TypeScript task fixtures and baseline/candidate runner recording verified completion, false completion, interventions, recovery, time and cost."
+        },
+        {
+          "id": "T40.2",
+          "description": "Compare same-Harness/backend baseline vs v2 or same-v2 strategy variants; separate cross-engine reporting and unavailable metrics. Cover omitted/tampered checks, dirty files, host crash and lost external ack."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Repeated paired runs keep model/config/task fixed and separate host faults/unknown external metrics from successful outcomes.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-evals --test t40_add_coding_task_paired_evaluations",
+          "path": "crates/r-code-evals/tests/t40_add_coding_task_paired_evaluations.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Repeated paired runs keep model/config/task fixed and separate host faults/unknown external metrics from successful outcomes."
+      ],
+      "estimated_loc": 380,
+      "title_zh": "真实编码任务配对评测"
+    },
+    {
+      "id": "T41",
+      "title": "Enforce architecture and release acceptance",
+      "serves": [
+        "evals"
+      ],
+      "depends_on": [
+        "T33",
+        "T34",
+        "T35",
+        "T36",
+        "T37",
+        "T38",
+        "T39",
+        "T40"
+      ],
+      "description": "Add one acceptance entrypoint plus Cargo dependency guards proving SDK/protocol/kernel/TUI boundaries and third-party installation without core edits.",
+      "files": [
+        {
+          "path": "scripts/verify-harness-v2.mjs",
+          "action": "create",
+          "what": "Enforce architecture and release acceptance"
+        },
+        {
+          "path": "scripts/verify-harness-v2.test.mjs",
+          "action": "create",
+          "what": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "action": "modify",
+          "what": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
+        },
+        {
+          "path": "docs/prd/pluggable-harness/architecture.md",
+          "action": "create",
+          "what": "Document the implemented new architecture alongside its active PRD; the old architecture stays archived."
+        },
+        {
+          "path": "docs/prd/pluggable-harness/protocol-v1.md",
+          "action": "create",
+          "what": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
+        },
+        {
+          "path": "docs/prd/pluggable-harness/plugin-author-guide.md",
+          "action": "create",
+          "what": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
+        }
+      ],
+      "building_blocks": [
+        "evals"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T41.1",
+          "description": "Add one acceptance entrypoint plus Cargo dependency guards proving SDK/protocol/kernel/TUI boundaries and third-party installation without core edits."
+        },
+        {
+          "id": "T41.2",
+          "description": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Full acceptance passes on supported platforms; protocol docs, SDK example and installer workflow reproduce the extension story.",
+          "kind": "integration",
+          "command": "node scripts/verify-harness-v2.mjs --profile full"
+        }
+      ],
+      "acceptance_criteria": [
+        "Full acceptance passes on supported platforms; protocol docs, SDK example and installer workflow reproduce the extension story."
+      ],
+      "estimated_loc": 400,
+      "title_zh": "统一验收、架构守卫与开发文档"
+    },
+    {
+      "id": "T42",
+      "title": "Cut over and retire duplicate orchestration",
+      "serves": [
+        "docs"
+      ],
+      "depends_on": [
+        "T41"
+      ],
+      "description": "Switch production composition to ApplicationService; remove old execution dispatch/engine enums and unused ExtensionHost/WorkCard/runtime recovery stubs after proving no callers.",
+      "files": [
+        {
+          "path": "src-tauri/src/commands.rs",
+          "action": "modify",
+          "what": "Cut over and retire duplicate orchestration"
+        },
+        {
+          "path": "src-tauri/src/extensions.rs",
+          "action": "delete",
+          "what": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        },
+        {
+          "path": "src-tauri/src/work_card.rs",
+          "action": "delete",
+          "what": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        },
+        {
+          "path": "src-tauri/src/lib.rs",
+          "action": "modify",
+          "what": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        },
+        {
+          "path": "crates/r-code-agent-worker/Cargo.toml",
+          "action": "delete",
+          "what": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        },
+        {
+          "path": "crates/r-code-agent-worker/src/lib.rs",
+          "action": "delete",
+          "what": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        },
+        {
+          "path": "docs/readme.md",
+          "action": "modify",
+          "what": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        }
+      ],
+      "building_blocks": [
+        "docs"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies; stdio protocol uses tokio + serde_json"
+      ],
+      "subtasks": [
+        {
+          "id": "T42.1",
+          "description": "Switch production composition to ApplicationService; remove old execution dispatch/engine enums and unused ExtensionHost/WorkCard/runtime recovery stubs after proving no callers."
+        },
+        {
+          "id": "T42.2",
+          "description": "Retire r-code-agent-worker implementation or retain only explicit legacy readers; update Cargo membership and mark historical architecture plans superseded."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Final dependency/callsite checks show one authoritative new run/verification/recovery path, with no legacy fallback creating duplicate work.",
+          "kind": "integration",
+          "command": "node scripts/verify-harness-v2.mjs --profile full"
+        }
+      ],
+      "acceptance_criteria": [
+        "Final dependency/callsite checks show one authoritative new run/verification/recovery path, with no legacy fallback creating duplicate work."
+      ],
+      "estimated_loc": 450,
+      "sizing_note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch.",
+      "title_zh": "生产切换与旧调度链路退役"
+    },
+    {
+      "id": "T02a",
+      "title": "Define durable operation and input delivery protocol",
+      "serves": [
+        "protocol"
+      ],
+      "depends_on": [
+        "T02"
+      ],
+      "description": "Define stable attempt-scoped operation keys/input hashes independently of JSON-RPC ids, per-method replay classes and indeterminate outcomes.",
+      "files": [
+        {
+          "path": "crates/r-code-harness-protocol/src/operations.rs",
+          "action": "create",
+          "what": "Define durable operation and input delivery protocol"
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/services.rs",
+          "action": "modify",
+          "what": "Define host message_id/input_seq and atomic checkpoint consumed-input acknowledgements; add host-owned pending approval references."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/lib.rs",
+          "action": "modify",
+          "what": "Define host message_id/input_seq and atomic checkpoint consumed-input acknowledgements; add host-owned pending approval references."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/tests/t02a_define_durable_operation_and_input_delivery_prot.rs",
+          "action": "create",
+          "what": "Fixtures cover lost effect response, duplicate key/different input, restart generation, checkpoint lag and lost external acknowledgement."
+        }
+      ],
+      "building_blocks": [
+        "protocol"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T02a.1",
+          "description": "Define stable attempt-scoped operation keys/input hashes independently of JSON-RPC ids, per-method replay classes and indeterminate outcomes."
+        },
+        {
+          "id": "T02a.2",
+          "description": "Define host message_id/input_seq and atomic checkpoint consumed-input acknowledgements; add host-owned pending approval references."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fixtures cover lost effect response, duplicate key/different input, restart generation, checkpoint lag and lost external acknowledgement.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-harness-protocol --test t02a_define_durable_operation_and_input_delivery_prot",
+          "path": "crates/r-code-harness-protocol/tests/t02a_define_durable_operation_and_input_delivery_prot.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Fixtures cover lost effect response, duplicate key/different input, restart generation, checkpoint lag and lost external acknowledgement."
+      ],
+      "estimated_loc": 320,
+      "title_zh": "持久操作与输入消费协议"
+    },
+    {
+      "id": "T04a",
+      "title": "Construct explicit isolated RuntimeProfile",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T04"
+      ],
+      "description": "Create runtime crate scaffold and pure profile selection with explicit dev/prod and harness-v2 paths/credential identities.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/profile.rs",
+          "action": "create",
+          "what": "Construct explicit isolated RuntimeProfile"
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "create",
+          "what": "Provide launch options consumed by GUI/TUI/service before any store/settings/plugin/provider service initialization."
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "create",
+          "what": "Provide launch options consumed by GUI/TUI/service before any store/settings/plugin/provider service initialization."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Provide launch options consumed by GUI/TUI/service before any store/settings/plugin/provider service initialization."
+        },
+        {
+          "path": "src-tauri/src/app_paths.rs",
+          "action": "modify",
+          "what": "Provide launch options consumed by GUI/TUI/service before any store/settings/plugin/provider service initialization."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t04a_construct_explicit_isolated_runtimeprofile.rs",
+          "action": "create",
+          "what": "Fresh v2 startup and both client flavors leave old DB/config/JSONL unchanged and resolve identical intended profile identities."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "create",
+          "what": "Headless service module root"
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/mod.rs",
+          "action": "create",
+          "what": "Platform process guardian module root"
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T04a.1",
+          "description": "Create runtime crate scaffold and pure profile selection with explicit dev/prod and harness-v2 paths/credential identities."
+        },
+        {
+          "id": "T04a.2",
+          "description": "Provide launch options consumed by GUI/TUI/service before any store/settings/plugin/provider service initialization."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fresh v2 startup and both client flavors leave old DB/config/JSONL unchanged and resolve identical intended profile identities.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t04a_construct_explicit_isolated_runtimeprofile",
+          "path": "crates/r-code-runtime/tests/t04a_construct_explicit_isolated_runtimeprofile.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Fresh v2 startup and both client flavors leave old DB/config/JSONL unchanged and resolve identical intended profile identities."
+      ],
+      "estimated_loc": 240,
+      "title_zh": "显式 Profile 与 v2 隔离"
+    },
+    {
+      "id": "T06a",
+      "title": "Implement single-owner service and local client transport",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T05",
+        "T06",
+        "T02a"
+      ],
+      "description": "Implement r-code-service owner OS lock, profile identity/token, authenticated local RPC, user-only endpoints and stale-owner takeover.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/daemon.rs",
+          "action": "create",
+          "what": "Implement single-owner service and local client transport"
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "create",
+          "what": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        },
+        {
+          "path": "crates/r-code-runtime/src/ipc.rs",
+          "action": "create",
+          "what": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        },
+        {
+          "path": "crates/r-code-client/Cargo.toml",
+          "action": "create",
+          "what": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        },
+        {
+          "path": "crates/r-code-client/src/lib.rs",
+          "action": "create",
+          "what": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/application.rs",
+          "action": "create",
+          "what": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "modify",
+          "what": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        },
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t06a_implement_single_owner_service_and_local_client_.rs",
+          "action": "create",
+          "what": "Two real clients and competing daemons prove one owner, live-owner protection, recovery takeover and uninterrupted work after frontend exit."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T06a.1",
+          "description": "Implement r-code-service owner OS lock, profile identity/token, authenticated local RPC, user-only endpoints and stale-owner takeover."
+        },
+        {
+          "id": "T06a.2",
+          "description": "Add r-code-client with command/event connections, durable operation results and cursor replay; client auto-start races converge to one background owner."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Two real clients and competing daemons prove one owner, live-owner protection, recovery takeover and uninterrupted work after frontend exit.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t06a_implement_single_owner_service_and_local_client_",
+          "path": "crates/r-code-runtime/tests/t06a_implement_single_owner_service_and_local_client_.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Two real clients and competing daemons prove one owner, live-owner protection, recovery takeover and uninterrupted work after frontend exit."
+      ],
+      "estimated_loc": 500,
+      "sizing_note": "Daemon ownership and authenticated client transport are one coherent bootstrap contract; app-level idempotency is separately T06b. Estimate excludes mechanical reuse of existing framing helpers.",
+      "title_zh": "单一后台服务与本地客户端"
+    },
+    {
+      "id": "T12a",
+      "title": "Implement common authorization and launch profiles",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T04",
+        "T05",
+        "T10"
+      ],
+      "description": "Define common OperationDescriptor authorization for tools, managed processes, verification preparation and user-originated approval decisions.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/authorization.rs",
+          "action": "create",
+          "what": "Implement common authorization and launch profiles"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Resolve LaunchCapability/secret references; install Codex App Server ceiling policy; deny generic raw process use in restricted modes."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/launch_profiles.rs",
+          "action": "create",
+          "what": "Resolve LaunchCapability/secret references; install Codex App Server ceiling policy; deny generic raw process use in restricted modes."
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "modify",
+          "what": "Resolve LaunchCapability/secret references; install Codex App Server ceiling policy; deny generic raw process use in restricted modes."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t12a_implement_common_authorization_and_launch_profil.rs",
+          "action": "create",
+          "what": "Same restricted task through tools/process/checks cannot escalate; approval denial causes zero spawns and generic questions cannot grant permissions."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T12a.1",
+          "description": "Define common OperationDescriptor authorization for tools, managed processes, verification preparation and user-originated approval decisions."
+        },
+        {
+          "id": "T12a.2",
+          "description": "Resolve LaunchCapability/secret references; install Codex App Server ceiling policy; deny generic raw process use in restricted modes."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Same restricted task through tools/process/checks cannot escalate; approval denial causes zero spawns and generic questions cannot grant permissions.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t12a_implement_common_authorization_and_launch_profil",
+          "path": "crates/r-code-runtime/tests/t12a_implement_common_authorization_and_launch_profil.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Same restricted task through tools/process/checks cannot escalate; approval denial causes zero spawns and generic questions cannot grant permissions."
+      ],
+      "estimated_loc": 360,
+      "title_zh": "统一动作授权与启动能力"
+    },
+    {
+      "id": "T14a",
+      "title": "Contain Windows process trees with Job Objects",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T13"
+      ],
+      "description": "Implement Windows guardian/job ownership with kill-on-close and child assignment before execution, using windows-sys 0.61.2 platform APIs.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/windows.rs",
+          "action": "create",
+          "what": "Contain Windows process trees with Job Objects"
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/mod.rs",
+          "action": "modify",
+          "what": "Record owner/start identity and integrate graceful cancel plus forced job shutdown without PID-only recovery."
+        },
+        {
+          "path": "crates/r-code-runtime/src/lib.rs",
+          "action": "modify",
+          "what": "Record owner/start identity and integrate graceful cancel plus forced job shutdown without PID-only recovery."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Record owner/start identity and integrate graceful cancel plus forced job shutdown without PID-only recovery."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t14a_contain_windows_process_trees_with_job_objects.rs",
+          "action": "create",
+          "what": "Windows real-process tests kill the daemon, lose a wrapper, ignore cancellation and confirm descendants cannot write after terminal cleanup."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T14a.1",
+          "description": "Implement Windows guardian/job ownership with kill-on-close and child assignment before execution, using windows-sys 0.61.2 platform APIs."
+        },
+        {
+          "id": "T14a.2",
+          "description": "Record owner/start identity and integrate graceful cancel plus forced job shutdown without PID-only recovery."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Windows real-process tests kill the daemon, lose a wrapper, ignore cancellation and confirm descendants cannot write after terminal cleanup.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t14a_contain_windows_process_trees_with_job_objects",
+          "path": "crates/r-code-runtime/tests/t14a_contain_windows_process_trees_with_job_objects.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Windows real-process tests kill the daemon, lose a wrapper, ignore cancellation and confirm descendants cannot write after terminal cleanup."
+      ],
+      "estimated_loc": 380,
+      "title_zh": "Windows Job Object 进程管理"
+    },
+    {
+      "id": "T14b",
+      "title": "Contain Unix process groups with a guardian",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T13"
+      ],
+      "description": "Implement daemon-EOF guardian with its own lifecycle and managed child process groups, TERM grace then KILL, using existing libc/Tokio.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/unix.rs",
+          "action": "create",
+          "what": "Contain Unix process groups with a guardian"
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/mod.rs",
+          "action": "modify",
+          "what": "Record process start/owner identity and reconcile unknown surviving groups conservatively before releasing writer barriers."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Record process start/owner identity and reconcile unknown surviving groups conservatively before releasing writer barriers."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Record process start/owner identity and reconcile unknown surviving groups conservatively before releasing writer barriers."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t14b_contain_unix_process_groups_with_a_guardian.rs",
+          "action": "create",
+          "what": "Linux/macOS real-process tests kill the daemon, leave a grandchild and force guardian failure; uncertain survivors block a new writer."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T14b.1",
+          "description": "Implement daemon-EOF guardian with its own lifecycle and managed child process groups, TERM grace then KILL, using existing libc/Tokio."
+        },
+        {
+          "id": "T14b.2",
+          "description": "Record process start/owner identity and reconcile unknown surviving groups conservatively before releasing writer barriers."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Linux/macOS real-process tests kill the daemon, leave a grandchild and force guardian failure; uncertain survivors block a new writer.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t14b_contain_unix_process_groups_with_a_guardian",
+          "path": "crates/r-code-runtime/tests/t14b_contain_unix_process_groups_with_a_guardian.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Linux/macOS real-process tests kill the daemon, leave a grandchild and force guardian failure; uncertain survivors block a new writer."
+      ],
+      "estimated_loc": 380,
+      "title_zh": "Unix guardian 与进程组管理"
+    },
+    {
+      "id": "T17a",
+      "title": "Materialize frozen verifier and dependency inputs",
+      "serves": [
+        "verification"
+      ],
+      "depends_on": [
+        "T17",
+        "T18",
+        "T13"
+      ],
+      "description": "Materialize candidate blobs and pinned acceptance-control files into private check directories while preserving candidate dependency manifests/lockfiles.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/verification_inputs.rs",
+          "action": "create",
+          "what": "Materialize frozen verifier and dependency inputs"
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Implement Cargo --locked and npm ci --ignore-scripts preparation with scoped policy/cache identities; mark undeclared inputs/hooks unavailable."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/fixtures/verification_inputs/README.md",
+          "action": "create",
+          "what": "Implement Cargo --locked and npm ci --ignore-scripts preparation with scoped policy/cache identities; mark undeclared inputs/hooks unavailable."
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t17a_materialize_frozen_verifier_and_dependency_input.rs",
+          "action": "create",
+          "what": "Real fixtures cover npm test changed to noop, deleted verifier entry, legitimate dependency addition, submodules, dirty/new files and concurrent external edits."
+        }
+      ],
+      "building_blocks": [
+        "verification"
+      ],
+      "tools": [
+        "cargo test",
+        "node --test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T17a.1",
+          "description": "Materialize candidate blobs and pinned acceptance-control files into private check directories while preserving candidate dependency manifests/lockfiles."
+        },
+        {
+          "id": "T17a.2",
+          "description": "Prepare with Cargo --locked and npm ci --ignore-scripts under authorization; cache only checksummed dependency downloads, never target/node_modules/build/test outputs. Undeclared hooks/inputs yield unavailable."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Real fixtures cover npm test changed to noop, deleted verifier entry, legitimate dependency addition, submodules, dirty/new files and concurrent external edits.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t17a_materialize_frozen_verifier_and_dependency_input",
+          "path": "crates/r-code-runtime/tests/t17a_materialize_frozen_verifier_and_dependency_input.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Real fixtures cover npm test changed to noop, deleted verifier entry, legitimate dependency addition, submodules, dirty/new files and concurrent external edits."
+      ],
+      "estimated_loc": 380,
+      "title_zh": "冻结验收材料与依赖准备"
+    },
+    {
+      "id": "T06b",
+      "title": "Deduplicate application commands across client reconnects",
+      "serves": [
+        "apps"
+      ],
+      "depends_on": [
+        "T06a"
+      ],
+      "description": "Implement (profile_id, client_id, command_id) receipt identity and canonical method+payload hashes independently of attempt operation keys.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/application_receipts.rs",
+          "action": "create",
+          "what": "Deduplicate application commands across client reconnects"
+        },
+        {
+          "path": "crates/r-code-client/src/outbox.rs",
+          "action": "create",
+          "what": "Persistent reconnect outbox"
+        },
+        {
+          "path": "crates/r-code-store/src/v2/application_commands.rs",
+          "action": "create",
+          "what": "Atomic app-level command receipts"
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t06b_contracts.rs",
+          "action": "create",
+          "what": "Real clients lose replies and reconnect: task/plugin/message effects occur once; reused command_id with different payload fails."
+        }
+      ],
+      "building_blocks": [
+        "apps"
+      ],
+      "tools": [
+        "cargo test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T06b.1",
+          "description": "Implement (profile_id, client_id, command_id) receipt identity and canonical method+payload hashes independently of attempt operation keys."
+        },
+        {
+          "id": "T06b.2",
+          "description": "Add persistent client outbox/retry behavior and daemon request/result atomicity for create/install/message/approval/stop."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Real clients lose replies and reconnect: task/plugin/message effects occur once; reused command_id with different payload fails.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t06b_contracts",
+          "path": "crates/r-code-runtime/tests/t06b_contracts.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Real clients lose replies and reconnect: task/plugin/message effects occur once; reused command_id with different payload fails."
+      ],
+      "estimated_loc": 350,
+      "title_zh": "客户端命令持久去重"
+    },
+    {
+      "id": "T12b",
+      "title": "Interpret declarative process protocol constraints",
+      "serves": [
+        "services"
+      ],
+      "depends_on": [
+        "T12a",
+        "T02"
+      ],
+      "description": "Define package-pinned ProcessProfile schema for framing, method allowlists and JSON-pointer bindings to host-owned values.",
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/process_profiles.rs",
+          "action": "create",
+          "what": "Interpret declarative process protocol constraints"
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/process_profile.rs",
+          "action": "create",
+          "what": "Declarative process constraints"
+        },
+        {
+          "path": "plugins/codex/process-profile.json",
+          "action": "create",
+          "what": "Codex App Server mappings supplied by plugin package"
+        },
+        {
+          "path": "crates/r-code-runtime/tests/t12b_contracts.rs",
+          "action": "create",
+          "what": "Fixture profiles prove frame splitting cannot bypass scope/permission constraints, unknown methods are denied and kernel contains no Codex method-name switch."
+        }
+      ],
+      "building_blocks": [
+        "services"
+      ],
+      "tools": [
+        "cargo test"
+      ],
+      "packages": [
+        "existing workspace dependencies"
+      ],
+      "subtasks": [
+        {
+          "id": "T12b.1",
+          "description": "Define package-pinned ProcessProfile schema for framing, method allowlists and JSON-pointer bindings to host-owned values."
+        },
+        {
+          "id": "T12b.2",
+          "description": "Validate each complete outbound frame using a neutral interpreter; Codex-specific rules live only in its plugin package."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fixture profiles prove frame splitting cannot bypass scope/permission constraints, unknown methods are denied and kernel contains no Codex method-name switch.",
+          "kind": "integration",
+          "command": "cargo test -p r-code-runtime --test t12b_contracts",
+          "path": "crates/r-code-runtime/tests/t12b_contracts.rs"
+        }
+      ],
+      "acceptance_criteria": [
+        "Fixture profiles prove frame splitting cannot bypass scope/permission constraints, unknown methods are denied and kernel contains no Codex method-name switch."
+      ],
+      "estimated_loc": 350,
+      "title_zh": "声明式外部进程协议约束"
+    }
+  ],
+  "order": [
+    "T00",
+    "T01",
+    "T02",
+    "T02a",
+    "T03",
+    "T04",
+    "T04a",
+    "T05",
+    "T06",
+    "T07",
+    "T08",
+    "T09",
+    "T10",
+    "T11",
+    "T06a",
+    "T06b",
+    "T12a",
+    "T12b",
+    "T12",
+    "T13",
+    "T14a",
+    "T14b",
+    "T14",
+    "T15",
+    "T16",
+    "T17",
+    "T18",
+    "T17a",
+    "T19",
+    "T20",
+    "T21",
+    "T22",
+    "T23",
+    "T24",
+    "T25",
+    "T26",
+    "T27",
+    "T28",
+    "T29",
+    "T30",
+    "T31",
+    "T32",
+    "T33",
+    "T34",
+    "T35",
+    "T36",
+    "T37",
+    "T38",
+    "T39",
+    "T40",
+    "T41",
+    "T42"
+  ],
+  "phases": [
+    {
+      "id": "P0",
+      "name": "PRD与基线",
+      "tasks": [
+        "T00"
+      ]
+    },
+    {
+      "id": "P1",
+      "name": "协议、领域与v2数据",
+      "tasks": [
+        "T01",
+        "T02",
+        "T02a",
+        "T03",
+        "T04",
+        "T04a",
+        "T05",
+        "T06"
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "后台服务与插件交付",
+      "tasks": [
+        "T07",
+        "T08",
+        "T09",
+        "T10",
+        "T11",
+        "T06a",
+        "T06b"
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "宿主能力与进程边界",
+      "tasks": [
+        "T12a",
+        "T12b",
+        "T12",
+        "T13",
+        "T14a",
+        "T14b",
+        "T14",
+        "T15",
+        "T16",
+        "T17"
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "验收、Plan、委派与恢复",
+      "tasks": [
+        "T18",
+        "T17a",
+        "T19",
+        "T20",
+        "T21",
+        "T22",
+        "T23",
+        "T24",
+        "T25"
+      ]
+    },
+    {
+      "id": "P5",
+      "name": "Native与Codex插件化",
+      "tasks": [
+        "T26",
+        "T27",
+        "T28",
+        "T29",
+        "T30",
+        "T31"
+      ]
+    },
+    {
+      "id": "P6",
+      "name": "GUI/TUI及旧数据读取",
+      "tasks": [
+        "T32",
+        "T33",
+        "T34",
+        "T35",
+        "T36",
+        "T37"
+      ]
+    },
+    {
+      "id": "P7",
+      "name": "交付验收与旧链路退役",
+      "tasks": [
+        "T38",
+        "T39",
+        "T40",
+        "T41",
+        "T42"
+      ]
+    }
+  ],
+  "review": {
+    "verdict": "pass",
+    "score": 95,
+    "iterations": 3,
+    "blocking": 0,
+    "major": 0,
+    "issues": [],
+    "source": "Independent principal engineer via plan-loop"
+  },
+  "documentation_layout": {
+    "selected_scope": "Organize docs top-level only; retain existing support guides/operations/platform/contracts.",
+    "new_plan_directory": "D:/project/rust/r-code/docs/prd/pluggable-harness",
+    "new_plan_files": [
+      "plan.md",
+      "tasks.json",
+      "review.json"
+    ],
+    "archive_moves": [
+      {
+        "from": "D:/project/rust/r-code/docs/architecture.md",
+        "to": "D:/project/rust/r-code/docs/support/archive/architecture-before-harness-v2.md"
+      },
+      {
+        "from": "D:/project/rust/r-code/docs/tui-v2",
+        "to": "D:/project/rust/r-code/docs/support/archive/tui-v2"
+      }
+    ],
+    "navigation": [
+      "docs/readme.md",
+      "docs/readme.en.md",
+      "docs/support/README.md",
+      "docs/support/archive/readme.md",
+      "README.md",
+      "README.zh-CN.md",
+      "CONTRIBUTING.md",
+      "docs/support/operations/releasing.md"
+    ],
+    "live_path_consumers": [
+      "scripts/verify-tui-v2.mjs",
+      "scripts/windows-reliability/docs-consistency-check.mjs",
+      "scripts/codex-interaction/m4-02-regression.mjs",
+      "crates/r-code-tui/examples/inline_bench.rs"
+    ],
+    "rules": [
+      "Preserve current uncommitted document and code content; no checkout/reset/overwrite of user changes.",
+      "Archive TUI PRD normative/contract marker bodies without changing frozen digests or historical evidence statuses; update only location metadata and navigation outside frozen blocks.",
+      "Keep historical artifacts/evidence report contents unchanged; record path migrations in the archive index.",
+      "Redirect new inline_bench output into artifacts/metrics/tui-v2 rather than overwriting the archived report; update live verifier expectations accordingly.",
+      "Update current links and executable path consumers; retain historical literal paths with migration mapping.",
+      "After archiving the old architecture, the new plan's later T41 architecture update targets docs/prd/pluggable-harness/architecture.md, not a recreated top-level docs/architecture.md.",
+      "Run plan schema/DAG validation, relative-link/path checks, TUI verifier unit checks and Windows docs consistency; write new migration reports separately from historical reports.",
+      "Before any recursive move, resolve and verify absolute source/destination remain in docs and intended support/archive; use native PowerShell Move-Item -LiteralPath with no overwrites."
+    ],
+    "filesystem_status": "Publication accompanies the authorized docs top-level reorganization on 2026-09-09."
+  },
+  "schema_version": "r-code-harness-plan.v1",
+  "publication": {
+    "date": "2026-09-09",
+    "status": "ready_for_implementation",
+    "scope": "Planning documents and documentation reorganization only; product refactor not started.",
+    "source_revision": "88f7efe3e69ff617a4d565efc0d9c700cfed4512",
+    "source_state": "User's current working tree, including pre-existing uncommitted changes.",
+    "task_source_of_truth": "tasks.json",
+    "review_file": "review.json"
+  }
+}
+

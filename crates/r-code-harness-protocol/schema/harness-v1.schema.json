@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://r-code.dev/schemas/harness-v1.schema.json",
+  "title": "Harness plugin manifest (harness.json)",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "apiMajor",
+    "apiMinor",
+    "displayName",
+    "supportedPlatforms",
+    "configSchema"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1" },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Opaque harness identity; never parsed for meaning."
+    },
+    "version": { "type": "string", "description": "Semantic version of the plugin package." },
+    "apiMajor": { "type": "integer", "minimum": 1 },
+    "apiMinor": { "type": "integer", "minimum": 0 },
+    "displayName": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "supportedPlatforms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["platform", "executable"],
+        "additionalProperties": false,
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"]
+          },
+          "executable": {
+            "type": "string",
+            "pattern": "^(?!/)[^:]+",
+            "description": "Package-relative native executable path; no drive letters, no absolute paths, no '..' segments."
+          },
+          "argv": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "supportedFeatures": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Advertised features (e.g. multi-turn-tools, plan-hitl, delegation). Informational; not a grant."
+    },
+    "requestedHostServices": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "host.model.stream",
+          "host.tools.list",
+          "host.tools.call",
+          "host.process.open",
+          "host.process.write",
+          "host.process.close",
+          "host.context.read",
+          "host.artifacts.put",
+          "host.artifacts.read",
+          "host.plan.publish",
+          "host.plan.update",
+          "host.questions.ask",
+          "host.approvals.request",
+          "host.children.spawn",
+          "host.children.wait",
+          "host.children.cancel",
+          "host.verification.run",
+          "host.checkpoint.save",
+          "host.completion.propose"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "configSchema": {
+      "type": "object",
+      "description": "JSON Schema for plugin configuration values."
+    },
+    "processProfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "framing"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "framing": { "type": "string", "enum": ["ndjson-rpc", "raw"] }
+        }
+      },
+      "uniqueItems": true
+    }
+  }
+}

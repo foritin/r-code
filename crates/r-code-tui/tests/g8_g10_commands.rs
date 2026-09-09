@@ -5,6 +5,11 @@
 //! - `/clone`：真克隆落库 → 系统行确认（/resume 可打开）。
 //! - `/new`：真正切换到新会话（G8 修复：此前只建任务不切换）。
 //! - `/login`：Codex 状态 + 其余厂商诚实引导（不出现假 OAuth）。
+//!
+//! T35：TUI 经共享 r-code-service 守护进程运行（隔离 data-dir/ipc-name +
+//! 结束杀守护进程）。
+mod daemon_common;
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -14,13 +19,12 @@ struct Session {
     output: std::sync::mpsc::Receiver<String>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     _master: Box<dyn portable_pty::MasterPty + Send>,
+    env: daemon_common::DaemonEnv,
 }
 
 fn spawn_tui() -> Option<Session> {
     let bin = std::env::var("CARGO_BIN_EXE_r-code-tui").ok()?;
-    let dir = tempfile::tempdir().ok()?;
-    let keep = String::from(dir.path().to_str()?);
-    std::mem::forget(dir);
+    let (env, extra) = daemon_common::daemon_env("g8");
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -31,8 +35,16 @@ fn spawn_tui() -> Option<Session> {
         })
         .ok()?;
     let mut cmd = CommandBuilder::new(bin);
-    cmd.args(["--data-dir", &keep]);
+    cmd.args([
+        "--data-dir",
+        env.data_dir.to_str()?,
+        "--ipc-name",
+        &env.ipc_name,
+    ]);
     cmd.env("RUST_BACKTRACE", "0");
+    for (key, value) in extra {
+        cmd.env(key, value);
+    }
     let child = pair.slave.spawn_command(cmd).ok()?;
     let writer = pair.master.take_writer().ok()?;
     let reader = pair.master.try_clone_reader().ok()?;
@@ -61,6 +73,7 @@ fn spawn_tui() -> Option<Session> {
         output,
         child,
         _master: master,
+        env,
     })
 }
 
@@ -111,8 +124,10 @@ impl Session {
     }
 
     fn send(&mut self, keys: &str) {
-        let _ = self.writer.write_all(keys.as_bytes());
-        let _ = self.writer.flush();
+        self.writer
+            .write_all(keys.as_bytes())
+            .expect("write PTY input");
+        self.writer.flush().expect("flush PTY input");
     }
 
     /// 静置：排空 300ms 输出（Esc 与后续按键之间留间隔，避免 crossterm 把
@@ -137,10 +152,7 @@ impl Session {
 
 #[test]
 fn tree_fork_clone_login_new_commands_work() {
-    let Some(mut session) = spawn_tui() else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui().expect("r-code-tui must start inside a PTY");
     session.wait_for("尚未配置", Duration::from_secs(20));
 
     // 1) /tree：main-only 树浮层（G8）。
@@ -183,4 +195,5 @@ fn tree_fork_clone_login_new_commands_work() {
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session.env);
 }

@@ -1,0 +1,54 @@
+schema_version: ai-worklist-freeze.v1
+skill_contract:
+  name: prd-to-ai-worklist
+  version: 1.1.0
+
+status: frozen
+source_document: docs/support/archive/tui-v2/r-code-cli-prd.md
+
+normative_input:
+  files:
+    - docs/support/archive/tui-v2/r-code-cli-prd.md
+  refs:
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#1-背景目标终态与非目标
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#2-已冻结决策
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#3-仓库事实表
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#4-机器合同与规范性需求
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#5-质量性能与安全门禁
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#6-需求追踪表
+  digest_algorithm: sha256
+  normalization: ai-worklist-markers-v1
+  digest: d72edbcda619c0c9fbb1a5c67b723041ff5ba0295ee4687c0ff65acd6df1efd9
+
+worklist:
+  refs:
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#7-verification-harness-与里程碑
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#8-主-checklist唯一状态源
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#9-详细任务卡
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#10-连续执行恢复与证据协议
+    - docs/support/archive/tui-v2/r-code-cli-prd.md#11-风险兼容与外部放行
+  task_count: 24
+  required_task_count: 24
+  digest_algorithm: sha256
+  normalization: ai-worklist-contract-markers-v1
+  digest: 9a63c262051b4ccb31d9376e5b2952c717f1e5d56c69595b9c28935cdb378ee9
+
+completion_gate:
+  passed: true
+  blocking_issues: 0
+  major_issues: 0
+  report_path: artifacts/ai-tasks/verification/tui-v2/implementation/worklist-gate.json
+
+material_change_triggers:
+  - normative_requirement_changed
+  - repository_fact_invalidates_task
+  - blocking_or_major_gate_failure
+  - state_or_evidence_contradiction
+  - explicit_scope_change
+
+volatile_fields_excluded:
+  - checkbox_state
+  - progress_counts
+  - current_task
+  - evidence_paths
+  - run_metadata

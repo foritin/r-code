@@ -643,7 +643,7 @@
 
 .companion-pulse-stack .companion-session-card:hover .companion-session-copy,
 .companion-pulse-stack .companion-session-card:focus-within .companion-session-copy {
-  transform: translateY(-7px);
+  transform: translateY(-17px);
 }
 
 .companion-session-dot {

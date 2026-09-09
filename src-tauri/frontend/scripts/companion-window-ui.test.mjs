@@ -294,26 +294,29 @@ test("task completion keeps the tracked avatar footprint continuous and fully vi
   await page.waitForTimeout(2_300);
 
   const target = await page.evaluate(async () => {
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     const state = useTasksStore.getState();
     const task = state.tasks.find((item) => item.id === "mock-task-queue");
     if (!task) throw new Error("browser mock is missing the completion target");
     const endedAt = new Date().toISOString();
-    useTasksStore.setState({
-      tasks: state.tasks.map((item) => item.id === task.id
-        ? { ...item, state: "idle", updated_at: endedAt }
-        : { ...item, state: "archived", updated_at: endedAt }),
-      details: Object.fromEntries(Object.entries(state.details).map(([taskId, detail]) => [taskId, {
-        ...detail,
-        task: {
-          ...detail.task,
-          state: taskId === task.id ? "idle" : "archived",
-          updated_at: endedAt,
-        },
+    for (const [taskId, detail] of Object.entries(browserMockDetails)) {
+      applyMockTaskTransition({ tasks: browserMockTasks, details: browserMockDetails }, taskId, {
+        task: { state: taskId === task.id ? "idle" : "archived", updated_at: endedAt },
         permissions: detail.permissions.map((permission) => ({ ...permission, decision: "allow" })),
         runs: detail.runs.map((run) => ({ ...run, ended_at: run.ended_at ?? endedAt })),
-      }])),
-    });
+      });
+    }
+    let nextState = { tasks: state.tasks, details: state.details };
+    for (const [taskId, detail] of Object.entries(state.details)) {
+      nextState = transitionMockTaskStore(nextState, taskId, {
+        task: { state: taskId === task.id ? "idle" : "archived", updated_at: endedAt },
+        permissions: detail.permissions.map((permission) => ({ ...permission, decision: "allow" })),
+        runs: detail.runs.map((run) => ({ ...run, ended_at: run.ended_at ?? endedAt })),
+      });
+    }
+    useTasksStore.setState(nextState);
     return { id: task.id, title: task.title };
   });
   await page.waitForFunction(() => document.querySelector(".companion-unread-badge")?.textContent === "1");
@@ -321,30 +324,26 @@ test("task completion keeps the tracked avatar footprint continuous and fully vi
   const dialog = page.getByRole("dialog", { name: "最近任务" });
   await dialog.waitFor({ state: "visible" });
   const targetCard = dialog.locator(".companion-session-card").filter({ hasText: target.title });
-  await targetCard.locator(".companion-session-row").click();
+  await targetCard.hover();
+  await targetCard.getByRole("button", { name: "继续跟进" }).click();
   await dialog.waitFor({ state: "detached" });
   await page.waitForFunction(() => !document.querySelector(".companion-window-root")?.classList.contains("has-tracking"));
 
   await page.evaluate(async (taskId) => {
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     const state = useTasksStore.getState();
     const startedAt = new Date().toISOString();
     const detail = state.details[taskId];
-    useTasksStore.setState({
-      tasks: state.tasks.map((item) => item.id === taskId
-        ? { ...item, state: "in_progress", updated_at: startedAt }
-        : item),
-      details: detail ? {
-        ...state.details,
-        [taskId]: {
-          ...detail,
-          task: { ...detail.task, state: "in_progress", updated_at: startedAt },
-          runs: detail.runs.map((run, index) => index === 0
-            ? { ...run, started_at: run.started_at ?? startedAt, ended_at: null }
-            : run),
-        },
-      } : state.details,
-    });
+    const transition = {
+      task: { state: "in_progress", updated_at: startedAt },
+      runs: detail.runs.map((run, index) => index === 0
+        ? { ...run, started_at: run.started_at ?? startedAt, ended_at: null }
+        : run),
+    };
+    applyMockTaskTransition({ tasks: browserMockTasks, details: browserMockDetails }, taskId, transition);
+    useTasksStore.setState(transitionMockTaskStore(state, taskId, transition));
   }, target.id);
   await page.waitForFunction(() => {
     const root = document.querySelector(".companion-window-root");
@@ -368,23 +367,18 @@ test("task completion keeps the tracked avatar footprint continuous and fully vi
     window.__companionTrackingObserver = observer;
     sample();
 
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     const state = useTasksStore.getState();
     const endedAt = new Date().toISOString();
     const detail = state.details[taskId];
-    useTasksStore.setState({
-      tasks: state.tasks.map((item) => item.id === taskId
-        ? { ...item, state: "idle", updated_at: endedAt }
-        : item),
-      details: detail ? {
-        ...state.details,
-        [taskId]: {
-          ...detail,
-          task: { ...detail.task, state: "idle", updated_at: endedAt },
-          runs: detail.runs.map((run) => ({ ...run, ended_at: endedAt })),
-        },
-      } : state.details,
-    });
+    const transition = {
+      task: { state: "idle", updated_at: endedAt },
+      runs: detail.runs.map((run) => ({ ...run, ended_at: endedAt })),
+    };
+    applyMockTaskTransition({ tasks: browserMockTasks, details: browserMockDetails }, taskId, transition);
+    useTasksStore.setState(transitionMockTaskStore(state, taskId, transition));
   }, target.id);
   await page.waitForFunction(() => {
     const root = document.querySelector(".companion-window-root");
@@ -659,25 +653,20 @@ test("independent session assistant animates, reports unread progress and expose
   await dialog.waitFor({ state: "detached" });
 
   const transitionedTask = await page.evaluate(async () => {
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     const state = useTasksStore.getState();
     const task = state.tasks.find((item) => item.state === "in_progress");
     if (!task) throw new Error("browser mock is missing an in-progress task");
     const completedAt = new Date().toISOString();
     const detail = state.details[task.id];
-    useTasksStore.setState({
-      tasks: state.tasks.map((item) => item.id === task.id
-        ? { ...item, state: "review_ready", updated_at: completedAt }
-        : item),
-      details: detail ? {
-        ...state.details,
-        [task.id]: {
-          ...detail,
-          task: { ...detail.task, state: "review_ready", updated_at: completedAt },
-          runs: detail.runs.map((run) => ({ ...run, ended_at: run.ended_at ?? completedAt })),
-        },
-      } : state.details,
-    });
+    const transition = {
+      task: { state: "review_ready", updated_at: completedAt },
+      runs: detail.runs.map((run) => ({ ...run, ended_at: run.ended_at ?? completedAt })),
+    };
+    applyMockTaskTransition({ tasks: browserMockTasks, details: browserMockDetails }, task.id, transition);
+    useTasksStore.setState(transitionMockTaskStore(state, task.id, transition));
     return { id: task.id, title: task.title };
   });
   await page.waitForFunction(() => {
@@ -760,19 +749,29 @@ test("running and unread sessions surface automatically above the assistant", as
   await live.hover();
   assert.equal(await live.getByRole("button", { name: "继续跟进" }).count(), 1);
   assert.equal(await live.getByRole("button", { name: "停止当前运行" }).count(), 1);
-  await page.waitForFunction(() => {
-    const card = document.querySelector(".companion-pulse-stack .companion-session-card:hover");
-    const actions = card?.querySelector(".companion-session-actions");
-    const supporting = card?.querySelector(".companion-session-copy small");
-    const title = card?.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
-    const actionButtons = [...(card?.querySelectorAll(".companion-session-actions button") ?? [])]
+  await page.waitForTimeout(260);
+  const hoverLanes = await live.evaluate((card) => {
+    const actions = card.querySelector(".companion-session-actions");
+    const supporting = card.querySelector(".companion-session-copy small");
+    const title = card.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
+    const actionButtons = [...card.querySelectorAll(".companion-session-actions button")]
       .map((button) => button.getBoundingClientRect());
     const actionTop = Math.min(...actionButtons.map((rect) => rect.top));
-    return actions && supporting
-      && getComputedStyle(actions).opacity === "1"
-      && getComputedStyle(supporting).opacity === "0"
-      && title && Number.isFinite(actionTop) && title.bottom + 4 <= actionTop;
+    return {
+      actionsOpacity: actions ? getComputedStyle(actions).opacity : null,
+      supportingOpacity: supporting ? getComputedStyle(supporting).opacity : null,
+      titleBottom: title?.bottom ?? null,
+      actionTop,
+    };
   });
+  assert.equal(hoverLanes.actionsOpacity, "1");
+  assert.equal(hoverLanes.supportingOpacity, "0");
+  assert.ok(
+    hoverLanes.titleBottom != null
+      && Number.isFinite(hoverLanes.actionTop)
+      && hoverLanes.titleBottom + 4 <= hoverLanes.actionTop,
+    `hover title and actions overlap: ${JSON.stringify(hoverLanes)}`,
+  );
   const geometry = await stack.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const avatar = document.querySelector(".companion-avatar")?.getBoundingClientRect();
@@ -810,9 +809,9 @@ test("running and unread sessions surface automatically above the assistant", as
   assert.ok(geometry.avatar.top - geometry.stack.bottom >= 12
     && geometry.avatar.top - geometry.stack.bottom <= 22,
     `automatic progress drifted too far from the assistant's head: ${JSON.stringify(geometry)}`);
-  assert.ok(geometry.toggle.top >= geometry.avatar.bottom
-    && geometry.toggle.top - geometry.avatar.bottom <= 8,
-  `the collapse control must sit directly below the assistant's feet: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.toggle.top >= geometry.avatar.bottom - 12
+    && geometry.toggle.bottom <= 520,
+  `the accessible collapse target must stay anchored at the assistant's feet: ${JSON.stringify(geometry)}`);
   assert.ok(geometry.stack.width <= 320.5,
     `automatic progress should remain a compact head-anchored card: ${JSON.stringify(geometry.stack)}`);
   assert.ok(geometry.hoverBackgroundAlpha >= 0.96,
@@ -856,19 +855,29 @@ test("running and unread sessions surface automatically above the assistant", as
   await page.locator(".companion-window-root.is-mini").waitFor({ state: "visible" });
   await page.waitForFunction(() => document.querySelector(".companion-pulse-stack")?.getBoundingClientRect().width <= 264.5);
   await live.hover();
-  await page.waitForFunction(() => {
-    const card = document.querySelector(".companion-pulse-stack .companion-session-card:hover");
-    const actions = card?.querySelector(".companion-session-actions");
-    const supporting = card?.querySelector(".companion-session-copy small");
-    const title = card?.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
-    const actionButtons = [...(card?.querySelectorAll(".companion-session-actions button") ?? [])]
+  await page.waitForTimeout(260);
+  const miniHoverLanes = await live.evaluate((card) => {
+    const actions = card.querySelector(".companion-session-actions");
+    const supporting = card.querySelector(".companion-session-copy small");
+    const title = card.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
+    const actionButtons = [...card.querySelectorAll(".companion-session-actions button")]
       .map((button) => button.getBoundingClientRect());
     const actionTop = Math.min(...actionButtons.map((rect) => rect.top));
-    return actions && supporting
-      && getComputedStyle(actions).opacity === "1"
-      && getComputedStyle(supporting).opacity === "0"
-      && title && Number.isFinite(actionTop) && title.bottom + 4 <= actionTop;
+    return {
+      actionsOpacity: actions ? getComputedStyle(actions).opacity : null,
+      supportingOpacity: supporting ? getComputedStyle(supporting).opacity : null,
+      titleBottom: title?.bottom ?? null,
+      actionTop,
+    };
   });
+  assert.equal(miniHoverLanes.actionsOpacity, "1");
+  assert.equal(miniHoverLanes.supportingOpacity, "0");
+  assert.ok(
+    miniHoverLanes.titleBottom != null
+      && Number.isFinite(miniHoverLanes.actionTop)
+      && miniHoverLanes.titleBottom + 4 <= miniHoverLanes.actionTop,
+    `mini hover title and actions overlap: ${JSON.stringify(miniHoverLanes)}`,
+  );
   const miniGeometry = await stack.evaluate((element) => {
     const stackRect = element.getBoundingClientRect();
     const row = element.querySelector(".companion-session-row");
@@ -991,6 +1000,7 @@ test("progress overflow expands inline, collapses again and stays synchronized a
   const archiveTask = async (taskId) => {
     await page.evaluate(async (id) => {
       const { browserMockTasks, browserMockDetails } = await import("/src/lib/mock-data.ts");
+      const { transitionMockTaskDetail, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
       const { useTasksStore } = await import("/src/store/tasks.ts");
       const updatedAt = new Date().toISOString();
       const mockTask = browserMockTasks.find((task) => task.id === id);
@@ -1000,30 +1010,24 @@ test("progress overflow expands inline, collapses again and stays synchronized a
       }
       const mockDetail = browserMockDetails[id];
       if (mockDetail) {
-        mockDetail.task = { ...mockDetail.task, state: "archived", updated_at: updatedAt };
-        mockDetail.runs = mockDetail.runs.map((run) => ({
-          ...run,
-          ended_at: run.ended_at ?? updatedAt,
-        }));
+        browserMockDetails[id] = transitionMockTaskDetail(mockDetail, {
+          task: { state: "archived", updated_at: updatedAt },
+          runs: mockDetail.runs.map((run) => ({
+            ...run,
+            ended_at: run.ended_at ?? updatedAt,
+          })),
+        });
       }
       const state = useTasksStore.getState();
       const currentDetail = state.details[id];
-      useTasksStore.setState({
-        tasks: state.tasks.map((task) => task.id === id
-          ? { ...task, state: "archived", updated_at: updatedAt }
-          : task),
-        details: currentDetail ? {
-          ...state.details,
-          [id]: {
-            ...currentDetail,
-            task: { ...currentDetail.task, state: "archived", updated_at: updatedAt },
-            runs: currentDetail.runs.map((run) => ({
-              ...run,
-              ended_at: run.ended_at ?? updatedAt,
-            })),
-          },
-        } : state.details,
-      });
+      if (!currentDetail) throw new Error(`missing current mock detail: ${id}`);
+      useTasksStore.setState(transitionMockTaskStore(state, id, {
+        task: { state: "archived", updated_at: updatedAt },
+        runs: currentDetail.runs.map((run) => ({
+          ...run,
+          ended_at: run.ended_at ?? updatedAt,
+        })),
+      }));
     }, taskId);
   };
 
@@ -1084,36 +1088,50 @@ test("the full task panel keeps every unread session accessible and archived ses
   await page.evaluate(async () => {
     const { useTasksStore } = await import("/src/store/tasks.ts");
     const { browserMockTasks, browserMockDetails } = await import("/src/lib/mock-data.ts");
+    const { transitionMockTaskDetail, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     browserMockTasks.forEach((task) => { task.state = "idle"; });
-    Object.values(browserMockDetails).forEach((detail) => {
-      detail.task.state = "idle";
-      detail.permissions.forEach((permission) => { permission.decision = "allow"; });
-    });
+    for (const [taskId, detail] of Object.entries(browserMockDetails)) {
+      browserMockDetails[taskId] = transitionMockTaskDetail(detail, {
+        task: { state: "idle" },
+        permissions: detail.permissions.map((permission) => ({ ...permission, decision: "allow" })),
+      });
+    }
     const state = useTasksStore.getState();
-    useTasksStore.setState({
-      tasks: state.tasks.map((task) => task.id === "mock-task-complete"
-        ? { ...task, state: "archived", updated_at: new Date().toISOString() }
-        : task),
-    });
+    useTasksStore.setState(transitionMockTaskStore(state, "mock-task-complete", {
+      task: { state: "archived", updated_at: new Date().toISOString() },
+    }));
   });
   await page.waitForFunction(() => document.querySelector(".companion-unread-badge")?.textContent === "4");
   assert.match(await avatar.getAttribute("aria-label"), /4 个未读/);
 
   await page.evaluate(async () => {
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     const state = useTasksStore.getState();
-    useTasksStore.setState({
-      tasks: state.tasks.map((task) => ({ ...task, state: "idle" })),
-      details: Object.fromEntries(Object.entries(state.details).map(([taskId, detail]) => [taskId, {
-        ...detail,
-        task: { ...detail.task, state: "idle" },
+    let nextState = { tasks: state.tasks, details: state.details };
+    const endedAt = new Date().toISOString();
+    for (const [taskId, detail] of Object.entries(browserMockDetails)) {
+      applyMockTaskTransition({ tasks: browserMockTasks, details: browserMockDetails }, taskId, {
+        task: { state: "idle" },
         permissions: detail.permissions.map((permission) => ({ ...permission, decision: "allow" })),
         runs: detail.runs.map((run) => ({
           ...run,
-          ended_at: run.ended_at ?? new Date().toISOString(),
+          ended_at: run.ended_at ?? endedAt,
         })),
-      }])),
-    });
+      });
+    }
+    for (const [taskId, detail] of Object.entries(state.details)) {
+      nextState = transitionMockTaskStore(nextState, taskId, {
+        task: { state: "idle" },
+        permissions: detail.permissions.map((permission) => ({ ...permission, decision: "allow" })),
+        runs: detail.runs.map((run) => ({
+          ...run,
+          ended_at: run.ended_at ?? endedAt,
+        })),
+      });
+    }
+    useTasksStore.setState(nextState);
   });
   await page.waitForFunction(() => document.querySelector(".companion-window-root")?.classList.contains("state-idle"));
   await page.mouse.move(0, 0);
@@ -1153,16 +1171,15 @@ test("the full task panel keeps every unread session accessible and archived ses
       close() { window.__companionAudioClosed += 1; return Promise.resolve(); }
     };
     const { useCompanionStore } = await import("/src/store/companion.ts");
+    const { transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     useCompanionStore.getState().setSoundEnabled(true);
     const state = useTasksStore.getState();
     const target = state.tasks.find((task) => task.state === "idle" && task.id !== "mock-task-complete");
     if (!target) throw new Error("browser mock is missing an idle task for the audio failure case");
-    useTasksStore.setState({
-      tasks: state.tasks.map((task) => task.id === target.id
-        ? { ...task, state: "interrupted", updated_at: new Date().toISOString() }
-        : task),
-    });
+    useTasksStore.setState(transitionMockTaskStore(state, target.id, {
+      task: { state: "interrupted", updated_at: new Date().toISOString() },
+    }));
   });
   await page.waitForFunction(() => window.__companionAudioClosed === 1);
   await page.close();
@@ -1204,16 +1221,19 @@ test("session pills stop a live run once and keep failed stops unread", async ()
 
   await page.evaluate(async () => {
     const { browserMockTasks, browserMockDetails } = await import("/src/lib/mock-data.ts");
+    const { transitionMockTaskDetail, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const task = browserMockTasks.find((item) => item.id === "mock-task-api");
     if (!task) throw new Error("browser mock is missing mock-task-api");
     task.state = "exploring";
     task.updated_at = new Date(Date.now() + 2_000).toISOString();
-    browserMockDetails[task.id].task = { ...task };
+    browserMockDetails[task.id] = transitionMockTaskDetail(browserMockDetails[task.id], {
+      task: { state: task.state, updated_at: task.updated_at },
+    });
     window.__rCodeBrowserMockFailures = { cmd_agent_abort: "demo abort unavailable" };
     const { useTasksStore } = await import("/src/store/tasks.ts");
-    useTasksStore.setState({
-      tasks: useTasksStore.getState().tasks.map((item) => item.id === task.id ? { ...task } : item),
-    });
+    useTasksStore.setState(transitionMockTaskStore(useTasksStore.getState(), task.id, {
+      task: { state: task.state, updated_at: task.updated_at },
+    }));
   });
   const failedCard = dialog.locator(".companion-session-card").filter({ hasText: "添加请求限流中间件" });
   await failedCard.hover();

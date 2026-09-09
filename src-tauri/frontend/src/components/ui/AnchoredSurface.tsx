@@ -208,11 +208,15 @@ export function AnchoredSurface({
     if (matchAnchorWidth) surface.style.width = `${Math.min(anchorRect.width, viewportWidth)}px`;
 
     const surfaceRect = surface.getBoundingClientRect();
-    const chromeHeight = Math.max(0, surfaceRect.height - surface.clientHeight);
-    const naturalHeight = Math.max(surfaceRect.height, surface.scrollHeight + chromeHeight);
+    // 自然尺寸 = 解除本组件内联约束后的实际布局尺寸。不能用 scrollHeight/
+    // scrollWidth：它们报告"内容全高"，会无视列表层自身的 max-height 限高
+    // （如步骤浮层的 46vh），把浮层按一个用户永远看不到的假想高度放置——
+    // 空间判定误判后浮层贴到视口顶部，与锚点之间留下大片悬空（2026-09 实测）。
+    // CSS 级约束（surface 自身或内层）是布局的一部分，应如实计入。
+    const naturalHeight = surfaceRect.height;
     const naturalWidth = matchAnchorWidth
       ? Math.min(anchorRect.width, viewportWidth)
-      : Math.max(surfaceRect.width, surface.scrollWidth);
+      : surfaceRect.width;
 
     surface.style.maxHeight = previousMaxHeight;
     surface.style.maxWidth = previousMaxWidth;
@@ -265,11 +269,18 @@ export function AnchoredSurface({
       if (target instanceof Node && ownRef.current?.contains(target)) return;
       schedule();
     };
+    // 入场动画（transform/scale 类）进行中的 rect 是中间态，且动画结束不会触发
+    // ResizeObserver（布局尺寸未变）。动画结束后补一次定位，消除首测误差。
+    const scheduleForAnimationEnd = (event: Event) => {
+      if (event.target !== ownRef.current) return;
+      schedule();
+    };
 
     reposition();
     schedule();
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", scheduleForAncestorScroll, true);
+    window.addEventListener("animationend", scheduleForAnimationEnd);
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", schedule);
 
@@ -282,6 +293,7 @@ export function AnchoredSurface({
       observer?.disconnect();
       window.removeEventListener("resize", schedule);
       window.removeEventListener("scroll", scheduleForAncestorScroll, true);
+      window.removeEventListener("animationend", scheduleForAnimationEnd);
       window.visualViewport?.removeEventListener("resize", schedule);
       window.visualViewport?.removeEventListener("scroll", schedule);
     };

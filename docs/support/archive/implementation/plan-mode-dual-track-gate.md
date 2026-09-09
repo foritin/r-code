@@ -917,7 +917,7 @@ M0-00 必须位于所有 Rust M0 任务之前。证据 gate 之后仍保留正�
 
 - [Plan 模式、人工确认与增强审核](../../guides/plan-mode.md)
 - [请求构成审计与首轮锚定实验](./request-audit-and-anchoring.md)
-- [架构与实现细节](../../../architecture.md)
+- [架构与实现细节](../architecture-before-harness-v2.md)
 
 ---
 

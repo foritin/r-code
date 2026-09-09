@@ -23,7 +23,9 @@ use std::{
 };
 
 use agent_config::Config;
-use r_code_agent_worker::AgentPromptPolicy;
+// T42 阶段 1：AgentPromptPolicy 已下沉 agent-config；类型逐字节同形，
+// agent-prompts.toml 的 TOML 格式不变。
+use agent_config::AgentPromptPolicy;
 use r_code_core::error::ProductError;
 #[cfg(all(not(test), target_os = "macos"))]
 use r_code_core::secret::EncryptedFileSecretStore;

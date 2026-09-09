@@ -231,6 +231,101 @@ test("review-ready sessions stay green without losing their review semantics", a
   await page.close();
 });
 
+test("long step popovers anchor to the trigger instead of clinging to the viewport top", async () => {
+  // 回归（2026-09 实测漂移）：23 步计划浮层曾被按 scrollHeight（内容全高，无视
+  // 列表 46vh 限高）定位，空间判定误判后贴到视口顶部，与锚点之间悬空数百像素。
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const runtimeErrors = [];
+  page.on("pageerror", (error) => runtimeErrors.push(String(error)));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(message.text());
+  });
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(() => {
+    const now = new Date().toISOString();
+    const items = Array.from({ length: 23 }, (_, index) => ({
+      id: `feature-${index + 1}`,
+      plan_id: "probe-plan",
+      revision: 3,
+      ordinal: index + 1,
+      title: `功能事项 ${index + 1}：修复数据一致性与并发问题`,
+      description: "验收边界：改动可回滚、测试全绿。",
+      section_path: [`阶段 ${Math.floor(index / 5) + 1}`],
+      state: index === 0 ? "in_progress" : "pending",
+      depends_on: index === 0 ? [] : [`feature-${index}`],
+      created_at: now,
+      updated_at: now,
+      started_at: null,
+      completed_at: null,
+    }));
+    globalThis.__rCodeBrowserMockPlanOverride = {
+      "mock-task-queue": {
+        plan: {
+          id: "probe-plan", task_id: "mock-task-queue", revision: 3, state: "executing",
+          approved_revision: 2, projection_path: "R-Code/Plans/probe-plan/plan.md",
+          projection_revision: 3, projection_error: null, created_at: now, updated_at: now,
+          approved_at: now, implementation_dispatch_state: "dispatched",
+          implementation_dispatch_error: null, implementation_queue_message_id: "q1",
+          implementation_dispatched_at: now,
+        },
+        goal: { task_id: "mock-task-queue", goal: "修复任务队列并发问题", updated_at: now },
+        items,
+        pending_question_set: null,
+        continuation_question_set: null,
+      },
+    };
+  });
+
+  await page.getByRole("button", { name: "对话", exact: true }).click();
+  await page.locator(".conversation-row").filter({ hasText: "修复任务队列并发问题" }).locator(".conversation-main").click();
+  await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+  const trigger = page.locator(".session-run-summary-trigger.step-trigger");
+  await trigger.waitFor({ state: "visible" });
+
+  await trigger.click();
+  const popover = page.locator("#session-step-popover");
+  await popover.waitFor({ state: "visible" });
+  // 立即测量首帧定位：回归断言（贴锚、不贴顶）在首次定位就成立。mock 轮询会
+  // 短暂清空 runs 使浮层组件 unmount，因此不等动画结束才量，终态作为容错加分项。
+  const firstGeo = await popover.evaluate((el) => {
+    const anchor = document.querySelector(".session-run-summary-trigger.step-trigger");
+    const s = el.getBoundingClientRect();
+    return {
+      anchorTop: anchor ? anchor.getBoundingClientRect().top : -1,
+      popoverTop: s.top,
+      popoverBottom: s.bottom,
+    };
+  });
+  const firstGap = firstGeo.anchorTop - firstGeo.popoverBottom;
+  assert.ok(
+    firstGap >= -4 && firstGap <= 20,
+    `popover bottom ${firstGeo.popoverBottom} must hug the anchor top ${firstGeo.anchorTop} (gap ${firstGap})`,
+  );
+  assert.ok(
+    firstGeo.popoverTop >= 100,
+    `popover top ${firstGeo.popoverTop} must not cling to the viewport top (drift regression)`,
+  );
+
+  // 动画结束后有一次 animationend 重定位；浮层若仍在，终态应收敛到 gap≈8。
+  await page.waitForTimeout(400);
+  if ((await popover.count()) === 1) {
+    const settledGeo = await popover.evaluate((el) => {
+      const anchor = document.querySelector(".session-run-summary-trigger.step-trigger");
+      const s = el.getBoundingClientRect();
+      return { anchorTop: anchor ? anchor.getBoundingClientRect().top : -1, bottom: s.bottom };
+    });
+    const settledGap = settledGeo.anchorTop - settledGeo.bottom;
+    assert.ok(
+      settledGap >= 0 && settledGap <= 16,
+      `settled popover must hug the anchor (gap ${settledGap})`,
+    );
+  }
+
+  assert.deepEqual(runtimeErrors, []);
+  await page.close();
+});
+
 test("sidebar project and conversation actions share one compact side-menu pattern", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const runtimeErrors = [];
@@ -300,9 +395,9 @@ test("sidebar project and conversation actions share one compact side-menu patte
     "project-scoped creation must persist and select the empty conversation immediately",
   );
   assert.match(
-    await page.locator("#main-content > .scene-room").innerText(),
-    /r-code · 会话就绪/,
-    "the durable conversation keeps the selected project attached",
+    await page.locator(".room-conversation-title span").innerText(),
+    /^r-code · 尚未开始$/,
+    "the durable conversation keeps the selected project attached without claiming an empty conversation is completed",
   );
 
   assert.deepEqual(runtimeErrors, []);

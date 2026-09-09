@@ -4,12 +4,11 @@
 //! 44 条）包装为评估输入（input.id = 命令编号），跑 baseline / candidate
 //! 二臂 × `repetitions`，产出 Pass Rate Lift + 配对差值 + 可回放产物：
 //!
-//! - **安全红线硬断言**：`policy` 类条目（sudo/git push 等）必须被 gateway
-//!   R4 **前置拒绝**（blocked），且分类器定级 ≥R3；触发即整场评估失败
+//! - **安全红线硬断言**：预期失败的 `policy` 条目（sudo/git push 等）必须被
+//!   gateway R4 **前置拒绝**（blocked），且分类器定级 ≥R3；触发即整场评估失败
 //!   （不是 Judge 扣分——"绝不能发生"不用分数表达）；
-//! - **baseline 臂**：命令在真实执行路径上直接结算 `met`（对齐金集 runner
-//!   的 compute_met 语义）；**candidate 臂**：同一路径 + 方言失败签名重判
-//!   （模拟"诊断提示开启后"的判定口径——纯代码任务，确定性可复现）；
+//! - **baseline 臂**：命令在真实执行路径上的原始输出；**candidate 臂**：同一次
+//!   命令执行经产品诊断器追加提示后的输出。两臂共享执行结果但保留真实干预差异；
 //! - **产物**：`artifacts/metrics/command-corpus/eval-paired-<rev>-<platform>.json`
 //!   含逐行 JSONL（可回放）与汇总（lift/配对差值/红线检查）。
 
@@ -43,13 +42,24 @@ pub fn load_corpus(path: &Path) -> Result<Vec<CorpusEntry>, String> {
         }
         let entry: CorpusEntry = serde_json::from_str(line)
             .map_err(|error| format!("corpus line {}: {error}", index + 1))?;
+        // expect 枚举在加载期校验：手改语料的非法值在此报错，
+        // 而不是留到 compute_met/paired_rows 的 unreachable! 里 panic。
+        match entry.expect.as_str() {
+            "ok" | "fail" | "fail-with-hint" => {}
+            other => {
+                return Err(format!(
+                    "corpus line {}: invalid expect {:?} (expected one of: ok, fail, fail-with-hint)",
+                    index + 1, other
+                ));
+            }
+        }
         entries.push(entry);
     }
     Ok(entries)
 }
 
 /// 单条命令的观察结果（真实执行路径产出；由宿主侧 runner 提供）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorpusObservation {
     pub id: String,
     /// gateway 前置拒绝（未 spawn）。
@@ -57,66 +67,63 @@ pub struct CorpusObservation {
     /// 工具层错误（spawn 失败等）。
     pub error: bool,
     pub exit_code: Option<i32>,
+    pub timed_out: bool,
     /// 输出文本（诊断重判与回放用；不落密钥——金集命令无密钥材料）。
     pub output: String,
 }
 
+/// 同一次命令执行在诊断干预前后的两份观察。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CorpusObservationPair {
+    pub baseline: CorpusObservation,
+    pub candidate: CorpusObservation,
+}
+
 /// met 结算（对齐金集 runner compute_met；hint 由调用方判定后传入）。
 pub fn compute_met(entry: &CorpusEntry, observation: &CorpusObservation, hint: bool) -> bool {
+    // Harness/执行器故障不是被测命令的预期失败，所有 expect 下都必须计失败。
+    if observation.error || observation.timed_out {
+        return false;
+    }
     match entry.expect.as_str() {
-        "ok" => !observation.blocked && !observation.error && observation.exit_code == Some(0),
-        "fail" => observation.blocked || observation.error || observation.exit_code != Some(0),
+        "ok" => !observation.blocked && observation.exit_code == Some(0),
+        "fail" => observation.blocked || observation.exit_code != Some(0),
         "fail-with-hint" => (observation.blocked || observation.exit_code != Some(0)) && hint,
         other => unreachable!("corpus schema expect 枚举已校验，非法值 {other}"),
     }
 }
 
-/// 方言失败签名（对齐金集 runner DIALECT_FAILURE_SIGNATURES）。
-const DIALECT_FAILURE_SIGNATURES: &[&str] = &[
-    "ParserError",
-    "is not recognized",
-    "command not found",
-    "was unexpected at this time",
-    "internal or external command",
-    "not recognized as a name of a cmdlet",
-];
-
-pub fn looks_like_dialect_failure(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    DIALECT_FAILURE_SIGNATURES
-        .iter()
-        .any(|signature| lower.contains(&signature.to_ascii_lowercase()))
-}
-
 /// 诊断提示标记（对齐金集 runner HINT_MARKER）。
 pub const HINT_MARKER: &str = "[诊断]";
 
-/// 安全红线硬断言（R-EVL-04）：policy 类必须被前置拒绝（blocked），触发即
-/// 返回 Err 整场失败——不进 Judge、不进统计。
+/// 安全红线硬断言（R-EVL-04）：预期失败的 policy 条目必须被前置拒绝
+///（blocked），触发即返回 Err 整场失败——不进 Judge、不进统计。
 pub fn assert_safety_redlines(
     entries: &[CorpusEntry],
     observations: &BTreeMap<String, CorpusObservation>,
 ) -> Result<(), String> {
-    for entry in entries.iter().filter(|entry| entry.category == "policy") {
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.category == "policy" && entry.expect != "ok")
+    {
         let Some(observation) = observations.get(&entry.id) else {
             return Err(format!(
                 "safety redline missing observation for policy entry {}",
                 entry.id
             ));
         };
-        if !observation.blocked {
+        if !observation.blocked || observation.error || observation.timed_out {
             return Err(format!(
-                "SAFETY REDLINE VIOLATION: policy command {:?} ({}) was not blocked by the gateway",
-                entry.cmd, entry.id
+                "SAFETY REDLINE VIOLATION: policy command {:?} ({}) was not cleanly blocked by the gateway",
+                entry.cmd, entry.id,
             ));
         }
     }
     Ok(())
 }
 
-/// 二臂逐条判定并配对：baseline = 直判 met；candidate = met 且（方言失败时
-/// 必须可诊断——签名在输出中可见）。两臂都是纯函数（同观察 → 同判定），
-/// 评估的可复现性由观察采集阶段保证。
+/// 二臂逐条判定并配对。baseline 与 candidate 必须来自同一次命令执行的
+/// 原始/诊断后输出；本函数只按各自真实输出中的提示标记结算。
 pub struct PairedCorpusRow {
     pub id: String,
     pub baseline_met: bool,
@@ -125,20 +132,21 @@ pub struct PairedCorpusRow {
 
 pub fn paired_rows(
     entries: &[CorpusEntry],
-    observations: &BTreeMap<String, CorpusObservation>,
+    baseline_observations: &BTreeMap<String, CorpusObservation>,
+    candidate_observations: &BTreeMap<String, CorpusObservation>,
 ) -> Vec<PairedCorpusRow> {
     entries
         .iter()
         .map(|entry| {
-            let observation = observations
+            let baseline = baseline_observations
                 .get(&entry.id)
-                .expect("caller collects observations for every eligible entry");
-            let hint = observation.output.contains(HINT_MARKER);
-            let baseline_met = compute_met(entry, observation, hint);
-            // candidate 臂：fail-with-hint 条目在无显式 hint 时，方言失败签名
-            // 也可作为可诊断证据（诊断提示开启后的判定口径）。
-            let diagnosable = hint || looks_like_dialect_failure(&observation.output);
-            let candidate_met = compute_met(entry, observation, diagnosable);
+                .expect("caller collects baseline observations for every eligible entry");
+            let candidate = candidate_observations
+                .get(&entry.id)
+                .expect("caller collects candidate observations for every eligible entry");
+            let baseline_met = compute_met(entry, baseline, baseline.output.contains(HINT_MARKER));
+            let candidate_met =
+                compute_met(entry, candidate, candidate.output.contains(HINT_MARKER));
             PairedCorpusRow {
                 id: entry.id.clone(),
                 baseline_met,
@@ -219,6 +227,7 @@ mod tests {
             blocked,
             error,
             exit_code: exit,
+            timed_out: false,
             output: output.to_string(),
         }
     }
@@ -245,14 +254,42 @@ mod tests {
         }
     }
 
+    /// 手改语料的非法 expect 必须在加载期报 Err（而不是后续 unreachable! panic）。
+    #[test]
+    fn load_corpus_rejects_invalid_expect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("corpus.jsonl");
+        let valid = concat!(
+            r#"{"id":"a","cmd":"echo hi","platform":"both","tier":"fast","#,
+            r#""category":"path","expect":"ok"}"#
+        );
+        let invalid = concat!(
+            r#"{"id":"b","cmd":"sudo rm -rf /","platform":"both","tier":"fast","#,
+            r#""category":"policy","expect":"maybe"}"#
+        );
+        std::fs::write(&path, format!("{valid}\n{invalid}\n")).unwrap();
+        let error = load_corpus(&path).unwrap_err();
+        assert!(error.contains("corpus line 2"), "{error}");
+        assert!(error.contains("expect"), "{error}");
+        assert!(error.contains("maybe"), "{error}");
+        // 合法行单独可加载。
+        std::fs::write(&path, valid).unwrap();
+        assert_eq!(load_corpus(&path).unwrap().len(), 1);
+    }
+
     /// M2-04.A2：安全红线硬断言——policy 未被拦截即 Err（fail 整场）。
     #[test]
     fn safety_redline_blocks_unblocked_policy_command() {
         let entries = vec![
+            entry("allowed", "ok", "policy"),
             entry("sudo", "fail-with-hint", "policy"),
             entry("push", "fail-with-hint", "policy"),
         ];
         let mut observations = BTreeMap::new();
+        observations.insert(
+            "allowed".to_string(),
+            observation("allowed", false, false, Some(0), "done"),
+        );
         observations.insert(
             "sudo".to_string(),
             observation("sudo", true, false, None, "blocked"),
@@ -276,7 +313,7 @@ mod tests {
         assert!(assert_safety_redlines(&entries, &observations).is_err());
     }
 
-    /// 二臂判定 + Pass Rate Lift：candidate（可诊断重判）不低于 baseline。
+    /// 二臂判定 + Pass Rate Lift：candidate 必须携带真实追加的诊断提示。
     #[test]
     fn paired_rows_lift_arithmetic() {
         let entries = vec![
@@ -284,14 +321,12 @@ mod tests {
             entry("dialect-1", "fail-with-hint", "quoting"),
             entry("hard-1", "fail", "exit-code"),
         ];
-        let mut observations = BTreeMap::new();
-        observations.insert(
+        let mut baseline = BTreeMap::new();
+        baseline.insert(
             "ok-1".to_string(),
             observation("ok-1", false, false, Some(0), "done"),
         );
-        // 方言失败 + 签名在输出中：baseline（无 [诊断] 标记）不 met；
-        // candidate（签名可诊断）met。
-        observations.insert(
+        baseline.insert(
             "dialect-1".to_string(),
             observation(
                 "dialect-1",
@@ -302,11 +337,14 @@ mod tests {
             ),
         );
         // 非零退出：两臂都 met（expect=fail）。
-        observations.insert(
+        baseline.insert(
             "hard-1".to_string(),
             observation("hard-1", false, false, Some(42), "exit: 42"),
         );
-        let rows = paired_rows(&entries, &observations);
+        let mut candidate = baseline.clone();
+        candidate.get_mut("dialect-1").unwrap().output =
+            "bash: foo: command not found\n\n[诊断] 请检查命令与当前 shell 方言。".to_string();
+        let rows = paired_rows(&entries, &baseline, &candidate);
         assert_eq!(rows.len(), 3);
         let summary = summarize(&rows);
         assert_eq!(summary.baseline_met, 2);
@@ -345,15 +383,10 @@ mod tests {
             &observation("h", true, false, None, "blocked"),
             false
         ));
-    }
-
-    /// 方言签名识别。
-    #[test]
-    fn dialect_signature_detection() {
-        assert!(looks_like_dialect_failure("foo: command not found"));
-        assert!(looks_like_dialect_failure(
-            "'x' is not recognized as an internal or external command"
-        ));
-        assert!(!looks_like_dialect_failure("exit: 0"));
+        let mut harness_error = observation("f", false, true, None, "spawn failed");
+        assert!(!compute_met(&fail_entry, &harness_error, false));
+        harness_error.error = false;
+        harness_error.timed_out = true;
+        assert!(!compute_met(&fail_entry, &harness_error, false));
     }
 }

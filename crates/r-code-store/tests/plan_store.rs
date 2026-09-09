@@ -2802,3 +2802,231 @@ fn scope_decision_rejects_plan_mode_before_writing() {
         "rejected scope decision must not create a Plan"
     );
 }
+
+/// 为自动续跑测试搭好"已批准 + 实施已派发"的 executing Plan：
+/// 两个 feature（first 无依赖、second 依赖 first），approve 后 first 为 in_progress。
+fn fixture_with_dispatched_plan(
+    goal: &str,
+    items: Vec<PlanItemDraft>,
+) -> (Fixture, String, SessionBranch) {
+    let fixture = Fixture::in_memory(goal);
+    let created = fixture.create_plan();
+    let ready = publish(&fixture.store, &fixture.task.id, &created.plan.id, 1, items);
+    fixture
+        .store
+        .approve_plan(
+            &fixture.task.id,
+            &ApprovePlanInput {
+                plan_id: ready.plan.id.clone(),
+                expected_revision: ready.plan.revision,
+            },
+        )
+        .unwrap();
+    let branch = SessionBranchRepository::new(fixture.db.as_ref())
+        .ensure_active(&fixture.task.id)
+        .unwrap();
+    fixture
+        .store
+        .claim_implementation_dispatch(&fixture.task.id, &ready.plan.id)
+        .unwrap()
+        .expect("first dispatch claim must succeed");
+    fixture
+        .store
+        .stage_implementation_dispatch(&fixture.task.id, &ready.plan.id, &branch.id, "实施")
+        .unwrap();
+    (fixture, ready.plan.id, branch)
+}
+
+fn chain_items(count: usize) -> Vec<PlanItemDraft> {
+    (0..count)
+        .map(|index| {
+            let id = format!("feature-{index}");
+            let depends_on: Vec<String> = if index == 0 {
+                Vec::new()
+            } else {
+                vec![format!("feature-{}", index - 1)]
+            };
+            item(
+                &id,
+                &format!("Feature {index}"),
+                &depends_on.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn auto_continuation_claim_gates_on_progress_count_and_active_feature() {
+    let (fixture, plan_id, _branch) =
+        fixture_with_dispatched_plan("Auto continuation gates", chain_items(7));
+    let store = &fixture.store;
+    let task_id = &fixture.task.id;
+
+    // 首次自动续跑：无锚点，放行并登记（计数 1、锚定当前 revision）。
+    let first = store
+        .claim_auto_continuation(task_id)
+        .unwrap()
+        .expect("first claim");
+    assert_eq!(first.plan.id, plan_id);
+    let (used, anchor): (i64, Option<i64>) = {
+        let conn = fixture.db.conn().unwrap();
+        conn.query_row(
+            "SELECT auto_continuations, auto_continuation_revision FROM plans WHERE id = ?1",
+            [&plan_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(used, 1);
+    assert_eq!(anchor, Some(first.plan.revision as i64));
+
+    // 无进展（revision 未前进）：拒绝。
+    assert!(store.claim_auto_continuation(task_id).unwrap().is_none());
+
+    // 每完成一个 feature（revision 前进、下一个依赖就绪项激活）→ 允许再续。
+    // 链长 7，连续推进 5 次后达到 MAX_AUTO_CONTINUATIONS，第 6 次拒绝。
+    let mut revision = first.plan.revision;
+    for index in 0..5usize {
+        revision += 1;
+        store
+            .update_plan_item(
+                task_id,
+                &UpdatePlanItemInput {
+                    plan_id: plan_id.clone(),
+                    item_id: format!("feature-{index}"),
+                    expected_revision: revision - 1,
+                    state: PlanItemState::Completed,
+                },
+            )
+            .unwrap();
+        let claimed = store.claim_auto_continuation(task_id).unwrap();
+        if index < 4 {
+            assert!(claimed.is_some(), "advance {index} must re-claim");
+        } else {
+            assert!(
+                claimed.is_none(),
+                "sixth claim must hit MAX_AUTO_CONTINUATIONS"
+            );
+        }
+    }
+    let (used, _): (i64, Option<i64>) = {
+        let conn = fixture.db.conn().unwrap();
+        conn.query_row(
+            "SELECT auto_continuations, auto_continuation_revision FROM plans WHERE id = ?1",
+            [&plan_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(used, 5, "claim attempts beyond the cap must not register");
+
+    // 人工介入（手动续接/批准）重置账本后重新放行。
+    store.reset_auto_continuations(task_id, &plan_id).unwrap();
+    assert!(store.claim_auto_continuation(task_id).unwrap().is_some());
+
+    // 全部完成后：没有 in_progress feature → 不再续。
+    let mut revision = {
+        let conn = fixture.db.conn().unwrap();
+        conn.query_row(
+            "SELECT revision FROM plans WHERE id = ?1",
+            [&plan_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    for index in 5..7usize {
+        revision += 1;
+        store
+            .update_plan_item(
+                task_id,
+                &UpdatePlanItemInput {
+                    plan_id: plan_id.clone(),
+                    item_id: format!("feature-{index}"),
+                    expected_revision: (revision - 1) as u64,
+                    state: PlanItemState::Completed,
+                },
+            )
+            .unwrap();
+    }
+    assert!(store.claim_auto_continuation(task_id).unwrap().is_none());
+}
+
+#[test]
+fn auto_continuation_never_claims_while_feature_is_blocked() {
+    let (fixture, plan_id, _branch) = fixture_with_dispatched_plan(
+        "Auto continuation blocked",
+        vec![
+            item("first", "First", &[]),
+            item("second", "Second", &["first"]),
+        ],
+    );
+    let store = &fixture.store;
+    let task_id = &fixture.task.id;
+
+    // 模型显式 blocked：活动功能消失 → 绝不自动续（受阻必须人决策）。
+    let view = store.current_for_task(task_id).unwrap().unwrap();
+    store
+        .update_plan_item(
+            task_id,
+            &UpdatePlanItemInput {
+                plan_id: plan_id.clone(),
+                item_id: "first".to_string(),
+                expected_revision: view.plan.revision,
+                state: PlanItemState::Blocked,
+            },
+        )
+        .unwrap();
+    assert!(store.claim_auto_continuation(task_id).unwrap().is_none());
+
+    // 阻塞解除（blocked → in_progress）→ 恢复可续。
+    let view = store.current_for_task(task_id).unwrap().unwrap();
+    store
+        .update_plan_item(
+            task_id,
+            &UpdatePlanItemInput {
+                plan_id: plan_id.clone(),
+                item_id: "first".to_string(),
+                expected_revision: view.plan.revision,
+                state: PlanItemState::InProgress,
+            },
+        )
+        .unwrap();
+    assert!(store.claim_auto_continuation(task_id).unwrap().is_some());
+}
+
+#[test]
+fn implementation_continuation_accepts_idle_task_for_auto_resume() {
+    let (fixture, plan_id, branch) =
+        fixture_with_dispatched_plan("Continuation task states", vec![item("only", "Only", &[])]);
+    let store = &fixture.store;
+    let task_id = &fixture.task.id;
+
+    // 自动续跑路径：run 零变更结束回到 idle，但 Plan 仍有活动功能 → 允许续接。
+    {
+        let conn = fixture.db.conn().unwrap();
+        conn.execute(
+            "UPDATE tasks SET state = 'idle' WHERE id = ?1",
+            [task_id.as_str()],
+        )
+        .unwrap();
+    }
+    store
+        .stage_implementation_continuation(task_id, &plan_id, &branch.id, "only", "继续实施")
+        .unwrap_or_else(|error| panic!("idle task must allow auto continuation: {error}"));
+
+    // 非可续状态（archived）仍然拒绝。
+    {
+        let conn = fixture.db.conn().unwrap();
+        conn.execute(
+            "UPDATE tasks SET state = 'archived' WHERE id = ?1",
+            [task_id.as_str()],
+        )
+        .unwrap();
+    }
+    let error = store
+        .stage_implementation_continuation(task_id, &plan_id, &branch.id, "only", "继续实施")
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("interrupted, review-ready or idle"));
+}

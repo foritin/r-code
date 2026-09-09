@@ -9,7 +9,7 @@
    刻度设计原则：
    - 间距走 2px 栅格的具名档位。桌面端密集 chrome 需要 6/10 这样的中间档，
      但**只允许**这 11 档，杜绝 3/5/7/9/11/13/14 这类"手感值"。
-   - 字号下限 11px，只保留 7 档；层级差异优先靠颜色（--fg-muted / --fg-faint）
+   - 字号下限 12px，只保留 7 档；层级差异优先靠颜色（--fg-muted / --fg-faint）
      和字重表达，而不是靠 0.5px 的字号差。
    - 色调混合（tint/edge）收敛为每色 4 档，取代原先 51 组手调百分比。
    ============================================================================ */
@@ -28,10 +28,10 @@
   --sp-9: 24px;
   --sp-10: 32px;
 
-  /* ---------- 字阶：7 档，下限 11px ---------- */
-  --text-meta: 11px;   /* 元信息、徽章、快捷键、时间戳 */
-  --text-sm: 12px;     /* 菜单项、辅助说明、次级正文 */
-  --text-base: 14px;   /* 正文、列表主体、输入框 */
+  /* ---------- 字阶：7 档，下限 12px ---------- */
+  --text-meta: 12px;   /* 元信息、徽章、快捷键、时间戳 */
+  --text-sm: 13px;     /* 菜单项、辅助说明、次级正文 */
+  --text-base: 15px;   /* 正文、列表主体、输入框 */
   --text-md: 15px;     /* 小标题、树节点 */
   --text-lg: 16px;     /* 卡片标题、首页输入框 */
   --text-xl: 19px;     /* 区块大标题 */
@@ -100,19 +100,19 @@
   --font-display: Bahnschrift, "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
   --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 
-  --bg-app: #10110f;
-  --bg-sidebar: #1c1918;
-  --bg-panel: #151614;
-  --bg-card: #1b1c19;
-  --bg-chip: #25241f;
-  --bg-inset: #0b0c0a;
-  --bg-hover: #20211e;
-  --bg-active: #29261f;
-  --border: #2b2b27;
-  --border-strong: #4b463d;
-  --fg: #f1efe9;
-  --fg-muted: #a49f95;
-  --fg-faint: #858077;
+  --bg-app: #181818;
+  --bg-sidebar: #202020;
+  --bg-panel: #181818;
+  --bg-card: #262626;
+  --bg-chip: #303030;
+  --bg-inset: #141414;
+  --bg-hover: #2d2d2d;
+  --bg-active: #333333;
+  --border: #343434;
+  --border-strong: #505050;
+  --fg: #eeeeee;
+  --fg-muted: #b4b4b4;
+  --fg-faint: #999999;
   --accent: #f4742b;
   --accent-2: #c49a61;
   --accent-fg: #17100b;
@@ -151,7 +151,7 @@
   --border-strong: #d8c9b8;
   --fg: #2b241f;
   --fg-muted: #6d6259;
-  --fg-faint: #91857b;
+  --fg-faint: #776b61;
   --accent: #ed6514;
   --accent-2: #b94c13;
   --accent-fg: #ffffff;
@@ -207,8 +207,8 @@
    组件规则仍留在 signature.css 的 #app.r-code-signature 作用域内。
    ============================================================================ */
 :root {
-  --signature-workspace-radius: 28px;
-  --signature-sidebar: #1c1918;
+  --signature-workspace-radius: 20px;
+  --signature-sidebar: var(--bg-sidebar);
   --signature-sidebar-glow-hot: rgba(244, 116, 43, 0.06);
   --signature-sidebar-glow-deep: rgba(176, 53, 34, 0.12);
   --signature-sidebar-wash: rgba(244, 116, 43, 0.025);
@@ -219,15 +219,15 @@
   --signature-keyline: color-mix(in srgb, var(--accent) 34%, var(--border));
   --signature-accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --signature-accent-faint: color-mix(in srgb, var(--accent) 7%, transparent);
-  --signature-divider: #32312c;
-  --signature-panel-edge: #37362f;
-  --signature-elevated: #171815;
-  --signature-control: #23231f;
-  --signature-chrome-fg: #aaa49b;
-  --signature-sidebar-muted: #aaa59c;
-  --signature-sidebar-section: #817b72;
-  --signature-sidebar-project: #d8d4cc;
-  --signature-composer-shadow: 0 -10px 34px rgba(0, 0, 0, 0.12), 0 10px 24px rgba(0, 0, 0, 0.16);
+  --signature-divider: var(--border);
+  --signature-panel-edge: var(--border);
+  --signature-elevated: var(--bg-card);
+  --signature-control: var(--bg-chip);
+  --signature-chrome-fg: var(--fg-muted);
+  --signature-sidebar-muted: var(--fg-muted);
+  --signature-sidebar-section: var(--fg-faint);
+  --signature-sidebar-project: var(--fg);
+  --signature-composer-shadow: 0 4px 18px rgba(0, 0, 0, 0.1);
 }
 
 :root[data-theme='studio-light'] {

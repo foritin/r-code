@@ -757,9 +757,9 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -4088,25 +4088,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "r-code-agent-worker"
+name = "r-code-client"
 version = "1.0.1"
 dependencies = [
- "agent-config",
- "agent-contract",
- "agent-error",
- "agent-llm",
- "agent-store",
- "async-trait",
- "base64 0.22.1",
- "blake3",
- "chrono",
- "futures",
- "r-code-core",
- "r-code-gateway",
- "r-code-mcp",
+ "r-code-harness-protocol",
+ "r-code-runtime",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -4151,10 +4139,14 @@ version = "1.0.1"
 dependencies = [
  "agent-contract",
  "async-trait",
+ "libc",
  "r-code-core",
  "r-code-gateway",
- "r-code-host",
+ "r-code-harness-protocol",
+ "r-code-kernel",
+ "r-code-runtime",
  "r-code-store",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -4188,6 +4180,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "r-code-harness-codex"
+version = "1.0.1"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "r-code-harness-protocol",
+ "r-code-harness-sdk",
+ "r-code-kernel",
+ "r-code-runtime",
+ "r-code-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "r-code-harness-native"
+version = "1.0.1"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "r-code-gateway",
+ "r-code-harness-protocol",
+ "r-code-harness-sdk",
+ "r-code-kernel",
+ "r-code-runtime",
+ "r-code-store",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "r-code-harness-protocol"
+version = "1.0.1"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "r-code-harness-sdk"
+version = "1.0.1"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "r-code-harness-protocol",
+ "r-code-kernel",
+ "r-code-runtime",
+ "r-code-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "r-code-host"
 version = "1.0.1"
 dependencies = [
@@ -4215,10 +4272,12 @@ dependencies = [
  "objc2-foundation",
  "objc2-vision",
  "plist",
- "r-code-agent-worker",
+ "r-code-client",
  "r-code-core",
  "r-code-gateway",
+ "r-code-harness-protocol",
  "r-code-mcp",
+ "r-code-runtime",
  "r-code-store",
  "r-code-terminal",
  "reqwest 0.12.28",
@@ -4268,6 +4327,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "r-code-kernel"
+version = "1.0.1"
+dependencies = [
+ "async-trait",
+ "r-code-harness-protocol",
+ "r-code-store",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "r-code-mcp"
 version = "1.0.1"
 dependencies = [
@@ -4293,15 +4367,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "r-code-runtime"
+version = "1.0.1"
+dependencies = [
+ "agent-config",
+ "agent-contract",
+ "agent-llm",
+ "async-trait",
+ "base64 0.22.1",
+ "blake3",
+ "core-foundation",
+ "dirs 5.0.1",
+ "futures",
+ "keyring",
+ "libc",
+ "plist",
+ "r-code-client",
+ "r-code-core",
+ "r-code-gateway",
+ "r-code-harness-protocol",
+ "r-code-kernel",
+ "r-code-store",
+ "rusqlite",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
+ "zip",
+]
+
+[[package]]
 name = "r-code-store"
 version = "1.0.1"
 dependencies = [
  "agent-contract",
  "agent-error",
+ "async-trait",
  "blake3",
  "chrono",
  "diffy",
  "r-code-core",
+ "r-code-harness-protocol",
+ "r-code-kernel",
  "r2d2",
  "r2d2_sqlite",
  "rusqlite",
@@ -4347,10 +4461,12 @@ dependencies = [
  "crossterm",
  "image",
  "portable-pty",
- "r-code-agent-worker",
+ "r-code-client",
  "r-code-core",
  "r-code-gateway",
- "r-code-host",
+ "r-code-harness-protocol",
+ "r-code-kernel",
+ "r-code-runtime",
  "r-code-store",
  "ratatui",
  "serde",
@@ -4652,6 +4768,17 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "repair-harness"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "r-code-harness-protocol",
+ "r-code-harness-sdk",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "reqwest"

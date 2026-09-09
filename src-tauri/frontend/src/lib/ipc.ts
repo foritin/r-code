@@ -1504,3 +1504,90 @@ export const closePromptDecision = (epoch: number, decision: string, remember: b
 
 export const lifecycleExplicitQuit = () =>
   ipc<boolean>("cmd_lifecycle_explicit_quit");
+
+// ---- Harness v2（共享后台服务 / 插件管理）----
+export interface HarnessPluginEntry {
+  manifest: {
+    id: string;
+    version: string;
+    displayName: string;
+    description?: string;
+    supportedFeatures: string[];
+    processProfiles?: { name: string; framing: string }[];
+  };
+  packageRef: { id: string; version: string; contentDigest: string };
+  enabled: boolean;
+  installDir: string;
+  availability: "Available" | { Unavailable: string };
+}
+
+export interface HarnessTaskCreated {
+  taskId: string;
+  revision: number;
+}
+
+export interface HarnessEventEnvelope {
+  seq: number;
+  taskId: string;
+  runId: string;
+  kind: string;
+  source: { source: string } & Record<string, unknown>;
+  payload: Record<string, unknown>;
+}
+
+export const harnessV2Ping = () => ipc<boolean>("cmd_harness_v2_ping");
+export const harnessV2PluginsList = () =>
+  ipc<HarnessPluginEntry[]>("cmd_harness_v2_plugins_list");
+export const harnessV2PluginsInstall = (path: string) =>
+  ipc<{ id: string; version: string; contentDigest: string }>(
+    "cmd_harness_v2_plugins_install",
+    { path },
+  );
+export const harnessV2PluginsSetEnabled = (
+  id: string,
+  digest: string,
+  enabled: boolean,
+) =>
+  ipc<void>("cmd_harness_v2_plugins_set_enabled", {
+    id,
+    digest,
+    enabled,
+  });
+export const harnessV2PluginsRemove = (id: string, digest: string) =>
+  ipc<void>("cmd_harness_v2_plugins_remove", { id, digest });
+export const harnessV2TaskCreate = (
+  taskId: string,
+  objective: string,
+  kind: string,
+  requiredChecks: string[],
+) =>
+  ipc<HarnessTaskCreated>("cmd_harness_v2_task_create", {
+    taskId,
+    objective,
+    kind,
+    requiredChecks,
+  });
+export const harnessV2TaskSelectHarness = (taskId: string, harnessId: string) =>
+  ipc<{ id: string; version: string; contentDigest: string }>(
+    "cmd_harness_v2_task_select_harness",
+    { taskId, harnessId },
+  );
+export const harnessV2TaskSend = (taskId: string, text: string) =>
+  ipc<Record<string, unknown>>("cmd_harness_v2_task_send", { taskId, text });
+export const harnessV2TaskEvents = (afterSeq: number) =>
+  ipc<HarnessEventEnvelope[]>("cmd_harness_v2_task_events", { afterSeq });
+
+/** 供 UI 渲染的可用性文案键（声明式数据 → 宿主组件文案）。 */
+export function harnessAvailabilityKey(
+  availability: HarnessPluginEntry["availability"],
+): string {
+  if (availability === "Available") return "harness.available";
+  const reason =
+    typeof availability === "object" && availability !== null
+      ? availability.Unavailable
+      : "";
+  if (reason === "Disabled") return "harness.disabled";
+  if (reason.startsWith("IncompatibleApi")) return "harness.incompatibleApi";
+  if (reason && reason.startsWith("MissingEntrypoint")) return "harness.missingEntrypoint";
+  return "harness.unavailable";
+}

@@ -66,6 +66,7 @@ import type {
   PlanningStatusView,
 } from "./types";
 import type { UpdaterSnapshot } from "./updater-contract";
+import { transitionMockTaskDetail } from "./browser-mock-task-transition";
 import {
   browserMockModelAvailability,
   browserMockAbortSubagent,
@@ -705,7 +706,9 @@ export function setBrowserMockPlanningStatus(status: PlanningStatusView): void {
 function detailById(taskId: string): TaskDetail {
   const detail = browserMockDetails[taskId];
   if (!detail) throw new Error(`Demo 中不存在任务详情 ${taskId}`);
-  return detail;
+  const synchronized = transitionMockTaskDetail(detail, { task: taskById(taskId) });
+  browserMockDetails[taskId] = synchronized;
+  return synchronized;
 }
 
 /** Browser-regression hook: settle a mock main run the same way the desktop host would. */
@@ -883,6 +886,7 @@ function sendMessage(args: MockArgs): void {
     });
     addEvent(detail, "user_message_queued");
     touchTask(task);
+    detail.task = copy(task);
     return;
   }
 
@@ -980,6 +984,7 @@ function sendMessage(args: MockArgs): void {
   }
   task.state = task.mode === "plan" ? "idle" : task.workspace_path ? "review_ready" : "idle";
   touchTask(task);
+  detail.task = copy(task);
   addEvent(detail, "run_started");
   addEvent(detail, "run_ended");
 }
@@ -1073,6 +1078,11 @@ function syncMockPlanGoal(view: PlanView): PlanView {
 }
 
 function currentMockPlan(taskId: string): PlanView | null {
+  // E2E 注入口：测试脚本可以整体替换某个任务的 PlanView（长计划/边界状态），
+  // 不必驱动 mock 状态机逐步走到目标形态。
+  const override = (globalThis as { __rCodeBrowserMockPlanOverride?: Record<string, PlanView> })
+    .__rCodeBrowserMockPlanOverride;
+  if (override && override[taskId]) return structuredClone(override[taskId]);
   const view = mockPlans.get(taskId);
   return view ? syncMockPlanGoal(view) : null;
 }
@@ -1653,6 +1663,7 @@ function abortTask(taskId: string): void {
   }
   task.state = "interrupted";
   touchTask(task);
+  detail.task = copy(task);
   addEvent(detail, "run_aborted");
 }
 
@@ -1692,7 +1703,9 @@ function approvePermission(args: MockArgs): void {
     if (!permission) continue;
     permission.decision = args.decision as typeof permission.decision;
     permission.decided_at = nowIso();
-    touchTask(detail.task);
+    const task = taskById(detail.task.id);
+    touchTask(task);
+    detail.task = copy(task);
     addEvent(detail, "permission_decided");
     markTaskNotificationsRead(detail.task.id);
     return;
@@ -2292,7 +2305,9 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_planning_status": return copy(browserMockPlanningStatus);
     case "cmd_task_detail_batch": return {
-      details: copy(((args.taskIds as string[] | undefined) ?? []).map((id) => browserMockDetails[id]).filter(Boolean)),
+      details: copy(((args.taskIds as string[] | undefined) ?? []).map((id) => (
+        browserMockDetails[id] ? detailById(id) : undefined
+      )).filter(Boolean)),
     };
 
     case "cmd_agent_send": sendMessage(args); return undefined;
@@ -2649,37 +2664,43 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_rollback_task": {
       const taskId = stringArg(args, "taskId");
       const detail = detailById(taskId);
+      const task = taskById(taskId);
       const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
       const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
       const paths = detail.changes
         .filter((change) => !accepted.has(change.path) && !rejected.has(change.path))
         .map((change) => change.path);
       detail.changes = detail.changes.filter((change) => accepted.has(change.path));
-      detail.task.state = "idle";
-      touchTask(detail.task);
+      task.state = "idle";
+      touchTask(task);
+      detail.task = copy(task);
       markTaskNotificationsRead(taskId);
       return paths;
     }
     case "cmd_rollback_task_to_checkpoint": {
       const taskId = stringArg(args, "taskId");
       const detail = detailById(taskId);
+      const task = taskById(taskId);
       const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
       const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
       const paths = detail.changes
         .filter((change) => !accepted.has(change.path) && !rejected.has(change.path))
         .map((change) => change.path);
       detail.changes = detail.changes.filter((change) => accepted.has(change.path));
-      detail.task.state = "idle";
-      touchTask(detail.task);
+      task.state = "idle";
+      touchTask(task);
+      detail.task = copy(task);
       markTaskNotificationsRead(taskId);
       return paths;
     }
     case "cmd_accept_task": {
       const taskId = stringArg(args, "taskId");
       const detail = detailById(taskId);
-      detail.task.state = "idle";
+      const task = taskById(taskId);
+      task.state = "idle";
       for (const run of detail.runs) if (run.review_state === "pending") run.review_state = "accepted";
-      touchTask(detail.task);
+      touchTask(task);
+      detail.task = copy(task);
       markTaskNotificationsRead(taskId);
       return undefined;
     }
@@ -2801,7 +2822,13 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       workspace.memory_generation += 1;
       return copy(workspace);
     }
-    case "cmd_workspace_dashboard": return copy(browserMockWorkspaceDashboard(stringArg(args, "workspacePath")));
+    case "cmd_workspace_dashboard": {
+      const workspacePath = stringArg(args, "workspacePath");
+      for (const task of browserMockTasks) {
+        if (task.workspace_path === workspacePath && browserMockDetails[task.id]) detailById(task.id);
+      }
+      return copy(browserMockWorkspaceDashboard(workspacePath));
+    }
     case "cmd_project_activity_list": return copy(browserMockActivityList(stringArg(args, "workspacePath")));
     case "cmd_activity_list": return copy(browserMockActivityList());
 
@@ -2880,6 +2907,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
           run.summary ??= "应用退出前的遗留运行已安全收束。";
           runsClosed += 1;
         }
+        detail.task = copy(task);
       }
       const permissionsDenied = browserMockRecovery.orphaned_permissions;
       browserMockRecovery.interrupted_tasks.splice(0);

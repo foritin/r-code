@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { t } from "../../i18n";
 import { errText } from "../../lib/format";
 import { useAppStore, type SettingsPane } from "../../store/app";
 import { usePoll } from "../../lib/poll";
@@ -29,6 +30,12 @@ import {
   settingsSet,
   supportBundleChoose,
   supportPreview,
+  harnessV2PluginsList,
+  harnessV2PluginsInstall,
+  harnessV2PluginsSetEnabled,
+  harnessV2PluginsRemove,
+  harnessAvailabilityKey,
+  type HarnessPluginEntry,
 } from "../../lib/ipc";
 import { reloadImageUnderstandingEngine } from "../../lib/image-understanding";
 import type { PlanningStatusView } from "../../lib/types";
@@ -674,6 +681,30 @@ export function SettingsScene() {
   )), [t]);
   const pane = settingsPanes.find((item) => item.key === activePane) ?? settingsPanes[0];
 
+  const selectSettingsPane = useCallback((index: number) => {
+    const count = settingsPanes.length;
+    if (count === 0) return;
+    const target = settingsPanes[(index + count) % count];
+    setActivePane(target.key);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`settings-tab-${target.key}`)?.focus();
+    });
+  }, [setActivePane, settingsPanes]);
+
+  const handleSettingsTabKeyDown = useCallback((
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = index + 1;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = index - 1;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = settingsPanes.length - 1;
+    if (nextIndex == null) return;
+    event.preventDefault();
+    selectSettingsPane(nextIndex);
+  }, [selectSettingsPane, settingsPanes.length]);
+
   // E4 设置搜索：命中跨面板区块时经既有深链机制定位（切换页签 + 闪烁聚焦）。
   const [searchQuery, setSearchQuery] = useState("");
   const searchResults = useMemo(() => searchSettingsEntries(searchQuery), [searchQuery]);
@@ -739,20 +770,32 @@ export function SettingsScene() {
         </div>
 
         <div className="settings-layout">
-          <nav className="settings-nav" aria-label={t("settings.categoriesLabel")}>
-            {settingsPanes.map((item) => (
+          <nav className="settings-nav" role="tablist" aria-label={t("settings.categoriesLabel")}>
+            {settingsPanes.map((item, index) => (
               <button
                 key={item.key}
+                id={`settings-tab-${item.key}`}
+                type="button"
+                role="tab"
                 className={activePane === item.key ? "active" : ""}
-                aria-current={activePane === item.key ? "page" : undefined}
+                aria-selected={activePane === item.key}
+                aria-controls={`settings-panel-${item.key}`}
+                tabIndex={activePane === item.key ? 0 : -1}
                 onClick={() => setActivePane(item.key)}
+                onKeyDown={(event) => handleSettingsTabKeyDown(event, index)}
               >
                 {item.label}
               </button>
             ))}
           </nav>
 
-          <div className={`settings-detail${activePane === "agents" ? " settings-agent-detail" : ""}`}>
+          <div
+            className={`settings-detail${activePane === "agents" ? " settings-agent-detail" : ""}`}
+            id={`settings-panel-${pane.key}`}
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${pane.key}`}
+            tabIndex={0}
+          >
             <header className="settings-detail-head">
               {activePane === "agents" && <span className="settings-detail-eyebrow">AGENT</span>}
               <h2>{pane.label}</h2>
@@ -837,6 +880,7 @@ export function SettingsScene() {
                 ) : (
                   !configErr && <div className="settings-loading">正在读取 Agent 编排策略…</div>
                 )}
+                <HarnessPluginsSection />
               </div>
             )}
 
@@ -2022,7 +2066,6 @@ function ImageUnderstandingSection({
     <section className="settings-block image-understanding-block" id="image-understanding-block">
       <div className="block-title-row">
         <h3>图片理解 <InfoTip label="图片理解说明">辅助引擎只服务文本主模型：主模型目录确认多模态时原图直发，不经本机 OCR 或视觉模型。OCR 只提取文字（离线免费）；视觉模型理解整张图并生成描述（消耗调用）。</InfoTip></h3>
-        <span className="block-hint">只对文本主模型生效 · 主模型确认为多模态时原图直发，不经引擎</span>
         <button
           type="button"
           className="guide-link"
@@ -2032,12 +2075,16 @@ function ImageUnderstandingSection({
           指引手册 <span aria-hidden="true">→</span>
         </button>
       </div>
-      <p className="desc">
+      <p className="desc">{t("conversationUI.imageHint")}</p>
+      <details className="settings-explanation">
+        <summary>{t("conversationUI.technicalDetails")}</summary>
+        <p className="desc">
         决定发送的图片如何被模型理解：本机 OCR 只提取文字；视觉模型会理解整张图片并生成
         结构化描述。切换后对新发送的图片生效；原图仅本地留存预览。
         <strong>主模型本身支持图片输入（目录确认多模态）时，原图直接发送、不经过引擎</strong>——
         这里选择的引擎只对文本主模型生效。
-      </p>
+        </p>
+      </details>
       {err && <div className="errbar" role="alert">{err}</div>}
       <div className="image-understanding-engines" role="radiogroup" aria-label="图片理解引擎">
         <button
@@ -2051,7 +2098,7 @@ function ImageUnderstandingSection({
           <span className="image-engine-radio" aria-hidden="true" />
           <span className="image-engine-copy">
             <strong>本机 OCR（默认）</strong>
-            <small>文本主模型的辅助：离线、免费，仅提取图片中的文字（PNG/JPEG）注入上下文。</small>
+            <small>{t("conversationUI.ocrHint")}</small>
           </span>
         </button>
         <button
@@ -2065,7 +2112,7 @@ function ImageUnderstandingSection({
           <span className="image-engine-radio" aria-hidden="true" />
           <span className="image-engine-copy">
             <strong>视觉模型</strong>
-            <small>文本主模型的辅助：由指定的多模态模型理解整张图片并生成描述；多图并发理解，每次消耗该服务的调用。</small>
+            <small>{t("conversationUI.visionHint")}</small>
           </span>
         </button>
       </div>
@@ -3839,5 +3886,148 @@ function LifecycleSection() {
         </div>
       </section>
     </div>
+  );
+}
+
+// ---------- Harness v2 插件（共享后台服务）----------
+
+/** 声明式数据渲染：插件卡片由宿主组件统一呈现，插件不贡献任意 UI。 */
+function HarnessPluginsSection() {
+  const { t } = useTranslation();
+  const [plugins, setPlugins] = useState<HarnessPluginEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [installPath, setInstallPath] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      setError(null);
+      setPlugins(await harnessV2PluginsList());
+    } catch (cause) {
+      setPlugins(null);
+      setError(String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const install = useCallback(async () => {
+    const path = installPath.trim();
+    if (!path || busy) return;
+    setBusy(true);
+    try {
+      await harnessV2PluginsInstall(path);
+      setInstallPath("");
+      await reload();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, installPath, reload]);
+
+  const setEnabled = useCallback(
+    async (entry: HarnessPluginEntry, enabled: boolean) => {
+      setBusy(true);
+      try {
+        await harnessV2PluginsSetEnabled(
+          entry.manifest.id,
+          entry.packageRef.contentDigest,
+          enabled,
+        );
+        await reload();
+      } catch (cause) {
+        setError(String(cause));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [reload],
+  );
+
+  const remove = useCallback(
+    async (entry: HarnessPluginEntry) => {
+      setBusy(true);
+      try {
+        await harnessV2PluginsRemove(entry.manifest.id, entry.packageRef.contentDigest);
+        await reload();
+      } catch (cause) {
+        // 被活动/可恢复 Run pin 住的版本：拒绝移除并保留在列表中。
+        setError(String(cause));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [reload],
+  );
+
+  return (
+    <section className="settings-block" id="harness-plugins-block" data-block-id="harness-plugins-block">
+      <h2>{t("settings.harness.title")}</h2>
+      <p className="settings-hint">{t("settings.harness.description")}</p>
+      {error && <div className="settings-error" role="alert">{error}</div>}
+      <div className="settings-row">
+        <input
+          className="input"
+          type="text"
+          value={installPath}
+          placeholder={t("settings.harness.installPlaceholder")}
+          onChange={(event) => setInstallPath(event.target.value)}
+          aria-label={t("settings.harness.installPlaceholder")}
+        />
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || !installPath.trim()}
+          onClick={() => void install()}
+        >
+          {t("settings.harness.install")}
+        </button>
+        <button type="button" className="btn quiet" disabled={busy} onClick={() => void reload()}>
+          {t("settings.harness.refresh")}
+        </button>
+      </div>
+      {plugins === null && !error && (
+        <div className="settings-loading">{t("settings.harness.loading")}</div>
+      )}
+      {plugins?.length === 0 && <p className="settings-hint">{t("settings.harness.empty")}</p>}
+      <ul className="settings-list" aria-label={t("settings.harness.title")}>
+        {(plugins ?? []).map((entry) => {
+          const available = entry.availability === "Available";
+          return (
+            <li key={entry.packageRef.contentDigest} className="settings-item">
+              <div className="settings-item-main">
+                <span className="settings-item-title">{entry.manifest.displayName}</span>
+                <span className="settings-item-meta">
+                  {entry.manifest.id} · v{entry.manifest.version}
+                  {" · "}
+                  {t(harnessAvailabilityKey(entry.availability))}
+                </span>
+              </div>
+              <div className="settings-item-actions">
+                <button
+                  type="button"
+                  className="btn quiet"
+                  disabled={busy}
+                  onClick={() => void setEnabled(entry, !entry.enabled)}
+                >
+                  {entry.enabled ? t("settings.harness.disable") : t("settings.harness.enable")}
+                </button>
+                <button
+                  type="button"
+                  className="btn quiet danger"
+                  disabled={busy}
+                  onClick={() => void remove(entry)}
+                >
+                  {t("settings.harness.remove")}
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

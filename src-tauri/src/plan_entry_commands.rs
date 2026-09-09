@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use r_code_agent_worker::{LlmAgentRuntime, PlanNativeCatalogConfig, PlanNativeCatalogPhase};
 use r_code_core::dto::{AgentEngine, Task, TaskMode};
 use r_code_core::plan_entry::{
     OriginRequestEnvelope, OriginRequestKind, PlanEntryDecisionInput, PlanEntryOffer,
@@ -232,57 +231,6 @@ impl PlanningRuntimeState {
             ),
             Err(_) => ResolvedPlanRuntimeProfile::baseline(),
         }
-    }
-
-    /// Plan 原生目录配置（权威 phase 来自 plans.catalog_phase）。
-    pub fn plan_native_config_for_task(&self, task_id: &str) -> Option<PlanNativeCatalogConfig> {
-        let (profile, phase) = self
-            .plan_store
-            .current_runtime_profile_for_task(task_id)
-            .ok()
-            .flatten()?;
-        if !profile.enabled {
-            return None;
-        }
-        Some(PlanNativeCatalogConfig {
-            phase: match phase {
-                r_code_core::plan_entry::PlanCatalogPhase::Bootstrap => {
-                    PlanNativeCatalogPhase::Bootstrap
-                }
-                r_code_core::plan_entry::PlanCatalogPhase::Resident => {
-                    PlanNativeCatalogPhase::Resident
-                }
-            },
-        })
-    }
-
-    /// run 启动后的会话级配置注入（资格通过才注册工具；Plan 任务传入原生目录）。
-    /// 返回解析出的建议武装结果，调用方复用同一结果登记 gate（一次解析两处使用）。
-    pub async fn prepare_runtime_session(
-        &self,
-        runtime: &mut LlmAgentRuntime,
-        runtime_session_id: &str,
-        task: &Task,
-        branch_id: &str,
-        request_key: &str,
-    ) -> Option<ArmedPlanSuggestion> {
-        let armed = self
-            .resolve_suggestion_for_run(task, branch_id, request_key)
-            .unwrap_or(None);
-        runtime
-            .update_plan_entry_suggestion(runtime_session_id, armed.is_some())
-            .await;
-        if task.mode == TaskMode::Plan {
-            let config = self.plan_native_config_for_task(&task.id);
-            runtime
-                .update_plan_native_catalog(runtime_session_id, config)
-                .await;
-        } else {
-            runtime
-                .update_plan_native_catalog(runtime_session_id, None)
-                .await;
-        }
-        armed
     }
 
     /// 启动恢复与 Provider 设置保存共用的 supersede 入口：pending 且 route 不再

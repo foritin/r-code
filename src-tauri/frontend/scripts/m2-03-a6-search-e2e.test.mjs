@@ -67,7 +67,7 @@ test.after(async () => {
 async function openSettings(page) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByRole("button", { name: "模型服务", exact: true }).first().waitFor({ state: "visible", timeout: 8000 });
+  await page.getByRole("tab", { name: "模型服务", exact: true }).first().waitFor({ state: "visible", timeout: 8000 });
 }
 
 test("搜索命中跨页 block 并深链定位", async () => {

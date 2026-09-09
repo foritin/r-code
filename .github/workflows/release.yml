@@ -384,6 +384,7 @@ jobs:
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R_CODE_TAURI_PACKAGING: 1
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -415,6 +416,7 @@ jobs:
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          R_CODE_TAURI_PACKAGING: 1
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # macOS requires a signature to package the app. `-` is the local ad-hoc identity and
@@ -718,6 +720,7 @@ jobs:
             else
               if [[ -n "$changelog_section" ]]; then
                 notes_file="$RUNNER_TEMP/release-manifest/stable-release-notes.md"
+                existing_body="$(gh release view "$RELEASE_TAG" --json body --jq .body)"
                 {
                   printf '%s\n' "$changelog_section"
                   printf '\n%s\n' "$existing_body"

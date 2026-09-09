@@ -1,5 +1,5 @@
 //! M5-01 渲染路线基准：自研行差分 vs ratatui InlineViewport（viewport 全量重绘语义）
-//! vs 朴素全量重绘。确定性模拟（无终端依赖），报告写入 docs/tui-v2/m5-01-poc-report.md。
+//! vs 朴素全量重绘。确定性模拟（无终端依赖），报告写入 artifacts/metrics/tui-v2/m5-01-poc-report.md。
 //!
 //! 运行：cargo run -p r-code-tui --example inline_bench
 
@@ -74,9 +74,9 @@ fn main() {
         diff_bytes as f64 / viewport_bytes as f64 * 100.0,
         viewport_bytes as f64 / diff_bytes as f64,
     );
-    let path = std::path::Path::new("docs/tui-v2/m5-01-poc-report.md");
+    let path = std::path::Path::new("artifacts/metrics/tui-v2/m5-01-poc-report.md");
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("mkdir docs");
+        std::fs::create_dir_all(parent).expect("mkdir metrics");
     }
     std::fs::write(path, &report).expect("write report");
     println!("report written: {}", path.display());

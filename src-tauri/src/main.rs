@@ -767,18 +767,29 @@ fn main() {
                     }
                 }
             });
-            // 生产路径使用真实 provider runtime（配置缺失时 agent_send 直接报错）
-            state.agent.enable_real_mode();
-            match tauri::async_runtime::block_on(
-                r_code_host::commands::resume_queued_dispatches(&state),
-            ) {
-                Ok(resumed) if resumed > 0 => {
-                    tracing::info!(resumed, "resumed durable queued tasks after startup")
-                }
-                Err(error) => tracing::warn!("failed to resume durable queued tasks: {error}"),
-                _ => {}
-            }
+            // T42：旧聊天执行链（enable_real_mode / resume_queued_dispatches）已退役；
+            // v2 队列由 daemon 自管。
             app.manage(state);
+
+            // Harness v2 shared-daemon bridge (T33): UI/system concerns stay
+            // here; task/plugin state rides the daemon.
+            match r_code_host::harness_v2::shared_bridge() {
+                Ok(bridge) => {
+                    app.manage(bridge);
+                }
+                Err(error) => tracing::warn!(%error, "harness v2 bridge unavailable"),
+            }
+
+            // T42 阶段 1：GUI 聊天链路 → v2 daemon 投影桥（聊天命令与
+            // agent-event 事件泵共用；旧 commands.rs 实现原地保留）。
+            match r_code_host::harness_v2_chat::ChatV2Bridge::shared() {
+                Ok(bridge) => {
+                    app.manage(bridge);
+                }
+                Err(error) => tracing::warn!(%error, "harness v2 chat bridge unavailable"),
+            }
+            // v2 事件泵：journal → 旧 "agent-event" 频道（失败仅告警，不阻断）。
+            r_code_host::harness_v2_chat::spawn_event_pump(app.handle().clone());
 
             if let Err(error) = setup_companion_window(app.handle()) {
                 // A compositor may reject transparent/always-on-top windows. Keep the primary
@@ -804,6 +815,15 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            r_code_host::harness_v2::cmd_harness_v2_ping,
+            r_code_host::harness_v2::cmd_harness_v2_plugins_list,
+            r_code_host::harness_v2::cmd_harness_v2_plugins_install,
+            r_code_host::harness_v2::cmd_harness_v2_plugins_set_enabled,
+            r_code_host::harness_v2::cmd_harness_v2_plugins_remove,
+            r_code_host::harness_v2::cmd_harness_v2_task_create,
+            r_code_host::harness_v2::cmd_harness_v2_task_select_harness,
+            r_code_host::harness_v2::cmd_harness_v2_task_send,
+            r_code_host::harness_v2::cmd_harness_v2_task_events,
             tauri_commands::cmd_app_quit,
             tauri_commands::cmd_companion_ensure,
             tauri_commands::cmd_platform_capabilities,
@@ -831,6 +851,7 @@ fn main() {
             tauri_commands::cmd_task_set_model,
             tauri_commands::cmd_task_set_inference,
             tauri_commands::cmd_task_rename,
+            tauri_commands::cmd_task_clone,
             tauri_commands::cmd_task_update_goal,
             tauri_commands::cmd_task_set_mode,
             tauri_commands::cmd_plan_entry_offer_get,
@@ -972,7 +993,6 @@ fn main() {
             tauri_commands::cmd_mcp_market_search,
             tauri_commands::cmd_mcp_market_prepare_install,
             tauri_commands::cmd_mcp_market_install,
-            tauri_commands::cmd_provider_catalog,
             tauri_commands::cmd_provider_catalog,
             tauri_commands::cmd_subagent_provider_catalog,
             tauri_commands::cmd_subagent_provider_test,

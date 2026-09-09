@@ -92,8 +92,8 @@
     "sha256": "dff71b8674b5aede4715dc542dffe494ee728460f82aab79a73837b1216c96d7"
   },
   "src/components/room/Canvas.tsx": {
-    "count": 422,
-    "sha256": "9631f3845fda32cf277068cd8aac20b5caebfc92eec017ba40c08e248992f230"
+    "count": 425,
+    "sha256": "6c0e82f34de86d619ed15703df626c16a25dc1a77dba9e99324716be7b31460e"
   },
   "src/components/room/CodexModelConfiguration.tsx": {
     "count": 26,
@@ -120,12 +120,12 @@
     "sha256": "41b17dafaef7e0581ed7c4684cd76c597a55f6000e587891b1a304c8dee899c0"
   },
   "src/components/room/ModelSwitcher.tsx": {
-    "count": 65,
-    "sha256": "95e90422776af07605e958bf82b664f16f14d182241ab6e5e2ce26c4aefeb4f0"
+    "count": 63,
+    "sha256": "bcd43e68f02489cfda2e18b17c7881f9a98aa750d6bd24a55f70305d9131d4ce"
   },
   "src/components/room/Permissions.tsx": {
     "count": 5,
-    "sha256": "7ea5a6bd53dedf4b2ff8abc15bb6cb7d5ccc3c5a8960e02254d76059ce19923a"
+    "sha256": "018ade9cc6282c35a0cb70896895da3adc1743e3d3e44bf1951cd06b52ae8b5a"
   },
   "src/components/room/PlanEntryDialog.tsx": {
     "count": 10,
@@ -148,12 +148,12 @@
     "sha256": "973170eebacfbf0c6a9a197f2dc769c2db6ffa8defca057108940c139ae10913"
   },
   "src/components/room/SubagentWorkbench.tsx": {
-    "count": 110,
-    "sha256": "dc3e078157d59b585bbd3e5272585ae51683db26569699da36899049c86a5451"
+    "count": 109,
+    "sha256": "347ca859e4dcdc9f5a634474f9c51139648600c5bce569f1f7587a24936c669f"
   },
   "src/components/room/Timeline.tsx": {
-    "count": 89,
-    "sha256": "efdf19280d7c2dfffd34d5c6e71c5d609f45cdab28cbfd24811ee5457e2d0d0d"
+    "count": 102,
+    "sha256": "581d2a85e98409b1172f4c28bff2857e75262b5f7ce9dc32356d4e8c6dc6b739"
   },
   "src/components/room/TimelineActivity.tsx": {
     "count": 38,
@@ -176,8 +176,8 @@
     "sha256": "b4f066b4b4eef139218f56d91e7b69c34f76bad2bc049f07cbfe961015ae6a47"
   },
   "src/components/scenes/ConversationsScene.tsx": {
-    "count": 24,
-    "sha256": "8d5dbf04c63b2a38108e92cdee34dc97648fbbf83fc63ec6db265a89606c0458"
+    "count": 23,
+    "sha256": "2b316492bacb163ac5cdf5b3ae9d940be8f6483703fc18c11eac195523db52b2"
   },
   "src/components/scenes/DashboardScene.tsx": {
     "count": 59,
@@ -200,8 +200,8 @@
     "sha256": "ab4d1f0fc2a31b5eba6aba41d34564f4058227d5fe9322074ce6f03ae1f1c54c"
   },
   "src/components/scenes/InboxScene.tsx": {
-    "count": 84,
-    "sha256": "9a197c6fe76df582ec100b3cfbab4fc7567992fce9ce4712ba67f8fbbaf21efb"
+    "count": 82,
+    "sha256": "917983b29301d7807720cf7dda7aa583032f92222ad642b2e57f6f2b65873535"
   },
   "src/components/scenes/KnowledgeSettingsPane.tsx": {
     "count": 116,
@@ -220,12 +220,12 @@
     "sha256": "385549d8c727e12177ad7e4a41ef5c1a5993430e382e02bd7c31e82da6b2c089"
   },
   "src/components/scenes/RoomScene.tsx": {
-    "count": 67,
-    "sha256": "d268094ae6ed8a655a1db6f75d9c1a361b14526bd965c2f83e56c2b5cd6783cb"
+    "count": 66,
+    "sha256": "4203729cd9351e58468445a7c7b2b660b0ce3d13f67e0792ff6846f2c29da074"
   },
   "src/components/scenes/SettingsScene.tsx": {
-    "count": 511,
-    "sha256": "8dea1c2f4c30852d053c146d24e3d348b2032ca4db44447a04afce616591753c"
+    "count": 509,
+    "sha256": "aa913166610e7b27b56eea0b7f7f095792c4fc1925dce1773a89c05a30b658ce"
   },
   "src/components/scenes/SubagentProvidersPanel.tsx": {
     "count": 94,
@@ -248,8 +248,8 @@
     "sha256": "026168e37b00cb38df5cf1829f5a7fd5e2c2941471e5961f27db96910e11084f"
   },
   "src/components/shell/Rail.tsx": {
-    "count": 36,
-    "sha256": "9bbc5a7922edbfe9f1b6ff52ce8dbfa86884dd5d8e76f94cedd98ad413da5bcf"
+    "count": 38,
+    "sha256": "2bc80eebe9e1f0ac8c3707beca25220fee92206b276e2a5a05de5f5194660c30"
   },
   "src/components/shell/RailResizeHandle.tsx": {
     "count": 2,

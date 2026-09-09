@@ -5,6 +5,8 @@ export type ToolActivityState = "active" | "ok" | "fail";
 
 export function toolActivityKind(toolName: string): ToolActivityKind {
   if (isPlanToolName(toolName)) return "plan";
+  // MCP 草稿会呈现审核操作卡，不能因 create/save 被当作普通文件行折叠。
+  if (toolName === "mcp_create_draft" || toolName === "mcp_save_draft") return "tool";
   const verb = toolVerb(toolName);
   if (verb === "run") return "command";
   if (verb === "edit" || verb === "write") return "file";

@@ -544,7 +544,7 @@ mod tests {
             LogEntry {
                 timestamp: Utc::now().to_rfc3339(),
                 level: "ERROR".into(),
-                target: "r_code_agent_worker".into(),
+                target: "r_code_host::retired_worker".into(),
                 message: "provider failed".into(),
             },
         ];
@@ -558,7 +558,7 @@ mod tests {
         let errors = tail_levels_with_persistence(dir.path(), 10, &["warn", "error"]).unwrap();
         assert!(errors.iter().any(|entry| {
             entry.level == "ERROR"
-                && entry.target == "r_code_agent_worker"
+                && entry.target == "r_code_host::retired_worker"
                 && entry.message == "provider failed"
         }));
         assert!(!errors.iter().any(|entry| entry.message == "ready"));

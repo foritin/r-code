@@ -331,7 +331,7 @@ mod tests {
             crate::log_buffer::LogEntry {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 level: "WARN".into(),
-                target: "r_code_agent_worker".into(),
+                target: "r_code_host::retired_worker".into(),
                 message: "Authorization: Bearer sk-secret123456".into(),
             },
             crate::log_buffer::LogEntry {

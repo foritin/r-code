@@ -303,27 +303,23 @@ test("room project attachment is run-safe, one-time, and synchronizes the next-c
 
     await page.getByRole("button", { name: "附加文件夹", exact: true }).waitFor({ state: "visible" });
     await page.evaluate(async (id) => {
+      const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+      const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
       const { useTasksStore } = await import("/src/store/tasks.ts");
       const state = useTasksStore.getState();
       const detail = state.details[id];
       const fixtureRun = state.details["mock-task-queue"]?.runs.find((run) => run.ended_at == null);
-      const runningTask = { ...detail.task, state: "in_progress", updated_at: new Date().toISOString() };
-      useTasksStore.setState({
-        tasks: state.tasks.map((item) => item.id === id ? runningTask : item),
-        details: {
-          ...state.details,
-          [id]: {
-            ...detail,
-            task: runningTask,
-            runs: [{
-              ...(fixtureRun ?? {}),
-              id: `${id}-ui-running`,
-              task_id: id,
-              ended_at: null,
-            }],
-          },
-        },
-      });
+      const transition = {
+        task: { state: "in_progress", updated_at: new Date().toISOString() },
+        runs: [{
+          ...(fixtureRun ?? {}),
+          id: `${id}-ui-running`,
+          task_id: id,
+          ended_at: null,
+        }],
+      };
+      applyMockTaskTransition({ tasks: browserMockTasks, details: browserMockDetails }, id, transition);
+      useTasksStore.setState(transitionMockTaskStore(state, id, transition));
     }, taskId);
 
     const blockedAttach = page.getByRole("button", { name: "运行结束后可附加", exact: true });
@@ -336,14 +332,16 @@ test("room project attachment is run-safe, one-time, and synchronizes the next-c
     });
 
     await page.evaluate(async (id) => {
+      const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+      const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
       const { useTasksStore } = await import("/src/store/tasks.ts");
       const state = useTasksStore.getState();
-      const detail = state.details[id];
-      const idleTask = { ...detail.task, state: "idle", updated_at: new Date().toISOString() };
-      useTasksStore.setState({
-        tasks: state.tasks.map((item) => item.id === id ? idleTask : item),
-        details: { ...state.details, [id]: { ...detail, task: idleTask, runs: [] } },
-      });
+      const transition = {
+        task: { state: "idle", updated_at: new Date().toISOString() },
+        runs: [],
+      };
+      applyMockTaskTransition({ tasks: browserMockTasks, details: browserMockDetails }, id, transition);
+      useTasksStore.setState(transitionMockTaskStore(state, id, transition));
     }, taskId);
 
     const attach = page.getByRole("button", { name: "附加文件夹", exact: true });
@@ -1057,6 +1055,8 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
   assert.notEqual(runningAnimation, "none", "running dot must animate");
 
   await page.evaluate(async () => {
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { applyMockTaskTransition, transitionMockTaskStore } = await import("/src/test-utils/task-transition.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     // Sidebar bootstrap intentionally loads task summaries only. Fetch the detail before
     // mutating its latest run so this assertion exercises the real presentation path instead of
@@ -1065,26 +1065,23 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
     const state = useTasksStore.getState();
     const detail = state.details["mock-task-complete"];
     if (!detail) throw new Error("completed task detail is missing");
-    useTasksStore.setState({
-      details: {
-        ...state.details,
-        [detail.task.id]: {
-          ...detail,
-          runs: detail.runs.map((run, index) => index === 0
-            ? { ...run, review_state: "failed", ended_at: run.ended_at ?? new Date().toISOString() }
-            : run),
-        },
-      },
-    });
+    const transition = {
+      runs: detail.runs.map((run, index) => index === 0
+        ? { ...run, review_state: "failed", ended_at: run.ended_at ?? new Date().toISOString() }
+        : run),
+    };
+    applyMockTaskTransition(
+      { tasks: browserMockTasks, details: browserMockDetails },
+      detail.task.id,
+      transition,
+    );
+    useTasksStore.setState(transitionMockTaskStore(state, detail.task.id, transition));
   });
   const completedWithError = page.locator(".sidebar-task").filter({ hasText: "更新依赖并修复告警" });
-  await page.waitForFunction(() => document.querySelector(".sidebar-task[title*='已完成（含错误）']") != null);
-  assert.match(await completedWithError.getAttribute("title"), /已完成（含错误）/);
-  assert.equal(
-    await completedWithError.locator(".task-state-dot").count(),
-    0,
-    "an ended session stays quiet (no marker) even when its latest run retains an error",
-  );
+  await page.waitForFunction(() => document.querySelector(".sidebar-task[title*='执行失败']") != null);
+  assert.match(await completedWithError.getAttribute("title"), /执行失败/);
+  assert.equal(await completedWithError.locator(".task-state-dot.attention").count(), 1,
+    "a failed latest run remains actionable after it ends");
 
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
   await page.locator("#main-content > .scene-conversations").waitFor({ state: "visible" });
@@ -1103,7 +1100,7 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
     };
   });
   assert.equal(conversationColors.running, colors.warning);
-  assert.equal(conversationColors.finished, colors.success);
+  assert.equal(conversationColors.finished, colors.warning);
   await page.close();
 });
 
@@ -1118,11 +1115,25 @@ test("Codex one-click setup resumes automatically after browser login", async ()
   });
   assert.equal(normalizedLegacyPane, "agents", "legacy codex settings key must normalize to Agent orchestration");
 
-  const agentSettings = page.getByRole("button", { name: "Agent 编排", exact: true });
+  const categories = page.getByRole("tablist", { name: "设置分类" });
+  const agentSettings = categories.getByRole("tab", { name: "Agent 编排", exact: true });
   await agentSettings.waitFor({ state: "visible" });
-  assert.equal(await agentSettings.getAttribute("aria-current"), "page");
+  assert.equal(await agentSettings.getAttribute("aria-selected"), "true");
+  assert.equal(await agentSettings.getAttribute("tabindex"), "0");
+  assert.equal(await categories.locator('[role="tab"][tabindex="0"]').count(), 1);
+  await agentSettings.focus();
+  await page.keyboard.press("End");
+  const diagnosticsSettings = categories.getByRole("tab", { name: "诊断", exact: true });
+  await page.waitForFunction(() => document.activeElement?.id === "settings-tab-diagnostics");
+  assert.equal(await diagnosticsSettings.getAttribute("aria-selected"), "true");
+  await page.keyboard.press("Home");
+  const providerSettings = categories.getByRole("tab", { name: "模型服务", exact: true });
+  await page.waitForFunction(() => document.activeElement?.id === "settings-tab-providers");
+  await page.keyboard.press("ArrowRight");
+  await page.waitForFunction(() => document.activeElement?.id === "settings-tab-agents");
+  assert.equal(await agentSettings.getAttribute("aria-selected"), "true");
   assert.equal(
-    await page.getByRole("navigation", { name: "设置分类" }).getByRole("button", { name: "Codex CLI", exact: true }).count(),
+    await categories.getByRole("tab", { name: "Codex CLI", exact: true }).count(),
     0,
     "Codex CLI may be a candidate source, never the top-level settings module",
   );
@@ -1149,7 +1160,7 @@ test("Codex one-click setup resumes automatically after browser login", async ()
   assert.equal(await setup.locator(".codex-runtime-overview > .codex-runtime-card").count(), 3);
   assert.equal(await setup.locator(".codex-runtime-card.is-ready").count(), 3);
 
-  await page.getByRole("button", { name: "子代理配置", exact: true }).click();
+  await page.getByRole("tab", { name: "子代理配置", exact: true }).click();
   assert.equal(await page.locator(".codex-setup").count(), 0, "Codex runtime configuration must not remain in the candidate-pool module");
   await page.close();
 });
@@ -1812,6 +1823,12 @@ test("active run duration refreshes on the shared second tick and isolates rende
     useAppStore.getState().openRoom("mock-task-permission");
   });
 
+  const liveProcess = page.locator(".timeline-process-disclosure.is-live").first();
+  await liveProcess.waitFor({ state: "visible" });
+  const liveToggle = liveProcess.locator(".timeline-process-toggle");
+  assert.equal(await liveToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(await liveProcess.locator(".timeline-process-body").count(), 0);
+  await liveToggle.click();
   const duration = page.locator(".run-summary.active .run-duration").first();
   await duration.waitFor({ state: "visible" });
   const initial = await duration.textContent();
@@ -1844,9 +1861,6 @@ test("active run duration refreshes on the shared second tick and isolates rende
     return { name, rows };
   });
   assert.deepEqual(otherContent, { name: "处理中", rows: 1 });
-  const liveProcess = page.locator(".timeline-process-disclosure.is-live").first();
-  await liveProcess.waitFor({ state: "visible" });
-  const liveToggle = liveProcess.locator(".timeline-process-toggle");
   assert.equal(await liveToggle.getAttribute("aria-expanded"), "true");
   assert.match(await liveToggle.getAttribute("aria-label"), /^正在执行(?: · |$)/);
   await liveProcess.locator(".timeline-process-body .timeline-turn-trace.has-activity")
@@ -1856,6 +1870,66 @@ test("active run duration refreshes on the shared second tick and isolates rende
   assert.equal(await liveProcess.locator(".timeline-process-body").count(), 0);
   await liveToggle.click();
   assert.equal(await liveToggle.getAttribute("aria-expanded"), "true");
+  await page.close();
+});
+
+test("a folded live process keeps the latest update, failures, questions, and MCP actions visible", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { browserMockDetails, browserMockSetMessages } = await import("/src/lib/mock-data.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const taskId = "mock-task-permission";
+    const timestamp = browserMockDetails[taskId].runs[0].started_at;
+    const tool = (id, name, output, failed = false) => [
+      { id: `${id}-call`, kind: "tool_call", call_id: id, tool_name: name, input_json: "{}" },
+      { id: `${id}-result`, kind: "tool_result", call_id: id, output_json: JSON.stringify(output), is_error: failed },
+    ];
+    browserMockSetMessages(taskId, [
+      { id: "folded-user", kind: "message", role: "user", text: "核对过程折叠", timestamp },
+      { id: "folded-reasoning", kind: "system", text: "r_code_reasoning", output_json: JSON.stringify({ text: "先核对已有实现" }) },
+      { id: "folded-old", kind: "codex_commentary", role: "assistant", text: "较早的进度说明" },
+      ...tool("folded-read", "read_file", { content: "已读取文件" }),
+      ...tool("folded-error", "execute", { error: "定向检查失败" }, true),
+      ...tool("folded-confirm", "mcp_prepare_enable", {
+        status: "confirmation_required", action: "confirm_mcp_enable", server_id: "ui-review",
+        message: "核对后启用此服务。", preview: null,
+      }),
+      ...tool("folded-draft", "mcp_create_draft", {
+        status: "draft_created", action: "open_mcp_settings", server_id: "ui-draft", message: "草稿等待审核。",
+      }),
+      { id: "folded-progress", kind: "codex_commentary", role: "assistant", text: "最新进度：正在核对失败原因。" },
+      {
+        id: "folded-question", kind: "codex_question", output_json: JSON.stringify({
+          request_key: "folded-question", run_id: browserMockDetails[taskId].runs[0].id, state: "pending",
+          questions: [{ id: "scope", header: "范围", question: "本次修改覆盖哪个范围？", is_other: false, is_secret: false, options: [{ label: "当前模块", description: "保留其他模块" }] }],
+        }),
+      },
+    ].map((message) => ({ branch_id: "main", ...message })));
+    await useTasksStore.getState().refreshDetail(taskId);
+    useAppStore.getState().openRoom(taskId);
+  });
+
+  const toggle = page.locator(".timeline-process-disclosure.is-live .timeline-process-toggle");
+  await toggle.waitFor({ state: "visible" });
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(await page.locator(".timeline-process-body").count(), 0);
+  assert.equal(await page.getByText("较早的进度说明", { exact: true }).count(), 0);
+  const visible = page.locator(".timeline-live-progress");
+  await visible.getByText("最新进度：正在核对失败原因。", { exact: true }).waitFor({ state: "visible" });
+  await visible.getByText("本次修改覆盖哪个范围？", { exact: true }).waitFor({ state: "visible" });
+  await visible.locator(".tcard-mcp-confirmation").waitFor({ state: "visible" });
+  await visible.getByRole("button", { name: "前往设置审核", exact: true }).waitFor({ state: "visible" });
+  assert.match(await visible.innerText(), /失败/);
+
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+  await page.getByText("较早的进度说明", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await page.locator(".timeline-live-progress").count(), 0, "expanded content must not be duplicated below the trace");
+  await toggle.click();
+  await visible.locator(".codex-question-card.state-pending").waitFor({ state: "visible" });
   await page.close();
 });
 
@@ -1997,12 +2071,12 @@ test("appearance preferences stay flat and expose only theme and companion contr
       controlFontSize: controlStyle.fontSize,
     };
   });
-  assert.equal(shapeTypography.titleFontSize, "14px");
+  assert.equal(shapeTypography.titleFontSize, "15px");
   assert.equal(shapeTypography.titleFontWeight, "500");
   assert.equal(shapeTypography.supportingColor, shapeTypography.mutedColor, "light supporting copy should use the readable muted tone");
-  assert.equal(shapeTypography.supportingFontSize, "12px");
+  assert.equal(shapeTypography.supportingFontSize, "13px");
   assert.equal(shapeTypography.controlFontFamily, shapeTypography.titleFontFamily, "Chinese segmented labels should use the UI font rather than monospace fallback");
-  assert.equal(shapeTypography.controlFontSize, "12px");
+  assert.equal(shapeTypography.controlFontSize, "13px");
 
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
@@ -2030,9 +2104,9 @@ test("appearance preferences stay flat and expose only theme and companion contr
       titleFontFamily: getComputedStyle(title).fontFamily,
     };
   });
-  assert.equal(darkTypography.titleFontSize, "14px");
+  assert.equal(darkTypography.titleFontSize, "15px");
   assert.equal(darkTypography.supportingColor, darkTypography.faintColor, "dark supporting copy should retain the existing faint tone");
-  assert.equal(darkTypography.supportingFontSize, "12px");
+  assert.equal(darkTypography.supportingFontSize, "13px");
   assert.equal(darkTypography.controlFontFamily, darkTypography.titleFontFamily);
 
   const removedState = await page.evaluate(async () => {
@@ -2060,7 +2134,7 @@ test("knowledge and instructions lives in Settings and keeps project-scoped navi
   assert.equal(await page.locator(".sidebar-nav-item").filter({ hasText: "项目文件" }).count(), 0);
   assert.equal(await page.locator(".sidebar-nav-item").filter({ hasText: "知识与指令" }).count(), 0, "knowledge must not remain a first-level rail destination");
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByRole("button", { name: "知识与指令", exact: true }).click();
+  await page.getByRole("tab", { name: "知识与指令", exact: true }).click();
   const center = page.getByRole("region", { name: "知识与指令" });
   await center.waitFor({ state: "visible" });
   await center.getByRole("tab", { name: "记忆", exact: true }).waitFor({ state: "visible" });
@@ -3877,7 +3951,7 @@ test("diagnostics uses fixed retention and a native-folder export flow", async (
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByRole("button", { name: "诊断", exact: true }).click();
+  await page.getByRole("tab", { name: "诊断", exact: true }).click();
   await page.getByRole("heading", { name: "诊断日志", exact: true }).waitFor();
   await page.getByText("日志按日滚动，固定保留最近 7 天。", { exact: false }).waitFor();
   assert.equal(
@@ -3903,7 +3977,7 @@ test("agent coordination prompts can be edited, saved, and restored", async () =
 
   try {
     await page.getByRole("button", { name: "设置", exact: true }).click();
-    await page.getByRole("button", { name: "Agent 编排", exact: true }).click();
+    await page.getByRole("tab", { name: "Agent 编排", exact: true }).click();
     await page.getByRole("heading", { name: "委派路由", exact: true }).waitFor({ state: "visible" });
     assert.equal(await page.locator("#set-quality-reviewer").inputValue(), "r_code");
     assert.equal(await page.getByRole("textbox", { name: "主 Agent 协作 Prompt" }).count(), 0, "prompts must no longer be split across Settings");
@@ -3949,7 +4023,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
 
   try {
     await page.getByRole("button", { name: "设置", exact: true }).click();
-    await page.getByRole("button", { name: "Agent 编排", exact: true }).click();
+    await page.getByRole("tab", { name: "Agent 编排", exact: true }).click();
 
     // 证据门已移除：存在可用 DeepSeek 服务时开关即可用，卡片始终可见。
     await page.getByRole("heading", { name: "复杂任务先建议制定计划", exact: true })
@@ -4144,6 +4218,9 @@ test("info tips float on an opaque popover layer instead of overlapping the text
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
   await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("tab", { name: "模型服务", exact: true }).click();
+  await page.locator(".provider-row").first().click();
+  await page.getByRole("dialog").waitFor({ state: "visible" });
   const tipButton = page.locator(".provider-form-field", { hasText: "模型" })
     .locator(".info-tip").first();
   await tipButton.waitFor({ state: "visible" });
@@ -4600,9 +4677,10 @@ test("subagents open in deduplicated tabs while the overview stays available", a
   await nativeGrandchild.waitFor({ state: "visible" });
   assert.equal(await nativeChild.getAttribute("data-tree-depth"), "1");
   assert.equal(await nativeGrandchild.getAttribute("data-tree-depth"), "2");
-  assert.match(await nativeChild.locator(".subagent-tree-facts").innerText(), /深度 1.*槽位 1.*R-Code.*gpt-5\.6-terra/s);
-  assert.match(await nativeChild.locator(".subagent-tree-facts").innerText(), /可继续委派.*可实时消息/s);
-  assert.match(await activeSubagent.locator(".subagent-tree-facts").innerText(), /叶节点/);
+  assert.match(await nativeChild.locator(".subagent-tree-facts").getAttribute("title"), /深度 1.*槽位 1.*R-Code.*gpt-5\.6-terra/s);
+  assert.match(await nativeChild.locator(".subagent-tree-facts").getAttribute("title"), /可继续委派.*可实时消息/s);
+  assert.match(await activeSubagent.locator(".subagent-tree-facts").getAttribute("title"), /叶节点/);
+  assert.doesNotMatch(await nativeChild.locator(".subagent-tree-facts").innerText(), /深度|槽位/);
   assert.equal(
     await nativeChild.getByRole("button", { name: /停止R-Code 子代理 · 规划验证及其 1 个后代/ }).count(),
     1,
@@ -5153,13 +5231,20 @@ test("Needs You groups projects and synchronizes granular review acceptance live
 
   await page.evaluate(async () => {
     const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { transitionMockTaskDetail } = await import("/src/test-utils/task-transition.ts");
     const { useAppStore } = await import("/src/store/app.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
     const apiTask = browserMockTasks.find((task) => task.id === "mock-task-api");
     if (!apiTask) throw new Error("missing cross-project mock task");
     apiTask.state = "review_ready";
     apiTask.updated_at = new Date().toISOString();
-    browserMockDetails[apiTask.id].task = apiTask;
+    browserMockDetails[apiTask.id] = transitionMockTaskDetail(browserMockDetails[apiTask.id], {
+      task: { state: apiTask.state, updated_at: apiTask.updated_at },
+      runs: browserMockDetails[apiTask.id].runs.map((run) => ({
+        ...run,
+        ended_at: run.ended_at ?? apiTask.updated_at,
+      })),
+    });
     browserMockDetails[apiTask.id].changes = [{
       id: "mock-task-api-change-1",
       task_id: apiTask.id,

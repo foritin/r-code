@@ -43,7 +43,7 @@ if (process.env.R_CODE_SKIP_FRONTEND_SUITE === "1") {
 
 // 3) 文档一致性：架构文档引用的脚本与 fixture 存在；evidence 文件与 §9 对齐。
 const problems = [];
-const architecture = fs.readFileSync(path.join(rootDir, "docs/architecture.md"), "utf8");
+const architecture = fs.readFileSync(path.join(rootDir, "docs/support/archive/architecture-before-harness-v2.md"), "utf8");
 for (const referenced of [
   "src-tauri/src/codex_interaction.rs",
   "fixtures/codex-interaction/protocol-0.145.0.json",

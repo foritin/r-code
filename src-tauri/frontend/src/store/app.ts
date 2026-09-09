@@ -144,7 +144,7 @@ interface AppState {
 
 const RAIL_KEY = "r-code.rail.collapsed";
 const RAIL_WIDTH_KEY = "r-code.rail.width";
-export const DEFAULT_RAIL_WIDTH = 300;
+export const DEFAULT_RAIL_WIDTH = 272;
 export const MIN_RAIL_WIDTH = 232;
 export const MAX_RAIL_WIDTH = 520;
 const THEME_KEY = "r-code.theme.mode";

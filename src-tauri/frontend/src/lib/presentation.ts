@@ -14,6 +14,7 @@ import type {
   TaskStatusView,
   Workspace,
 } from "./types";
+import { t } from "../i18n";
 
 export type VisualTaskState = "running" | "attention" | "review" | "done" | "stopped" | "idle";
 
@@ -69,14 +70,17 @@ export function workspaceName(path: string | null, workspaces: readonly Workspac
 }
 
 export function isTaskLive(task: Task, detail?: TaskDetail): boolean {
-  if (detail?.status) {
-    return detail.status.active_run_id != null
-      || detail.status.display_state === "running"
-      || detail.status.display_state === "verifying";
+  const status = taskStatus(task, detail);
+  if (status) {
+    return status.active_run_id != null
+      || status.display_state === "running"
+      || status.display_state === "verifying";
   }
   return task.state === "in_progress"
     || task.state === "exploring"
-    || detail?.runs.some((run) => run.ended_at === null) === true;
+    || (detail?.task.state === task.state
+      && detail.task.updated_at === task.updated_at
+      && detail.runs.some((run) => run.ended_at === null));
 }
 
 export function pendingPermissionCount(detail?: TaskDetail): number {
@@ -84,18 +88,29 @@ export function pendingPermissionCount(detail?: TaskDetail): number {
 }
 
 function legacyDisplayState(task: Task, detail?: TaskDetail): TaskDisplayState {
-  if (pendingPermissionCount(detail) > 0) return "waiting_for_approval";
   if (task.state === "archived") return "archived";
-  if (task.state === "review_ready") return "review_ready";
-  if (isTaskLive(task, detail)) return "running";
+  const observationsCurrent = detail?.task.state === task.state
+    && detail.task.updated_at === task.updated_at;
+  const currentDetail = observationsCurrent ? detail : undefined;
+  if (pendingPermissionCount(currentDetail) > 0) return "waiting_for_approval";
+  if (task.state === "idle" && isCompletedWithError(currentDetail)) return "failed";
   if (task.state === "interrupted") return "interrupted";
-  if (task.state === "idle" && isCompletedWithError(detail)) return "failed";
+  if (task.state === "review_ready") return "review_ready";
+  if (isTaskLive(task, currentDetail)) return "running";
   return "idle";
 }
 
 /** Browser demo/旧桌面端没有 status 时才使用兼容投影；正式 IPC 始终提供后端视图。 */
-export function taskStatus(_task: Task, detail?: TaskDetail): TaskStatusView | undefined {
-  return detail?.status;
+export function taskStatus(task: Task, detail?: TaskDetail): TaskStatusView | undefined {
+  if (
+    !detail?.status
+    || detail.status.task_id !== task.id
+    || detail.status.persisted_state !== task.state
+    || detail.task.id !== task.id
+    || detail.task.state !== task.state
+    || detail.task.updated_at !== task.updated_at
+  ) return undefined;
+  return detail.status;
 }
 
 // ---- M1-03：共享投影单点委托 ----
@@ -149,13 +164,23 @@ export function visualTaskDisplayState(display: TaskDisplayState): VisualTaskSta
 }
 
 export function visualTaskState(task: Task, detail?: TaskDetail): VisualTaskState {
+  if (isTaskUnstarted(task, detail)) return "idle";
   return visualTaskDisplayState(taskDisplayState(task, detail));
+}
+
+/** An idle conversation with no runs has not produced a completed result. */
+export function isTaskUnstarted(task: Task, detail?: TaskDetail): boolean {
+  return detail?.task.id === task.id
+    && detail.task.state === task.state
+    && detail.task.updated_at === task.updated_at
+    && detail.runs.length === 0
+    && taskDisplayState(task, detail) === "idle";
 }
 
 export function taskDisplayStateLabel(display: TaskDisplayState, persistedState?: TaskState): string {
   const labels: Record<TaskDisplayState, string> = {
     archived: "已归档",
-    waiting_for_approval: "等待审批",
+    waiting_for_approval: "等待你的批准",
     waiting_for_question: "等待回答",
     failed: "执行失败",
     interrupted: "已中止",
@@ -170,19 +195,9 @@ export function taskDisplayStateLabel(display: TaskDisplayState, persistedState?
   return labels[display];
 }
 
-export function taskStateLabel(state: TaskState, detail?: TaskDetail): string {
-  const display = detail?.status?.display_state;
-  if (!display) {
-    if (pendingPermissionCount(detail) > 0) return "等待你的处理";
-    if (state === "exploring") return "正在分析";
-    if (state === "in_progress") return "正在执行";
-    if (state === "review_ready") return "等待审查";
-    if (state === "interrupted") return "已中止";
-    if (state === "archived") return "已归档";
-    if (state === "idle" && isCompletedWithError(detail)) return "已完成（含错误）";
-    return "已完成";
-  }
-  return taskDisplayStateLabel(display, state);
+export function taskStateLabel(task: Task, detail?: TaskDetail): string {
+  if (isTaskUnstarted(task, detail)) return t("conversationUI.unstarted");
+  return taskDisplayStateLabel(taskDisplayState(task, detail), task.state);
 }
 
 export function activeRun(detail?: TaskDetail): AgentRun | undefined {
@@ -195,21 +210,27 @@ export function activeRun(detail?: TaskDetail): AgentRun | undefined {
 
 /** 页面中没有后端当前动作字段时，使用 task state 的可解释回退。 */
 export function taskActivity(task: Task, detail?: TaskDetail): string {
-  const permission = detail?.permissions.find((item) => item.decision === "pending");
+  if (isTaskUnstarted(task, detail)) return t("conversationUI.startHint");
+  const observationsCurrent = detail?.task.id === task.id
+    && detail.task.state === task.state
+    && detail.task.updated_at === task.updated_at;
+  const currentDetail = observationsCurrent ? detail : undefined;
+  const permission = currentDetail?.permissions.find((item) => item.decision === "pending");
   if (permission) return `等待授权 · ${permission.tool_name}`;
-  const display = detail?.status?.display_state;
+  const display = taskDisplayState(task, detail);
+  const status = taskStatus(task, detail);
   if (display === "waiting_for_question") return "等待你回答问题";
   if (display === "workspace_binding_invalid") return "工作区绑定失效，需要恢复";
   if (display === "verification_required") return "当前结果需要重新验证";
   if (display === "verifying") return "正在验证变更";
-  if (display === "queued") return `已有 ${detail?.status.queue_depth ?? 0} 条消息排队`;
-  const run = activeRun(detail);
+  if (display === "queued") return `已有 ${status?.queue_depth ?? 0} 条消息排队`;
+  const run = activeRun(currentDetail);
   if (run?.summary?.trim()) return run.summary.trim();
   if (task.state === "exploring") return "梳理代码与执行路径";
   if (task.state === "in_progress") return "正在推进任务";
   if (task.state === "review_ready") return "变更已准备好审查";
   if (task.state === "interrupted") return "任务已停止";
-  if (task.state === "idle" && isCompletedWithError(detail)) return "运行已结束，详情中保留了错误";
+  if (task.state === "idle" && isCompletedWithError(currentDetail)) return "运行已结束，详情中保留了错误";
   return "等待下一步";
 }
 

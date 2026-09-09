@@ -212,6 +212,8 @@ test("macOS local builder supports explicit ad-hoc and notarized modes", () => {
   assert.match(script, /APPLE_SIGNING_IDENTITY/);
   assert.match(script, /APPLE_ID/);
   assert.match(script, /APPLE_API_KEY/);
+  assert.match(script, /cargo build --release -p r-code-tui --bin r-code-tui --target/);
+  assert.match(script, /R_CODE_TAURI_PACKAGING=1 cargo tauri build/);
   assert.match(script, /cargo tauri build --bundles app,dmg --target/);
   assert.match(script, /codesign --verify --deep --strict/);
   assert.match(script, /xcrun stapler validate/);
@@ -235,12 +237,31 @@ test("Windows local packaging uses a file-backed Tauri override", () => {
   assert.match(script, /windows-\(msvc\|gnu\|gnullvm\)/);
   assert.match(script, /rustcCommand\.Source -vV/);
   assert.match(script, /"--bins"/);
+  assert.match(script, /"r-code-tui", "--bin", "r-code-tui"/);
+  assert.match(script, /R_CODE_TAURI_PACKAGING/);
   assert.match(script, /Expected NSIS payload not found/);
   assert.doesNotMatch(script, /R-Code_\$\{version\}_\*-setup\.exe/);
   assert.match(script, /\[Security\.Cryptography\.SHA256\]::Create\(\)/);
   assert.equal(override.bundle.createUpdaterArtifacts, false);
   assert.doesNotMatch(script, /--config[^\r\n]*\{.*createUpdaterArtifacts/);
   assert.doesNotMatch(script, /Get-FileHash/);
+});
+
+test("documented manual Tauri builds enable sidecar validation", () => {
+  for (const relative of ["README.md", "docs/support/operations/releasing.md"]) {
+    const contents = fs.readFileSync(path.join(repoRoot, relative), "utf8");
+    const packagingLines = contents
+      .split(/\r?\n/)
+      .filter((line) => line.includes("cargo tauri build"));
+    assert.ok(packagingLines.length > 0, `${relative} must document a Tauri build`);
+    for (const line of packagingLines) {
+      assert.match(
+        line,
+        /R_CODE_TAURI_PACKAGING/,
+        `${relative} contains an unguarded manual Tauri build: ${line}`,
+      );
+    }
+  }
 });
 
 test("development launch and updater stay isolated from production", () => {
@@ -344,6 +365,11 @@ test("release workflow falls back per platform while preserving explicit unsigne
     /Build and publish platform-signed artifacts[\s\S]*?args: \$\{\{ matrix\.args \}\} \$\{\{ matrix\.signed_config \}\}/,
   );
   assert.match(workflow, /这是未签名预发布版本，仅用于测试/);
+  assert.equal(
+    (workflow.match(/R_CODE_TAURI_PACKAGING: 1/g) ?? []).length,
+    2,
+    "both signed and fallback Tauri packaging steps must enable sidecar validation",
+  );
   assert.match(workflow, /RCODE_UNSIGNED_STABLE_WARNING/);
   assert.match(workflow, /此 Latest 版本包含未完成平台代码签名的安装包/);
   assert.match(workflow, /--prerelease/);

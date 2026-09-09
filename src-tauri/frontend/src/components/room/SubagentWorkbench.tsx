@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, 
 import { subagentSessionMessagePage } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { useSharedNow } from "../../lib/shared-clock";
+import { t } from "../../i18n";
 import type {
   AgentRun,
   SessionMessage,
@@ -403,7 +404,6 @@ function SubagentTabsHeader({
           title="返回运行与子代理"
         >
           <IconChevronLeft width={14} height={14} aria-hidden="true" />
-          <span>运行与子代理</span>
         </button>
       )}
       <div className="workbench-tabs" role="tablist" aria-label="任务工作台标签" onKeyDown={handleWorkbenchTabListKeyDown}>
@@ -575,6 +575,10 @@ export function SubagentSessionTabs({
     () => new Map(subagents.map((child, index) => [child.id, index])),
     [subagents],
   );
+  const selectedTabRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    selectedTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedSubagentId]);
 
   return (
     <>
@@ -586,6 +590,7 @@ export function SubagentSessionTabs({
         return (
           <div
             key={child.id}
+            ref={selected ? selectedTabRef : undefined}
             className={`workbench-tab subagent-session-tab${selected ? " workbench-active-tab" : ""}`}
           >
             <button
@@ -707,16 +712,11 @@ function SubagentListSection({
                   size="sm"
                 />
                 <span className="subagent-list-row-copy">
-                  <strong title={child.label}>{child.label}</strong>
+                  <strong title={child.goal || child.label}>{compactText(child.goal, 64) || child.label}</strong>
                   <small title={listObservation(child)}>{listObservation(child)}</small>
-                  <span className="subagent-tree-facts" aria-label={treeFactsAriaLabel(node)}>
-                    <span>深度 {node.depth}</span>
-                    <span>{subagentSlotLabel(child)}</span>
-                    <span>{runtimeExecutorName(child.runtimeKind)}</span>
-                    <span>{child.model || "模型未记录"}</span>
-                    {subagentCapabilityLabels(child).map((capability) => (
-                      <span className="is-capability" key={capability}>{capability}</span>
-                    ))}
+                  <span className="subagent-tree-facts" title={treeFactsAriaLabel(node)}>
+                    {child.goal?.trim() && child.goal.trim() !== child.label.trim() && <span>{child.label}</span>}
+                    <span>{statusLabel(child.status)}</span>
                     {peerMessageActivity(child) && (
                       <span className="is-peer">PeerMessage {peerMessageActivity(child)}</span>
                     )}
@@ -725,6 +725,7 @@ function SubagentListSection({
                 </span>
                 <span className="subagent-list-row-meta" title={listTimeTitle(child)}>
                   <time>{listTime(child, now)}</time>
+                  <small>{t("conversationUI.lastUpdate", { time: relativeCompact(child.lastEventAt, now) })}</small>
                 </span>
               </button>
               {canAbortBranch && (
@@ -934,18 +935,16 @@ function SubagentInspector({
     () => mergeSessionEntries(persistedEntries, liveEntries),
     [liveEntries, persistedEntries],
   );
-  // 任务提示词：优先 scope.goal（live），否则取转录里第一条任务消息全文。
-  const taskPrompt = useMemo(() => {
-    if (child.goal?.trim()) return child.goal.trim();
-    const taskEntry = entries.find(
+  // 转录保留完整委派任务；实时 scope.goal 可能被压缩，只用于记录尚未到达时。
+  const taskPromptEntry = useMemo(() => entries.find(
       (entry): entry is SessionMessageEntry => entry.kind === "message" && entry.tone === "task",
-    );
-    return taskEntry?.text ?? null;
-  }, [child.goal, entries]);
+    ), [entries]);
+  const taskPrompt = taskPromptEntry?.text.trim() || child.goal?.trim() || null;
   const { runtimeEntries, transcriptEntries, transcriptBlocks, failedToolCount } = useMemo(() => {
     const runtime = entries.filter((entry): entry is SessionStatusEntry => entry.kind === "status");
     const transcript = entries.filter(
-      (entry): entry is SessionMessageEntry | SessionReasoningEntry | SessionToolEntry => entry.kind !== "status",
+      (entry): entry is SessionMessageEntry | SessionReasoningEntry | SessionToolEntry => entry.kind !== "status"
+        && entry !== taskPromptEntry,
     );
     return {
       runtimeEntries: runtime,
@@ -953,7 +952,7 @@ function SubagentInspector({
       transcriptBlocks: groupTranscriptEntries(transcript),
       failedToolCount: transcript.filter((entry) => entry.kind === "tool" && entry.state === "fail").length,
     };
-  }, [entries]);
+  }, [entries, taskPromptEntry]);
   const permission = useMemo(
     () => resolveSessionPermission(messages, {
       accessMode: child.accessMode,
@@ -1020,7 +1019,9 @@ function SubagentInspector({
                 <p>{taskPrompt}</p>
               </section>
             )}
-            <div className="subagent-session-meta" aria-label="子智能体编排信息">
+            <details className="subagent-technical-details">
+              <summary>{t("conversationUI.technicalDetails")}</summary>
+              <div className="subagent-session-meta" aria-label="子智能体编排信息">
               <span><b>深度</b>{treeNode?.depth ?? 1}</span>
               <span><b>槽位</b>{subagentSlotLabel(child).replace(/^槽位\s*/, "")}</span>
               <span><b>Provider</b>{runtimeExecutorName(child.runtimeKind)}</span>
@@ -1032,7 +1033,8 @@ function SubagentInspector({
                 <span className="subagent-tree-anomaly"><b>运行关系</b>{treeAnomalyLabel(treeNode)}</span>
               )}
               {child.routingReason && <span className="subagent-routing-reason"><b>路由</b>{child.routingReason}</span>}
-            </div>
+              </div>
+            </details>
             {error && <div className="subagent-session-error">读取子智能体记录失败：{error}</div>}
             {hasMoreBefore && (
               <button

@@ -13,7 +13,7 @@
 }
 
 #app.scene-room .scene-room.workbench-docked {
-  grid-template-columns: minmax(360px, var(--room-convo-width, 52%)) 8px minmax(420px, 1fr);
+  grid-template-columns: minmax(360px, var(--room-convo-width, 62%)) 8px minmax(360px, 1fr);
   grid-template-areas: "convo splitter canvas";
 }
 
@@ -108,13 +108,13 @@
 
 .room-conversation-title strong {
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 
 .room-conversation-title span {
   color: var(--fg-faint);
-  font: var(--text-meta) var(--font-mono);
+  font: var(--text-meta) var(--font-ui);
 }
 
 .room-workbench-toggle,
@@ -174,7 +174,8 @@
   display: flex;
   align-self: stretch;
   min-width: 0;
-  max-width: min(62%, 620px);
+  max-width: 100%;
+  flex: 1;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -263,8 +264,7 @@
 }
 
 .workbench-head-spacer {
-  min-width: 8px;
-  flex: 1;
+  flex: 0 0 8px;
 }
 
 .workbench-live {

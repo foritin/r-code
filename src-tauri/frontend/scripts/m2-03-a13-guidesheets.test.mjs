@@ -103,7 +103,7 @@ test("A13 四入口：卡片打开 → Esc 关闭 → 焦点恢复", async () =>
 
   for (const { pane, index, guide } of ENTRY_CASES) {
     await page.getByRole("button", { name: "设置", exact: true }).click();
-    const paneBtn = page.getByRole("button", { name: pane, exact: true }).first();
+    const paneBtn = page.getByRole("tab", { name: pane, exact: true }).first();
     await paneBtn.waitFor({ state: "visible", timeout: 8000 });
     await paneBtn.click();
     await page.waitForTimeout(400);

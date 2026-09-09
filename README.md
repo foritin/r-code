@@ -55,7 +55,7 @@ The normal desktop application is not three permanently separate processes. The 
 | Renderer | `src-tauri/frontend/` | React scenes, Zustand state, typed Tauri IPC |
 | Shared contracts | `vendor/agent-contracts/` | required `agent-*` contract crates Git submodule |
 
-JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See [Architecture](./docs/architecture.md) for the full model and diagrams.
+JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See the [implementation baseline](./docs/support/archive/architecture-before-harness-v2.md) for the full model and diagrams. The [pluggable Harness refactor plan](./docs/prd/pluggable-harness/plan.md) describes the next architecture; its product changes have not been implemented yet.
 
 ## Development
 
@@ -156,8 +156,11 @@ Local packaging:
 # Windows branded installer
 powershell -ExecutionPolicy Bypass -File ./scripts/build-branded-installer.ps1
 
-# Raw Windows NSIS / MSI
-cargo tauri build --bundles nsis,msi
+# Raw Windows NSIS / MSI (x64 MSVC; PowerShell 7)
+$target = "x86_64-pc-windows-msvc"
+cargo build --release -p r-code-tui --bin r-code-tui --target $target
+Copy-Item "target/$target/release/r-code-tui.exe" "src-tauri/binaries/r-code-tui-$target.exe" -Force
+pwsh -NoProfile -Command '$env:R_CODE_TAURI_PACKAGING = "1"; Set-Location src-tauri; cargo tauri build --bundles nsis,msi --target x86_64-pc-windows-msvc'
 
 # macOS ad-hoc Apple Silicon app/dmg
 bash ./scripts/manual/package-macos.sh
@@ -169,8 +172,13 @@ bash ./scripts/manual/package-macos.sh --target x86_64-apple-darwin
 bash ./scripts/manual/package-macos.sh --signed
 
 # Linux
-cargo tauri build --bundles appimage,deb
+target="$(rustc -vV | sed -n 's/^host: //p')"
+cargo build --release -p r-code-tui --bin r-code-tui --target "$target"
+install -m 755 "target/$target/release/r-code-tui" "src-tauri/binaries/r-code-tui-$target"
+(cd src-tauri && R_CODE_TAURI_PACKAGING=1 cargo tauri build --bundles appimage,deb --target "$target")
 ```
+
+`R_CODE_TAURI_PACKAGING=1` makes the build fail before packaging when the target-specific TUI sidecar is missing, is still a development placeholder, or has an executable format for the wrong platform.
 
 See [RELEASING.md](./docs/support/operations/releasing.md) for output paths, signing variables, and production requirements.
 
@@ -209,7 +217,8 @@ r-code/
 - [Contributing](./CONTRIBUTING.md)
 - [Support](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
-- [Architecture](./docs/architecture.md)
+- [Pluggable Harness refactor plan](./docs/prd/pluggable-harness/plan.md)
+- [Implementation architecture baseline](./docs/support/archive/architecture-before-harness-v2.md)
 - [Plan mode and enhanced review](./docs/support/guides/plan-mode.en.md)
 - [Web tools and MCP](./docs/support/guides/mcp.md)
 - [Evolving memory](./docs/support/guides/memory.md)

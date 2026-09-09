@@ -1,50 +1,65 @@
 //! 真实 PTY：启动首屏多物理行 + append 无撕裂（回归 M6-03 截图场景）。
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+mod common;
 
-fn run_demo() -> Option<String> {
-    let pty = native_pty_system();
-    let pair = pty
-        .openpty(PtySize {
-            rows: 24,
-            cols: 90,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .ok()?;
-    let mut cmd = CommandBuilder::new(std::env::var("CARGO_BIN_EXE_startup_demo").ok()?);
-    cmd.env("RUST_BACKTRACE", "0");
-    let mut child = pair.slave.spawn_command(cmd).ok()?;
-    drop(pair.slave);
-    let mut out = String::new();
-    let mut r = pair.master.try_clone_reader().ok()?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    let mut buf = [0u8; 4096];
-    loop {
-        if std::time::Instant::now() > deadline {
-            let _ = child.kill();
-            break;
-        }
-        match r.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                out.push_str(&String::from_utf8_lossy(&buf[..n]));
-                if out.contains("__STARTUP_END__") {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    let _ = child.wait();
-    Some(out)
+const CHILD_ENV: &str = "R_CODE_STARTUP_SEQUENCE_PTY_CHILD";
+
+fn render_demo() {
+    use r_code_tui::inline_render::InlineRenderer;
+    use std::io::Write;
+
+    let mut renderer = InlineRenderer::new();
+    let mut stdout = std::io::stdout();
+    println!("__STARTUP_BEGIN__");
+    let live1: Vec<String> = vec!["> ".into(), "状态行".into()];
+    stdout
+        .write_all(
+            renderer
+                .frame(
+                    &[
+                        "R-Code CLI 尚未配置模型服务".into(),
+                        "  1) 桌面端 R-Code Dev「设置 → 模型服务」选择并保存；\n  2) 直接编辑 config.toml".into(),
+                    ],
+                    &live1,
+                )
+                .as_bytes(),
+        )
+        .expect("write startup frame");
+    let live2: Vec<String> = vec!["> ask anything".into(), "状态行 v2".into()];
+    stdout
+        .write_all(
+            renderer
+                .frame(&["· 新状态行".to_string()], &live2)
+                .as_bytes(),
+        )
+        .expect("write appended frame");
+    println!("\n__STARTUP_END__");
+    stdout.flush().expect("flush startup demo");
 }
 
 #[test]
 fn startup_multi_physical_lines_render_without_tearing() {
-    let Some(out) = run_demo() else {
-        eprintln!("pty 不可用，跳过（确定性语义已由 display/inline_render 单测覆盖）");
+    if std::env::var_os(CHILD_ENV).is_some() {
+        render_demo();
         return;
-    };
+    }
+    let out = common::run_current_test_in_pty(
+        "startup_multi_physical_lines_render_without_tearing",
+        CHILD_ENV,
+        portable_pty::PtySize {
+            rows: 24,
+            cols: 90,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        "__STARTUP_END__",
+        std::time::Duration::from_secs(15),
+    )
+    .expect("startup demo must run inside a PTY");
+    let out = out
+        .split_once("__STARTUP_BEGIN__")
+        .and_then(|(_, output)| output.split_once("__STARTUP_END__"))
+        .map(|(output, _)| output)
+        .expect("startup markers must delimit renderer output");
     // 含 \n 的引导行被拆成独立物理行，且完整可见。
     assert!(out.contains("1) 桌面端 R-Code Dev"), "引导行可见：{out}");
     assert!(out.contains("2) 直接编辑"), "第二物理行可见：{out}");

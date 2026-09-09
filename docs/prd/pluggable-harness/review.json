@@ -1,0 +1,179 @@
+{
+  "schema_version": "r-code-plan-review.v1",
+  "plan": "plan.md",
+  "tasks": "tasks.json",
+  "published_at": "2026-09-09",
+  "review_type": "independent_principal_engineer",
+  "verdict": "pass",
+  "score": 95,
+  "blocking": 0,
+  "major": 0,
+  "issues": [],
+  "coverage_gaps": [],
+  "rounds": [
+    {
+      "iteration": 1,
+      "score": 78,
+      "verdict": "revise",
+      "resolved_topics": [
+        "shared daemon/profile ownership",
+        "uniform process authorization",
+        "frozen verifier input contract",
+        "host-crash descendant lifetime",
+        "operation/input identities",
+        "early profile isolation"
+      ]
+    },
+    {
+      "iteration": 2,
+      "score": 90,
+      "verdict": "revise",
+      "resolved_topics": [
+        "client-to-daemon command idempotency",
+        "declarative process profiles",
+        "rusqlite backup feature",
+        "dependency-download-only cache scope"
+      ]
+    },
+    {
+      "iteration": 3,
+      "score": 95,
+      "verdict": "pass",
+      "issues": [],
+      "coverage_gaps": []
+    }
+  ],
+  "structural_validation": {
+    "validator": ".agents/skills/plan-loop/tools/validate_plan.py",
+    "tasks": 52,
+    "components": 10,
+    "components_covered": 10,
+    "errors": [],
+    "sizing_warnings": [
+      {
+        "task_id": "T26",
+        "estimated_loc": 600,
+        "note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch."
+      },
+      {
+        "task_id": "T29",
+        "estimated_loc": 600,
+        "note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch."
+      },
+      {
+        "task_id": "T30",
+        "estimated_loc": 450,
+        "note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch."
+      },
+      {
+        "task_id": "T33",
+        "estimated_loc": 450,
+        "note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch."
+      },
+      {
+        "task_id": "T35",
+        "estimated_loc": 450,
+        "note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch."
+      },
+      {
+        "task_id": "T42",
+        "estimated_loc": 450,
+        "note": "Focused extraction/integration PR. Estimated new/rewritten logic includes tests; mechanical moves of existing tested modules are counted separately. Split only at the documented port/consumer boundary, not into a non-compiling half-switch."
+      },
+      {
+        "task_id": "T06a",
+        "estimated_loc": 500,
+        "note": "Daemon ownership and authenticated client transport are one coherent bootstrap contract; app-level idempotency is separately T06b. Estimate excludes mechanical reuse of existing framing helpers."
+      }
+    ]
+  },
+  "source_baseline": {
+    "revision": "88f7efe3e69ff617a4d565efc0d9c700cfed4512",
+    "working_tree": "Included pre-existing uncommitted changes; no reset or selective loss.",
+    "archive_input_hashes": {
+      "docs/architecture.md": {
+        "sha256": "12ca998da018be35fc42c1eb00512c92a1ff230064424e94b8d1dfacd2e98013",
+        "bytes": 55422
+      },
+      "docs/tui-v2/cli-naming-decision.md": {
+        "sha256": "ed054e4034be999fa692181e76b14352c4b30203c38bb5181da0e01129213a55",
+        "bytes": 2307
+      },
+      "docs/tui-v2/m5-01-poc-report.md": {
+        "sha256": "6853eaab2ba39d406da56f74c7bae69c92035eb8713f81d1eca552f072d6b682",
+        "bytes": 1831
+      },
+      "docs/tui-v2/pi-parity-gap-list.md": {
+        "sha256": "35742ed58016dcde39f084b8b3c50d487d17bfca40623f17cdab2f6db7cfd4ad",
+        "bytes": 9768
+      },
+      "docs/tui-v2/pi-tui-deep-research.md": {
+        "sha256": "0e47a2bb1d948ab283ff744d2e03950abd7993b9888278a90ecad29401cc037e",
+        "bytes": 34105
+      },
+      "docs/tui-v2/r-code-cli-prd.md": {
+        "sha256": "152d5b51ffb4c590007ae833bb88802f5fb77049558abb5ab2ff937096d93cff",
+        "bytes": 67227
+      },
+      "docs/tui-v2/tui-v2-freeze.yaml": {
+        "sha256": "3301aa68c0800881d3ab6c5d713b014fa8ecc3527be5d6d41c0621a583546cb2",
+        "bytes": 1812
+      },
+      "docs/tui-v2/tui-v4-prototype.html": {
+        "sha256": "de92511e998165f32b3f412af12c8cc62ee32ce93ed1f62de9e227de7c80396f",
+        "bytes": 38418
+      },
+      "scripts/verify-tui-v2.mjs": {
+        "sha256": "cfb9a73b6c4f073af39ab53177a215d9d9c7457ed3819d9ab363398af8f51def",
+        "bytes": 66377
+      },
+      "scripts/verify-tui-v2.test.mjs": {
+        "sha256": "8e5086c4523e1c5aab0ecac5a6aa61f3b669c99bf5e79ae39b774e59096a360d",
+        "bytes": 1593
+      },
+      "README.md": {
+        "sha256": "d0ecd4b252bc4c6e5a9f2eb13b44a75311a3019aa8fe6be3a43da4390961605d",
+        "bytes": 11919
+      },
+      "docs/support/operations/releasing.md": {
+        "sha256": "0fde5a3ddf4af84cc445c726f6e7dcbe68063f2766aa64abcf4c0229f0bef3e8",
+        "bytes": 24613
+      }
+    }
+  },
+  "publication_scope": "Planning documentation and authorized docs reorganization. No Harness V2 product implementation is claimed.",
+"post_review_changes": [
+    "Documentation paths adjusted for the user-approved docs/prd and support/archive layout; architecture decisions unchanged."
+  ],
+  "publication_checks": {
+    "date": "2026-09-09",
+    "task_schema_and_dag": {
+      "passed": true,
+      "tasks": 52,
+      "components_covered": 10
+    },
+    "local_document_links": {
+      "passed": true,
+      "checked": 186,
+      "missing": 0
+    },
+    "archive_integrity": {
+      "passed": true,
+      "byte_identical_tui_files": 6,
+      "frozen_normative_digest_unchanged": true,
+      "frozen_worklist_digest_unchanged": true,
+      "gate": "../../support/archive/tui-v2/path-migration-gate.json"
+    },
+    "windows_docs_consistency": {
+      "passed": true
+    },
+    "tui_verifier_tests": {
+      "passed": 2,
+      "failed": 0
+    },
+    "codex_regression_script_syntax": {
+      "passed": true
+    },
+    "product_refactor_implemented": false
+  }
+}

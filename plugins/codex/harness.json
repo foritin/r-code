@@ -1,0 +1,43 @@
+{
+  "schema_version": "1",
+  "id": "codex.r-code",
+  "version": "1.0.1",
+  "apiMajor": 1,
+  "apiMinor": 0,
+  "displayName": "R-Code Codex Harness",
+  "description": "Built-in Codex harness: App Server workflow through managed host processes with pinned process-profile constraints.",
+  "supportedPlatforms": [
+    { "platform": "windows-x64", "executable": "bin/r-code-harness-codex" },
+    { "platform": "macos-arm64", "executable": "bin/r-code-harness-codex" },
+    { "platform": "macos-x64", "executable": "bin/r-code-harness-codex" },
+    { "platform": "linux-x64", "executable": "bin/r-code-harness-codex" }
+  ],
+  "supportedFeatures": [
+    "app-server",
+    "approvals",
+    "questions",
+    "steer",
+    "thread-resume",
+    "cross-harness-delegation"
+  ],
+  "requestedHostServices": [
+    "host.process.open",
+    "host.process.write",
+    "host.process.close",
+    "host.tools.list",
+    "host.tools.call",
+    "host.artifacts.put",
+    "host.artifacts.read",
+    "host.questions.ask",
+    "host.approvals.request",
+    "host.children.spawn",
+    "host.children.wait",
+    "host.children.cancel",
+    "host.checkpoint.save",
+    "host.completion.propose"
+  ],
+  "configSchema": { "type": "object" },
+  "processProfiles": [
+    { "name": "codex-app-server", "framing": "ndjson-rpc" }
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "r-code-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Local RPC client for the shared r-code-service daemon: command/event connections, durable operation results and daemon auto-start."
+
+[dependencies]
+r-code-harness-protocol = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+r-code-runtime = { workspace = true }

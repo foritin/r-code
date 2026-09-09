@@ -34,7 +34,7 @@ export interface NeedsYouItem {
 
 interface TasksState {
   tasks: Task[];
-  /** taskId → TaskDetail（LRU 语义靠调用方控制刷新） */
+  /** taskId → TaskDetail（按最近刷新 LRU 淘汰，上限 DETAIL_LRU_CAP） */
   details: Record<string, TaskDetail>;
   workspaces: Workspace[];
   /** workspacePath → 服务端聚合仪表盘 */
@@ -136,6 +136,38 @@ function mergeChangedDetails(
   return next;
 }
 
+/** details 缓存上限：每条 TaskDetail 携带完整 events/changes/runs 数组，无上限时
+ * 长会话会随轮询无限膨胀（内存 + 每轮签名计算）。超过后按“最近刷新优先”淘汰。 */
+const DETAIL_LRU_CAP = 100;
+
+/** taskId 的最近刷新顺序（队首最旧），与 details 同步维护。 */
+const detailRecency: string[] = [];
+
+/** 记录本次刷新的 id（置为最新），再把 details 淘汰到上限以内。
+ * 未触发淘汰时原样返回传入对象，保持既有“无变化即不改引用”的比较语义。 */
+function trackDetailRefresh(
+  details: Record<string, TaskDetail>,
+  refreshedIds: string[],
+): Record<string, TaskDetail> {
+  for (const id of refreshedIds) {
+    const at = detailRecency.indexOf(id);
+    if (at >= 0) detailRecency.splice(at, 1);
+    detailRecency.push(id);
+  }
+  // 顺带清掉已不在 details 里的陈旧 id，保持队列与缓存一致。
+  for (let i = detailRecency.length - 1; i >= 0; i--) {
+    if (!details[detailRecency[i]]) detailRecency.splice(i, 1);
+  }
+  const excess = detailRecency.length - DETAIL_LRU_CAP;
+  if (excess <= 0) return details;
+  const evicted = new Set(detailRecency.splice(0, excess));
+  const next: Record<string, TaskDetail> = {};
+  for (const [id, detail] of Object.entries(details)) {
+    if (!evicted.has(id)) next[id] = detail;
+  }
+  return next;
+}
+
 const detailRequests = new Map<string, Promise<TaskDetail>>();
 
 interface TaskListResult {
@@ -217,7 +249,10 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     set((s) => {
       const nextTasks = tasksSignature(s.tasks) === tasksSignature(tasks) ? s.tasks : tasks;
       const nextDetails = fallbackDetails
-        ? mergeChangedDetails(s.details, fallbackDetails)
+        ? trackDetailRefresh(
+            mergeChangedDetails(s.details, fallbackDetails),
+            Object.keys(fallbackDetails),
+          )
         : s.details;
       if (nextTasks === s.tasks && nextDetails === s.details) return s;
       return { tasks: nextTasks, details: nextDetails, refreshedAt: Date.now() };
@@ -240,8 +275,11 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   refreshDetail: async (taskId) => {
     const detail = await requestTaskDetail(taskId);
     set((s) => {
-      if (detailSignature(s.details[taskId]) === detailSignature(detail)) return s;
-      return { details: { ...s.details, [taskId]: detail } };
+      const same = detailSignature(s.details[taskId]) === detailSignature(detail);
+      // 轮询命中也算“最近刷新”，数据未变时仍可能因淘汰产生新引用。
+      const tracked = trackDetailRefresh(s.details, [taskId]);
+      if (same && tracked === s.details) return s;
+      return { details: { ...tracked, [taskId]: detail } };
     });
   },
 
@@ -252,7 +290,10 @@ export const useTasksStore = create<TasksState>((set, get) => ({
       const batch = await ipc.taskDetailBatch(ids);
       const details = Object.fromEntries(batch.details.map((detail) => [detail.task.id, detail]));
       set((s) => {
-        const nextDetails = mergeChangedDetails(s.details, details);
+        const nextDetails = trackDetailRefresh(
+          mergeChangedDetails(s.details, details),
+          Object.keys(details),
+        );
         return nextDetails === s.details ? s : { details: nextDetails };
       });
     } catch {
@@ -267,7 +308,10 @@ export const useTasksStore = create<TasksState>((set, get) => ({
       }
       if (Object.keys(results).length) {
         set((s) => {
-          const nextDetails = mergeChangedDetails(s.details, results);
+          const nextDetails = trackDetailRefresh(
+            mergeChangedDetails(s.details, results),
+            Object.keys(results),
+          );
           return nextDetails === s.details ? s : { details: nextDetails };
         });
       }
@@ -304,7 +348,7 @@ export const useTasksStore = create<TasksState>((set, get) => ({
       : [task, ...s.tasks.filter((candidate) => candidate.id !== task.id)];
     const currentDetail = s.details[task.id];
     const details = currentDetail && currentDetail.task !== task
-      ? { ...s.details, [task.id]: { ...currentDetail, task } }
+      ? { ...trackDetailRefresh(s.details, [task.id]), [task.id]: { ...currentDetail, task } }
       : s.details;
     return tasks === s.tasks && details === s.details ? s : { tasks, details };
   }),

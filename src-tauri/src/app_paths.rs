@@ -168,6 +168,18 @@ impl AppFlavor {
         std::env::set_var("NPM_CONFIG_PREFIX", &environment.npm_prefix);
         Ok(())
     }
+
+    /// Harness-v2 handoff values for the shared daemon profile. The GUI passes
+    /// its build flavor explicitly to `r-code-runtime::LaunchOptions`; this
+    /// method exposes the matching flavor spelling and the per-flavor data
+    /// root without linking the runtime crate.
+    pub fn harness_launch_options(self) -> (&'static str, Option<PathBuf>) {
+        let flavor = match self {
+            Self::Production => "production",
+            Self::Development => "development",
+        };
+        (flavor, self.default_data_dir())
+    }
 }
 
 pub const fn bundle_identifier() -> &'static str {

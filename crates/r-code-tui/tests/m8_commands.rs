@@ -1,11 +1,16 @@
 //! 真实 PTY 端到端：M8 三命令（G7/G9/G11）的交互路径回归。
 //!
-//! - `/session`：会话统计卡 commit 进 transcript（未落盘会话文件回退行）。
+//! - `/session`：会话统计卡 commit 进 transcript（无 run 时会话文件回退行）。
 //! - `/export <绝对路径>.md`：系统行确认 + 磁盘上真有 markdown 文件。
 //! - `/copy`：无 assistant 回复时的可操作提示。
 //! - `/setup` 环境变量模式（G11）：key 步 Tab 切换 → 变量清单渲染；Esc 退出
 //!   不落盘（PTY 编译为非 test 配置，明文 key 保存会写真实凭据后端——env
-//!   模式保存只写 config.toml，但本测试只验切换与渲染，不提交）。
+//!   模式保存只写 settings.json，但本测试只验切换与渲染，不提交）。
+//!
+//! T35：TUI 经共享 r-code-service 守护进程运行（隔离 data-dir/ipc-name +
+//! 结束杀守护进程）。
+mod daemon_common;
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -15,13 +20,12 @@ struct Session {
     output: std::sync::mpsc::Receiver<String>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     _master: Box<dyn portable_pty::MasterPty + Send>,
+    env: daemon_common::DaemonEnv,
 }
 
 fn spawn_tui() -> Option<Session> {
     let bin = std::env::var("CARGO_BIN_EXE_r-code-tui").ok()?;
-    let dir = tempfile::tempdir().ok()?;
-    let keep = String::from(dir.path().to_str()?);
-    std::mem::forget(dir);
+    let (env, extra) = daemon_common::daemon_env("m8");
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -32,8 +36,16 @@ fn spawn_tui() -> Option<Session> {
         })
         .ok()?;
     let mut cmd = CommandBuilder::new(bin);
-    cmd.args(["--data-dir", &keep]);
+    cmd.args([
+        "--data-dir",
+        env.data_dir.to_str()?,
+        "--ipc-name",
+        &env.ipc_name,
+    ]);
     cmd.env("RUST_BACKTRACE", "0");
+    for (key, value) in extra {
+        cmd.env(key, value);
+    }
     let child = pair.slave.spawn_command(cmd).ok()?;
     let writer = pair.master.take_writer().ok()?;
     let reader = pair.master.try_clone_reader().ok()?;
@@ -62,6 +74,7 @@ fn spawn_tui() -> Option<Session> {
         output,
         child,
         _master: master,
+        env,
     })
 }
 
@@ -112,17 +125,16 @@ impl Session {
     }
 
     fn send(&mut self, keys: &str) {
-        let _ = self.writer.write_all(keys.as_bytes());
-        let _ = self.writer.flush();
+        self.writer
+            .write_all(keys.as_bytes())
+            .expect("write PTY input");
+        self.writer.flush().expect("flush PTY input");
     }
 }
 
 #[test]
 fn session_card_and_export_commands_work() {
-    let Some(mut session) = spawn_tui() else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui().expect("r-code-tui must start inside a PTY");
     session.wait_for("尚未配置", Duration::from_secs(20));
 
     // 1) /session：统计卡进 transcript（G9）。新会话未发送过 → 会话文件行
@@ -157,14 +169,12 @@ fn session_card_and_export_commands_work() {
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session.env);
 }
 
 #[test]
 fn setup_env_mode_toggle_renders_var_list() {
-    let Some(mut session) = spawn_tui() else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui().expect("r-code-tui must start inside a PTY");
     session.wait_for("尚未配置", Duration::from_secs(20));
     // 1) /setup → 过滤 openai → Enter 进 key 步。
     session.send("/setup\r");
@@ -191,4 +201,5 @@ fn setup_env_mode_toggle_renders_var_list() {
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session.env);
 }

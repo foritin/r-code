@@ -1,0 +1,23 @@
+[package]
+name = "r-code-harness-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust SDK for writing R-Code harness plugins: lifecycle serving, host-call client, streams and cancellation."
+
+[dependencies]
+r-code-harness-protocol = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+r-code-kernel = { workspace = true }
+r-code-store = { workspace = true }
+r-code-runtime = { workspace = true }

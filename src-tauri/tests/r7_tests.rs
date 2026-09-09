@@ -13,7 +13,7 @@ use r_code_core::dto::{
     AgentRun, FileChangeType, ProjectAccessMode, RiskLevel, TaskMode, TaskState,
 };
 use r_code_host::commands::{
-    accept_task, agent_send, changes_list, permission_approve, permission_pending, recovery_data,
+    accept_task, changes_list, permission_approve, permission_pending, recovery_data,
     rollback_file, task_create, task_detail, task_list, workspace_open, workspace_set_access_mode,
     CommandState,
 };
@@ -784,34 +784,6 @@ fn r7_t5_context_injection_features() {
 // ============================================================================
 // 附加测试: Agent 命令
 // ============================================================================
-
-#[tokio::test]
-async fn r7_agent_send_and_abort() {
-    let (_dir, state) = setup_state();
-
-    let task = task_create(&state, None, "Agent test", "Test agent", "ask")
-        .await
-        .unwrap();
-
-    // 发送消息
-    agent_send(&state, &task.id, "Hello agent").await.unwrap();
-
-    // 验证会话文件已创建
-    let session_path = state.sessions_dir.join(format!("{}.jsonl", task.id));
-    assert!(session_path.exists(), "session file should exist");
-
-    // 中止
-    TaskRepository::new(&state.db)
-        .update_state(&task.id, TaskState::InProgress)
-        .unwrap();
-
-    r_code_host::commands::agent_abort(&state, &task.id)
-        .await
-        .unwrap();
-
-    let detail = task_detail(&state, &task.id).await.unwrap();
-    assert_eq!(detail.task.state, TaskState::Interrupted);
-}
 
 // ============================================================================
 // 附加测试: 恢复数据

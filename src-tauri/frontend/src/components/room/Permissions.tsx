@@ -3,14 +3,20 @@
  * 数据源:task_detail 轮询(store.tasks);批复后刷新 detail。
  */
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { permissionApprove } from "../../lib/ipc";
-import { permissionAttribution, permissionRiskLabel } from "../../lib/format";
+import {
+  canPersistPermissionGrant,
+  permissionAttribution,
+  permissionRiskLabel,
+} from "../../lib/format";
 import { useTasksStore } from "../../store/tasks";
 import type { AgentRun, PermissionDecision, PermissionRequest } from "../../lib/types";
 
 const EMPTY_RUNS: AgentRun[] = [];
 
 export function PendingPermissions({ taskId }: { taskId: string }) {
+  const { t } = useTranslation();
   const permissions = useTasksStore((s) => s.details[taskId]?.permissions);
   const runs = useTasksStore((s) => s.details[taskId]?.runs);
   const pending = useMemo(
@@ -38,6 +44,16 @@ export function PendingPermissions({ taskId }: { taskId: string }) {
 
   return (
     <div className="perm-stack">
+      <p className="sr-only" aria-live="assertive" aria-atomic="true">
+        {pending[0]
+          ? t(canPersistPermissionGrant(pending[0].risk_level)
+            ? "approvals.waitingAnnouncementWithActions"
+            : "approvals.waitingAnnouncementWithSingleUseActions", {
+              risk: permissionRiskLabel(pending[0].risk_level),
+              tool: pending[0].tool_name,
+            })
+          : ""}
+      </p>
       {pending.map((p) => (
         <PermissionCard
           key={p.id}
@@ -47,7 +63,7 @@ export function PendingPermissions({ taskId }: { taskId: string }) {
           onDecide={decide}
         />
       ))}
-      {error && <div className="perm-error">批复失败:{error}</div>}
+      {error && <div className="perm-error" role="alert">{t("approvals.error", { error })}</div>}
     </div>
   );
 }
@@ -63,31 +79,49 @@ function PermissionCard({
   busy: boolean;
   onDecide: (id: string, decision: Exclude<PermissionDecision, "pending">) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const attribution = permissionAttribution(permission, runs);
+  const headingId = `permission-${permission.id}-heading`;
+  const scopeId = `permission-${permission.id}-scope`;
+  const target = permission.target?.trim()
+    || permission.input_summary.trim()
+    || t("approvals.currentAction");
+  const canPersist = canPersistPermissionGrant(permission.risk_level);
   return (
-    <div className="perm-card">
+    <section className="perm-card" role="region" aria-labelledby={headingId} aria-describedby={scopeId}>
       <div className="perm-head">
         <span className="chip risk" title={permissionRiskLabel(permission.risk_level)}>
           {permission.risk_level} · {permissionRiskLabel(permission.risk_level)}
         </span>
-        <span className="perm-tool">{permission.tool_name}</span>
+        <span className="perm-tool" id={headingId}>{permission.tool_name}</span>
         <span className={"perm-owner owner-" + attribution.kind}>{attribution.label}</span>
-        <span className="perm-hint">等待批准</span>
+        <span className="perm-hint">{t("approvals.waitingLabel")}</span>
       </div>
       <div className="perm-summary" title={permission.input_summary}>
         {permission.input_summary}
       </div>
+      <div className="perm-scope" id={scopeId}>
+        {canPersist
+          ? t("approvals.persistentScope", {
+              tool: permission.tool_name,
+              target,
+              risk: permission.risk_level,
+            })
+          : t("approvals.singleUseScope", { risk: permission.risk_level })}
+      </div>
       <div className="perm-actions">
-        <button className="btn accent sm" disabled={busy} onClick={() => void onDecide(permission.id, "allow")}>
-          允许一次
+        <button type="button" className="btn accent sm" disabled={busy} onClick={() => void onDecide(permission.id, "allow")}>
+          {t("approvals.allowOnce")}
         </button>
-        <button className="btn sm" disabled={busy} onClick={() => void onDecide(permission.id, "allow_always")}>
-          总是允许
-        </button>
-        <button className="btn danger sm" disabled={busy} onClick={() => void onDecide(permission.id, "deny")}>
-          拒绝
+        {canPersist && (
+          <button type="button" className="btn sm" disabled={busy} onClick={() => void onDecide(permission.id, "allow_always")}>
+            {t("approvals.allowAlways")}
+          </button>
+        )}
+        <button type="button" className="btn danger sm" disabled={busy} onClick={() => void onDecide(permission.id, "deny")}>
+          {t("approvals.deny")}
         </button>
       </div>
-    </div>
+    </section>
   );
 }

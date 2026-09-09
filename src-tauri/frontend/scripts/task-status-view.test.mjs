@@ -152,8 +152,8 @@ test("list, detail, and dashboard surfaces route status through the authoritativ
     /taskStatus\(task, detail\)\?\.display_state\s*\?\?\s*legacyDisplayState\(task, detail\)/,
   );
   assert.match(conversations, /taskDisplayState\(task, details\[task\.id\]\)/);
-  assert.match(conversations, /taskStateLabel\(task\.state, detail\)/);
-  assert.match(canvas, /taskStateLabel\(task\.state, detail\)/);
+  assert.match(conversations, /taskStateLabel\(task, detail\)/);
+  assert.match(canvas, /taskStateLabel\(task, detail\)/);
   assert.match(canvas, /switch\s*\(taskDisplayState\(detail\.task, detail\)\)/);
   assert.match(dashboard, /visualTaskDisplayState\(summary\.status\.display_state\)/);
   assert.match(
@@ -199,7 +199,7 @@ test("presentation honors backend precedence, preserves attention, and maps ever
       const detail = makeDetail(display, [], 0, queueDepth);
       return {
         display: presentation.taskDisplayState(detail.task, detail),
-        label: presentation.taskStateLabel(detail.task.state, detail),
+        label: presentation.taskStateLabel(detail.task, detail),
         visual: presentation.visualTaskState(detail.task, detail),
         activity: presentation.taskActivity(detail.task, detail),
         expected: { display, label, visual, activity },
@@ -216,17 +216,23 @@ test("presentation honors backend precedence, preserves attention, and maps ever
     legacyReview.runs = [];
     delete legacyReview.status;
 
+    const staleApproval = makeDetail("waiting_for_approval", ["approval_required"], 3);
+    const currentTask = {
+      ...staleApproval.task,
+      updated_at: new Date(Date.parse(staleApproval.task.updated_at) + 1_000).toISOString(),
+    };
+
     return {
       approval: {
         display: presentation.taskDisplayState(approval.task, approval),
         visual: presentation.visualTaskState(approval.task, approval),
-        label: presentation.taskStateLabel(approval.task.state, approval),
+        label: presentation.taskStateLabel(approval.task, approval),
         unread: presentation.taskStatus(approval.task, approval).unread_count,
       },
       failure: {
         display: presentation.taskDisplayState(failure.task, failure),
         visual: presentation.visualTaskState(failure.task, failure),
-        label: presentation.taskStateLabel(failure.task.state, failure),
+        label: presentation.taskStateLabel(failure.task, failure),
         unread: presentation.taskStatus(failure.task, failure).unread_count,
         attention: presentation.taskStatus(failure.task, failure).attention,
       },
@@ -236,13 +242,18 @@ test("presentation honors backend precedence, preserves attention, and maps ever
         review: presentation.taskDisplayState(legacyReview.task, legacyReview),
         missingStatus: presentation.taskStatus(legacyRunning.task, legacyRunning) ?? null,
       },
+      stale: {
+        display: presentation.taskDisplayState(currentTask, staleApproval),
+        label: presentation.taskStateLabel(currentTask, staleApproval),
+        activity: presentation.taskActivity(currentTask, staleApproval),
+      },
     };
   });
 
   assert.deepEqual(result.approval, {
     display: "waiting_for_approval",
     visual: "attention",
-    label: "等待审批",
+    label: "等待你的批准",
     unread: 11,
   });
   assert.deepEqual(result.failure, {
@@ -251,6 +262,11 @@ test("presentation honors backend precedence, preserves attention, and maps ever
     label: "执行失败",
     unread: 9,
     attention: ["run_failed", "review_required"],
+  });
+  assert.deepEqual(result.stale, {
+    display: "running",
+    label: "正在执行",
+    activity: "正在推进任务",
   });
   for (const item of result.mapped) {
     assert.deepEqual(
@@ -263,6 +279,57 @@ test("presentation honors backend precedence, preserves attention, and maps ever
     review: "review_ready",
     missingStatus: null,
   });
+  await context.close();
+});
+
+test("an empty conversation is unstarted without overriding completed, attention, or stale states", async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}@vite/client`);
+  const result = await page.evaluate(async () => {
+    const { isTaskUnstarted, taskStateLabel, taskActivity, visualTaskState } = await import("/src/lib/presentation.ts");
+    const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+    const completed = structuredClone(browserMockDetails["mock-task-complete"]);
+    completed.task.state = "idle";
+    completed.permissions = [];
+    completed.status = {
+      task_id: completed.task.id,
+      persisted_state: "idle",
+      display_state: "idle",
+      active_run_id: null,
+      attention: [],
+      queue_depth: 0,
+      unread_count: 0,
+    };
+    const empty = structuredClone(completed);
+    empty.runs = [];
+    const waiting = structuredClone(empty);
+    waiting.status.display_state = "waiting_for_question";
+    waiting.status.attention = ["question_required"];
+    const describe = (detail) => ({
+      unstarted: isTaskUnstarted(detail.task, detail),
+      label: taskStateLabel(detail.task, detail),
+      visual: visualTaskState(detail.task, detail),
+    });
+    return {
+      empty: { ...describe(empty), activity: taskActivity(empty.task, empty) },
+      completed: describe(completed),
+      waiting: describe(waiting),
+      stale: [
+        { ...empty.task, id: "another-task" },
+        { ...empty.task, updated_at: new Date(Date.parse(empty.task.updated_at) + 1_000).toISOString() },
+        { ...empty.task, state: "review_ready" },
+      ].map((task) => isTaskUnstarted(task, empty)),
+      missing: isTaskUnstarted(empty.task),
+    };
+  });
+  assert.deepEqual(result.empty, {
+    unstarted: true, label: "尚未开始", visual: "idle", activity: "发送第一条消息，开始对话",
+  });
+  assert.deepEqual(result.completed, { unstarted: false, label: "已完成", visual: "done" });
+  assert.deepEqual(result.waiting, { unstarted: false, label: "等待回答", visual: "attention" });
+  assert.deepEqual(result.stale, [false, false, false]);
+  assert.equal(result.missing, false);
   await context.close();
 });
 

@@ -2,7 +2,7 @@
 
 > 文档状态：`frozen`（只表示执行合同已完整、通过文档门禁，不表示产品功能已经实现）
 > 执行合同：`prd-to-ai-worklist` v1.1.0
-> 取证基线：2026-08-30；pi（`earendil-works/pi`，原 `badlogic/pi-mono`）v0.84.x 官方仓库 master 分支逐条核查；R-Code 现状来自 [`docs/architecture.md`](../architecture.md) 与源码
+> 取证基线：2026-08-30；pi（`earendil-works/pi`，原 `badlogic/pi-mono`）v0.84.x 官方仓库 master 分支逐条核查；R-Code 现状来自 [`docs/architecture.md`](../architecture-before-harness-v2.md) 与源码
 > 固化清单：[`pi-alignment-and-tui-freeze.yaml`](./pi-alignment-and-tui-freeze.yaml)
 > 唯一完成状态：本文 §8 主 Checklist；任务卡、任务包与证据不得维护第二套 Checkbox
 

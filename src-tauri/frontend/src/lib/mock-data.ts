@@ -24,6 +24,7 @@ import type {
   Workspace,
   WorkspaceDashboard,
 } from "./types";
+import { transitionMockTaskDetail } from "./browser-mock-task-transition";
 
 const now = Date.now();
 const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
@@ -1006,7 +1007,11 @@ function mockChangeSummary(task: Task) {
 }
 
 function mockTaskSummary(task: Task): DashboardTaskSummary {
-  const detail = browserMockDetails[task.id];
+  const storedDetail = browserMockDetails[task.id];
+  const detail = storedDetail
+    ? transitionMockTaskDetail(storedDetail, { task })
+    : storedDetail;
+  if (detail) browserMockDetails[task.id] = detail;
   const activeRun = detail?.runs.find((run) => run.ended_at === null) ?? detail?.runs.find((run) => run.agent_kind === "main") ?? null;
   const permission = detail?.permissions.find((item) => item.decision === "pending");
   const activity = permission

@@ -15,6 +15,9 @@ agent-error = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }
+r-code-harness-protocol = { workspace = true }
+r-code-kernel = { workspace = true }
+async-trait = { workspace = true }
 
 # SQLite
 rusqlite = { workspace = true }

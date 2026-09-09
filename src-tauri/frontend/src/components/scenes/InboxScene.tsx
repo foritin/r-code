@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   acceptTask,
   changeRequest,
@@ -9,7 +10,12 @@ import {
   REVIEW_STATUS_CHANGED_EVENT,
   rollbackTask,
 } from "../../lib/ipc";
-import { elapsedSince, permissionAttribution, permissionRiskLabel } from "../../lib/format";
+import {
+  canPersistPermissionGrant,
+  elapsedSince,
+  permissionAttribution,
+  permissionRiskLabel,
+} from "../../lib/format";
 import { taskTitle, workspaceName } from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
 import { selectNeedsYou, useTasksStore, type NeedsYouItem } from "../../store/tasks";
@@ -230,7 +236,6 @@ export function InboxScene() {
         <div className="inbox-scroll">
           <header className="inbox-header">
             <div>
-              <p className="page-kicker">NEEDS YOU</p>
               <h1>待处理</h1>
               <p>跨项目同步权限请求与审核变更，处理结果会实时回流。</p>
             </div>
@@ -359,12 +364,24 @@ function InspectorHead({ title, subtitle, onCollapse }: { title: string; subtitl
 }
 
 function PermissionInspector({ item, onError, onCollapse }: { item: NeedsYouItem; onError: (text: string | null) => void; onCollapse: () => void }) {
+  const { t } = useTranslation();
   const permission = item.permission!;
   const detail = useTasksStore((s) => s.details[item.task.id]);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const openRoom = useAppStore((s) => s.openRoom);
   const [busy, setBusy] = useState(false);
   const attribution = permissionAttribution(permission, detail?.runs ?? []);
+  const canPersist = canPersistPermissionGrant(permission.risk_level);
+  const target = permission.target?.trim()
+    || permission.input_summary.trim()
+    || t("approvals.currentAction");
+  const scope = canPersist
+    ? t("approvals.persistentScope", {
+        tool: permission.tool_name,
+        target,
+        risk: permission.risk_level,
+      })
+    : t("approvals.singleUseScope", { risk: permission.risk_level });
   const decide = async (decision: Exclude<PermissionDecision, "pending">) => {
     if (busy) return;
     setBusy(true);
@@ -386,11 +403,12 @@ function PermissionInspector({ item, onError, onCollapse }: { item: NeedsYouItem
         <DetailLine label="发起者" value={attribution.label} />
         <DetailLine label="等待时间" value={elapsedSince(item.since)} />
         <div className="inspector-summary"><small>请求说明</small><p>{permission.input_summary || "没有补充说明。"}</p></div>
+        <div className="inspector-summary"><small>{t("approvals.scopeLabel")}</small><p>{scope}</p></div>
       </div>
       <footer className="inspector-actions">
-        <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void decide("allow")}>允许一次</button>
-        <button className="rc-button" disabled={busy} onClick={() => void decide("deny")}>拒绝</button>
-        <button className="rc-button rc-button-quiet" disabled={busy} onClick={() => void decide("allow_always")}>始终允许</button>
+        <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void decide("allow")}>{t("approvals.allowOnce")}</button>
+        {canPersist && <button className="rc-button rc-button-quiet" disabled={busy} onClick={() => void decide("allow_always")}>{t("approvals.allowAlways")}</button>}
+        <button className="rc-button" disabled={busy} onClick={() => void decide("deny")}>{t("approvals.deny")}</button>
         <button className="text-link inspector-open-task" onClick={() => openRoom(item.task.id)}>打开任务 <IconArrowRight width={14} height={14} /></button>
       </footer>
     </div>

@@ -13,13 +13,20 @@ members = [
     "vendor/agent-contracts/crates/agent-tauri",
     # R-Code 产品私有 crate
     "crates/r-code-core",
+    "crates/r-code-harness-protocol",
+    "crates/r-code-kernel",
+    "crates/r-code-runtime",
+    "crates/r-code-harness-sdk",
+    "crates/r-code-client",
     "crates/r-code-store",
     "crates/r-code-gateway",
     "crates/r-code-mcp",
     "crates/r-code-terminal",
-    "crates/r-code-agent-worker",
     "crates/r-code-evals",
     "crates/r-code-tui",
+    "examples/repair-harness",
+    "plugins/native",
+    "plugins/codex",
     "installer",
     "src-tauri",
 ]
@@ -42,6 +49,7 @@ async-trait = "0.1"
 # 序列化
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+semver = { version = "1", features = ["serde"] }
 serde_yaml = "0.9"
 url = "2"
 http = "1"
@@ -79,7 +87,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rmcp = { version = "=3.1.0", default-features = false, features = ["client", "server", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # SQLite（产品私有存储层）
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 
@@ -131,11 +139,18 @@ agent-tauri = { path = "vendor/agent-contracts/crates/agent-tauri" }
 
 # 内部产品私有 crate
 r-code-core = { path = "crates/r-code-core" }
+r-code-harness-protocol = { path = "crates/r-code-harness-protocol" }
+r-code-kernel = { path = "crates/r-code-kernel" }
+r-code-runtime = { path = "crates/r-code-runtime" }
+r-code-harness-sdk = { path = "crates/r-code-harness-sdk" }
+r-code-client = { path = "crates/r-code-client" }
+r-code-harness-native = { path = "plugins/native" }
+r-code-harness-codex = { path = "plugins/codex" }
+repair-harness = { path = "examples/repair-harness" }
 r-code-store = { path = "crates/r-code-store" }
 r-code-gateway = { path = "crates/r-code-gateway" }
 r-code-mcp = { path = "crates/r-code-mcp" }
 r-code-terminal = { path = "crates/r-code-terminal" }
-r-code-agent-worker = { path = "crates/r-code-agent-worker" }
 r-code-host = { path = "src-tauri" }
 
 [profile.dev]

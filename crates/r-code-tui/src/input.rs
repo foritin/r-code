@@ -276,6 +276,17 @@ impl InputBuffer {
         self.cursor = index;
     }
 
+    /// Ctrl+U：删除光标到当前行首（readline kill-to-line-start 惯例；
+    /// 多行缓冲只清光标所在行，其他行的显式换行不受影响）。
+    pub fn clear_line(&mut self) {
+        let start = self.line_start_index();
+        if start < self.cursor {
+            self.snapshot();
+            self.chars.drain(start..self.cursor);
+            self.cursor = start;
+        }
+    }
+
     /// 整体替换文本（外部编辑器回填用；入 undo 栈可回退）。
     pub fn set_text(&mut self, text: &str) {
         self.snapshot();
@@ -331,6 +342,8 @@ pub enum KeyAction {
     Backspace,
     /// Delete。
     DeleteForward,
+    /// 清行（Ctrl+U：删除光标到行首，readline 惯例）。
+    ClearLine,
     /// 光标左/右/行首/行尾。
     CursorLeft,
     CursorRight,
@@ -382,6 +395,8 @@ pub enum KeyAction {
     /// 读系统剪贴板图片为附件（Ctrl+V，pi 对齐 G6——bracketed paste 只能
     /// 传文本，图片字节必须走 OS 剪贴板）。
     PasteImage,
+    /// 终端 EOF（Ctrl+D）：空输入时退出，非空输入时删除光标后的字符。
+    EndOfInput,
     /// 垂直上移（↑：多行编辑先移动光标，首行边界翻历史）。
     CursorUp,
     /// 垂直下移（↓：多行编辑先移动光标，末行边界翻历史）。
@@ -405,7 +420,7 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
         KeyCode::Char(ch) if ctrl && (ch == 'c' || ch == 'C') => KeyAction::Abort,
-        KeyCode::Char(ch) if ctrl && (ch == 'd' || ch == 'D') => KeyAction::Quit,
+        KeyCode::Char(ch) if ctrl && (ch == 'd' || ch == 'D') => KeyAction::EndOfInput,
         KeyCode::Enter if shift => KeyAction::Newline,
         KeyCode::Char('j') | KeyCode::Char('J') if ctrl => KeyAction::Newline,
         KeyCode::Char('z') | KeyCode::Char('Z') if ctrl => KeyAction::Undo,
@@ -424,6 +439,10 @@ pub fn map_key(key: crossterm::event::KeyEvent) -> KeyAction {
         KeyCode::Char('t') | KeyCode::Char('T') if alt => KeyAction::ToggleThinking,
         KeyCode::Char(',') if alt => KeyAction::ThinkingDown,
         KeyCode::Char('.') if alt => KeyAction::ThinkingUp,
+        // Ctrl+U：清行（readline 惯例——删除光标到行首）。
+        KeyCode::Char('u') | KeyCode::Char('U') if ctrl => KeyAction::ClearLine,
+        // 其余 Ctrl/Alt 组合字符不落进 Insert（控制字符/死键乱码不得入缓冲）。
+        KeyCode::Char(_) if ctrl || alt => KeyAction::Ignore,
         KeyCode::Char(ch) => KeyAction::Insert(ch),
         KeyCode::Tab => KeyAction::ToggleSearch,
         KeyCode::BackTab => KeyAction::CycleMode,
@@ -479,7 +498,7 @@ mod tests {
         assert_eq!(key(KeyCode::Down), KeyAction::CursorDown);
         assert_eq!(key(KeyCode::PageUp), KeyAction::ScrollUp);
         assert_eq!(ctrl(KeyCode::Char('c')), KeyAction::Abort);
-        assert_eq!(ctrl(KeyCode::Char('d')), KeyAction::Quit);
+        assert_eq!(ctrl(KeyCode::Char('d')), KeyAction::EndOfInput);
         assert_eq!(ctrl(KeyCode::Char('t')), KeyAction::ToggleTranscript);
         assert_eq!(ctrl(KeyCode::Char('l')), KeyAction::OpenModelPicker);
         assert_eq!(ctrl(KeyCode::Char('s')), KeyAction::PersistSelection);
@@ -651,6 +670,49 @@ mod tests {
         buf.move_end(); // → 行 1 尾（cursor=1）
         buf.move_right(); // 越过 \n → 行 2 首
         assert_eq!(buf.cursor(), 2, "a\n|b——越过换行符");
+    }
+
+    /// Ctrl+U 清行（readline 惯例：删除光标到行首）+ Ctrl/Alt 未映射组合
+    /// 字符不插入控制字符。
+    #[test]
+    fn ctrl_u_clears_line_and_unmapped_ctrl_alt_are_ignored() {
+        let key = |code, modifiers| map_key(KeyEvent::new(code, modifiers));
+        // Ctrl+U / Ctrl+Shift+U（大写形态）都映射清行。
+        assert_eq!(
+            key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            KeyAction::ClearLine
+        );
+        assert_eq!(
+            key(KeyCode::Char('U'), KeyModifiers::CONTROL),
+            KeyAction::ClearLine
+        );
+        // 未映射的 Ctrl/Alt 组合：忽略（不再插入 stray 控制字符）。
+        assert_eq!(
+            key(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            KeyAction::Ignore
+        );
+        assert_eq!(
+            key(KeyCode::Char('x'), KeyModifiers::ALT),
+            KeyAction::Ignore
+        );
+        // 无修饰的普通字符仍插入。
+        assert_eq!(
+            key(KeyCode::Char('u'), KeyModifiers::NONE),
+            KeyAction::Insert('u')
+        );
+        // 缓冲语义：删除光标到当前行首（多行只清所在行；行首处为 no-op）。
+        let mut buf = InputBuffer::new();
+        buf.insert_str("keep\nmid junk");
+        buf.move_home(); // 到 "mid junk" 行首
+        buf.clear_line(); // 行首 no-op
+        assert_eq!(buf.text(), "keep\nmid junk");
+        buf.move_end();
+        buf.clear_line(); // 清光标所在行
+        assert_eq!(buf.text(), "keep\n", "只清光标所在行，首行保留");
+        let mut single = InputBuffer::new();
+        single.insert_str("all");
+        single.clear_line();
+        assert_eq!(single.text(), "", "单行缓冲清到空");
     }
 
     /// M1-02.A1：Release 事件不产生任何动作（Windows/kitty 双写根因）。

@@ -1,0 +1,32 @@
+{
+  "name": "codex-app-server",
+  "framing": "ndjson-rpc",
+  "methods": [
+    {
+      "name": "initialize",
+      "params": [
+        { "pointer": "/cwd", "constraint": { "kind": "bound-to", "value": "workspace-root" } },
+        { "pointer": "/approvalPolicy", "constraint": { "kind": "enum", "values": ["untrusted", "on-request", "on-failure", "never"] } },
+        { "pointer": "/sandboxMode", "constraint": { "kind": "enum", "values": ["read-only", "workspace-write", "danger-full-access"] } },
+        { "pointer": "/credentials", "constraint": { "kind": "must-be-absent" } },
+        { "pointer": "/apiKey", "constraint": { "kind": "must-be-absent" } }
+      ]
+    },
+    {
+      "name": "newConversation",
+      "params": [
+        { "pointer": "/cwd", "constraint": { "kind": "within-workspace" } }
+      ]
+    },
+    {
+      "name": "sendUserTurn",
+      "params": [
+        { "pointer": "/cwd", "constraint": { "kind": "within-workspace" } },
+        { "pointer": "/escalatedPermissions", "constraint": { "kind": "must-be-absent" } }
+      ]
+    },
+    { "name": "interrupt", "params": [] },
+    { "name": "shutdown", "params": [] }
+  ],
+  "env": ["CODEX_HOME"]
+}

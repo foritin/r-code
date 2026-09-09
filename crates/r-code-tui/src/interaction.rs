@@ -68,7 +68,6 @@ pub mod window_reexport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use r_code_core::dto::AgentEvent;
 
     /// M8-02.A1：内联审批 + 风险分级同源（分类器同一函数）。
     #[test]
@@ -97,10 +96,10 @@ mod tests {
     #[test]
     fn tool_events_carry_approval_material() {
         let mut state = TuiState::new();
-        state.apply(&AgentEvent::ToolCall {
+        state.apply_transcript_event(&crate::TranscriptEvent::ToolCall {
+            run_id: "r1".into(),
             name: "bash".into(),
             input: serde_json::json!({"command": "cargo build"}),
-            call_id: "c1".into(),
         });
         assert_eq!(state.rows().len(), 1);
     }

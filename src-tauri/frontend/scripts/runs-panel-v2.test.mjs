@@ -89,15 +89,33 @@ test.after(async () => {
   server?.kill();
 });
 
-async function openSummary(page, taskText) {
+async function openSummary(page, taskText, permissionRisk = null) {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   const taskRow = page.locator(".sidebar-task-row").filter({ hasText: taskText });
   await taskRow.locator(".sidebar-task").click();
   await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
-  await page.evaluate(async () => {
+  await page.evaluate(async (riskLevel) => {
+    if (riskLevel) {
+      const taskId = "mock-task-permission";
+      const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const current = browserMockDetails[taskId];
+      const permission = current?.permissions[0];
+      if (!current || !permission) throw new Error("browser mock is missing the pending permission");
+      const next = {
+        ...current,
+        permissions: current.permissions.map((item, index) => (
+          index === 0 ? { ...item, risk_level: riskLevel } : item
+        )),
+      };
+      browserMockDetails[taskId] = next;
+      useTasksStore.setState((state) => ({
+        details: { ...state.details, [taskId]: structuredClone(next) },
+      }));
+    }
     const { useAppStore } = await import("/src/store/app.ts");
     useAppStore.getState().setCanvasTab("summary");
-  });
+  }, permissionRisk);
   await page.locator(".sum-brief").waitFor({ state: "visible" });
 }
 
@@ -182,11 +200,17 @@ test("pending permission renders an inline decision card in the summary", async 
 
   const card = page.locator(".sum-perm");
   await card.waitFor({ state: "visible" });
-  assert.match((await card.locator(".sum-perm-top").textContent()) ?? "", /待批权限 · 1/);
+  assert.match((await card.locator(".sum-perm-top").textContent()) ?? "", /运行已暂停 · 等待批准 · 1/);
   assert.match((await card.locator(".sum-perm-why").textContent()) ?? "", /cargo test/);
+  assert.match((await card.locator(".sum-perm-scope").textContent()) ?? "", /最高风险 R2/);
   const actions = card.locator(".sum-perm-actions button");
   assert.equal(await actions.count(), 3);
-  assert.ok(await actions.nth(2).isEnabled(), "允许一次应可用");
+  assert.deepEqual(
+    await actions.allTextContents(),
+    ["允许一次", "本任务始终允许", "拒绝"],
+    "高风险操作入口必须保持一致的安全顺序",
+  );
+  assert.ok(await actions.nth(0).isEnabled(), "允许一次应可用");
 
   // 简报格同步警示待批数。
   const pendingCell = page.locator(".sum-brief-outcomes .sum-oc").nth(2).locator(".sum-oc-v");
@@ -194,4 +218,61 @@ test("pending permission renders an inline decision card in the summary", async 
   assert.match((await pendingCell.getAttribute("class")) ?? "", /warn/);
 
   await page.close();
+});
+
+test("permission surfaces share the R0-R2 persistent approval boundary", async () => {
+  for (const { risk, persistent } of [
+    { risk: "R1", persistent: true },
+    { risk: "R3", persistent: false },
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await openSummary(page, "优化 Rust 编译性能", risk);
+
+    const summary = page.locator(".sum-perm");
+    await summary.waitFor({ state: "visible" });
+    const summaryAlways = summary.getByRole("button", { name: "本任务始终允许", exact: true });
+    assert.equal(await summaryAlways.count(), persistent ? 1 : 0, `${risk} 摘要卡长期授权入口错误`);
+    const summaryScope = (await summary.locator(".sum-perm-scope").textContent()) ?? "";
+    if (persistent) {
+      assert.match(summaryScope, new RegExp(`最高风险 ${risk}`));
+    } else {
+      assert.match(summaryScope, new RegExp(`${risk} 高风险操作只能单次允许`));
+    }
+
+    const fullCard = page.locator(".perm-card");
+    await fullCard.waitFor({ state: "visible" });
+    assert.equal(
+      await fullCard.getByRole("button", { name: "本任务始终允许", exact: true }).count(),
+      persistent ? 1 : 0,
+      `${risk} 房间审批卡长期授权入口错误`,
+    );
+    const announcement = (await page.locator(".perm-stack > .sr-only").textContent()) ?? "";
+    assert.match(
+      announcement,
+      persistent ? /允许一次、本任务始终允许或拒绝/ : /只能选择允许一次或拒绝/,
+      `${risk} 读屏操作说明与可用按钮不一致`,
+    );
+
+    await page.evaluate(async () => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().setScene("inbox");
+    });
+    await page.locator(".scene-inbox").waitFor({ state: "visible" });
+    await page.locator('.inbox-row[data-task-id="mock-task-permission"]').click();
+    const inboxInspector = page.locator('.inbox-inspector[aria-label="权限详情"]');
+    await inboxInspector.waitFor({ state: "visible" });
+    assert.equal(
+      await inboxInspector.getByRole("button", { name: "本任务始终允许", exact: true }).count(),
+      persistent ? 1 : 0,
+      `${risk} 收件箱审批详情长期授权入口错误`,
+    );
+    const inboxScope = (await inboxInspector.locator(".inspector-summary").last().textContent()) ?? "";
+    assert.match(
+      inboxScope,
+      persistent ? new RegExp(`最高风险 ${risk}`) : new RegExp(`${risk} 高风险操作只能单次允许`),
+      `${risk} 收件箱审批详情缺少准确的授权范围`,
+    );
+
+    await page.close();
+  }
 });

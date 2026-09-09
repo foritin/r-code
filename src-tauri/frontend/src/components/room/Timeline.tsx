@@ -59,6 +59,8 @@ import {
   type TimelineUserItem,
 } from "./timeline-presentation";
 import { TimelineRunChangeSummary } from "./TimelineRunChangeSummary";
+import { useTranslation } from "react-i18next";
+import { hasMcpConfirmationPayload, hasMcpSettingsActionPayload } from "./ToolCard";
 
 export interface TimelineHandle {
   /** 发送失败（消息可能已落盘）→ 以持久化历史重建。 */
@@ -423,6 +425,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   },
   ref
 ) {
+  const { t } = useTranslation();
   const itemsRef = useRef<TimelineItem[]>([]);
   const presentationRef = useRef(new TimelinePresentationCache());
   const [timelineRevision, setTimelineRevision] = useState(0);
@@ -433,7 +436,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const [resending, setResending] = useState(false);
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
   const [expandedProcessTurnIds, setExpandedProcessTurnIds] = useState<Set<string>>(() => new Set());
-  const [collapsedLiveProcessTurnIds, setCollapsedLiveProcessTurnIds] = useState<Set<string>>(() => new Set());
+  const [expandedLiveProcessTurnIds, setExpandedLiveProcessTurnIds] = useState<Set<string>>(() => new Set());
   const [visibleTurnLimit, setVisibleTurnLimit] = useState(80);
   const [previewingImage, setPreviewingImage] = useState<{ src: string; name: string } | null>(null);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
@@ -659,7 +662,11 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         if (dead) u();
         else un = u;
       })
-      .catch(() => {});
+      // 监听注册失败（旧桌面端无该事件通道等）不再静默吞掉：进入时间线错误态，
+      // 用户能看到流式事件已断流，而不是误以为运行已自然结束。
+      .catch((e) => {
+        if (!dead) setError(String(e));
+      });
     return () => {
       dead = true;
       if (coalesceTimer != null) window.clearTimeout(coalesceTimer);
@@ -775,7 +782,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     });
   }, []);
   const toggleLiveTurnProcess = useCallback((turnId: string) => {
-    setCollapsedLiveProcessTurnIds((current) => {
+    setExpandedLiveProcessTurnIds((current) => {
       const next = new Set(current);
       if (next.has(turnId)) next.delete(turnId);
       else next.add(turnId);
@@ -854,6 +861,13 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           </div>
         );
       case "context":
+        if (it.label === "执行过程" && it.detail) {
+          return (
+            <div className={`agent timeline-progress-update${dim(it.t)}`} data-t={it.t} key={it.id}>
+              <Markdown text={it.detail} taskId={taskId} workspacePath={workspacePath} />
+            </div>
+          );
+        }
         return (
           <TimelineContextEvent
             key={it.id}
@@ -1095,10 +1109,9 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     >
       {error && <div className="tl-error">时间线加载失败:{error}</div>}
       {!error && itemsRef.current.length === 0 && (
-        <div className="empty">
-          还没有对话。
-          <br />
-          在下方输入第一句话,运行中再发即为 steer。
+        <div className="timeline-welcome">
+          <h1>{t("conversationUI.welcome")}</h1>
+          <p>{t("conversationUI.welcomeHint")}</p>
         </div>
       )}
       {hiddenTurnCount > 0 && <button type="button" className="timeline-load-earlier" onClick={loadEarlierTurns}>加载更早的 {Math.min(80, hiddenTurnCount)} 轮 · 尚有 {hiddenTurnCount} 轮</button>}
@@ -1139,11 +1152,25 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         const hasProcessDisclosure = canArchiveProcess || hasLiveProcess;
         const processExpanded = canArchiveProcess
           ? expandedProcessTurnIds.has(turn.id)
-          : hasLiveProcess && !collapsedLiveProcessTurnIds.has(turn.id);
+          : hasLiveProcess && expandedLiveProcessTurnIds.has(turn.id);
         const processLabel = canArchiveProcess
           ? processDuration ?? "执行过程"
           : liveProcessLabel(turn.items);
-        const processPreview = latestProcessPreview(turn.items);
+        const processPreview = canArchiveProcess ? latestProcessPreview(turn.items) : null;
+        const latestProgressIndex = turn.items.reduce((latest, item, index) =>
+          item.kind === "agent" || (item.kind === "context" && item.label === "执行过程") ? index : latest, -1);
+        // Keep the latest public update and actionable/error content visible when the trace is folded.
+        const liveItems = hasLiveProcess && !processExpanded ? turn.items.flatMap<TimelineDisplayItem>((item, index) => {
+          if (item.kind === "tool_group") {
+            const tools = item.tools.filter((tool) => tool.state === "fail"
+              || hasMcpConfirmationPayload(tool.name, tool.outputJson)
+              || hasMcpSettingsActionPayload(tool.name, tool.outputJson));
+            return tools.length > 0 ? [{ ...item, tools }] : [];
+          }
+          return index === latestProgressIndex
+            || item.kind === "question" || item.kind === "plan" || item.kind === "subagent_group"
+            || (item.kind === "ms" && item.ok === false) ? [item] : [];
+        }) : [];
         const processTraceEnd = canArchiveProcess ? finalResponseIndex : turn.items.length;
         const processDetailsId = `timeline-process-${turn.id}`;
         return (
@@ -1192,6 +1219,14 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                     </div>
                   )}
                 </div>
+                {liveItems.length > 0 && (
+                  <div className="timeline-live-progress">
+                    {liveItems.map((item) => {
+                      const isFinal = item.kind === "agent" && item.phase !== "commentary" && item === finalResponse;
+                      return renderTimelineItem(item, isFinal, item.kind === "agent" && !isFinal);
+                    })}
+                  </div>
+                )}
                 {canArchiveProcess && (
                   <div className="timeline-turn-trace timeline-process-final">
                     {turn.items.slice(finalResponseIndex).map((item, index) => {

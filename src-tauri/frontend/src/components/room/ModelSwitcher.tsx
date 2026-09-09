@@ -10,6 +10,7 @@ import { Menu, MenuEmpty, MenuItem, MenuSeparator } from "../ui/Menu";
 import { StatusBar } from "../ui/StatusBar";
 import { AnchoredSurface } from "../ui/AnchoredSurface";
 import { IconChevronDown } from "../icons";
+import { useTranslation } from "react-i18next";
 import {
   capabilitiesFor,
   inferenceSummary,
@@ -65,6 +66,7 @@ export function ModelSwitcher({
   variant = "bar",
   openRequest,
 }: Props) {
+  const { t } = useTranslation();
   const [view, setView] = useState<View>("root");
   const [pending, setPending] = useState<PendingSwitch | null>(null);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
@@ -89,8 +91,7 @@ export function ModelSwitcher({
   );
 
   const openModels = () => {
-    // 分组默认全部收起，避免长列表一眼铺开；用户按需展开某个 Provider。
-    setExpandedProvider(null);
+    setExpandedProvider(active.name);
     setView("models");
   };
 
@@ -237,8 +238,8 @@ export function ModelSwitcher({
     : {};
   const trigger = variant === "pill" ? (
     <button type="button" ref={triggerRef} className={`provider-pill model-config-trigger${readyClass}`} title={triggerTitle} disabled={running} {...triggerHover}>
-      <span>{active.provider?.label ?? "模型配置"}</span>
-      <small>{active.model || "未配置"} · {summary}</small>
+      <span title={active.model}>{active.model || t("conversationUI.model")}</span>
+      <small>{summary.replace(/（推荐）|\(recommended\)/gi, "").trim()}</small>
       <IconChevronDown width={12} height={12} />
     </button>
   ) : (

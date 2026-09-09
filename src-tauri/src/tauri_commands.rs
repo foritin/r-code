@@ -24,6 +24,8 @@ use r_code_host::commands::{
     SubagentSessionMessagePage, SubagentSessionMessagePageRequest, TaskDetail, TaskDetailBatch,
     TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard, WorkspaceForgetResult,
 };
+// T42 阶段 1：聊天链路命令改走 v2 daemon 投影层（前端命令名/参数零改动）。
+use r_code_host::harness_v2_chat::SharedChatV2Bridge;
 use r_code_host::log_buffer::LogEntry;
 use r_code_host::plan_entry_commands::{PlanEntryOfferView, PlanningStatusView};
 use r_code_host::replay::ReplayEntry;
@@ -248,9 +250,16 @@ pub fn cmd_browser_agent_contract(
 }
 
 /// 任务创建命令。 [doc-09]
+///
+/// T42 阶段 1：实现切到 v2 daemon 投影层（`harness_v2_chat`）；命令名、
+/// 参数名与返回的 `Task` 形状不变。`workspace_path` 在 v2 语义下诚实忽略
+/// （v2 任务不绑定工作区）；provider/agent 参数同样诚实忽略（v2 默认
+/// pin 内置 native harness）。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // flat invoke args mirror the frontend contract
 pub async fn cmd_task_create(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     workspace_path: Option<String>,
     title: String,
     goal: String,
@@ -258,17 +267,17 @@ pub async fn cmd_task_create(
     provider_name: Option<String>,
     agent_engine: Option<String>,
 ) -> Result<Task, CommandError> {
-    r_code_host::commands::task_create_with_agent_typed(
-        &state,
-        workspace_path.as_deref(),
-        &title,
-        &goal,
-        &mode,
-        provider_name.as_deref(),
-        agent_engine.as_deref(),
-    )
-    .await
-    .map_err(CommandError::from)
+    let _ = (state, workspace_path);
+    chat_v2
+        .task_create(
+            &title,
+            &goal,
+            &mode,
+            provider_name.as_deref(),
+            agent_engine.as_deref(),
+        )
+        .await
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 项目“+”专用：立即持久化一个按项目递增命名的空白对话。
@@ -294,15 +303,20 @@ pub async fn cmd_task_prepare(
 }
 
 /// 列出任务命令。
+///
+/// T42 阶段 1：v2 daemon 投影（v2 无工作区绑定/归档概念，两个参数诚实忽略）。
 #[tauri::command]
 pub async fn cmd_task_list(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     workspace_path: Option<String>,
     include_archived: bool,
 ) -> Result<Vec<Task>, CommandError> {
-    r_code_host::commands::task_list(&state, workspace_path.as_deref(), include_archived)
+    let _ = (state, workspace_path, include_archived);
+    chat_v2
+        .task_list(None, false)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 归档已停止的会话。
@@ -416,15 +430,34 @@ pub async fn cmd_task_set_inference(
 }
 
 /// 修改会话在列表中显示的名称。
+///
+/// T42 阶段 1：v2 daemon 投影（task.rename 后回读详情，返回旧 Task 形状）。
 #[tauri::command]
 pub async fn cmd_task_rename(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     task_id: String,
     title: String,
 ) -> Result<Task, CommandError> {
-    r_code_host::commands::task_rename(&state, &task_id, &title)
+    let _ = state;
+    chat_v2
+        .task_rename(&task_id, &title)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
+}
+
+/// T42 阶段 1：克隆会话，走 v2 daemon task.clone，标题追加“（克隆）”。
+#[tauri::command]
+pub async fn cmd_task_clone(
+    state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
+    task_id: String,
+) -> Result<Task, CommandError> {
+    let _ = state;
+    chat_v2
+        .task_clone(&task_id)
+        .await
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// Update or clear the durable goal used by Plan and subsequent turns.
@@ -670,62 +703,63 @@ pub async fn cmd_task_compact_context(
 }
 
 /// 获取任务详情（含事件、变更、权限、验证）。
+///
+/// T42 阶段 1：v2 daemon 投影（task.detail + 事件 journal → 11 字段旧形状；
+/// 变更/权限/验证/排队视图为诚实空）。
 #[tauri::command]
 pub async fn cmd_task_detail(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     task_id: String,
 ) -> Result<TaskDetail, CommandError> {
-    r_code_host::commands::task_detail(&state, &task_id)
+    let _ = state;
+    chat_v2
+        .task_detail(&task_id)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 批量获取任务详情，避免项目 / 活动页产生 IPC N+1。
+///
+/// T42 阶段 1：v2 daemon 投影（逐个 detail 聚合，形状与单项完全一致）。
 #[tauri::command]
 pub async fn cmd_task_detail_batch(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     task_ids: Vec<String>,
 ) -> Result<TaskDetailBatch, CommandError> {
-    r_code_host::commands::task_detail_batch(&state, &task_ids)
+    let _ = state;
+    chat_v2
+        .task_detail_batch(&task_ids)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 发送用户消息到 Agent。 [doc-04 §7]
+///
+/// T42 阶段 1：v2 daemon `task.sendMessage`（自带排队语义，queued 视为成功）。
+/// mode 参数保留旧校验保持错误行为一致；附件参数在 v2 语义下诚实忽略
+/// （v2 sendMessage 为纯文本通道）。
 #[tauri::command]
 pub async fn cmd_agent_send(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     task_id: String,
     message: String,
     mode: Option<String>,
     attachments: Option<Vec<r_code_host::commands::AttachmentInput>>,
     attachment_ids: Option<Vec<String>>,
 ) -> Result<(), CommandError> {
-    let mode = match mode {
-        Some(value) => AgentSendMode::try_from_str(&value)
-            .ok_or_else(|| format!("invalid agent send mode: {value}"))?,
-        None => AgentSendMode::Auto,
-    };
-    // 新引用链路（docs/support/archive/implementation/multimodal-attachments-and-deepseek-plan-anchoring-implementation.md §4.4）：只传 attachment id；
-    // 旧 Base64 载荷仅继续服务尚未迁移的调用方。
-    if let Some(ids) = attachment_ids.as_deref() {
-        if !ids.is_empty() {
-            return r_code_host::commands::agent_send_with_attachment_refs(
-                &state, &task_id, &message, mode, ids,
-            )
-            .await
-            .map_err(CommandError::from);
-        }
+    let _ = (state, attachments, attachment_ids);
+    if let Some(value) = &mode {
+        AgentSendMode::try_from_str(value)
+            .ok_or_else(|| format!("invalid agent send mode: {value}"))
+            .map_err(CommandError::from)?;
     }
-    r_code_host::commands::agent_send_with_mode_and_attachments(
-        &state,
-        &task_id,
-        &message,
-        mode,
-        attachments.as_deref().unwrap_or_default(),
-    )
-    .await
-    .map_err(CommandError::from)
+    chat_v2
+        .agent_send(&task_id, &message)
+        .await
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 附件 staging（docs §2.2 边界 1）：一次性 IPC Base64 → Blob 引用。
@@ -765,14 +799,19 @@ pub async fn cmd_agent_attachment_preview(
 }
 
 /// 中止 Agent 运行。
+///
+/// T42 阶段 1：v2 daemon `task.cancel`。
 #[tauri::command]
 pub async fn cmd_agent_abort(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     task_id: String,
 ) -> Result<(), CommandError> {
-    r_code_host::commands::agent_abort(&state, &task_id)
+    let _ = state;
+    chat_v2
+        .agent_abort(&task_id)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 中止当前主运行下的一个子代理。
@@ -1667,14 +1706,20 @@ pub async fn cmd_replay(
 }
 
 /// 读取会话消息序列（Room 时间线数据源）。
+///
+/// T42 阶段 1：v2 daemon 事件 journal 投影（input.queued→用户消息、
+/// assistant.message→助手消息、tool.call/tool.result→工具条目）。
 #[tauri::command]
 pub async fn cmd_session_messages(
     state: State<'_, CommandState>,
+    chat_v2: State<'_, SharedChatV2Bridge>,
     task_id: String,
 ) -> Result<Vec<SessionMessage>, CommandError> {
-    r_code_host::commands::session_messages(&state, &task_id)
+    let _ = state;
+    chat_v2
+        .session_messages(&task_id)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// Read a historical branch without changing the active conversation.
@@ -2146,7 +2191,7 @@ pub async fn cmd_rtk_status(
 pub async fn cmd_provider_metrics(
     state: State<'_, CommandState>,
     task_id: String,
-) -> Result<Option<r_code_agent_worker::ProviderMetricsSnapshot>, CommandError> {
+) -> Result<Option<r_code_host::commands::ProviderMetricsSnapshot>, CommandError> {
     r_code_host::commands::provider_metrics(&state, &task_id)
         .await
         .map_err(CommandError::from)
@@ -2355,12 +2400,18 @@ pub async fn cmd_local_file_target(
 /// Return bounded image bytes through Tauri's binary IPC response (not JSON/base64).
 #[tauri::command]
 pub async fn cmd_local_image_preview(
-    state: State<'_, CommandState>,
+    app: AppHandle,
     workspace_path: Option<String>,
     reference: String,
 ) -> Result<tauri::ipc::Response, CommandError> {
-    let (_, bytes) =
-        r_code_host::commands::local_image_preview(&state, workspace_path.as_deref(), &reference)?;
+    // 解析 + 最多 32 MiB 的同步读取会长时间占用异步线程池，移入 blocking 线程。
+    // `State<'_>` 无法跨 'static 边界，改由闭包内经 AppHandle 重新取托管状态。
+    let (_, bytes) = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<CommandState>();
+        r_code_host::commands::local_image_preview(&state, workspace_path.as_deref(), &reference)
+    })
+    .await
+    .map_err(|error| format!("image preview worker failed: {error}"))??;
     Ok(tauri::ipc::Response::new(bytes))
 }
 

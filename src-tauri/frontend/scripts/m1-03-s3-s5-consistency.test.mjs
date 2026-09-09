@@ -45,7 +45,7 @@ function* walkTsFiles(dir) {
 test("A3 任务状态标签唯一源：组件层零散射", () => {
   // 只锁任务状态专属文案；「等待回答」另属问题卡生命周期（pending/answered/...），放行。
   const canonicalLabels = [
-    "等待审批",
+    "等待你的批准",
     "工作区失效",
     "等待审查",
     "需要验证",

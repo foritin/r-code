@@ -1,5 +1,11 @@
 //! 真实 PTY 端到端：驱动真实 r-code-tui 二进制，注入按键，断言 `/` 菜单
 //! 出现且 ↑/↓ 移动选中项（用户实测"上下键不起作用"的回归测试）。
+//!
+//! T35：TUI 经共享 r-code-service 守护进程运行——spawn 前设置
+//! R_CODE_SERVICE_BIN/R_CODE_BUILTIN_PLUGINS_DIR 与隔离 --data-dir/--ipc-name，
+//! 结束后杀掉守护进程。
+mod daemon_common;
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -12,14 +18,12 @@ struct Session {
     // （表现：启动即 EOF、无任何渲染输出）。Unix 侧 reader 的 fd dup 本就
     // 保活 master，此字段无副作用；Windows 必须由 Session 持有到会话结束。
     _master: Box<dyn portable_pty::MasterPty + Send>,
+    _env: daemon_common::DaemonEnv,
 }
 
 fn spawn_tui() -> Option<Session> {
     let bin = std::env::var("CARGO_BIN_EXE_r-code-tui").ok()?;
-    let dir = tempfile::tempdir().ok()?;
-    // tempfile 会 drop；把路径搬到泄漏的 Box 里保持存活。
-    let keep = String::from(dir.path().to_str()?);
-    std::mem::forget(dir);
+    let (env, extra) = daemon_common::daemon_env("imenu");
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -30,8 +34,16 @@ fn spawn_tui() -> Option<Session> {
         })
         .ok()?;
     let mut cmd = CommandBuilder::new(bin);
-    cmd.args(["--data-dir", &keep]);
+    cmd.args([
+        "--data-dir",
+        env.data_dir.to_str()?,
+        "--ipc-name",
+        &env.ipc_name,
+    ]);
     cmd.env("RUST_BACKTRACE", "0");
+    for (key, value) in extra {
+        cmd.env(key, value);
+    }
     let child = pair.slave.spawn_command(cmd).ok()?;
     let writer = pair.master.take_writer().ok()?;
     let reader = pair.master.try_clone_reader().ok()?;
@@ -62,6 +74,7 @@ fn spawn_tui() -> Option<Session> {
         output,
         child,
         _master: master,
+        _env: env,
     })
 }
 
@@ -114,24 +127,23 @@ impl Session {
     }
 
     fn send(&mut self, keys: &str) {
-        let _ = self.writer.write_all(keys.as_bytes());
-        let _ = self.writer.flush();
+        self.writer
+            .write_all(keys.as_bytes())
+            .expect("write PTY input");
+        self.writer.flush().expect("flush PTY input");
     }
 }
 
 #[test]
 fn slash_menu_arrow_keys_move_selection() {
-    let Some(mut session) = spawn_tui() else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui().expect("r-code-tui must start inside a PTY");
     // 1) 启动：出现引导（真实模式，无配置）。
     session.wait_for("尚未配置", Duration::from_secs(20));
     // 2) 输入 "/"：斜杠菜单出现。
     session.send("/");
     let out = session.wait_for("/model", Duration::from_secs(5));
     assert!(out.contains("/model"), "菜单必须出现：{out:?}");
-    // 3) ↓：选中从 /model 移到 /setup（注册表第二位；cyan bold › 前缀随行重写）。
+    // 3) ↓：选中从 /model 移到下一项（注册表序；cyan bold › 前缀随行重写）。
     session.send("\x1b[B");
     let out = session.wait_for("› /setup", Duration::from_secs(5));
     assert!(out.contains("› /setup"), "↓ 必须移动选中项：{out:?}");
@@ -139,22 +151,24 @@ fn slash_menu_arrow_keys_move_selection() {
     session.send("\x1b[A");
     let out = session.wait_for("› /model", Duration::from_secs(5));
     assert!(out.contains("› /model"), "↑ 必须移回：{out:?}");
-    // 5) 输入完整消息并发送（无配置 → 错误 System 行 commit，输入行恢复可用）。
+    // 5) 输入完整消息并发送（无 provider → run.failed → 错误 System 行
+    //    commit，输入行恢复可用）。
     session.send("\x15"); // Ctrl-U 清行（防残留）
     session.send("产出一首诗\r");
-    let out = session.wait_for("发送失败", Duration::from_secs(10));
+    let out = session.wait_for("发送失败", Duration::from_secs(15));
     assert!(
-        out.contains("发送失败") && out.contains("anthropic"),
-        "错误行必须 commit 且含指引：{out:?}"
+        out.contains("发送失败") && out.contains("/setup"),
+        "错误行必须 commit 且含 /setup 引导：{out:?}"
     );
     // 6) 错误后输入行仍可输入（提示符行重绘出现）。
     session.send("next");
     // wait_for 内部已做去 ANSI 匹配（超时会 panic）；此处仅消费返回值。
     let _ = session.wait_for("> next", Duration::from_secs(5));
-    // 7) 清理：Ctrl-C 两次退出。
+    // 7) 清理：Ctrl-C 两次退出 + 杀守护进程。
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session._env);
 }
 
 /// 症状3回归：/setup 引导流可达且可操作（选预设 → 过滤 → 进 key 步 → 掩码
@@ -164,10 +178,7 @@ fn slash_menu_arrow_keys_move_selection() {
 /// 命名空间隔离）覆盖。
 #[test]
 fn setup_flow_reachable_and_cancellable() {
-    let Some(mut session) = spawn_tui() else {
-        eprintln!("pty 不可用，跳过");
-        return;
-    };
+    let mut session = spawn_tui().expect("r-code-tui must start inside a PTY");
     session.wait_for("尚未配置", Duration::from_secs(20));
     // 1) /setup 打开向导：预设列表出现。
     session.send("/setup\r");
@@ -202,4 +213,5 @@ fn setup_flow_reachable_and_cancellable() {
     session.send("\x03");
     session.send("\x03");
     let _ = session.child.wait();
+    daemon_common::shutdown_daemon(&session._env);
 }

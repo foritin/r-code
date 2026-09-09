@@ -146,20 +146,17 @@ export function Rail() {
       </div>
 
       <nav className="sidebar-nav" aria-label={t("shell.globalNavigation")}>
-        <NavItem icon={<IconHistory />} label={t("shell.conversations")} active={scene === "home" || scene === "conversations" || scene === "room"} onClick={() => setScene("conversations")} />
+        <NavItem icon={<IconHistory />} label={t("shell.conversations")} active={scene === "conversations"} onClick={() => setScene("conversations")} />
         <NavItem icon={<IconInbox />} label={t("shell.inbox")} active={scene === "inbox"} count={needsCount} onClick={() => setScene("inbox")} />
         <NavItem icon={<IconActivity />} label={t("shell.activity")} active={scene === "deck"} onClick={() => setScene("deck")} />
         <NavItem icon={<IconArchive />} label={t("shell.archive")} active={scene === "archive"} onClick={() => setScene("archive")} />
       </nav>
 
-      <div className="sidebar-recent">
+      {floatingTasks.length > 0 && <div className="sidebar-recent">
         <div className="sidebar-section-head">
           <span className="rail-label">{t("shell.recent")}</span>
         </div>
-        {floatingTasks.length === 0 ? (
-          <p className="sidebar-recent-empty rail-label">{t("shell.noChats")}</p>
-        ) : (
-          <div className="sidebar-task-list">
+        <div className="sidebar-task-list">
             {floatingTasks.map((task) => {
               const state = visualTaskState(task, details[task.id]);
               const active = scene === "room" && currentTaskId === task.id;
@@ -171,7 +168,7 @@ export function Rail() {
                       setCurrentWorkspace(null);
                       openRoom(task.id);
                     }}
-                    title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
+                    title={`${taskTitle(task)} · ${taskStateLabel(task, details[task.id])}`}
                   >
                     {MARKED_STATES.has(state) && <i className={`task-state-dot ${state}`} aria-hidden="true" />}
                     <span className="rail-label">{taskTitle(task)}</span>
@@ -186,9 +183,8 @@ export function Rail() {
                 </div>
               );
             })}
-          </div>
-        )}
-      </div>
+        </div>
+      </div>}
 
       <div className="sidebar-projects">
         <div className="sidebar-section-head">
@@ -237,7 +233,7 @@ export function Rail() {
                             openRoom(task.id);
                             if (task.workspace_path) setCurrentWorkspace(task.workspace_path);
                           }}
-                          title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
+                          title={`${taskTitle(task)} · ${taskStateLabel(task, details[task.id])}`}
                         >
                           {MARKED_STATES.has(state) && <i className={`task-state-dot ${state}`} aria-hidden="true" />}
                           <span className="rail-label">{taskTitle(task)}</span>

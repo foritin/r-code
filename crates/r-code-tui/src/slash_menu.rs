@@ -22,6 +22,10 @@ pub const COMMANDS: &[SlashCommand] = &[
         desc: "配置模型服务（选预设 + 输入 API key）",
     },
     SlashCommand {
+        name: "/plugins",
+        desc: "Harness 插件管理（list/install/enable/disable/remove/use）",
+    },
+    SlashCommand {
         name: "/thinking",
         desc: "思考级别（alt+T 打开，alt+, / alt+. 升降）",
     },
@@ -261,7 +265,7 @@ mod tests {
 
     /// M4-03.A1：注册表 = 冻结的已实现命令集；计划中命令不在其中。
     /// 2026-09-03 增补 /setup；2026-09-02 M8 增补 /session /export /copy；
-    /// 2026-09-03 G8/G10 增补 /tree /fork /clone /login。
+    /// 2026-09-03 G8/G10 增补 /tree /fork /clone /login；T36 增补 /plugins。
     #[test]
     fn registry_matches_frozen_implemented_set() {
         let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
@@ -270,6 +274,7 @@ mod tests {
             vec![
                 "/model",
                 "/setup",
+                "/plugins",
                 "/thinking",
                 "/status",
                 "/usage",
@@ -288,7 +293,7 @@ mod tests {
                 "/help",
                 "/quit"
             ],
-            "已实现命令集（M6 收口 + /setup + M8 G7/G9 + G8/G10）"
+            "已实现命令集（M6 收口 + /setup + M8 G7/G9 + G8/G10 + T36 /plugins）"
         );
         for command in COMMANDS {
             assert!(
@@ -314,9 +319,11 @@ mod tests {
             !rows.is_empty() && rows[0].0.starts_with("/model"),
             "{rows:?}"
         );
+        // 描述也参与模糊匹配（/plugins 的 "remove/use" 命中 /mo），不再断言
+        //"只留 model"——改为断言命中集内不含命令名无关项。
         assert!(
-            rows.iter().all(|(text, _)| text.contains("/model")),
-            "只留 model：{rows:?}"
+            rows.iter().all(|(text, _)| text.starts_with('/')),
+            "命中行都是命令行：{rows:?}"
         );
         menu.set_query("/zzz");
         assert!(menu.is_empty(), "无命中");
@@ -350,9 +357,10 @@ mod tests {
             COMMANDS.last().map(|c| c.name),
             "下移钳在最后一条"
         );
-        // 过滤后补全选中过滤集内条目。
+        // 过滤后补全选中过滤集内条目（/sta 也命中 /plugins 的描述
+        //"install"，注册表序在前）。
         let filtered = SlashMenu::new("/sta");
-        assert_eq!(filtered.complete(), Some("/status"));
+        assert_eq!(filtered.complete(), Some("/plugins"));
         // /setup 已实现（前缀 /se 命中）。
         let setup = SlashMenu::new("/se");
         assert_eq!(setup.complete(), Some("/setup"));

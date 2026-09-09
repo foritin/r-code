@@ -17,9 +17,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
 
-use crate::commands::{
-    agent_abort, agent_send, session_messages, task_create_with_agent, task_detail, CommandState,
-};
+use crate::commands::CommandState;
+// T42 阶段 1：MCP 工具的聊天执行面切到 v2 daemon 投影层；工具名与返回
+// JSON 形状保持不变（任务创建/发送/中止/详情/会话消息）。
+use crate::harness_v2_chat::ChatV2Bridge;
 use crate::migration::MigrationManager;
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -80,6 +81,9 @@ pub async fn serve_stdio(data_dir: Option<PathBuf>) -> Result<(), String> {
 /// 防止任意外部 prompt 使用猜到的 task ID 读取或中止其他会话。
 pub struct McpService {
     state: CommandState,
+    /// T42 阶段 1：聊天执行面（task_create/agent_send/agent_abort/
+    /// task_detail/session_messages）改走 v2 daemon 投影桥。
+    v2: ChatV2Bridge,
     owned_tasks: Mutex<HashSet<String>>,
 }
 
@@ -130,9 +134,11 @@ impl McpService {
             project_root,
             Some(db_path),
         );
-        state.enable_real_agent_mode().await;
         Ok(Self {
             state,
+            v2: ChatV2Bridge::for_current_app().map_err(|error| {
+                format!("v2 daemon bridge unavailable; MCP startup aborted: {error}")
+            })?,
             owned_tasks: Mutex::new(HashSet::new()),
         })
     }
@@ -141,6 +147,8 @@ impl McpService {
     fn from_state(state: CommandState) -> Self {
         Self {
             state,
+            // 测试环境同样只解析 profile（无 IO）；真实连接延迟到命令调用。
+            v2: ChatV2Bridge::for_current_app().expect("v2 chat bridge profile"),
             owned_tasks: Mutex::new(HashSet::new()),
         }
     }
@@ -254,19 +262,21 @@ impl McpService {
         };
         // Ask is a hard read-only capability policy; Edit exposes the normal project-scoped tools
         // and still respects the workspace's persisted approval policy.
-        let task = task_create_with_agent(
-            &self.state,
-            Some(&workspace),
-            &title,
-            &goal,
-            mode,
-            provider_name.as_deref(),
-            Some("r_code"),
-        )
-        .await
-        .map_err(|_| "R-Code could not create the delegated task")?;
+        // T42 阶段 1：v2 daemon task.create（workspace 绑定在 v2 语义下诚实忽略，
+        // 工具执行范围由 daemon 的 workspaces root 决定）。
+        let task = self
+            .v2
+            .task_create(
+                &title,
+                &goal,
+                mode,
+                provider_name.as_deref(),
+                Some("r_code"),
+            )
+            .await
+            .map_err(|_| "R-Code could not create the delegated task")?;
         self.owned_tasks.lock().await.insert(task.id.clone());
-        if let Err(error) = agent_send(&self.state, &task.id, &goal).await {
+        if let Err(error) = self.v2.agent_send(&task.id, &goal).await {
             tracing::warn!(task_id = %task.id, "MCP native delegate could not start: {error}");
             return Err(
                 "R-Code Agent is not ready; configure a usable provider in R-Code Settings",
@@ -296,7 +306,8 @@ impl McpService {
     async fn cancel_task(&self, arguments: &Value) -> Result<Value, &'static str> {
         let task_id = required_text(arguments, "task_id", 160)?;
         self.require_owned(&task_id).await?;
-        agent_abort(&self.state, &task_id)
+        self.v2
+            .agent_abort(&task_id)
             .await
             .map_err(|_| "R-Code could not cancel this task")?;
         Ok(json!({ "task_id": task_id, "status": "cancelled" }))
@@ -327,14 +338,18 @@ impl McpService {
     }
 
     async fn task_status_payload(&self, task_id: &str) -> Result<Value, &'static str> {
-        let detail = task_detail(&self.state, task_id)
+        let detail = self
+            .v2
+            .task_detail(task_id)
             .await
             .map_err(|_| "R-Code task is unavailable")?;
         let running = matches!(
             detail.task.state,
             TaskState::Exploring | TaskState::InProgress
         ) || detail.runs.iter().any(|run| run.ended_at.is_none());
-        let messages = session_messages(&self.state, task_id)
+        let messages = self
+            .v2
+            .session_messages(task_id)
             .await
             .map_err(|_| "R-Code task result is unavailable")?;
         let result = messages

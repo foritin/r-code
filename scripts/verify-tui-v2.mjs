@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// R-Code CLI（TUI v2）统一验收 Harness（docs/tui-v2/r-code-cli-prd.md §7.1 / R-GEN-01）
+// R-Code CLI（TUI v2）统一验收 Harness（docs/support/archive/tui-v2/r-code-cli-prd.md §7.1 / R-GEN-01）
 //
 // 用法：
 //   node scripts/verify-tui-v2.mjs --task <TASK_ID>    --profile implementation|production
@@ -18,15 +18,42 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 const PROFILE_DIR_BASE = path.join(REPO_ROOT, "artifacts", "ai-tasks", "verification", "tui-v2");
 const EVIDENCE_DIR = path.join(REPO_ROOT, "artifacts", "ai-tasks", "evidence", "tui-v2");
 const DOC_GATE_REPORT = path.join(PROFILE_DIR_BASE, "implementation", "worklist-gate.json");
-const WORKLIST_DOCUMENT = "docs/tui-v2/r-code-cli-prd.md";
-const WORKLIST_FREEZE = "docs/tui-v2/tui-v2-freeze.yaml";
+const WORKLIST_DOCUMENT = "docs/support/archive/tui-v2/r-code-cli-prd.md";
+const WORKLIST_FREEZE = "docs/support/archive/tui-v2/tui-v2-freeze.yaml";
 
 const MILESTONE_ORDER = ["M0", "M1", "M2", "M3", "M4", "M5", "M6"];
+
+export function parseTimeoutMs(value, name, fallback) {
+  if (value === undefined || value === "") return fallback;
+  const timeoutMs = Number(value);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return timeoutMs;
+}
+
+const COMMAND_TIMEOUT_MS = parseTimeoutMs(
+  process.env.R_CODE_TUI_VERIFY_COMMAND_TIMEOUT_MS,
+  "R_CODE_TUI_VERIFY_COMMAND_TIMEOUT_MS",
+  10 * 60 * 1000,
+);
+const RAW_TIMEOUT_MS = parseTimeoutMs(
+  process.env.R_CODE_TUI_VERIFY_RAW_TIMEOUT_MS,
+  "R_CODE_TUI_VERIFY_RAW_TIMEOUT_MS",
+  2 * 60 * 1000,
+);
+const GIT_TIMEOUT_MS = parseTimeoutMs(
+  process.env.R_CODE_TUI_VERIFY_GIT_TIMEOUT_MS,
+  "R_CODE_TUI_VERIFY_GIT_TIMEOUT_MS",
+  30 * 1000,
+);
+const KILL_GRACE_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // 断言 registry：每个任务登记其验收断言的执行方式。
@@ -465,7 +492,7 @@ const REGISTRY = {
         id: "M6-03.A1",
         description: "命名决策记录存在且含分发影响分析（三方案对照 + 否决依据）",
         kind: "file",
-        path: "docs/tui-v2/cli-naming-decision.md",
+        path: "docs/support/archive/tui-v2/cli-naming-decision.md",
         contains: ["维持 `r-code-tui` 单名", "externalBin", "否决"],
       },
       {
@@ -641,7 +668,7 @@ const REGISTRY = {
         id: "M5-01.A1",
         description: "基准报告存在且含两路线数据（差分/viewport/朴素 三列字节对比 + 语义对照表）",
         kind: "file",
-        path: "docs/tui-v2/m5-01-poc-report.md",
+        path: "docs/support/archive/tui-v2/m5-01-poc-report.md",
         contains: ["自研行差分", "ratatui InlineViewport", "定案"],
       },
       {
@@ -656,7 +683,7 @@ const REGISTRY = {
         kind: "self",
         async check(ctx) {
           const report = await (await import("node:fs/promises")).readFile(
-            path.join(REPO_ROOT, "docs", "tui-v2", "m5-01-poc-report.md"),
+            path.join(REPO_ROOT, "docs", "support", "archive", "tui-v2", "m5-01-poc-report.md"),
             "utf8",
           );
           const hasRationale =
@@ -999,13 +1026,19 @@ const REGISTRY = {
       },
       {
         id: "M2-05.A2",
-        description: "y/a/esc → 三态映射（含宿主 PermissionDecision 对齐）",
+        description: "R0-R2 的 y/a/esc 三态映射，并对 R3/R4 隐藏且拒绝 a",
         kind: "self",
         async check(ctx) {
           const record = await ctx.runner.run([
             "cargo", "test", "-p", "r-code-tui", "--lib", "decision_keys_map_to_three_states",
           ]);
-          return { passed: record.exitCode === 0, details: { exitCode: record.exitCode } };
+          const boundary = await ctx.runner.run([
+            "cargo", "test", "-p", "r-code-tui", "--lib", "high_risk_overlay_omits_and_rejects_persistent_approval",
+          ]);
+          return {
+            passed: record.exitCode === 0 && boundary.exitCode === 0,
+            details: { mappingExitCode: record.exitCode, boundaryExitCode: boundary.exitCode },
+          };
         },
       },
       {
@@ -1317,6 +1350,65 @@ function resolveCommand(spec) {
   return resolveCommand(parts);
 }
 
+function terminateProcessTree(child) {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killer.once("error", () => child.kill("SIGKILL"));
+    killer.once("close", (code) => {
+      if (code !== 0) child.kill("SIGKILL");
+    });
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
+export function runBoundedProcess(resolved, { cwd, env, timeoutMs }) {
+  return new Promise((resolve) => {
+    const child = spawn(resolved.file, resolved.args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+      windowsHide: true,
+    });
+    let output = "";
+    let settled = false;
+    let timedOut = false;
+    let timer = null;
+    let killFallback = null;
+    const finish = (exitCode, signal, error = null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (killFallback) clearTimeout(killFallback);
+      resolve({ exitCode: exitCode ?? -1, signal, error, output, timedOut });
+    };
+
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.once("error", (error) => finish(-1, null, String(error)));
+    child.once("close", (exitCode, signal) => finish(exitCode, signal));
+    timer = setTimeout(() => {
+      timedOut = true;
+      terminateProcessTree(child);
+      // Always resolve even if the platform process-tree terminator itself is broken.
+      killFallback = setTimeout(() => finish(-1, "SIGKILL"), KILL_GRACE_MS);
+    }, timeoutMs);
+  });
+}
+
 class CommandRunner {
   constructor(logDir) {
     this.logDir = logDir;
@@ -1340,8 +1432,11 @@ class CommandRunner {
     const inner = isObjectSpec ? spec.command : spec;
     const resolved = resolveCommand(inner);
     const cmdText = Array.isArray(inner) ? inner.join(" ") : String(inner);
-    const cwd = spec.cwd ? path.resolve(REPO_ROOT, spec.cwd) : REPO_ROOT;
-    const env = { ...process.env, ...(spec.env ?? {}) };
+    const cwd = isObjectSpec && spec.cwd ? path.resolve(REPO_ROOT, spec.cwd) : REPO_ROOT;
+    const env = { ...process.env, ...(isObjectSpec ? spec.env ?? {} : {}) };
+    const timeoutMs = isObjectSpec
+      ? parseTimeoutMs(spec.timeoutMs, `${cmdText} timeoutMs`, COMMAND_TIMEOUT_MS)
+      : COMMAND_TIMEOUT_MS;
     const slug = createHash("sha256")
       .update(JSON.stringify([inner, path.relative(REPO_ROOT, cwd), spec.env ?? {}]))
       .digest("hex")
@@ -1349,66 +1444,43 @@ class CommandRunner {
     const logPath = path.join(this.logDir, `cmd-${slug}.log`);
     const started = Date.now();
     process.stderr.write(`[tui-v2] cmd: ${cmdText}\n`);
-    const result = await new Promise((resolve) => {
-      const child = spawn(resolved.file, resolved.args, {
-        cwd,
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let output = "";
-      child.stdout.on("data", (chunk) => {
-        output += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        output += chunk;
-      });
-      child.on("error", (error) => {
-        resolve({ exitCode: -1, error: String(error), output });
-      });
-      child.on("close", (exitCode) => {
-        resolve({ exitCode: exitCode ?? -1, output });
-      });
-    });
+    const result = await runBoundedProcess(resolved, { cwd, env, timeoutMs });
     const record = {
       cmd: cmdText,
       cwd: path.relative(REPO_ROOT, cwd),
       exitCode: result.exitCode,
       error: result.error ?? null,
+      signal: result.signal ?? null,
+      timedOut: result.timedOut,
+      timeoutMs,
       durationMs: Date.now() - started,
       logPath: path.relative(REPO_ROOT, logPath),
     };
     await mkdir(this.logDir, { recursive: true });
     await writeFile(
       logPath,
-      `$ ${cmdText}\n# exit=${record.exitCode} durationMs=${record.durationMs}\n${result.output}`,
+      `$ ${cmdText}\n# exit=${record.exitCode} durationMs=${record.durationMs} timedOut=${record.timedOut} timeoutMs=${timeoutMs}\n${result.output}`,
       "utf8",
     );
     return record;
   }
 
-  async spawnRaw(argv, { expectExit, env } = {}) {
+  async spawnRaw(argv, { expectExit, env, timeoutMs = RAW_TIMEOUT_MS } = {}) {
     const resolved = resolveCommand(argv);
     const started = Date.now();
-    const result = await new Promise((resolve) => {
-      const child = spawn(resolved.file, resolved.args, {
-        cwd: REPO_ROOT,
-        env: env ? { ...process.env, ...env } : process.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let output = "";
-      child.stdout.on("data", (chunk) => {
-        output += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        output += chunk;
-      });
-      child.on("error", (error) => resolve({ exitCode: -1, output: String(error) }));
-      child.on("close", (exitCode) => resolve({ exitCode: exitCode ?? -1, output }));
+    const effectiveTimeoutMs = parseTimeoutMs(timeoutMs, "spawnRaw timeoutMs", RAW_TIMEOUT_MS);
+    const result = await runBoundedProcess(resolved, {
+      cwd: REPO_ROOT,
+      env: env ? { ...process.env, ...env } : process.env,
+      timeoutMs: effectiveTimeoutMs,
     });
     return {
       exitCode: result.exitCode,
-      passed: result.exitCode === expectExit,
+      passed: !result.timedOut && result.exitCode === expectExit,
       durationMs: Date.now() - started,
+      timedOut: result.timedOut,
+      timeoutMs: effectiveTimeoutMs,
+      error: result.error ?? null,
       output: result.output.slice(0, 2000),
     };
   }
@@ -1428,21 +1500,22 @@ async function fileExists(target) {
 }
 
 async function gitInfo() {
-  const run = (args) =>
-    new Promise((resolve) => {
-      const child = spawn("git", args, {
-        cwd: REPO_ROOT,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let out = "";
-      child.stdout.on("data", (chunk) => {
-        out += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        out += chunk;
-      });
-      child.on("close", (code) => resolve({ code, out }));
-    });
+  const run = async (args) => {
+    const result = await runBoundedProcess(
+      { file: "git", args },
+      { cwd: REPO_ROOT, env: process.env, timeoutMs: GIT_TIMEOUT_MS },
+    );
+    if (result.error) {
+      throw new Error(`git ${args.join(" ")} failed to start: ${result.error}`);
+    }
+    if (result.timedOut) {
+      throw new Error(`git ${args.join(" ")} timed out after ${GIT_TIMEOUT_MS}ms`);
+    }
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")} exited ${result.exitCode}: ${result.output.trim()}`);
+    }
+    return { code: result.exitCode, out: result.output };
+  };
   const revision = (await run(["rev-parse", "HEAD"])).out.trim();
   const status = (await run(["status", "--porcelain"])).out;
   const diffStat = (await run(["diff", "HEAD", "--stat"])).out;
@@ -1495,7 +1568,12 @@ async function runAssertion(assertion, taskMeta, context) {
         ...base,
         status: gatePassed ? "passed" : "failed",
         evidence: record.logPath,
-        details: { exitCode: record.exitCode, gatePassed: gateReport?.passed ?? null },
+        details: {
+          exitCode: record.exitCode,
+          timedOut: record.timedOut,
+          timeoutMs: record.timeoutMs,
+          gatePassed: gateReport?.passed ?? null,
+        },
       };
     }
     if (assertion.kind === "command") {
@@ -1505,9 +1583,15 @@ async function runAssertion(assertion, taskMeta, context) {
       for (const command of chain) {
         const spec = assertion.cwd ? { cwd: assertion.cwd, env: assertion.env, command } : command;
         const record = await context.runner.run(spec);
-        const ok = record.exitCode === 0;
+        const ok = !record.timedOut && record.exitCode === 0;
         passed = passed && ok;
-        details.commands.push({ cmd: record.cmd, cwd: record.cwd, exitCode: record.exitCode });
+        details.commands.push({
+          cmd: record.cmd,
+          cwd: record.cwd,
+          exitCode: record.exitCode,
+          timedOut: record.timedOut,
+          timeoutMs: record.timeoutMs,
+        });
         if (!ok) break;
       }
       return {
@@ -1729,7 +1813,9 @@ async function main() {
   process.exit(exitCode);
 }
 
-main().catch((error) => {
-  process.stderr.write(`harness error: ${error}\n`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`harness error: ${error}\n`);
+    process.exit(1);
+  });
+}

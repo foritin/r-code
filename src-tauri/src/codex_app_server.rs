@@ -177,7 +177,6 @@ impl CodexAppServerRegistry {
         Ok(CodexAppServerLease {
             state,
             shutdown: slot.shutdown.clone(),
-            slot,
             reusable: false,
         })
     }
@@ -191,51 +190,15 @@ impl CodexAppServerRegistry {
         config_path: &Path,
         startup_timeout: Duration,
     ) -> Result<(), CodexAppServerError> {
-        self.prepare_tracked(task_id, workspace, cli_path, config_path, startup_timeout)
+        self.acquire(task_id, workspace, cli_path, config_path, startup_timeout)
             .await
-            .map(drop)
-    }
-
-    pub(crate) async fn prepare_tracked(
-        &self,
-        task_id: &str,
-        workspace: &Path,
-        cli_path: Option<PathBuf>,
-        config_path: &Path,
-        startup_timeout: Duration,
-    ) -> Result<CodexAppServerPreparation, CodexAppServerError> {
-        let mut lease = self
-            .acquire(task_id, workspace, cli_path, config_path, startup_timeout)
-            .await?;
-        let preparation = CodexAppServerPreparation {
-            slot: lease.slot.clone(),
-        };
-        lease.mark_reusable();
-        Ok(preparation)
+            .map(|mut lease| {
+                lease.mark_reusable();
+            })
     }
 
     pub(crate) async fn invalidate(&self, task_id: &str) {
         let slot = self.slots.lock().await.remove(task_id);
-        if let Some(slot) = slot {
-            reclaim_app_server_slot(slot).await;
-        }
-    }
-
-    /// Reclaim only the exact slot produced by one earlier prepare. A lifecycle reset may already
-    /// have removed that slot and a first send may have installed a fresh one under the same task
-    /// ID; stale prepare cleanup must never cancel the replacement.
-    pub(crate) async fn invalidate_prepared(
-        &self,
-        task_id: &str,
-        preparation: &CodexAppServerPreparation,
-    ) {
-        let slot = {
-            let mut slots = self.slots.lock().await;
-            match slots.get(task_id) {
-                Some(current) if Arc::ptr_eq(current, &preparation.slot) => slots.remove(task_id),
-                _ => None,
-            }
-        };
         if let Some(slot) = slot {
             reclaim_app_server_slot(slot).await;
         }
@@ -279,13 +242,8 @@ async fn reclaim_app_server_slot(slot: Arc<CodexAppServerTaskSlot>) {
 /// reusable only after observing a matching `turn/completed` and settling run-local callbacks.
 pub(crate) struct CodexAppServerLease {
     state: OwnedMutexGuard<CodexAppServerTaskState>,
-    slot: Arc<CodexAppServerTaskSlot>,
     shutdown: CancellationToken,
     reusable: bool,
-}
-
-pub(crate) struct CodexAppServerPreparation {
-    slot: Arc<CodexAppServerTaskSlot>,
 }
 
 impl CodexAppServerLease {
@@ -1772,45 +1730,6 @@ input.on('line', (line) => {
             .expect("task invalidation task panicked");
         wait_for_process_exit(child_process_id).await;
         wait_for_process_exit(node_process_id).await;
-        shutdown_registry(&registry).await;
-    }
-
-    #[tokio::test]
-    async fn stale_prepare_cleanup_never_invalidates_a_replacement_slot() {
-        let Some(fixture) = AppServerFixture::new() else {
-            return;
-        };
-        let registry = CodexAppServerRegistry::default();
-        let stale = timeout(
-            FIXTURE_TIMEOUT,
-            registry.prepare_tracked(
-                "task-prepare-generation",
-                &fixture.workspace,
-                Some(fixture.cli_path.clone()),
-                &fixture.config_path,
-                FIXTURE_TIMEOUT,
-            ),
-        )
-        .await
-        .expect("tracked prepare exceeded the fixture bound")
-        .expect("tracked prepare failed");
-
-        registry.invalidate("task-prepare-generation").await;
-        let mut replacement = acquire(&registry, "task-prepare-generation", &fixture).await;
-        let replacement_shutdown = replacement.shutdown_token();
-
-        registry
-            .invalidate_prepared("task-prepare-generation", &stale)
-            .await;
-        assert!(registry.contains_task("task-prepare-generation").await);
-        assert!(
-            !replacement_shutdown.is_cancelled(),
-            "cleanup from an old branch prepare cancelled the replacement transport"
-        );
-
-        replacement.mark_reusable();
-        drop(replacement);
-        assert_eq!(fixture.spawn_count(), 2);
         shutdown_registry(&registry).await;
     }
 

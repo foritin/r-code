@@ -1,0 +1,19 @@
+[package]
+name = "repair-harness"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Example third-party harness: a plan-then-repair workflow built only on the public SDK."
+
+[[bin]]
+name = "repair-harness"
+path = "src/main.rs"
+
+[dependencies]
+r-code-harness-sdk = { workspace = true }
+r-code-harness-protocol = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }

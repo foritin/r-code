@@ -303,6 +303,29 @@ fn reject_if_cancelled(
     }
 }
 
+/// 在阻塞线程池上执行文件工具主体。
+///
+/// 工具的 async 方法里直接跑 `std::fs` 属于同步 IO：大文件读/原子写在慢盘上
+/// 能把 tokio 工作线程卡住上百毫秒。这里把整个同步主体挪进 `spawn_blocking`，
+/// 可观察行为与直接调用一致——同一入参、同一错误类型、同一顺序；闭包 panic
+/// 经 `resume_unwind` 原样传播（gateway 的 CatchUnwindFuture 照旧捕获）。
+async fn run_fs_blocking<F, T>(tool_name: &str, work: F) -> Result<T, ProductError>
+where
+    F: FnOnce() -> Result<T, ProductError> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(result) => result,
+        Err(join_error) if join_error.is_panic() => {
+            std::panic::resume_unwind(join_error.into_panic())
+        }
+        // 仅剩"运行时正在关闭、阻塞任务被丢弃"这类罕见场景。
+        Err(join_error) => Err(ProductError::Other(format!(
+            "tool {tool_name} blocking execution was not completed: {join_error}"
+        ))),
+    }
+}
+
 // ============================================================================
 // read_file  [doc-02 §5] -- R1
 // ============================================================================
@@ -351,7 +374,7 @@ or its line_byte_offset when one individual line is exceptionally long."
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_read_file(&input, None)
+        run_fs_blocking(self.name(), move || execute_read_file(&input, None)).await
     }
 
     async fn execute_with_context_and_abort_with_workspace(
@@ -362,7 +385,12 @@ or its line_byte_offset when one individual line is exceptionally long."
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolExecutionResult, ProductError> {
         reject_if_cancelled(self.name(), abort_flag)?;
-        execute_read_file(&input, workspace_guard).map(ToolExecutionResult::from)
+        let guard = workspace_guard.cloned();
+        run_fs_blocking(self.name(), move || {
+            execute_read_file(&input, guard.as_ref())
+        })
+        .await
+        .map(ToolExecutionResult::from)
     }
 }
 
@@ -573,7 +601,7 @@ impl Tool for ListFilesTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_list_files(&input, None)
+        run_fs_blocking(self.name(), move || execute_list_files(&input, None)).await
     }
 
     async fn execute_with_context_and_abort_with_workspace(
@@ -584,7 +612,12 @@ impl Tool for ListFilesTool {
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolExecutionResult, ProductError> {
         reject_if_cancelled(self.name(), abort_flag)?;
-        execute_list_files(&input, workspace_guard).map(ToolExecutionResult::from)
+        let guard = workspace_guard.cloned();
+        run_fs_blocking(self.name(), move || {
+            execute_list_files(&input, guard.as_ref())
+        })
+        .await
+        .map(ToolExecutionResult::from)
     }
 }
 
@@ -801,7 +834,7 @@ impl Tool for LoadSkillTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_load_skill(&input, None)
+        run_fs_blocking(self.name(), move || execute_load_skill(&input, None)).await
     }
 
     async fn execute_with_context_and_abort_with_workspace(
@@ -812,7 +845,12 @@ impl Tool for LoadSkillTool {
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolExecutionResult, ProductError> {
         reject_if_cancelled(self.name(), abort_flag)?;
-        execute_load_skill(&input, workspace_guard).map(ToolExecutionResult::from)
+        let guard = workspace_guard.cloned();
+        run_fs_blocking(self.name(), move || {
+            execute_load_skill(&input, guard.as_ref())
+        })
+        .await
+        .map(ToolExecutionResult::from)
     }
 }
 
@@ -916,7 +954,7 @@ These checks reduce stale writes but are not a cross-process lock or strict comp
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_edit(&input, None)
+        run_fs_blocking(self.name(), move || execute_edit(&input, None)).await
     }
 
     async fn execute_with_context_and_abort_with_workspace(
@@ -927,7 +965,10 @@ These checks reduce stale writes but are not a cross-process lock or strict comp
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolExecutionResult, ProductError> {
         reject_if_cancelled(self.name(), abort_flag)?;
-        execute_edit(&input, workspace_guard).map(ToolExecutionResult::from)
+        let guard = workspace_guard.cloned();
+        run_fs_blocking(self.name(), move || execute_edit(&input, guard.as_ref()))
+            .await
+            .map(ToolExecutionResult::from)
     }
 }
 
@@ -1391,7 +1432,7 @@ impl Tool for ApplyPatchTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_apply_patch(&input, None)
+        run_fs_blocking(self.name(), move || execute_apply_patch(&input, None)).await
     }
 
     async fn execute_with_context_and_abort_with_workspace(
@@ -1402,7 +1443,12 @@ impl Tool for ApplyPatchTool {
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolExecutionResult, ProductError> {
         reject_if_cancelled(self.name(), abort_flag)?;
-        execute_apply_patch(&input, workspace_guard).map(ToolExecutionResult::from)
+        let guard = workspace_guard.cloned();
+        run_fs_blocking(self.name(), move || {
+            execute_apply_patch(&input, guard.as_ref())
+        })
+        .await
+        .map(ToolExecutionResult::from)
     }
 }
 
@@ -1463,7 +1509,7 @@ impl Tool for CreateFileTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_create_file(&input, None)
+        run_fs_blocking(self.name(), move || execute_create_file(&input, None)).await
     }
 
     async fn execute_with_context_and_abort_with_workspace(
@@ -1474,7 +1520,12 @@ impl Tool for CreateFileTool {
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolExecutionResult, ProductError> {
         reject_if_cancelled(self.name(), abort_flag)?;
-        execute_create_file(&input, workspace_guard).map(ToolExecutionResult::from)
+        let guard = workspace_guard.cloned();
+        run_fs_blocking(self.name(), move || {
+            execute_create_file(&input, guard.as_ref())
+        })
+        .await
+        .map(ToolExecutionResult::from)
     }
 }
 
@@ -1528,7 +1579,7 @@ impl Tool for DeleteFileTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        execute_delete_file(&input, None)
+        run_fs_blocking(self.name(), move || execute_delete_file(&input, None)).await
     }
 
     async fn execute_with_context_and_abort_with_workspace(
@@ -1539,7 +1590,12 @@ impl Tool for DeleteFileTool {
         workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolExecutionResult, ProductError> {
         reject_if_cancelled(self.name(), abort_flag)?;
-        execute_delete_file(&input, workspace_guard).map(ToolExecutionResult::from)
+        let guard = workspace_guard.cloned();
+        run_fs_blocking(self.name(), move || {
+            execute_delete_file(&input, guard.as_ref())
+        })
+        .await
+        .map(ToolExecutionResult::from)
     }
 }
 

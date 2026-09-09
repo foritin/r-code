@@ -49,7 +49,7 @@ pub struct RunController {
     pub set_mode: Arc<dyn Fn(&'static str) + Send + Sync>,
     /// 运行中排队发送（宿主 AgentSendMode::Queue）。
     pub queue_send: Arc<dyn Fn(String) + Send + Sync>,
-    /// 审批决策落账（y/a/esc 三键契约；经宿主 PermissionEngine）。
+    /// 审批决策落账（a 键受风险等级约束；经宿主 PermissionEngine）。
     pub decide_approval: Arc<dyn Fn(crate::approval::ApprovalDecision) + Send + Sync>,
     /// /status 与 /usage 的数据装配（卡行 + 汇总行）。
     pub status_report: Arc<dyn Fn() -> (Vec<String>, String) + Send + Sync>,
@@ -57,6 +57,8 @@ pub struct RunController {
     pub session_report: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// !command 直通执行（宿主 shell 链；输出进 Shell 行）。
     pub run_bang: Arc<dyn Fn(String) + Send + Sync>,
+    /// /plugins 子命令（共享后台服务；None = v2 桥不可用）。
+    pub run_harness_command: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// 打开 /resume 列表（无会话时 None）。
     pub open_resume: Arc<dyn Fn() -> Option<crate::session_picker::SessionPicker> + Send + Sync>,
     /// 接续会话（task_id；JSONL 重建 transcript）。
@@ -107,6 +109,7 @@ impl Default for RunController {
             status_report: Arc::new(|| (Vec::new(), String::new())),
             session_report: Arc::new(Vec::new),
             run_bang: Arc::new(|_| {}),
+            run_harness_command: None,
             open_resume: Arc::new(|| None),
             resume_session: Arc::new(|_| {}),
             new_session: Arc::new(|| {}),
@@ -133,14 +136,12 @@ pub enum LoopOutcome {
     Quit,
 }
 
-/// 进入交互 TUI（备用屏 + 原始模式 + 渲染循环）。
-///
-/// `terminal` 由调用方用 stdout 构造；退出时由本函数恢复（raw mode 关闭、
-/// 备用屏离开）。事件轮询非阻塞（100ms tick）以刷新流式 assistant。
+/// 进入交互 TUI 渲染循环。终端模式由调用方设置和恢复；任何终端 I/O 错误都会
+/// 返回给调用方，以便统一清理后用非零状态退出。
 pub async fn run_interactive(
     state: Arc<Mutex<TuiState>>,
     controller: RunController,
-) -> LoopOutcome {
+) -> Result<LoopOutcome, String> {
     let mut input = InputBuffer::new();
     let mut status: Option<String> = None;
     // M2-01/M2-02：底部插入式浮层（模型/思考选择器；打开期间独占键位）。
@@ -176,7 +177,7 @@ pub async fn run_interactive(
                 .ok()
         });
     loop {
-        let (epoch, commit, live, caret_col, rows_len) = {
+        let (epoch, commit, live, caret_row, caret_col, rows_len) = {
             let (
                 rows,
                 running,
@@ -189,8 +190,10 @@ pub async fn run_interactive(
                 streaming,
                 epoch,
             ) = {
-                let mut st = state.lock().unwrap();
-                st.flush_streaming();
+                let st = state.lock().unwrap();
+                // 不逐帧 flush：delta 留在 streaming 缓冲由 live 区预览
+                //（streaming_preview），封口帧/运行收敛才落成单行——逐帧
+                // flush 会把 delta 片段提交成几十条 complete:false 碎片行。
                 (
                     st.rows().to_vec(),
                     st.is_running(),
@@ -244,32 +247,48 @@ pub async fn run_interactive(
             if live.len() > max_live {
                 live = live.split_off(live.len() - max_live);
             }
-            let caret_col = crate::display::input_caret_col(&view, width);
+            // 输入区多行/折行时，光标可落在任意 wrap 行（相对输入块尾计）；
+            // live 截顶后钳回保留区内，防止光标算术越出块首。
+            let (caret_row, caret_col) = crate::display::input_caret_pos(&view, width);
+            let caret_row = caret_row.min(live.len().saturating_sub(1));
             let rows_len = rows.len();
-            (epoch, commit, live, caret_col, rows_len)
+            (epoch, commit, live, caret_row, caret_col, rows_len)
         };
 
         // 无新历史且 live 未变：跳过重绘（省字节；终端无扰动）。
         if epoch != last_epoch || !commit.is_empty() || live != last_live {
             // G8：重建视图 = 清屏（含 scrollback）+ 渲染器几何重置。
             if epoch != last_epoch {
-                let _ = stdout.write_all(b"\x1b[2J\x1b[3J\x1b[H");
+                stdout
+                    .write_all(b"\x1b[2J\x1b[3J\x1b[H")
+                    .map_err(|error| format!("clear terminal view: {error}"))?;
                 renderer.invalidate();
                 last_live.clear();
                 last_epoch = epoch;
             }
             let bytes = renderer.frame(&commit, &live);
-            let _ = stdout.write_all(bytes.as_bytes());
-            // 硬件光标放回输入位（IME 跟随）。
-            let cursor_seq = renderer.cursor_to_live(0, caret_col as usize + 1);
-            let _ = stdout.write_all(cursor_seq.as_bytes());
-            let _ = stdout.flush();
+            stdout
+                .write_all(bytes.as_bytes())
+                .map_err(|error| format!("write terminal frame: {error}"))?;
+            // 硬件光标放回输入位（IME 跟随；多行输入时定位到光标所在 wrap 行）。
+            let cursor_seq = renderer.cursor_to_live(caret_row, caret_col as usize + 1);
+            stdout
+                .write_all(cursor_seq.as_bytes())
+                .map_err(|error| format!("write terminal cursor: {error}"))?;
+            stdout
+                .flush()
+                .map_err(|error| format!("flush terminal frame: {error}"))?;
             // 字节级输出记录（诊断/回归：ConPTY 会重合成输出流，真字节
             // 只有这里可取；R_CODE_TUI_RECORD=<file> 开启，帧边界以 2026 包
             // 裹为准）。
-            if let Some(record) = record.as_mut() {
-                let _ = record.write_all(bytes.as_bytes());
-                let _ = record.write_all(cursor_seq.as_bytes());
+            if let Some(record_file) = record.as_mut() {
+                if let Err(error) = record_file
+                    .write_all(bytes.as_bytes())
+                    .and_then(|()| record_file.write_all(cursor_seq.as_bytes()))
+                {
+                    status = Some(format!("TUI 输出记录已停止：{error}"));
+                    record = None;
+                }
             }
             last_live = live;
         }
@@ -277,17 +296,19 @@ pub async fn run_interactive(
 
         // 非阻塞轮询（tick 驱动流式刷新）；Ctrl-C 由 crossterm 默认捕获，这里
         // 通过 poll 收事件即可（未启用 raw 的 ctrl-c 时无需额外处理）。
-        let event = tokio::task::block_in_place(|| {
+        let event = tokio::task::block_in_place(|| -> Result<_, String> {
             let mut got = None;
             for _ in 0..10 {
-                if event::poll(Duration::from_millis(10)).unwrap_or(false) {
-                    match event::read() {
-                        Ok(Event::Key(key)) => {
+                if event::poll(Duration::from_millis(10))
+                    .map_err(|error| format!("poll terminal events: {error}"))?
+                {
+                    match event::read().map_err(|error| format!("read terminal event: {error}"))? {
+                        Event::Key(key) => {
                             got = Some(key);
                             break;
                         }
                         // M4-02：bracketed paste——超阈值折叠占位，小粘贴直插。
-                        Ok(Event::Paste(text)) => {
+                        Event::Paste(text) => {
                             if crate::paste::should_fold(&text) {
                                 let placeholder = pastes.register(text);
                                 input.insert_str(&placeholder);
@@ -296,7 +317,7 @@ pub async fn run_interactive(
                             }
                         }
                         // M5-02：尺寸变化 → live 区几何失效，下一帧重起块。
-                        Ok(Event::Resize(..)) => {
+                        Event::Resize(..) => {
                             renderer.invalidate();
                             last_live.clear();
                         }
@@ -304,8 +325,8 @@ pub async fn run_interactive(
                     }
                 }
             }
-            got
-        });
+            Ok(got)
+        })?;
 
         if let Some(key) = event {
             // M4-05：transcript 浮层接管键位（q/esc 关闭、滚动；其余忽略）。
@@ -327,9 +348,13 @@ pub async fn run_interactive(
                 }
                 continue;
             }
-            // M2-05：待审批请求接管键位（y/a/esc；必须决策，不可忽略关闭）。
-            if overlay.is_none() && state.lock().unwrap().pending_approval().is_some() {
-                if let Some(decision) = approval_decision_for_key(map_key(key)) {
+            // M2-05：待审批请求接管键位（R0-R2 支持 y/a/esc，R3/R4 仅 y/esc）。
+            let pending_approval = overlay
+                .is_none()
+                .then(|| state.lock().unwrap().pending_approval().cloned())
+                .flatten();
+            if let Some(pending) = pending_approval {
+                if let Some(decision) = approval_decision_for_key(map_key(key), &pending) {
                     (controller.decide_approval)(decision);
                 }
                 continue;
@@ -698,9 +723,12 @@ pub async fn run_interactive(
                 KeyAction::ExternalEditor => {
                     // 临时退出 raw mode 给编辑器，回来后回填。
                     let draft = input.text();
-                    let _ = crossterm::terminal::disable_raw_mode();
+                    crossterm::terminal::disable_raw_mode()
+                        .map_err(|error| format!("leave raw mode for external editor: {error}"))?;
                     let outcome = crate::external_editor::run_external_editor(&draft).await;
-                    let _ = crossterm::terminal::enable_raw_mode();
+                    crossterm::terminal::enable_raw_mode().map_err(|error| {
+                        format!("restore raw mode after external editor: {error}")
+                    })?;
                     match outcome {
                         Ok(edited) => input.set_text(&edited),
                         Err(error) => {
@@ -714,6 +742,7 @@ pub async fn run_interactive(
                     renderer = crate::inline_render::InlineRenderer::new();
                 }
                 KeyAction::Backspace => input.backspace(),
+                KeyAction::ClearLine => input.clear_line(),
                 KeyAction::DeleteForward => input.delete_forward(),
                 KeyAction::CursorLeft => input.move_left(),
                 KeyAction::CursorRight => input.move_right(),
@@ -747,6 +776,19 @@ pub async fn run_interactive(
                         }
                     } else if trimmed == "/setup" {
                         overlay = Some(Overlay::Setup(crate::setup_flow::SetupFlow::new()));
+                    } else if trimmed == "/plugins" || trimmed.starts_with("/plugins ") {
+                        let arg = trimmed
+                            .strip_prefix("/plugins")
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .to_string();
+                        match &controller.run_harness_command {
+                            Some(run) => run(arg),
+                            None => state
+                                .lock()
+                                .unwrap()
+                                .push_system("Harness v2 后台服务不可用".to_string()),
+                        }
                     } else if trimmed == "/status" || trimmed == "/usage" {
                         let (card, summary) = (controller.status_report)();
                         let mut st = state.lock().unwrap();
@@ -810,10 +852,16 @@ pub async fn run_interactive(
                         match last {
                             Some(text) => match crate::clipboard::copy_check(&text) {
                                 Ok(()) => {
-                                    let _ = stdout.write_all(
-                                        crate::clipboard::osc52_sequence(&text).as_bytes(),
-                                    );
-                                    let _ = stdout.flush();
+                                    stdout
+                                        .write_all(
+                                            crate::clipboard::osc52_sequence(&text).as_bytes(),
+                                        )
+                                        .map_err(|error| {
+                                            format!("write terminal clipboard sequence: {error}")
+                                        })?;
+                                    stdout.flush().map_err(|error| {
+                                        format!("flush terminal clipboard sequence: {error}")
+                                    })?;
                                     state.lock().unwrap().push_system(
                                         "已复制最后一条回复（经终端剪贴板）".to_string(),
                                     );
@@ -857,7 +905,7 @@ pub async fn run_interactive(
                             Err(error) => status = Some(error),
                         }
                     } else if trimmed == "/quit" {
-                        return LoopOutcome::Quit;
+                        return Ok(LoopOutcome::Quit);
                     } else if trimmed == "/tree" {
                         // G8：分支树导航。
                         overlay = (controller.open_tree)().map(Overlay::Tree);
@@ -950,8 +998,14 @@ pub async fn run_interactive(
                         (controller.abort)();
                         status = Some("已请求中止…".to_string());
                     } else {
-                        return LoopOutcome::Quit;
+                        return Ok(LoopOutcome::Quit);
                     }
+                }
+                KeyAction::EndOfInput => {
+                    if input.is_empty() {
+                        return Ok(LoopOutcome::Quit);
+                    }
+                    input.delete_forward();
                 }
                 KeyAction::Quit => {
                     if pending_fork.take().is_some() {
@@ -960,7 +1014,7 @@ pub async fn run_interactive(
                     } else if !input.is_empty() {
                         input.take();
                     } else {
-                        return LoopOutcome::Quit;
+                        return Ok(LoopOutcome::Quit);
                     }
                 }
                 KeyAction::CycleMode => {
@@ -1000,10 +1054,13 @@ pub async fn run_interactive(
     }
 }
 
-/// M2-05：审批接管期的键位映射（y/a=决策，esc/ctrl-c=拒绝——审批不可忽略关闭）。
-fn approval_decision_for_key(action: KeyAction) -> Option<crate::approval::ApprovalDecision> {
+/// M2-05：审批接管期的键位映射（a 受风险边界约束，esc/ctrl-c 始终拒绝）。
+fn approval_decision_for_key(
+    action: KeyAction,
+    pending: &crate::approval_overlay::PendingApproval,
+) -> Option<crate::approval::ApprovalDecision> {
     match action {
-        KeyAction::Insert(ch) => crate::approval_overlay::map_decision(ch),
+        KeyAction::Insert(ch) => crate::approval_overlay::map_decision(pending, ch),
         KeyAction::Quit | KeyAction::Abort => Some(crate::approval::ApprovalDecision::Deny),
         _ => None,
     }

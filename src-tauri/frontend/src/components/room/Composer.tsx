@@ -7,6 +7,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { t } from "../../i18n";
+import { isTaskUnstarted } from "../../lib/presentation";
 import {
   agentQueueRemove,
   agentQueueReorder,
@@ -312,7 +314,8 @@ export function Composer({
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const setCurrentProject = useTasksStore((s) => s.setCurrentProject);
-  const task = useTasksStore((s) => s.details[taskId]?.task);
+  const taskDetail = useTasksStore((s) => s.details[taskId]);
+  const task = taskDetail?.task;
   const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const setScene = useAppStore((s) => s.setScene);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
@@ -1636,7 +1639,9 @@ export function Composer({
                 : "描述目标；发送后 Agent 会立即开始执行…"
               : running
                 ? "正在处理，可继续补充要求…"
-                : "回复、提问或补充上下文…（输入 @ 引用文件）"
+                : task && isTaskUnstarted(task, taskDetail)
+                  ? t("conversationUI.firstMessage")
+                  : "回复、提问或补充上下文…（输入 @ 引用文件）"
           }
           onChange={(e) => {
             leaveInputHistory();
@@ -1704,6 +1709,22 @@ export function Composer({
               running={running}
               onChanged={onProviderChanged}
             />
+            <ProjectAccessSelector
+              value={workspaceAccessMode}
+              workspaceName={workspaceName ?? "未附加工作区"}
+              placement="up"
+              disabled={scopeBusy}
+              unavailableReason={workspaceAttached
+                ? undefined
+                : "先通过“+”附加文件夹，才能设置 Agent 的本地工具权限。"}
+              changeNotice={running
+                ? "当前运行继续使用启动时的权限；新设置从下一轮开始生效。"
+                : undefined}
+              onChange={onAccessModeChange}
+              openRequest={permissionMenuRequest}
+            />
+          </div>
+          <div className="comp-meta-model">
             {agentEngine === "r_code" ? (
               <ModelSwitcher
                 taskId={taskId}
@@ -1725,22 +1746,7 @@ export function Composer({
                 onPreferencesChange={setCodexPreferences}
               />
             )}
-            <ProjectAccessSelector
-              value={workspaceAccessMode}
-              workspaceName={workspaceName ?? "未附加工作区"}
-              placement="up"
-              disabled={scopeBusy}
-              unavailableReason={workspaceAttached
-                ? undefined
-                : "先通过“+”附加文件夹，才能设置 Agent 的本地工具权限。"}
-              changeNotice={running
-                ? "当前运行继续使用启动时的权限；新设置从下一轮开始生效。"
-                : undefined}
-              onChange={onAccessModeChange}
-              openRequest={permissionMenuRequest}
-            />
           </div>
-          <span className="spacer" />
           {goalMode ? (
             <button
               className={`send composer-primary-button${goalSaving || sending ? " is-loading" : ""}`}

@@ -17,6 +17,7 @@ jobs:
   frontend:
     name: Frontend and Release Metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -28,7 +29,7 @@ jobs:
           cache-dependency-path: src-tauri/frontend/package-lock.json
       - name: Verify release metadata
         run: |
-          node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs scripts/icon-assets.test.mjs scripts/verify-codex-interaction.test.mjs scripts/verify-product-experience.test.mjs scripts/verify-windows-reliability.test.mjs
+          node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs scripts/icon-assets.test.mjs scripts/verify-codex-interaction.test.mjs scripts/verify-product-experience.test.mjs scripts/verify-windows-reliability.test.mjs scripts/verify-tui-v2.test.mjs
           node scripts/check-installer-frontend.mjs
           node scripts/release.mjs check
       - name: Install frontend dependencies
@@ -200,6 +201,9 @@ jobs:
         # Several workspace integration suites share process-global fixtures.
         # Serial execution avoids platform-dependent false hangs under CI load.
         run: cargo test --workspace --all-features -- --test-threads=1
+
+      - name: Harness v2 acceptance (guards + conformance)
+        run: node scripts/verify-harness-v2.mjs --profile quick
       # Windows 命令执行可靠性金集回归门禁（windows-reliability PRD R-MET-01/M4-02）：
       # fast 档真实执行（净化 PATH → 五级解析 → Git Bash），失败即阻断本 job。
       # 预算：fast 41 条串行 < 2min（单条 60s 上限、命令平均 < 1s）。

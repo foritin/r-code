@@ -15,11 +15,7 @@
   position: relative;
   isolation: isolate;
   background-color: var(--signature-sidebar);
-  background-image:
-    radial-gradient(210px 172px at var(--rc-current-rail) var(--rc-topbar-h), var(--signature-corner-glow-hot) 0%, var(--signature-corner-glow-soft) 34%, transparent 74%),
-    radial-gradient(112% 72% at 18% 112%, var(--signature-sidebar-glow-deep) 0%, rgba(176, 53, 34, 0.05) 34%, transparent 72%),
-    radial-gradient(82% 58% at -14% 28%, var(--signature-sidebar-glow-hot) 0%, transparent 73%),
-    linear-gradient(90deg, var(--signature-sidebar-wash), transparent 78%);
+  background-image: none;
 }
 
 #app.r-code-signature .app-topbar,
@@ -48,7 +44,7 @@
   border-left: 1px solid var(--signature-divider);
   border-radius: var(--signature-workspace-radius) 0 0 0;
   background: var(--bg-app);
-  box-shadow: -18px -18px 46px color-mix(in srgb, #000 12%, transparent);
+  box-shadow: none;
 }
 
 :root[data-theme="studio-light"] #app.r-code-signature .main {
@@ -58,7 +54,7 @@
 
 #app.r-code-signature .main::before,
 #app.r-code-signature .main::after {
-  content: "";
+  content: none;
   position: absolute;
   z-index: 40;
   pointer-events: none;
@@ -118,8 +114,8 @@
   border-radius: 4px;
   background: transparent;
   color: var(--signature-chrome-fg);
-  font: 500 11px/1 var(--font-display);
-  letter-spacing: 0.055em;
+  font: 500 var(--text-sm)/1 var(--font-ui);
+  letter-spacing: normal;
   white-space: nowrap;
 }
 
@@ -145,14 +141,14 @@
   min-width: 184px;
   padding: 5px;
   border-color: var(--border-strong);
-  border-radius: 10px 4px 10px 4px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-panel) 97%, transparent);
 }
 
 .desktop-menu-popover .menu-item {
   min-height: 30px;
-  border-radius: 5px 2px 5px 2px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
 }
 
 #app.r-code-signature .compact-search-toggle,
@@ -192,8 +188,8 @@
 
 #app.r-code-signature .sidebar-brand {
   gap: 10px;
-  font-family: var(--font-display);
-  letter-spacing: 0.02em;
+  font-family: var(--font-ui);
+  letter-spacing: normal;
 }
 
 #app.r-code-signature .sidebar-brand-mark {
@@ -217,7 +213,7 @@
 }
 
 #app.r-code-signature .sidebar-new {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-weight: 560;
 }
 
@@ -230,7 +226,7 @@
 #app.r-code-signature .sidebar-nav-item {
   position: relative;
   min-height: 34px;
-  border-radius: 3px 9px 9px 3px;
+  border-radius: var(--radius-md);
   color: var(--signature-sidebar-muted);
 }
 
@@ -240,26 +236,26 @@
 }
 
 #app.r-code-signature .sidebar-nav-item.active {
-  background: linear-gradient(90deg, rgba(244, 116, 43, 0.14), rgba(244, 116, 43, 0.025) 62%, transparent);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--bg-active);
+  box-shadow: none;
   color: var(--fg);
 }
 
 #app.r-code-signature .sidebar-nav-item.active svg {
-  color: #ff9b5d;
+  color: var(--fg);
 }
 
 #app.r-code-signature .sidebar-section-head {
   min-height: 28px;
   color: var(--signature-sidebar-section);
-  font: 600 10px/1 var(--font-display);
-  letter-spacing: 0.13em;
+  font: 500 var(--text-meta)/1.4 var(--font-ui);
+  letter-spacing: normal;
 }
 
 #app.r-code-signature .sidebar-project-head {
   border-radius: 5px;
   color: var(--signature-sidebar-project);
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
 }
 
 #app.r-code-signature .sidebar-project-row {
@@ -273,7 +269,7 @@
 
 #app.r-code-signature .sidebar-task-row,
 #app.r-code-signature .sidebar-task {
-  border-radius: 3px 8px 8px 3px;
+  border-radius: var(--radius-md);
 }
 
 #app.r-code-signature .sidebar-task:hover {
@@ -281,8 +277,8 @@
 }
 
 #app.r-code-signature .sidebar-task.active {
-  background: linear-gradient(90deg, rgba(244, 116, 43, 0.115), rgba(244, 116, 43, 0.02) 70%, transparent);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--bg-active);
+  box-shadow: none;
 }
 
 #app.r-code-signature .app-sidebar .task-state-dot,
@@ -437,9 +433,9 @@
 }
 
 #app.r-code-signature .provider-pill > span {
-  color: #ffa268;
-  font-family: var(--font-display);
-  letter-spacing: 0.035em;
+  color: var(--fg);
+  font-family: var(--font-ui);
+  letter-spacing: normal;
 }
 
 #app.r-code-signature .send-button,
@@ -612,9 +608,9 @@
 }
 
 #app.r-code-signature .room-conversation-title strong {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-weight: 620;
-  letter-spacing: 0.015em;
+  letter-spacing: normal;
 }
 
 #app.r-code-signature.scene-room .timeline {
@@ -627,10 +623,10 @@
   margin: 0 0 30px auto;
   padding: 11px 16px 12px;
   border: 0;
-  border-radius: 10px 10px 3px 10px;
+  border-radius: 16px;
   background: color-mix(in srgb, var(--bg-hover) 76%, transparent);
   box-shadow: none;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 #app.r-code-signature .you > .who {
@@ -650,7 +646,7 @@
   max-width: min(100%, 930px);
   margin: 0 0 22px;
   color: var(--fg);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1.72;
 }
 
@@ -776,22 +772,12 @@
   background: transparent;
 }
 
-/* ===== 霓虹闪烁与余辉（执行中文字，原型 C+）=====
-   明亮的白光伴随瞬间高强度曝光（0%/44% 两次闪烁），
-   随后光晕迅速衰减、只留轻微暖橙余辉；reduced-motion 由 base.css 全停。 */
+/* Status indicators carry motion; text stays stable while reading. */
 #app.r-code-signature .run-disclosure.run-summary.active .run-name,
 #app.r-code-signature .run-disclosure.run-summary.active .run-duration,
 #app.r-code-signature .tcard.active .tcard-head .verb {
-  animation: signature-neon-flash 2.9s ease-in-out infinite;
-}
-
-@keyframes signature-neon-flash {
-  0% { color: #fff; text-shadow: 0 0 3px rgba(255, 255, 255, 0.95), 0 0 16px rgba(255, 240, 222, 0.9), 0 0 44px rgba(244, 116, 43, 0.7); }
-  7% { color: #fff; text-shadow: 0 0 2px rgba(255, 255, 255, 0.7), 0 0 9px rgba(255, 222, 188, 0.5), 0 0 22px rgba(244, 116, 43, 0.38); }
-  16% { color: var(--fg); text-shadow: 0 0 7px rgba(255, 228, 202, 0.26), 0 0 18px rgba(244, 116, 43, 0.16); }
-  44% { color: #fff; text-shadow: 0 0 2px rgba(255, 255, 255, 0.55), 0 0 10px rgba(255, 216, 182, 0.4), 0 0 26px rgba(244, 116, 43, 0.3); }
-  58% { color: var(--fg); text-shadow: 0 0 8px rgba(255, 228, 202, 0.18), 0 0 20px rgba(244, 116, 43, 0.1); }
-  100% { color: var(--fg-muted); text-shadow: 0 0 10px rgba(244, 116, 43, 0.07); }
+  color: var(--fg-muted);
+  animation: none;
 }
 
 /* 流式光标：白→暖橙渐变 + 光晕余辉（原型 C+ 的 caret） */
@@ -923,35 +909,51 @@
   margin: 0 auto;
   padding: 2px 12px 6px;
   border: 1px solid var(--signature-panel-edge);
-  border-radius: 16px;
+  border-radius: 20px;
   background: var(--bg-card);
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--signature-composer-shadow);
+  container-type: inline-size;
+  container-name: composer;
 }
 
 #app.r-code-signature .scene-room .comp-box:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--signature-panel-edge));
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent),
-    var(--shadow-card);
+  border-color: var(--border-strong);
+  box-shadow: var(--signature-composer-shadow);
 }
 
 #app.r-code-signature .scene-room .comp-box textarea {
   display: block;
-  min-height: 48px;
+  min-height: 64px;
   padding: 10px 2px 6px;
   color: var(--fg);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.6;
 }
 
 #app.r-code-signature .scene-room .comp-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
   margin-top: 0;
   padding: 6px 0 0;
   border-top: 0;
 }
 
 #app.r-code-signature .scene-room .comp-meta-context {
-  gap: 2px;
+  flex: none;
+  gap: 4px;
+}
+
+.comp-meta-model { display: flex; justify-content: flex-end; min-width: 0; }
+.comp-meta-model .model-config-root { min-width: 0; }
+.comp-meta-model .provider-pill { min-width: 0; max-width: 100%; }
+.comp-meta-model .provider-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comp-meta-model .provider-pill > small { flex: none; font-family: var(--font-ui); }
+
+@container composer (max-width: 540px) {
+  #app.r-code-signature .scene-room .comp-meta { grid-template-columns: minmax(0, 1fr) auto; }
+  #app.r-code-signature .scene-room .comp-meta-context { grid-column: 1 / -1; }
+  .comp-meta-model { justify-content: flex-start; }
 }
 
 #app.r-code-signature .scene-room .comp-meta .composer-attachment-add,
@@ -980,17 +982,20 @@
   background: var(--signature-control);
 }
 
-/* 原型 C：主操作按钮是带文字的胶囊（↑ 发送 / ■ 中断），不是纯图标方块 */
+/* A single circular primary action, with its full name available to assistive technology. */
 #app.r-code-signature .scene-room .comp-meta .send {
-  width: auto;
-  min-width: 66px;
-  height: 32px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
   gap: 6px;
-  padding: 0 13px;
-  border-radius: 9px;
+  padding: 0;
+  border-radius: 50%;
   font-size: 12.5px;
   font-weight: 650;
 }
+
+#app.r-code-signature .scene-room .comp-meta .send-label { display: none; }
 
 #app.r-code-signature .scene-room .comp-meta .composer-stop-button {
   background: var(--signature-control);
@@ -1057,8 +1062,8 @@
 }
 
 #app.r-code-signature .workbench-tab {
-  font-family: var(--font-display);
-  letter-spacing: 0.035em;
+  font-family: var(--font-ui);
+  letter-spacing: normal;
 }
 
 #app.r-code-signature .workbench-tab-select strong {
@@ -1115,6 +1120,45 @@
 }
 
 /* ---------- Shared product pages ---------- */
+/* Reading sizes are shared across navigation, menus and the conversation. */
+#app.r-code-signature .sidebar-task,
+#app.r-code-signature .sidebar-project-head,
+#app.r-code-signature .sidebar-nav-item,
+#app.r-code-signature .sidebar-new,
+#app.r-code-signature .sidebar-footer-action {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  letter-spacing: normal;
+}
+
+#app.r-code-signature .provider-pill,
+#app.r-code-signature .project-access-trigger,
+#app.r-code-signature .timeline-activity-toggle,
+#app.r-code-signature .timeline-context-toggle,
+#app.r-code-signature .model-config-row,
+#app.r-code-signature .model-menu .menu-item {
+  font-size: var(--text-sm);
+}
+
+#app.r-code-signature .provider-pill:disabled { opacity: .55; cursor: not-allowed; }
+#app.r-code-signature .timeline-progress-update { color: var(--fg); font-size: var(--text-base); }
+.timeline-live-progress { padding-top: 16px; }
+
+.timeline-welcome { max-width: 640px; margin: 0 auto; text-align: center; }
+.timeline-welcome h1 { margin: 0 0 12px; color: var(--fg); font: 600 clamp(24px, 2.4vw, 32px)/1.3 var(--font-ui); }
+.timeline-welcome p { color: var(--fg-muted); font-size: var(--text-base); line-height: 1.6; }
+#app.r-code-signature.scene-room .convo:has(.timeline-welcome) { overflow-y: auto; }
+#app.r-code-signature.scene-room .convo:has(.timeline-welcome) .timeline {
+  flex: none;
+  margin-top: clamp(40px, 18vh, 180px);
+  padding-block: 0 24px;
+}
+#app.r-code-signature.scene-room .convo:has(.timeline-welcome) .room-composer-region { padding-bottom: 32px; }
+
+.settings-explanation { margin: 12px 0; color: var(--fg-muted); font-size: var(--text-sm); }
+.settings-explanation > summary { width: fit-content; padding: 4px 0; cursor: pointer; }
+.settings-explanation[open] > summary { margin-bottom: 8px; }
+
 #app.r-code-signature .page-kicker,
 #app.r-code-signature .dashboard-kicker,
 #app.r-code-signature .activity-kicker,

@@ -53,9 +53,12 @@ pub fn live_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
     // transcript 浮层：占满 live 区（唯一"全屏"语义载体）。
     if view.transcript_view.is_open() {
         let header = fg(&crate::transcript_view::header_line(width), "2");
-        let body = crate::transcript_view::render_rows(&view.rows)
-            .into_iter()
-            .map(|line| fg(&line, "2"));
+        // 滚动窗口：scroll = 距底部行偏移——先移除底部 scroll 行，再交由
+        // 调用方截底部一屏（scroll=0 即尾锚定，↑/pgup 后窗口随之上移）。
+        let mut body = crate::transcript_view::render_rows(&view.rows);
+        let visible_end = body.len().saturating_sub(view.transcript_view.scroll());
+        body.truncate(visible_end);
+        let body = body.into_iter().map(|line| fg(&line, "2"));
         let hints = fg(crate::transcript_view::hints_line(), "2");
         let mut lines: Vec<String> = std::iter::once(header)
             .chain(body)
@@ -116,8 +119,9 @@ pub fn live_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
     if let Some(status) = &view.status {
         lines.push(fg(status, "33"));
     }
-    // 输入行（贴底：prompt + 徽章 + 输入 + 右侧统计/模型标签）。
-    lines.push(input_line(view, width));
+    // 输入区（贴底：prompt + 徽章 + 输入 + 右侧统计/模型标签）。多行/折行
+    // 输入产出多条 live 行——每行恰占一物理行，live 块高度随之增长。
+    lines.extend(input_lines(view, width));
     truncate_live_block(&mut lines, width)
 }
 
@@ -237,8 +241,23 @@ fn slash_menu_lines(menu: &crate::slash_menu::SlashMenu) -> Vec<String> {
         .collect()
 }
 
-fn input_line(view: &DisplayInput<'_>, width: usize) -> String {
-    let prompt = if view.running { "⏳ steer > " } else { "> " };
+/// 输入行框架件（prompt/徽章/右侧统计与模型标签——统计块只占首物理行）。
+struct InputFrame {
+    prompt: String,
+    prompt_color: &'static str,
+    badge: String,
+    badge_cols: usize,
+    stats_text: String,
+    stats_color: &'static str,
+    model: String,
+}
+
+fn input_frame(view: &DisplayInput<'_>) -> InputFrame {
+    let prompt = if view.running {
+        "⏳ steer > ".to_string()
+    } else {
+        "> ".to_string()
+    };
     let prompt_color = if crate::bang_command::prompt_semantic(&view.input.text())
         == crate::bang_command::PromptSemantic::Bang
     {
@@ -257,6 +276,7 @@ fn input_line(view: &DisplayInput<'_>, width: usize) -> String {
             fg(&format!("{text} "), code)
         })
         .unwrap_or_default();
+    let badge_cols = visible_width(&badge);
     // 统计 + 模型标签只拼一次（右侧段）。
     let (stats_text, stats_color) = view
         .usage
@@ -270,32 +290,93 @@ fn input_line(view: &DisplayInput<'_>, width: usize) -> String {
             (format!("{text}  "), code)
         })
         .unwrap_or_default();
-    let model = view.model_label.clone().unwrap_or_default();
-    let left = format!("{}{}{}", fg(prompt, prompt_color), badge, view.input.text());
-    let left_cols = visible_width(&left);
-    let right_cols = visible_width(&stats_text) + visible_width(&model);
-    let padding = width.saturating_sub(left_cols + right_cols + 1);
-    format!(
-        "{}{}{}{}",
-        left,
-        " ".repeat(padding),
-        fg(&stats_text, stats_color),
-        fg(&model, "2")
-    )
+    InputFrame {
+        prompt,
+        prompt_color,
+        badge,
+        badge_cols,
+        stats_text,
+        stats_color,
+        model: view.model_label.clone().unwrap_or_default(),
+    }
 }
 
-/// 输入光标位（IME/定位用）：live 块最后一行、prompt+徽章+光标前文本的可见列
-/// （钳在 width-1 内）。
-pub fn input_caret_col(view: &DisplayInput<'_>, width: usize) -> u16 {
-    let prompt = if view.running { "⏳ steer > " } else { "> " };
-    let badge_cols = view
-        .mode_badge
-        .map(|(text, _)| text.chars().count() + 1)
-        .unwrap_or(0);
-    let text = view.input.text();
+/// 输入文本净化（live 区几何安全）：`\t`/`\r` 折成空格（控制字符宽度不可
+/// 控、`\r` 还会被终端解释回行首），`\n` 保留由 wrap_lines 拆行。逐字符
+/// 1:1 映射——光标的 char 索引在净化前后保持一致。
+fn sanitize_input_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '\t' | '\r' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
+/// 输入区可折行宽度（首行余量：prompt+徽章在左、统计+模型在右，各留 1 列松弛）。
+fn input_wrap_width(frame: &InputFrame, width: usize) -> usize {
+    let left_cols = visible_width(&frame.prompt) + frame.badge_cols;
+    let right_cols = visible_width(&frame.stats_text) + visible_width(&frame.model);
+    width.saturating_sub(left_cols + right_cols + 1).max(1)
+}
+
+/// 输入区行（多行安全）：净化 + wrap_lines 折行，一条 live 行 = 一个物理行。
+/// 首行带 prompt/徽章 + 右侧统计；续行仅文本。
+pub fn input_lines(view: &DisplayInput<'_>, width: usize) -> Vec<String> {
+    let frame = input_frame(view);
+    let wrap_width = input_wrap_width(&frame, width);
+    let wrapped = crate::input::wrap_lines(&sanitize_input_text(&view.input.text()), wrap_width);
+    let right_cols = visible_width(&frame.stats_text) + visible_width(&frame.model);
+    let mut lines = Vec::with_capacity(wrapped.len());
+    for (index, segment) in wrapped.iter().enumerate() {
+        if index == 0 {
+            let left = format!(
+                "{}{}{}",
+                fg(&frame.prompt, frame.prompt_color),
+                frame.badge,
+                segment
+            );
+            let padding = width.saturating_sub(visible_width(&left) + right_cols + 1);
+            lines.push(format!(
+                "{}{}{}{}",
+                left,
+                " ".repeat(padding),
+                fg(&frame.stats_text, frame.stats_color),
+                fg(&frame.model, "2")
+            ));
+        } else {
+            lines.push(segment.clone());
+        }
+    }
+    lines
+}
+
+/// 输入光标位（live 区坐标，多行/折行安全）：返回 `(row_from_bottom, col)`
+/// ——输入块贴 live 块尾部，`row_from_bottom` 相对块尾（0 = 最后一行）。
+/// 折行与 [`input_lines`] 同口径（贪心 wrap 前缀行 == 全文行到光标处）。
+pub fn input_caret_pos(view: &DisplayInput<'_>, width: usize) -> (usize, u16) {
+    let frame = input_frame(view);
+    let left_cols = visible_width(&frame.prompt) + frame.badge_cols;
+    let wrap_width = input_wrap_width(&frame, width);
+    let text = sanitize_input_text(&view.input.text());
     let before: String = text.chars().take(view.input.cursor()).collect();
-    let col = visible_width(prompt) + badge_cols + visible_width(&before);
-    (col.min(width.saturating_sub(1))) as u16
+    let before_rows = crate::input::wrap_lines(&before, wrap_width);
+    let total_rows = crate::input::wrap_lines(&text, wrap_width).len();
+    let row_index = before_rows.len() - 1;
+    let row_from_bottom = total_rows - 1 - row_index;
+    let mut col = before_rows
+        .last()
+        .map(|row| visible_width(row))
+        .unwrap_or(0);
+    if row_index == 0 {
+        col += left_cols;
+    }
+    (row_from_bottom, col.min(width.saturating_sub(1)) as u16)
+}
+
+/// 兼容入口：仅取光标列（单行输入与旧口径等价）。
+pub fn input_caret_col(view: &DisplayInput<'_>, width: usize) -> u16 {
+    input_caret_pos(view, width).1
 }
 
 /// ANSI 感知截断到 `width` 可视列（超宽尾部加 `…`）。live 行专用。
@@ -457,10 +538,114 @@ mod tests {
             output_tokens: 900,
             ..Default::default()
         });
-        let line = input_line(&view, 80);
-        let text = strip_ansi(&line);
+        let text = strip_ansi(&input_lines(&view, 80).join("\n"));
         assert_eq!(text.matches("↑1.0K").count(), 1, "token 段唯一：{text}");
         assert_eq!(text.matches("1.9K used").count(), 1, "占用段唯一：{text}");
+    }
+
+    /// 多行/折行输入：一行 live 行 = 一个物理行（\t/\r 净化成空格、\n 拆行），
+    /// 光标行号随 wrap 行定位（live 块高度与光标算术的几何前提）。
+    #[test]
+    fn multi_line_input_wraps_into_one_live_row_per_physical_row() {
+        let mut input = InputBuffer::new();
+        input.insert_str("第一行");
+        input.newline();
+        input.insert_str("第二行\t尾");
+        let transcript_view = TranscriptView::new();
+        let view = base_view(&input, &transcript_view);
+        let lines = input_lines(&view, 40);
+        assert_eq!(lines.len(), 2, "两个逻辑行 = 两条 live 行：{lines:?}");
+        assert!(lines[0].contains("第一行"), "{lines:?}");
+        assert!(
+            lines[1].contains("第二行") && lines[1].contains("尾"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains('\n') || line.contains('\t')),
+            "live 行不得内嵌 \\n/\\t：{lines:?}"
+        );
+        // 光标在末行（"第二行 尾"之后）→ row_from_bottom=0，列=该行宽（无 prompt）。
+        assert_eq!(
+            input_caret_pos(&view, 40),
+            (0, 9),
+            "第二行=6 + 空格=1 + 尾=2"
+        );
+        // 光标回到第一行 → row_from_bottom=1，列=prompt(2)+第一行(6)。
+        drop(view);
+        input.move_home(); // 当前行行首（第二行）
+        input.move_left(); // 越过 \n 到第一行行尾
+        let view = base_view(&input, &transcript_view);
+        assert_eq!(
+            input_caret_pos(&view, 40),
+            (1, 2 + 6),
+            "{:?}/{}",
+            input.cursor(),
+            input.text()
+        );
+        // \r 净化：不破坏行数（不产生额外物理行）。
+        let mut cr_input = InputBuffer::new();
+        cr_input.insert_str("a\r");
+        cr_input.insert('b');
+        let view = base_view(&cr_input, &transcript_view);
+        assert_eq!(input_lines(&view, 20).len(), 1, "\\r 折成空格不拆行");
+    }
+
+    /// 长行软折行：超出首行余量的文本折成多条 live 行，光标随行推进。
+    #[test]
+    fn long_input_soft_wraps_and_caret_follows() {
+        let mut input = InputBuffer::new();
+        input.insert_str(&"x".repeat(40));
+        let transcript_view = TranscriptView::new();
+        let view = base_view(&input, &transcript_view);
+        // width=20：wrap_width = 20 - 2(prompt) - 1 = 17 → 40 字符折 3 行。
+        let lines = input_lines(&view, 20);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(
+            input_caret_pos(&view, 20),
+            (0, 40 - 2 * 17),
+            "光标在末 wrap 行"
+        );
+    }
+
+    /// transcript 浮层滚动：scroll>0 时窗口上移（不再永久尾锚定）。
+    #[test]
+    fn transcript_overlay_windows_body_by_scroll() {
+        let input = InputBuffer::new();
+        let rows: Vec<crate::TranscriptRow> = (0..30)
+            .map(|index| crate::TranscriptRow::System {
+                text: format!("行{index}"),
+            })
+            .collect();
+        // 尾锚定（scroll=0）：最新行可见。
+        let mut anchored = TranscriptView::new();
+        anchored.open();
+        let mut view = base_view(&input, &anchored);
+        view.rows = rows.clone();
+        let lines = live_lines(&view, 80);
+        assert!(
+            lines.iter().any(|line| line.contains("行29")),
+            "尾锚定必须包含最新行：{lines:?}"
+        );
+        // 上滚 2 行：底部 2 行移出窗口，顶部行仍在。
+        let mut scrolled = TranscriptView::new();
+        scrolled.open();
+        scrolled.scroll_up(rows.len());
+        scrolled.scroll_up(rows.len());
+        let mut view = base_view(&input, &scrolled);
+        view.rows = rows;
+        let lines = live_lines(&view, 80);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("行29") || line.contains("行28")),
+            "滚动后底部行必须移出窗口：{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("行0")),
+            "顶部行仍可见：{lines:?}"
+        );
     }
 
     /// 流式预览进 live 区；commit 行不重复它。

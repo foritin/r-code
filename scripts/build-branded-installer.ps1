@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Target = "",
     [string]$InnerInstaller = "",
@@ -73,6 +73,64 @@ $architecture = if ($targetArchitecture -eq "aarch64") {
 }
 
 if (-not $SkipInnerBuild) {
+    $tuiBuildArgs = @("build", "--release", "-p", "r-code-tui", "--bin", "r-code-tui")
+    if ($Target) {
+        $tuiBuildArgs += @("--target", $Target)
+    }
+    Push-Location $repoRoot
+    try {
+        & $cargoCommand.Source @tuiBuildArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "r-code-tui sidecar build failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Pop-Location
+    }
+    $tuiSource = Join-Path $releaseRoot "r-code-tui.exe"
+    if (-not (Test-Path -LiteralPath $tuiSource -PathType Leaf)) {
+        throw "Expected r-code-tui sidecar not found: $tuiSource"
+    }
+    $tuiDestinationDir = Join-Path $repoRoot "src-tauri\binaries"
+    [IO.Directory]::CreateDirectory($tuiDestinationDir) | Out-Null
+    Copy-Item -LiteralPath $tuiSource -Destination (Join-Path $tuiDestinationDir "r-code-tui-$architectureTarget.exe") -Force
+
+    # T38: sidecar set = TUI + shared daemon + two built-in harness plugins.
+    $harnessSidecars = @(
+        @{ Package = "r-code-runtime"; Bin = "r-code-service" },
+        @{ Package = "r-code-harness-native"; Bin = "r-code-harness-native" },
+        @{ Package = "r-code-harness-codex"; Bin = "r-code-harness-codex" }
+    )
+    foreach ($sidecar in $harnessSidecars) {
+        & $cargoCommand.Source @("build", "--release", "-p", $sidecar.Package, "--bin", $sidecar.Bin)
+        if ($LASTEXITCODE -ne 0) {
+            throw "$($sidecar.Bin) sidecar build failed with exit code $LASTEXITCODE"
+        }
+        $source = Join-Path $releaseRoot "$($sidecar.Bin).exe"
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Expected $($sidecar.Bin) sidecar not found: $source"
+        }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $tuiDestinationDir "$($sidecar.Bin)-$architectureTarget.exe") -Force
+    }
+
+    # T38: built-in plugin package resources (manifest + bin) staged beside
+    # the app; the daemon registers them through the normal immutable
+    # registry at startup - no source-code engine switch.
+    $builtinPackages = @(
+        @{ Staged = "native"; Binary = "r-code-harness-native" },
+        @{ Staged = "codex"; Binary = "r-code-harness-codex" }
+    )
+    foreach ($builtin in $builtinPackages) {
+        $stagedDir = Join-Path $repoRoot "src-tauri\plugins\$($builtin.Staged)"
+        [IO.Directory]::CreateDirectory((Join-Path $stagedDir "bin")) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $releaseRoot "$($builtin.Binary).exe") `
+            -Destination (Join-Path $stagedDir "bin\$($builtin.Binary).exe") -Force
+        if (-not (Test-Path -LiteralPath (Join-Path $stagedDir "harness.json") -PathType Leaf)) {
+            throw "Built-in manifest missing: src-tauri/plugins/$($builtin.Staged)/harness.json"
+        }
+    }
+
+    $previousPackagingMode = [Environment]::GetEnvironmentVariable("R_CODE_TAURI_PACKAGING", "Process")
+    [Environment]::SetEnvironmentVariable("R_CODE_TAURI_PACKAGING", "1", "Process")
     Push-Location (Join-Path $repoRoot "src-tauri")
     try {
         $tauriArgs = @(
@@ -89,6 +147,7 @@ if (-not $SkipInnerBuild) {
         }
     } finally {
         Pop-Location
+        [Environment]::SetEnvironmentVariable("R_CODE_TAURI_PACKAGING", $previousPackagingMode, "Process")
     }
 }
 

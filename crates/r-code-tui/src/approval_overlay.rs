@@ -1,7 +1,7 @@
 //! 审批浮层 codex 化（M2-05 / R-APPR-01）。
 //!
 //! 内联于底部面板（带面语义），y/a/esc 三键契约（MC-5）：
-//! `y`=Allow（单次）、`a`=AllowAlways（本任务级 standing rule，R3/R4 被宿主拒绝）、
+//! `y`=Allow（单次）、`a`=AllowAlways（本任务级 standing rule，仅 R0-R2 可用）、
 //! `esc`=Deny。决策只产生意图，落账经宿主 PermissionEngine（不绕过安全边界）。
 
 use crate::approval::ApprovalDecision;
@@ -44,7 +44,7 @@ pub enum LineKind {
 
 /// codex 形态浮层行：bold 标题 + `$ 命令` + 编号选项 + hints。
 pub fn overlay_lines(pending: &PendingApproval) -> Vec<OverlayLine> {
-    vec![
+    let mut lines = vec![
         OverlayLine {
             text: "是否允许执行以下命令？".to_string(),
             kind: LineKind::Title,
@@ -61,19 +61,31 @@ pub fn overlay_lines(pending: &PendingApproval) -> Vec<OverlayLine> {
             text: "  1. 允许 (y)".to_string(),
             kind: LineKind::Option,
         },
-        OverlayLine {
+    ];
+    if pending.risk.can_persist_standing() {
+        lines.push(OverlayLine {
             text: "  2. 允许，且本任务内不再询问该命令 (a)".to_string(),
             kind: LineKind::Option,
-        },
-        OverlayLine {
+        });
+        lines.push(OverlayLine {
             text: "  3. 拒绝，并告诉 R-Code 换一种做法 (esc)".to_string(),
             kind: LineKind::Option,
-        },
-        OverlayLine {
+        });
+        lines.push(OverlayLine {
             text: "  y 允许 · a 任务级放行 · esc 拒绝".to_string(),
             kind: LineKind::Hint,
-        },
-    ]
+        });
+    } else {
+        lines.push(OverlayLine {
+            text: "  2. 拒绝，并告诉 R-Code 换一种做法 (esc)".to_string(),
+            kind: LineKind::Option,
+        });
+        lines.push(OverlayLine {
+            text: format!("  {} 只能单次允许 · y 允许 · esc 拒绝", pending.risk),
+            kind: LineKind::Hint,
+        });
+    }
+    lines
 }
 
 /// 决策后的 transcript 注记（a 放行出 standing rule 注记文案）。
@@ -87,11 +99,11 @@ pub fn resolution_note(pending: &PendingApproval, decision: ApprovalDecision) ->
     }
 }
 
-/// 字符键 → 决策意图（y/Y=允许、a/A=任务级放行；其余无决策）。
-pub fn map_decision(ch: char) -> Option<ApprovalDecision> {
+/// 字符键 → 决策意图（y/Y=允许；仅 R0-R2 接受 a/A 任务级放行）。
+pub fn map_decision(pending: &PendingApproval, ch: char) -> Option<ApprovalDecision> {
     match ch.to_ascii_lowercase() {
         'y' => Some(ApprovalDecision::Approve),
-        'a' => Some(ApprovalDecision::ApproveAlways),
+        'a' if pending.risk.can_persist_standing() => Some(ApprovalDecision::ApproveAlways),
         _ => None,
     }
 }
@@ -160,14 +172,21 @@ mod tests {
         );
     }
 
-    /// M2-05.A2：y/a/esc → 三态映射（含宿主决策枚举对齐）。
+    /// M2-05.A2：R2 的 y/a/esc → 三态映射（含宿主决策枚举对齐）。
     #[test]
     fn decision_keys_map_to_three_states() {
-        assert_eq!(map_decision('y'), Some(ApprovalDecision::Approve));
-        assert_eq!(map_decision('Y'), Some(ApprovalDecision::Approve));
-        assert_eq!(map_decision('a'), Some(ApprovalDecision::ApproveAlways));
-        assert_eq!(map_decision('A'), Some(ApprovalDecision::ApproveAlways));
-        assert_eq!(map_decision('n'), None, "n 不是决策键");
+        let pending = PendingApproval::from_request(&request(RiskLevel::R2));
+        assert_eq!(map_decision(&pending, 'y'), Some(ApprovalDecision::Approve));
+        assert_eq!(map_decision(&pending, 'Y'), Some(ApprovalDecision::Approve));
+        assert_eq!(
+            map_decision(&pending, 'a'),
+            Some(ApprovalDecision::ApproveAlways)
+        );
+        assert_eq!(
+            map_decision(&pending, 'A'),
+            Some(ApprovalDecision::ApproveAlways)
+        );
+        assert_eq!(map_decision(&pending, 'n'), None, "n 不是决策键");
         assert_eq!(
             to_host_decision(ApprovalDecision::Approve),
             PermissionDecision::Allow
@@ -180,6 +199,30 @@ mod tests {
             to_host_decision(ApprovalDecision::Deny),
             PermissionDecision::Deny
         );
+    }
+
+    #[test]
+    fn high_risk_overlay_omits_and_rejects_persistent_approval() {
+        for risk in [RiskLevel::R3, RiskLevel::R4] {
+            let pending = PendingApproval::from_request(&request(risk));
+            let texts: Vec<String> = overlay_lines(&pending)
+                .into_iter()
+                .map(|line| line.text)
+                .collect();
+            assert!(
+                texts.iter().all(|text| !text.contains("(a)")),
+                "{risk} 不应展示任务级放行键：{texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text.contains("只能单次允许") && text.contains("esc 拒绝")),
+                "{risk} 应明确单次作用域：{texts:?}"
+            );
+            assert_eq!(map_decision(&pending, 'a'), None);
+            assert_eq!(map_decision(&pending, 'A'), None);
+            assert_eq!(map_decision(&pending, 'y'), Some(ApprovalDecision::Approve));
+        }
     }
 
     /// M2-05.A3：a 放行 → 宿主 standing rule 生效（同任务同工具复检直接 Allowed）。

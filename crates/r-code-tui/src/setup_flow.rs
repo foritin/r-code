@@ -1,18 +1,21 @@
 //! `/setup` 引导式模型服务配置（症状3：无配置时 `/model` 是死端，没有
-//! 可操作流程）。
+//! 可操作的流程）。
 //!
-//! 复用桌面设置页同一套基建：`provider_catalog::PRESETS` 预设目录 +
-//! `SettingsService`（api_key 经 `save_global` 迁入平台凭据后端，配置文件
-//! 不落明文）。两步流：选预设（输入过滤 + ↑↓）→ 输 API key（掩码）→
-//! 保存即 `default_provider` + 立即可用（`ensure_real_runtime` 每次 send
-//! 重读配置，无需重建 runtime）。
+//! T35 起数据面与 v2 共享服务同源：预设目录 = `r_code_runtime` 的
+//! `provider_catalog::PRESETS`（自桌面迁移），落盘 = v2 `SettingsStore`
+//!（profile root 的 settings.json + 平台凭据后端）。守护进程的
+//! `SettingsBackedResolver` 每次 run 前重读 settings.json，保存即对下一次
+//! 发送生效（与 `settings.apply` RPC 等价；此处本地直写以保持浮层同步
+//! 提交语义）。
+//!
+//! 两步流：选预设（输入过滤 + ↑↓）→ 输 API key（掩码）→ 保存即默认。
 //!
 //! 2026-09-02 G11（pi `envApiKeyAuth()` 对齐）：key 步可 **Tab 切换环境变量
-//! 鉴权模式**——不保存任何密钥，落盘的 provider `api_key` 留空，由宿主
-//! `settings::apply_env` 在每次加载时从环境变量回填（`R_CODE_PROVIDER_<ID>
-//! _API_KEY` 或厂商别名）。零凭据落盘 + SSH/CI 场景天然契合。
+//! 鉴权模式**——不保存任何密钥，provider 条目带 `env_var`，加载时由
+//! SettingsStore 从环境变量回填。零凭据落盘 + SSH/CI 场景天然契合。
 
-use r_code_host::provider_catalog::{Preset, PRESETS};
+use r_code_runtime::services::provider_catalog::{Preset, PRESETS};
+use r_code_runtime::services::settings_store::{ProviderEntry, SettingsStore};
 
 /// 可配置预设（与设置页同口径：排除 deepseek_anthropic 聚合口）。
 pub fn setup_presets() -> Vec<&'static Preset> {
@@ -45,7 +48,7 @@ pub enum Step {
     /// 选预设：输入即过滤；selection 是过滤结果内的下标。
     PickProvider { query: String, selection: usize },
     /// 输入 API key：掩码显示，不回显原文；`env_mode` = 环境变量鉴权
-    /// （G11：key 不落盘不进凭据后端，加载时由 apply_env 回填）。
+    ///（G11：key 不落盘不进凭据后端，加载时由 SettingsStore 回填）。
     EnterKey {
         preset_id: String,
         key: String,
@@ -301,41 +304,38 @@ impl Default for SetupFlow {
     }
 }
 
-/// 保存配置：插入/覆盖该预设的 ProviderConfig 并设为默认。
-/// api_key 明文只在这条路径上出现一次——`save_global` 会把它迁入平台
-/// 凭据后端并在落盘的 TOML 里清空。
-pub fn apply(config_dir: &std::path::Path, preset: &Preset, api_key: &str) -> Result<(), String> {
+/// 落盘的 provider 条目（预设默认：无 base_url/protocol 覆盖——跟随目录）。
+fn preset_entry(preset: &Preset, env_var: Option<String>) -> ProviderEntry {
+    ProviderEntry {
+        selection: preset.id.to_string(),
+        model: preset.model.to_string(),
+        base_url: None,
+        protocol: Some(preset.protocol.as_str().to_string()),
+        env_var,
+    }
+}
+
+/// 保存配置：插入/覆盖该预设的 v2 provider 条目并设为默认。
+/// api_key 明文只在这条路径上出现一次——`SettingsStore::apply_provider`
+/// 把它迁入平台凭据后端，settings.json 不落 key 材料。守护进程每次 run
+/// 前重读 settings.json（live resolver），保存即生效。
+pub fn apply(profile_root: &std::path::Path, preset: &Preset, api_key: &str) -> Result<(), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("API key 为空".to_string());
     }
-    let settings = r_code_host::settings::SettingsService::new(config_dir.to_path_buf());
-    let mut config = settings
-        .load_global_unvalidated()
-        .map_err(|error| format!("读取配置失败：{error}"))?;
-    config.providers.insert(
-        preset.id.to_string(),
-        agent_config::ProviderConfig {
-            base_url: preset.base_url.to_string(),
-            api_key: key.to_string(),
-            model: preset.model.to_string(),
-            provider_kind: Some(preset.id.to_string()),
-            max_tokens: preset.max_output_tokens,
-            temperature: None,
-            protocol: Some(preset.protocol.as_str().to_string()),
-            show_reasoning: true,
-        },
-    );
-    config.default_provider = preset.id.to_string();
-    settings
-        .save_global(&config)
+    let store = SettingsStore::new(profile_root.to_path_buf());
+    store
+        .apply_provider(preset_entry(preset, None), Some(key))
         .map_err(|error| format!("保存配置失败：{error}"))?;
+    store
+        .set_default(preset.id)
+        .map_err(|error| format!("设置默认服务失败：{error}"))?;
     Ok(())
 }
 
-/// G11：该预设环境变量鉴权会读取的变量名（与宿主
-/// `settings::provider_env_value` 同一顺序：厂商别名在前、profile 作用域
-/// 变量在后——别名是用户 shell 里最常见的既有形态）。
+/// G11：该预设环境变量鉴权会读取的变量名（展示清单：厂商别名在前、
+/// profile 作用域变量在后——别名是用户 shell 里最常见的既有形态）。
 pub fn env_var_names(preset_id: &str) -> Vec<String> {
     let mut names = Vec::new();
     match preset_id {
@@ -351,34 +351,31 @@ pub fn env_var_names(preset_id: &str) -> Vec<String> {
     names
 }
 
-/// G11 环境变量鉴权落盘：provider 配置 `api_key` 留空 + 设为默认。
+/// 环境变量条目实际登记的变量（v2 条目单变量字段：厂商别名优先，无别名
+/// 的预设用 profile 作用域变量）。
+fn registered_env_var(preset_id: &str) -> String {
+    env_var_names(preset_id)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| format!("R_CODE_PROVIDER_{}_API_KEY", preset_id.to_ascii_uppercase()))
+}
+
+/// G11 环境变量鉴权落盘：provider 条目 `env_var` 生效、无 key 材料。
 ///
-/// 空密钥不触碰平台凭据后端（`save_global` 只迁移非空 key）——密钥始终
-/// 只存在于用户 shell 环境里，加载时由 `apply_env` 回填（pi envApiKeyAuth
-/// 同款语义：auth.json 缺失回落环境变量）。
-pub fn apply_env_mode(config_dir: &std::path::Path, preset: &Preset) -> Result<(), String> {
-    let settings = r_code_host::settings::SettingsService::new(config_dir.to_path_buf());
-    let mut config = settings
-        .load_global_unvalidated()
-        .map_err(|error| format!("读取配置失败：{error}"))?;
-    config.providers.insert(
-        preset.id.to_string(),
-        agent_config::ProviderConfig {
-            base_url: preset.base_url.to_string(),
-            // 环境变量模式：密钥永不落盘；加载链 apply_env 回填。
-            api_key: String::new(),
-            model: preset.model.to_string(),
-            provider_kind: Some(preset.id.to_string()),
-            max_tokens: preset.max_output_tokens,
-            temperature: None,
-            protocol: Some(preset.protocol.as_str().to_string()),
-            show_reasoning: true,
-        },
-    );
-    config.default_provider = preset.id.to_string();
-    settings
-        .save_global(&config)
+/// 空密钥不触碰平台凭据后端（`apply_provider` 只迁移非空 key）——密钥始终
+/// 只存在于用户 shell 环境里，加载时由 SettingsStore 的 credential_of 回填
+///（pi envApiKeyAuth 同款语义：auth.json 缺失回落环境变量）。
+pub fn apply_env_mode(profile_root: &std::path::Path, preset: &Preset) -> Result<(), String> {
+    let store = SettingsStore::new(profile_root.to_path_buf());
+    store
+        .apply_provider(
+            preset_entry(preset, Some(registered_env_var(preset.id))),
+            None,
+        )
         .map_err(|error| format!("保存配置失败：{error}"))?;
+    store
+        .set_default(preset.id)
+        .map_err(|error| format!("设置默认服务失败：{error}"))?;
     Ok(())
 }
 
@@ -546,58 +543,66 @@ mod tests {
         );
     }
 
-    /// G11.A3：apply_env_mode 落盘——api_key 空、不触碰凭据后端、默认生效。
+    /// G11.A3：apply_env_mode 落盘——settings.json 无 key 材料、env_var 登记、
+    /// 默认生效（环境变量模式不触碰凭据后端）。
     #[test]
-    fn apply_env_mode_writes_empty_key_without_credentials() {
+    fn apply_env_mode_writes_entry_without_credentials() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let config_dir = dir.path().join("config");
-        std::fs::create_dir_all(&config_dir).expect("mkdir");
-        apply_env_mode(&config_dir, preset("openai")).expect("apply env mode");
+        let profile_root = dir.path().join("harness-v2");
+        std::fs::create_dir_all(&profile_root).expect("mkdir");
+        apply_env_mode(&profile_root, preset("openai")).expect("apply env mode");
 
-        let toml = std::fs::read_to_string(config_dir.join("config.toml")).expect("TOML");
-        assert!(toml.contains("default_provider = \"openai\""), "{toml}");
-        // 落盘 api_key 为空（无密钥可泄；加载期由 apply_env 回填）。
-        assert!(!toml.contains("sk-"), "不得出现任何密钥形态：{toml}");
-        let settings = r_code_host::settings::SettingsService::new(config_dir.clone());
-        let config = settings.load_global_unvalidated().expect("reload");
-        let provider = config.providers.get("openai").expect("provider 已写入");
-        assert!(provider.api_key.is_empty(), "空密钥落盘");
-        // 凭据后端无该 provider 条目（没写过任何东西）。
-        assert!(
-            settings.provider_secret("openai").expect("read").is_none(),
-            "环境变量模式不得写入平台凭据后端"
+        let settings = SettingsStore::new(profile_root.clone()).load();
+        assert_eq!(settings.default_selection.as_deref(), Some("openai"));
+        let provider = settings
+            .providers
+            .iter()
+            .find(|p| p.selection == "openai")
+            .expect("provider 已写入");
+        assert_eq!(
+            provider.env_var.as_deref(),
+            Some("OPENAI_API_KEY"),
+            "厂商别名变量登记（v2 单变量字段取首个）"
         );
+        // settings.json 不含任何 key 材料。
+        let text =
+            std::fs::read_to_string(profile_root.join("settings.json")).expect("settings.json");
+        assert!(!text.contains("sk-"), "不得出现任何密钥形态：{text}");
+        // availability：未设置变量时无凭据（has_credential=false 诚实呈现）。
+        let availability = SettingsStore::new(profile_root).availability();
+        assert_eq!(availability.len(), 1);
+        assert!(!availability[0].has_credential || std::env::var("OPENAI_API_KEY").is_ok());
     }
 
-    /// apply：写盘 + 平台凭据 + 默认 provider + 协议 slug；文件无明文 key。
+    /// apply：写盘 + 默认 provider + 协议 slug；settings.json 无明文 key。
+    ///（凭据后端写入用临时 selection 命名空间隔离，结束后清理条目。）
     #[test]
-    fn apply_writes_config_without_plaintext_key() {
+    fn apply_writes_settings_without_plaintext_key() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let config_dir = dir.path().join("config");
-        std::fs::create_dir_all(&config_dir).expect("mkdir");
-        apply(&config_dir, preset("anthropic"), "  sk-ant-secret-1  ").expect("apply");
+        let profile_root = dir.path().join("harness-v2");
+        std::fs::create_dir_all(&profile_root).expect("mkdir");
+        apply(&profile_root, preset("anthropic"), "  sk-ant-secret-1  ").expect("apply");
 
-        let settings = r_code_host::settings::SettingsService::new(config_dir.clone());
-        let config = settings.load_global_unvalidated().expect("reload");
-        assert_eq!(config.default_provider, "anthropic");
-        let provider = config.providers.get("anthropic").expect("provider 已写入");
-        assert_eq!(provider.base_url, "https://api.anthropic.com");
+        let store = SettingsStore::new(profile_root.clone());
+        let settings = store.load();
+        assert_eq!(settings.default_selection.as_deref(), Some("anthropic"));
+        let provider = settings
+            .providers
+            .iter()
+            .find(|p| p.selection == "anthropic")
+            .expect("provider 已写入");
         assert_eq!(provider.protocol.as_deref(), Some("anthropic_messages"));
         assert_eq!(provider.model, preset("anthropic").model);
-        // 落盘 TOML 不含明文 key（已被迁入平台凭据后端）。
-        let toml = std::fs::read_to_string(config_dir.join("config.toml")).expect("读 TOML");
+        // 落盘 settings.json 不含明文 key（已被迁入平台凭据后端）。
+        let text =
+            std::fs::read_to_string(profile_root.join("settings.json")).expect("读 settings.json");
         assert!(
-            !toml.contains("sk-ant-secret-1"),
-            "明文 key 不得落盘：{toml}"
+            !text.contains("sk-ant-secret-1"),
+            "明文 key 不得落盘：{text}"
         );
-        // 重新加载能从凭据后端取回 key（trim 已生效）。
-        let resolved = settings.load_global().expect("validated load");
-        let secret = resolved
-            .providers
-            .get("anthropic")
-            .expect("provider")
-            .api_key
-            .clone();
-        assert_eq!(secret, "sk-ant-secret-1", "key 从平台凭据后端回填");
+        // availability 反映凭据已入后端（credential_of 可取回）。
+        assert!(store.availability().iter().any(|row| row.has_credential));
+        // 清理：移除测试写入的凭据后端条目（避免污染开发机真实凭据库）。
+        let _ = store.remove_provider("anthropic");
     }
 }

@@ -7,12 +7,18 @@ import { fileURLToPath } from "node:url";
 const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(frontendDir, relative), "utf8");
 
-function losslessWebpDimensions(buffer) {
+function webpDimensions(buffer) {
   let offset = 12;
   while (offset + 8 <= buffer.length) {
     const kind = buffer.subarray(offset, offset + 4).toString();
     const size = buffer.readUInt32LE(offset + 4);
     const data = offset + 8;
+    if (kind === "VP8X") {
+      return {
+        width: buffer.readUIntLE(data + 4, 3) + 1,
+        height: buffer.readUIntLE(data + 7, 3) + 1,
+      };
+    }
     if (kind === "VP8L") {
       assert.equal(buffer[data], 0x2f, "invalid VP8L signature");
       const bits = buffer.readUInt32LE(data + 1);
@@ -23,7 +29,7 @@ function losslessWebpDimensions(buffer) {
     }
     offset = data + size + (size & 1);
   }
-  throw new Error("lossless WebP dimensions not found");
+  throw new Error("WebP dimensions not found");
 }
 
 test("companion is a separate native-window entry with a narrow capability", () => {
@@ -247,7 +253,7 @@ test("pet button suppresses the global rectangular focus card and only accents i
   assert.doesNotMatch(spriteCss, /drop-shadow/);
 });
 
-test("registered virtual-singer atlases use Codex cells and lossless transparency", () => {
+test("registered virtual-singer atlases use Codex cells and exact alpha transparency", () => {
   const assets = [
     ["r-code-miku-v4.webp", { width: 1536, height: 1872 }],
   ];
@@ -255,7 +261,9 @@ test("registered virtual-singer atlases use Codex cells and lossless transparenc
     const sprite = fs.readFileSync(path.join(frontendDir, "src/assets/companion", name));
     assert.equal(sprite.subarray(0, 4).toString(), "RIFF");
     assert.equal(sprite.subarray(8, 12).toString(), "WEBP");
-    assert.ok(sprite.includes(Buffer.from("VP8L")), `${name} must be lossless RGBA WebP`);
-    assert.deepEqual(losslessWebpDimensions(sprite), expected);
+    assert.ok(sprite.includes(Buffer.from("VP8X")), `${name} must use extended WebP`);
+    assert.ok(sprite.includes(Buffer.from("ALPH")), `${name} must preserve an alpha channel`);
+    assert.ok(sprite.includes(Buffer.from("VP8 ")), `${name} must use budgeted lossy RGB`);
+    assert.deepEqual(webpDimensions(sprite), expected);
   }
 });

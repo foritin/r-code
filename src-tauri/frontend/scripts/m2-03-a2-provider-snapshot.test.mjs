@@ -94,7 +94,7 @@ test("Composer 模型徽标与 Settings 默认服务一致（同源 snapshot）"
   assert.ok(/服务默认/.test(composerText), "Composer 未显示 canonical 默认标注");
 
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByRole("button", { name: "模型服务", exact: true }).first().click();
+  await page.getByRole("tab", { name: "模型服务", exact: true }).first().click();
   await page.waitForTimeout(500);
   const settingsText = await page.evaluate(() => document.body.innerText);
   assert.ok(/服务默认|设为默认/.test(settingsText), "Settings 未显示默认服务语义");

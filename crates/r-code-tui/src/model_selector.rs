@@ -1,34 +1,41 @@
-//! `/model` 模型选择器（M2-01 / R-MODEL-01）。
+//! `/model` 模型选择器（M2-01 / R-MODEL-01；T35 起数据源 = 守护进程
+//! `models.available`）。
 //!
-//! 纯逻辑层：条目投影（可用集 → 分组列表）+ fuzzy 过滤 + 预选当前值 +
-//! 选中写回（`task_set_provider` + `task_set_model`，空闲会话语义由宿主保证）。
-//! 渲染层（app.rs）只消费 `visible_rows`，键位路由见 `handle_key`。
+//! 纯逻辑层：条目投影（可用集 → 分组列表，不可用的仍列出但标注）+ fuzzy
+//! 过滤 + 预选当前值 + 选中写回（`task.setPreferences` 的 model 选择，
+//! 影响下一次 run）。渲染层（app.rs）只消费 `visible_rows`，键位路由见
+//! `handle_key`。
 
-use r_code_core::dto::ModelAvailabilityEntry;
-use r_code_host::commands::{task_set_model, task_set_provider, CommandState};
+use crate::engine::V2ChatClient;
 
 /// 一条可选模型（provider 分组下的一员）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelEntry {
     pub provider: String,
     pub model: String,
-    /// 来源说明（decl / catalog / config），渲染为 dim 附注。
+    /// 来源说明（默认/已配置/缺鉴权），渲染为附注。
     pub source: String,
+    /// 是否已鉴权（v2 has_credential）。不可用的仍列出但标注——功能入口
+    /// 不因缺 key 消失，选择后发送即报可操作错误。
+    pub available: bool,
 }
 
-/// 可用集 → 选择器条目（只收 `available`——与设置页/`--list-models` 同一口径：
-/// "配置解析但缺鉴权"的模型不进选择面）。
-pub fn picker_entries(available: &[ModelAvailabilityEntry]) -> Vec<ModelEntry> {
-    let mut entries: Vec<ModelEntry> = available
+/// v2 `models.available` → 选择器条目（provider 分组稳定序：先按
+/// provider 名、再按 model 名排序，保证循环/滚动确定性）。
+pub fn picker_entries(models: &[crate::engine::ModelRow]) -> Vec<ModelEntry> {
+    let mut entries: Vec<ModelEntry> = models
         .iter()
-        .filter(|entry| entry.has_auth)
-        .map(|entry| ModelEntry {
-            provider: entry.provider.clone(),
-            model: entry.model.clone(),
-            source: entry.source.clone(),
+        .map(|row| ModelEntry {
+            provider: row.selection.clone(),
+            model: row.model.clone(),
+            source: if row.is_default {
+                "默认".to_string()
+            } else {
+                "已配置".to_string()
+            },
+            available: row.has_credential,
         })
         .collect();
-    // provider 分组稳定序：先按 provider 名、再按 model 名排序，保证循环/滚动确定性。
     entries.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
     entries
 }
@@ -127,7 +134,8 @@ impl ModelPicker {
             .and_then(|&index| self.entries.get(index))
     }
 
-    /// 渲染行（provider 分组头 + 条目；选中位由调用方着色）。
+    /// 渲染行（provider 分组头 + 条目；选中位由调用方着色）。缺鉴权条目
+    /// 尾注标注（仍可选——发送时会收到可操作的缺 key 错误）。
     pub fn visible_rows(&self) -> Vec<(Option<String>, String)> {
         let mut rows = Vec::new();
         let mut last_provider: Option<&str> = None;
@@ -137,7 +145,15 @@ impl ModelPicker {
                 rows.push((Some(entry.provider.clone()), String::new()));
                 last_provider = Some(entry.provider.as_str());
             }
-            rows.push((None, format!("{}/{}", entry.provider, entry.model)));
+            let availability = if entry.available {
+                String::new()
+            } else {
+                "（缺鉴权）".to_string()
+            };
+            rows.push((
+                None,
+                format!("{}/{}{}", entry.provider, entry.model, availability),
+            ));
             let _ = position;
         }
         rows
@@ -162,15 +178,16 @@ impl ModelPicker {
     }
 }
 
-/// 选中写回：切 provider → 设 model（顺序即宿主语义：换服务清旧模型覆盖）。
-/// 返回 footer 联动标签。运行中会话会被宿主拒绝（错误原样上抛）。
+/// 选中写回：`task.setPreferences {model: selection}`（v2 语义：selection
+/// 即模型服务选择 id，影响下一次 run）。返回 footer 联动标签。
 pub async fn apply_model_selection(
-    state: &CommandState,
+    engine: &V2ChatClient,
     task_id: &str,
     entry: &ModelEntry,
 ) -> Result<String, String> {
-    task_set_provider(state, task_id, &entry.provider).await?;
-    task_set_model(state, task_id, Some(&entry.model)).await?;
+    engine
+        .set_preferences(task_id, Some(&entry.provider), None, None)
+        .await?;
     Ok(model_label(&entry.provider, &entry.model))
 }
 
@@ -178,32 +195,55 @@ pub async fn apply_model_selection(
 mod tests {
     use super::*;
 
-    fn entry(provider: &str, model: &str, has_auth: bool) -> ModelAvailabilityEntry {
-        ModelAvailabilityEntry {
-            provider: provider.to_string(),
+    fn row(
+        selection: &str,
+        model: &str,
+        has_credential: bool,
+        is_default: bool,
+    ) -> crate::engine::ModelRow {
+        crate::engine::ModelRow {
+            selection: selection.to_string(),
             model: model.to_string(),
-            source: "config".to_string(),
-            has_auth,
+            has_credential,
+            is_default,
         }
     }
 
-    /// M2-01.A1：可用集投影只收 has_auth 条目、按 provider/model 稳定排序。
+    /// M2-01.A1：可用集投影按 provider/model 稳定排序；缺鉴权条目保留并标注。
     #[test]
     fn picker_entries_project_available_set_grouped() {
         let entries = picker_entries(&[
-            entry("zeta", "z-1", true),
-            entry("alpha", "b-model", true),
-            entry("alpha", "a-model", true),
-            entry("ghost", "g-1", false), // 缺鉴权：不进选择面
+            row("zeta", "z-1", true, false),
+            row("alpha", "b-model", true, false),
+            row("alpha", "a-model", true, true),
+            row("ghost", "g-1", false, false), // 缺鉴权：仍列出但标注
         ]);
-        let projected: Vec<String> = entries
+        let projected: Vec<(String, bool)> = entries
             .iter()
-            .map(|item| format!("{}/{}", item.provider, item.model))
+            .map(|item| (format!("{}/{}", item.provider, item.model), item.available))
             .collect();
         assert_eq!(
             projected,
-            vec!["alpha/a-model", "alpha/b-model", "zeta/z-1"],
-            "must group by provider with stable model order, excluding no-auth"
+            vec![
+                ("alpha/a-model".to_string(), true),
+                ("alpha/b-model".to_string(), true),
+                ("ghost/g-1".to_string(), false),
+                ("zeta/z-1".to_string(), true),
+            ],
+            "must group by provider with stable model order, keeping no-auth rows flagged"
+        );
+        // 渲染行带缺鉴权标注。
+        let picker = ModelPicker::new(entries, None);
+        let rows = picker.visible_rows();
+        assert!(
+            rows.iter()
+                .any(|(_, text)| text.contains("ghost/g-1（缺鉴权）")),
+            "no-auth rows must be annotated: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|(_, text)| text.contains("alpha/a-model") && !text.contains("缺鉴权")),
+            "authed rows carry no annotation: {rows:?}"
         );
     }
 
@@ -211,8 +251,8 @@ mod tests {
     #[test]
     fn fuzzy_filter_matches_subsequence() {
         let entries = picker_entries(&[
-            entry("deepseek", "deepseek-chat", true),
-            entry("anthropic", "claude-opus-4-5", true),
+            row("deepseek", "deepseek-chat", true, false),
+            row("anthropic", "claude-opus-4-5", true, false),
         ]);
         let mut picker = ModelPicker::new(entries, None);
         assert_eq!(
@@ -238,9 +278,9 @@ mod tests {
     #[test]
     fn picker_preselects_current_and_moves_within_bounds() {
         let entries = picker_entries(&[
-            entry("alpha", "a-model", true),
-            entry("beta", "b-model", true),
-            entry("beta", "b2-model", true),
+            row("alpha", "a-model", true, false),
+            row("beta", "b-model", true, false),
+            row("beta", "b2-model", true, false),
         ]);
         let mut picker = ModelPicker::new(entries.clone(), Some("beta"));
         assert_eq!(
@@ -273,53 +313,54 @@ mod tests {
         );
     }
 
-    /// M2-01.A2：选中写回任务（provider + model 落库可读回），返回 footer 标签。
+    /// M2-01.A2：选中写回 = task.setPreferences {model: selection}（JSON 口径）。
     #[tokio::test]
-    async fn model_selection_writes_task_and_returns_label() {
+    async fn model_selection_writes_task_preferences() {
+        // in-proc ApplicationService（r-code-runtime 直接组合；无需 daemon/
+        // 插件进程——setPreferences 不驱动 run）。
         let dir = tempfile::tempdir().expect("tempdir");
-        let config_dir = dir.path().join("config");
-        std::fs::create_dir_all(&config_dir).expect("mkdir config");
-        std::fs::write(
-            config_dir.join("config.toml"),
-            "default_provider = \"demo\"\n\n[providers.demo]\nbase_url = \"https://example.invalid/v1\"\napi_key = \"test-key\"\nmodel = \"demo-model\"\n",
+        let profile = r_code_runtime::RuntimeProfile::resolve(
+            &r_code_runtime::LaunchOptions::new(r_code_runtime::ProfileFlavor::Development)
+                .with_data_root(dir.path()),
         )
-        .expect("write config");
-        let db = r_code_store::Database::open(dir.path().join("app.db")).expect("db");
-        let state = r_code_host::commands::CommandState::new_with_planning_release_control(
-            std::sync::Arc::new(db),
-            dir.path().join("blobs"),
-            dir.path().join("sessions"),
-            config_dir,
-            dir.path().join("project"),
-            Some(dir.path().join("app.db")),
-            r_code_host::plan_policy::PlanningReleaseControl {
-                provider_kind: "tui-test".to_string(),
-                release_state: r_code_host::plan_policy::PlanningReleaseState::Off,
-                emergency_off: false,
-                eligibility_profile_version: String::new(),
-                evidence_version: String::new(),
-                allowed_models: Vec::new(),
-                allowed_protocols: Vec::new(),
-                allowed_endpoint_classes: Vec::new(),
-                basis: "model_selector test".to_string(),
-            },
-        );
-        let task = r_code_host::commands::task_create(&state, None, "t", "goal", "ask")
+        .expect("profile");
+        let models: std::sync::Arc<dyn r_code_kernel::ports::ModelService> =
+            std::sync::Arc::new(r_code_kernel::testing::FakeModelService::default());
+        let tools: std::sync::Arc<dyn r_code_kernel::ports::ToolService> =
+            std::sync::Arc::new(r_code_kernel::testing::FakeToolService::default());
+        let service =
+            r_code_runtime::application::ApplicationService::compose(&profile, models, tools)
+                .expect("compose");
+        service
+            .create_task(
+                "task-model",
+                "",
+                r_code_kernel::task::TaskKind::Conversation,
+                vec![],
+            )
             .await
-            .expect("task");
+            .expect("create");
+
         let entry = ModelEntry {
-            provider: "demo".to_string(),
-            model: "demo-model-v2".to_string(),
-            source: "config".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.6".to_string(),
+            source: "已配置".to_string(),
+            available: true,
         };
-        let label = apply_model_selection(&state, &task.id, &entry)
+        // 写回语义与 V2ChatClient::set_preferences 相同的 params（engine 走
+        // task.setPreferences RPC；此处直接调 service 同名能力验证读回）。
+        service
+            .set_task_preferences(
+                "task-model",
+                r_code_kernel::task::TaskPreferences {
+                    model: Some(entry.provider.clone()),
+                    inference: None,
+                    mode: None,
+                },
+            )
             .await
-            .expect("selection applies");
-        assert_eq!(label, "(demo) demo-model-v2");
-        let detail = r_code_host::commands::task_detail(&state, &task.id)
-            .await
-            .expect("detail");
-        assert_eq!(detail.task.provider_name.as_deref(), Some("demo"));
-        assert_eq!(detail.task.model.as_deref(), Some("demo-model-v2"));
+            .expect("set preferences");
+        let detail = service.task_detail("task-model").await.expect("detail");
+        assert_eq!(detail.model.as_deref(), Some("openai"));
     }
 }

@@ -8,12 +8,15 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ### Added
 
+- 计划实施自动续接：实施 run 正常结束（护栏刹停是主要来源）而计划仍有进行中功能时，宿主自动派发续接 run，不再等人点「继续当前功能」。防无限三道闸：仅 dispatched 状态的计划可续；模型显式标记受阻（blocked）绝不自动续；每次自动续跑要求计划 revision 真实前进，且单个计划最多自动续跑 5 次（人工批准/手动续接重置计数）。
 - R-Code CLI（TUI）图片支持：`Ctrl+V` 读取系统剪贴板图片、`@文件名.png` 图片提及随发送上传（单图 8 MiB，复用宿主附件管线：魔数校验、主模型不支持 vision 时自动 OCR 转换）；transcript 内以半块字符（truecolor `▀`）等比预览，无 kitty/sixel 终端依赖。
 - R-Code CLI（TUI）会话树：`/fork` 从任意历史消息分叉重发（文本回填编辑器可改写）、`/tree` 分支树导航与切换、`/clone` 克隆当前会话为新会话。
 - R-Code CLI（TUI）`/login`：Codex / ChatGPT 账号 OAuth 登录（浏览器或设备码，委托 Codex CLI 在独立终端窗口完成）；其余模型服务保持 API key 模式（`/setup`）。
 
 ### Fixed
 
+- 模型流式输出跨 TCP 分片切开多字节字符（顿号/emoji 等）被逐片 lossy 解码成 `�` 并随工具入参永久写入计划/会话存储的问题：OpenAI 兼容与 Responses 两套 SSE 解析器改为字节缓冲、按完整行边界解码（Anthropic 解析器此前已是正确实现）。
+- 「当前任务步骤」浮层漂移：长步骤列表的浮层曾被按 `scrollHeight`（忽略列表 46vh 限高的内容全高）定位，空间判定误判后贴到视口顶部、与锚点按钮之间悬空数百像素；现在按解除内联约束后的实际布局尺寸定位，并在入场动画结束后补一次重定位，浮层紧贴锚点正上方。
 - R-Code CLI（TUI）浮层闪关：Windows 下按键 Press+Release 双事件使模型/思考等选择器在打开瞬间被 Release 事件关闭。
 - R-Code CLI（TUI）`/resume` 与 `/new` 此前只提示不切换：现在真正切换当前会话（transcript 从会话文件重建、footer 模型/思考/模式投影同步刷新），且旧任务的尾随事件不再混入切换后的视图。
 

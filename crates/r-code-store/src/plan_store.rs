@@ -28,6 +28,10 @@ use crate::Database;
 
 const MAX_PLAN_ITEMS: usize = 100;
 const MAX_TEXT_ANSWER_CHARS: usize = 4_000;
+/// 单个 Plan 自动续跑的绝对上限。即使每次续跑 revision 都有进展，达到上限后也
+/// 必须人工介入（手动"继续当前功能"会重置计数）——防止模型反复小步推进形成
+/// 无界烧钱循环。每次自动续跑仍受独立 run 预算（工具轮数/墙钟/思考字符）约束。
+pub const MAX_AUTO_CONTINUATIONS: i64 = 5;
 pub const PLAN_CONTINUATION_INTERRUPTED: &str =
     "PLAN_CONTINUATION_INTERRUPTED: application restarted before dispatch acknowledgement";
 pub const PLAN_IMPLEMENTATION_DISPATCH_INTERRUPTED: &str =
@@ -1402,9 +1406,11 @@ impl PlanStore {
                 |row| row.get(0),
             )
             .map_err(db_err)?;
-        if !matches!(task_state.as_str(), "interrupted" | "review_ready") {
+        // "idle" 只会由自动续跑路径抵达（run 零变更正常结束回到 idle，但 Plan 仍有
+        // 活动功能）；手动续接命令层仍校验 interrupted | review_ready。
+        if !matches!(task_state.as_str(), "interrupted" | "review_ready" | "idle") {
             return Err(invalid(format!(
-                "Plan continuation requires an interrupted or review-ready task, got {task_state}"
+                "Plan continuation requires an interrupted, review-ready or idle task, got {task_state}"
             )));
         }
         let branch_exists: bool = tx
@@ -1478,6 +1484,113 @@ impl PlanStore {
         tx.commit().map_err(db_err)?;
         drop(conn);
         self.require_view(task_id, plan_id)
+    }
+
+    /// Run 正常结束后的自动续跑资格判定与登记（原子）。
+    ///
+    /// 防无限三道闸：
+    /// 1. 仅 executing 且 implementation_dispatch_state = dispatched 的 Plan；
+    /// 2. 仅当存在 in_progress feature——全部完成、或活动功能被模型显式标 blocked
+    ///    时返回 None（blocked 是"实施受阻需要人决策"的语义，绝不自动续）；
+    /// 3. 已自动续跑次数 < [`MAX_AUTO_CONTINUATIONS`]，且自上次自动续跑以来
+    ///    plan.revision 严格前进——模型必须真实推进过 Plan 状态（至少一次
+    ///    plan_item_update 落库），原地空转的 run 不再获得自动续跑。
+    ///
+    /// 返回 `Ok(Some(view))` 表示本次自动续跑已登记（计数 +1、锚定当前 revision），
+    /// 调用方应继续调用 [`Self::stage_implementation_continuation`]；`Ok(None)`
+    /// 表示不自动续（由人工介入）。人工路径（批准 / 手动续接）通过
+    /// [`Self::reset_auto_continuations`] 重置账本。
+    pub fn claim_auto_continuation(&self, task_id: &str) -> Result<Option<PlanView>, ProductError> {
+        let plan_id = {
+            let conn = self.db.conn()?;
+            conn.query_row(
+                "SELECT id FROM plans WHERE task_id = ?1 AND state = 'executing' LIMIT 1",
+                params![task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)?
+        };
+        let Some(plan_id) = plan_id else {
+            return Ok(None);
+        };
+        let lock = plan_lock(&plan_id)?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| ProductError::Other("Plan lock is poisoned".to_string()))?;
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let plan = require_owned_plan(&tx, task_id, &plan_id)?;
+        if plan.implementation_dispatch_state != PlanImplementationDispatchState::Dispatched {
+            return Ok(None);
+        }
+        let approved_revision = plan
+            .approved_revision
+            .ok_or_else(|| invalid("executing Plan has no approved revision"))?;
+        let has_active = load_items(&tx, &plan_id, approved_revision)?
+            .iter()
+            .any(|item| item.state == PlanItemState::InProgress);
+        if !has_active {
+            return Ok(None);
+        }
+        let (used, anchor): (i64, Option<i64>) = tx
+            .query_row(
+                "SELECT auto_continuations, auto_continuation_revision FROM plans \
+                 WHERE id = ?1 AND task_id = ?2",
+                params![&plan_id, task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(db_err)?;
+        if used >= MAX_AUTO_CONTINUATIONS {
+            return Ok(None);
+        }
+        // 进展判定：首次自动续跑（无锚点）放行；其后要求 revision 严格前进。
+        let current_revision = plan.revision as i64;
+        if anchor.is_some_and(|anchor| current_revision <= anchor) {
+            return Ok(None);
+        }
+        let changed = tx
+            .execute(
+                "UPDATE plans SET auto_continuations = auto_continuations + 1, \
+                 auto_continuation_revision = ?1, updated_at = ?2 \
+                 WHERE id = ?3 AND task_id = ?4 AND auto_continuations = ?5 \
+                   AND auto_continuation_revision IS ?6 AND state = 'executing'",
+                params![
+                    current_revision,
+                    Utc::now().to_rfc3339(),
+                    &plan_id,
+                    task_id,
+                    used,
+                    anchor
+                ],
+            )
+            .map_err(db_err)?;
+        if changed != 1 {
+            // 并发竞争（另一处已登记）：放弃本次自动续跑，交由既有队列/人工路径。
+            return Ok(None);
+        }
+        tx.commit().map_err(db_err)?;
+        drop(conn);
+        self.require_view(task_id, &plan_id).map(Some)
+    }
+
+    /// 人工介入（批准计划 / 手动"继续当前功能"）后清零自动续跑账本，
+    /// 为新一轮自动续跑预算重新计数。
+    pub fn reset_auto_continuations(
+        &self,
+        task_id: &str,
+        plan_id: &str,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE plans SET auto_continuations = 0, auto_continuation_revision = NULL, \
+             updated_at = ?1 WHERE id = ?2 AND task_id = ?3",
+            params![Utc::now().to_rfc3339(), plan_id, task_id],
+        )
+        .map_err(db_err)?;
+        Ok(())
     }
 
     pub fn mark_implementation_dispatch_failed_for_queue(

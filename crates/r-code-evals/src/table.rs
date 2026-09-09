@@ -23,7 +23,7 @@ pub struct EvalTableRow {
     pub repetition: u32,
     pub score: Option<f64>,
     pub rationale: Option<String>,
-    /// pass = score >= 1 且 run 收敛（R-EVL-03 固定判据）。
+    /// pass = score 有限、位于 [0,1]、等于 1 且 run 收敛（R-EVL-03 固定判据）。
     pub passed: bool,
     /// 运行错误（harness 级失败行没有结果）。
     pub run_error: Option<String>,
@@ -72,7 +72,7 @@ impl EvalDiagnostics {
 #[derive(Debug, Clone, Default)]
 pub struct EvalTableReport {
     pub rows: Vec<EvalTableRow>,
-    /// candidate 通过率 − baseline 通过率（分臂分母 = 各臂成功行数）。
+    /// candidate 通过率 − baseline 通过率（分臂分母 = 各臂全部预期运行行）。
     pub pass_rate_lift: f64,
     pub baseline_pass_rate: f64,
     pub candidate_pass_rate: f64,
@@ -205,12 +205,12 @@ pub async fn eval_harness_table(
         }
     }
 
-    // Pass Rate Lift（分臂分母 = 各臂成功行数；无行时 0）。
+    // Pass Rate Lift（分臂分母 = 各臂全部预期运行行；harness 错计失败；无行时 0）。
     let rate = |harness_name: &str| -> f64 {
         let rows: Vec<&EvalTableRow> = report
             .rows
             .iter()
-            .filter(|row| row.harness == harness_name && row.run_error.is_none())
+            .filter(|row| row.harness == harness_name)
             .collect();
         if rows.is_empty() {
             return 0.0;
@@ -275,7 +275,10 @@ fn scored_row(
         result,
         fixture: input.fixture.as_deref(),
     });
-    let passed = result.stop_reason.is_settled() && verdict.score >= 1.0;
+    let passed = result.stop_reason.is_settled()
+        && verdict.score.is_finite()
+        && (0.0..=1.0).contains(&verdict.score)
+        && verdict.score >= 1.0;
     EvalTableRow {
         harness: harness_name.to_string(),
         input_id: input.id.clone(),
@@ -436,7 +439,32 @@ mod tests {
         assert!(report.diagnostics.harness_errors[0].contains("candidate/i1#1"));
         assert_eq!(report.diagnostics.unscorable.len(), 1);
         assert!(report.diagnostics.unscorable[0].contains("baseline/i1#1"));
+        assert_eq!(report.baseline_pass_rate, 0.0);
+        assert_eq!(report.candidate_pass_rate, 0.0);
+        assert!(!report.rows[0].passed, "out-of-range score cannot pass");
         // harness 错行不进配对。
         assert!(report.pairs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn harness_errors_count_as_failed_runs() {
+        let pass_judge = create_judge("pass", Arc::new(|_| JudgeVerdict::pass("always")));
+        let ok = Arc::new(ScriptedHarness {
+            fail: false,
+            usage: None,
+            wall_ms: 1,
+        });
+        let broken = Arc::new(ScriptedHarness {
+            fail: true,
+            usage: None,
+            wall_ms: 1,
+        });
+        let inputs = vec![EvalInput::new("i1", "p")];
+
+        let report = eval_harness_table(ok, broken, &inputs, 1, &pass_judge).await;
+
+        assert_eq!(report.baseline_pass_rate, 1.0);
+        assert_eq!(report.candidate_pass_rate, 0.0);
+        assert_eq!(report.pass_rate_lift, -1.0);
     }
 }

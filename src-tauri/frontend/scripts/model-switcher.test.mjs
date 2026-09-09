@@ -40,9 +40,8 @@ test("provider groups are single-expand sections without inline custom-model ent
   assert.doesNotMatch(switcher, /添加自定义模型|model-custom|customFor|customValue/);
 });
 
-test("entering the model list keeps every provider group collapsed by default", () => {
-  assert.match(switcher, /const openModels = \(\) => \{[^]*?setExpandedProvider\(null\);[^]*?setView\("models"\)/);
-  assert.doesNotMatch(switcher, /setExpandedProvider\(active\.name/);
+test("entering the model list expands the current provider for direct model selection", () => {
+  assert.match(switcher, /const openModels = \(\) => \{[^]*?setExpandedProvider\(active\.name\);[^]*?setView\("models"\)/);
 });
 
 test("provider default remains a null model binding", () => {

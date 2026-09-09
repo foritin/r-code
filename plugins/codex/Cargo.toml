@@ -1,0 +1,27 @@
+[package]
+name = "r-code-harness-codex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Built-in Codex harness plugin: App Server workflow over managed host processes."
+
+[[bin]]
+name = "r-code-harness-codex"
+path = "src/main.rs"
+
+[dependencies]
+r-code-harness-sdk = { workspace = true }
+r-code-harness-protocol = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+r-code-kernel = { workspace = true }
+r-code-store = { workspace = true }
+r-code-runtime = { workspace = true }

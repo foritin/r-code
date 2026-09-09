@@ -1,13 +1,13 @@
-//! TaskMode 循环（M2-03 / R-MODE-01）。
+//! TaskMode 循环（M2-03 / R-MODE-01；T35 起写回走守护进程
+//! `task.setPreferences` 的 mode）。
 //!
-//! `Shift+Tab` 循环 ask→edit→auto→plan（宿主 `TaskMode` 枚举序，PRD §2.6）；
-//! 写回经 `task_set_mode`（运行中被拒、Plan 需 R-Code 引擎——宿主语义不动）。
-//! 输入区模式态：非 ask 档显示 `[mode]` 前缀，plan 用 magenta（色彩语义 §2.7）。
+//! `Shift+Tab` 循环 ask→edit→auto→plan；写回 per-task 偏好（影响下一次
+//! run）。输入区模式态：非 ask 档显示 `[mode]` 前缀，plan 用 magenta
+//!（色彩语义 §2.7）。
 
-use r_code_core::dto::TaskMode;
-use r_code_host::commands::{task_set_mode, CommandState};
+use crate::engine::V2ChatClient;
 
-/// 循环序（= 宿主枚举序）。
+/// 循环序（= 模式枚举序）。
 pub const MODE_CYCLE: [&str; 4] = ["ask", "edit", "auto", "plan"];
 
 /// 下一档（未知值回落 ask，避免脏状态卡死循环）。
@@ -38,10 +38,14 @@ pub fn mode_badge(mode: &str) -> Option<(&'static str, BadgeColor)> {
     }
 }
 
-/// 写回任务模式（运行中/引擎不支持由宿主拒绝并原样上抛）。
-pub async fn apply_mode(state: &CommandState, task_id: &str, mode: &str) -> Result<(), String> {
-    let parsed = TaskMode::try_from_str(mode).ok_or_else(|| format!("未知模式：{mode}"))?;
-    task_set_mode(state, task_id, parsed).await.map(|_| ())
+/// 写回任务模式（守护进程校验未知模式；影响下一次 run）。
+pub async fn apply_mode(engine: &V2ChatClient, task_id: &str, mode: &str) -> Result<(), String> {
+    if !MODE_CYCLE.contains(&mode) {
+        return Err(format!("未知模式：{mode}"));
+    }
+    engine
+        .set_preferences(task_id, None, None, Some(mode))
+        .await
 }
 
 #[cfg(test)]
@@ -50,7 +54,7 @@ mod tests {
 
     /// M2-03.A1：循环序 ask→edit→auto→plan→ask；未知值回落 ask。
     #[test]
-    fn cycle_follows_host_enum_order() {
+    fn cycle_follows_enum_order() {
         assert_eq!(cycle_mode("ask"), "edit");
         assert_eq!(cycle_mode("edit"), "auto");
         assert_eq!(cycle_mode("auto"), "plan");
@@ -58,49 +62,48 @@ mod tests {
         assert_eq!(cycle_mode("bogus"), "ask", "未知值安全回落");
     }
 
-    /// M2-03.A2：模式写回任务（读回一致）。
+    /// M2-03.A2：模式写回任务（task.detail 读回一致；非法模式客户端拒绝）。
     #[tokio::test]
     async fn mode_persists_on_task() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = r_code_store::Database::open(dir.path().join("app.db")).expect("db");
-        let config_dir = dir.path().join("config");
-        std::fs::create_dir_all(&config_dir).expect("mkdir");
-        let state = r_code_host::commands::CommandState::new_with_planning_release_control(
-            std::sync::Arc::new(db),
-            dir.path().join("blobs"),
-            dir.path().join("sessions"),
-            config_dir,
-            dir.path().join("project"),
-            Some(dir.path().join("app.db")),
-            r_code_host::plan_policy::PlanningReleaseControl {
-                provider_kind: "tui-test".to_string(),
-                release_state: r_code_host::plan_policy::PlanningReleaseState::Off,
-                emergency_off: false,
-                eligibility_profile_version: String::new(),
-                evidence_version: String::new(),
-                allowed_models: Vec::new(),
-                allowed_protocols: Vec::new(),
-                allowed_endpoint_classes: Vec::new(),
-                basis: "task_mode test".to_string(),
-            },
-        );
-        let task = r_code_host::commands::task_create(&state, None, "t", "goal", "ask")
+        let profile = r_code_runtime::RuntimeProfile::resolve(
+            &r_code_runtime::LaunchOptions::new(r_code_runtime::ProfileFlavor::Development)
+                .with_data_root(dir.path()),
+        )
+        .expect("profile");
+        let models: std::sync::Arc<dyn r_code_kernel::ports::ModelService> =
+            std::sync::Arc::new(r_code_kernel::testing::FakeModelService::default());
+        let tools: std::sync::Arc<dyn r_code_kernel::ports::ToolService> =
+            std::sync::Arc::new(r_code_kernel::testing::FakeToolService::default());
+        let service =
+            r_code_runtime::application::ApplicationService::compose(&profile, models, tools)
+                .expect("compose");
+        service
+            .create_task(
+                "task-mode",
+                "",
+                r_code_kernel::task::TaskKind::Conversation,
+                vec![],
+            )
             .await
-            .expect("task");
-        apply_mode(&state, &task.id, "plan")
+            .expect("create");
+        // 与 V2ChatClient::set_preferences 同参数形状（mode 字符串）。
+        service
+            .set_task_preferences(
+                "task-mode",
+                r_code_kernel::task::TaskPreferences {
+                    model: None,
+                    inference: None,
+                    mode: Some("plan".to_string()),
+                },
+            )
             .await
             .expect("apply plan");
-        let detail = r_code_host::commands::task_detail(&state, &task.id)
-            .await
-            .expect("detail");
-        assert_eq!(detail.task.mode, TaskMode::Plan);
-        apply_mode(&state, &task.id, "auto")
-            .await
-            .expect("apply auto");
-        let detail = r_code_host::commands::task_detail(&state, &task.id)
-            .await
-            .expect("detail");
-        assert_eq!(detail.task.mode, TaskMode::Auto);
+        let detail = service.task_detail("task-mode").await.expect("detail");
+        assert_eq!(detail.mode.as_deref(), Some("plan"));
+        // 非法模式：TUI 层拒绝（不连 daemon）。
+        let engine = crate::engine::V2ChatClient::from_profile(profile, None);
+        assert!(apply_mode(&engine, "task-mode", "bogus").await.is_err());
     }
 
     /// M2-03.A3：plan 态 magenta 语义色；ask 无徽章。

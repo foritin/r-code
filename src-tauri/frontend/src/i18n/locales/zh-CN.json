@@ -1,4 +1,18 @@
 {
+  "conversationUI": {
+    "unstarted": "尚未开始",
+    "startHint": "发送第一条消息，开始对话",
+    "imageHint": "主模型支持图片时直接发送原图；仅支持文本时，使用下面的辅助方式。",
+    "ocrHint": "离线、免费，提取 PNG/JPEG 中的文字。",
+    "visionHint": "理解整张图片并生成描述，消耗所选服务的调用。",
+    "welcome": "想做些什么？",
+    "welcomeHint": "描述你的目标，也可以附加文件或选择项目。",
+    "firstMessage": "描述任务、提出问题，或输入 @ 引用文件…",
+    "technicalDetails": "技术详情",
+    "lastUpdate": "{{time}}更新",
+    "model": "模型",
+    "unconfigured": "未配置"
+  },
   "app": {
     "skipToMain": "跳到主内容",
     "opening": "正在打开…"
@@ -122,7 +136,39 @@
         "restartLater": "稍后重启",
         "restarting": "正在重启…"
       }
+    },
+    "harness": {
+      "title": "Harness 插件",
+      "description": "安装并管理本地受信 Harness 插件；任务可随时切换（仅空闲时生效，运行中的任务保持其固定版本）。",
+      "installPlaceholder": "本地插件包目录路径",
+      "install": "安装",
+      "refresh": "刷新",
+      "loading": "正在读取插件目录…",
+      "empty": "尚未安装任何 Harness 插件。",
+      "enable": "启用",
+      "disable": "停用",
+      "remove": "移除"
     }
+  },
+  "approvals": {
+    "statusRunning": "正在执行",
+    "statusLoading": "状态加载中",
+    "collapsedWorkbench": "任务工作台已收起，{{status}}",
+    "expandWorkbench": "展开任务工作台，{{count}} 个待查看变更",
+    "waitingAnnouncement": "等待你的批准。{{risk}}，工具 {{tool}}。",
+    "waitingAnnouncementWithActions": "等待你的批准。{{risk}}，工具 {{tool}}。请选择允许一次、本任务始终允许或拒绝。",
+    "waitingAnnouncementWithSingleUseActions": "等待你的批准。{{risk}}，工具 {{tool}}。此风险级别只能选择允许一次或拒绝。",
+    "waitingLabel": "等待你的批准",
+    "pausedHeading": "运行已暂停 · 等待批准 · {{count}}",
+    "additionalPending": " · 其余 {{count}} 项在「验证与决策」",
+    "currentAction": "当前操作",
+    "scopeLabel": "授权范围",
+    "persistentScope": "“本任务始终允许”仅对 {{tool}} · {{target}} 生效，最高风险 {{risk}}。",
+    "singleUseScope": "{{risk}} 高风险操作只能单次允许；不会保存长期规则。",
+    "allowOnce": "允许一次",
+    "allowAlways": "本任务始终允许",
+    "deny": "拒绝",
+    "error": "批复失败：{{error}}"
   },
   "notifications": {
     "ariaLabel": "通知",
@@ -197,5 +243,12 @@
       "service_unavailable": "系统通知服务暂不可用，提醒仍会显示在应用内。",
       "permission_request_failed": "无法请求系统通知权限，请检查操作系统的通知设置后重试。"
     }
+  },
+  "harness": {
+    "available": "可用",
+    "disabled": "已停用",
+    "incompatibleApi": "协议版本不兼容",
+    "missingEntrypoint": "缺少平台入口",
+    "unavailable": "不可用"
   }
 }

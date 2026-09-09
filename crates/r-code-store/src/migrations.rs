@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 34;
+pub const LATEST_SCHEMA_VERSION: u32 = 35;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -63,6 +63,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(32, MIGRATION_032, false),
     MigrationSpec::new(33, MIGRATION_033, false),
     MigrationSpec::new(34, MIGRATION_034, false),
+    MigrationSpec::new(35, MIGRATION_035, false),
 ];
 
 impl MigrationSpec {
@@ -1644,6 +1645,15 @@ CREATE TABLE session_attachment_migrations (
     error TEXT,
     updated_at TEXT NOT NULL
 );
+"#;
+
+/// Migration 035: Plan 实施自动续跑的防无限账本（run 终态自动派发续接）。
+/// `auto_continuations` 是本计划已发生的自动续跑次数（绝对上限，超限必须人工介入）；
+/// `auto_continuation_revision` 是上次自动续跑登记时的 plan.revision——再次自动续跑
+/// 要求 revision 严格前进（模型必须真实推进过一次 plan_item_update）。
+const MIGRATION_035: &str = r#"
+ALTER TABLE plans ADD COLUMN auto_continuations INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE plans ADD COLUMN auto_continuation_revision INTEGER;
 "#;
 
 #[cfg(test)]

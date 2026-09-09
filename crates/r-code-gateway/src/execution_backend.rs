@@ -116,18 +116,17 @@ impl CommandExecutionBackend for LocalShellBackend {
         use std::process::Stdio;
         use tokio::process::Command;
 
-        let plan = crate::tools_command::plan_shell(&spec.command, self.shell_override.as_deref())?;
+        let mut plan =
+            crate::tools_command::plan_shell(&spec.command, self.shell_override.as_deref())?;
         let mut cmd = Command::new(plan.program());
         match &plan {
             crate::tools_command::ShellPlan::Inline { args, .. } => {
                 cmd.args(args);
             }
             crate::tools_command::ShellPlan::Script {
-                leading,
-                script_path,
-                ..
+                leading, script, ..
             } => {
-                cmd.args(leading).arg(script_path);
+                cmd.args(leading).arg(script.path());
             }
         }
         cmd.current_dir(&spec.cwd)

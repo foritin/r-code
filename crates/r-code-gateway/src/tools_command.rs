@@ -55,6 +55,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
 /// stdout / stderr 各自的输出上限（字符）。
 const MAX_STREAM_CHARS: usize = 30_000;
+/// 排空缓冲的单流内存上限（字节）。
+///
+/// 模型侧的 `MAX_STREAM_CHARS` 截断只在进程退出后才发生；若排空缓冲本身不设
+/// 上限，一条高输出命令（如失控地 cat 大文件）能在进程存活期间把缓冲撑到
+/// 数百 MB 直至 OOM。这里在**排空的同时**硬性封顶：超限字节边读边丢（保证
+/// 管道不阻塞），只记一个截断标记。8 MiB 是 30,000 字符上限的数百倍余量。
+const MAX_DRAIN_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 const ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
 /// 进程退出后，等待 stdout/stderr 读端冲刷的宽限时间。个别后代进程可能继承了
 /// 管道写端且迟迟不退，`read_to_end` 会一直等 EOF；这个宽限保证命令一旦正常退出
@@ -213,6 +220,47 @@ impl ShellDialect {
     }
 }
 
+/// 临时 `.ps1` 暂存脚本的 Drop 守卫。
+///
+/// 仅靠显式 [`ShellPlan::cleanup`] 时，工具 future 若在某个 await 点被取消/
+/// 丢弃（abort、超时外层 select、任务 panic），`%TEMP%` 里的脚本文件会永久
+/// 泄漏。守卫把删除责任绑到值本身：无论从哪条路径退出，`Drop` 都会删文件；
+/// 显式 `cleanup` 只是把删除提前，且与 `Drop` 幂等共存（路径 take 后不重复删）。
+#[derive(Debug)]
+pub(crate) struct TempScriptGuard {
+    path: Option<PathBuf>,
+}
+
+impl TempScriptGuard {
+    /// 非 Windows 构建不会构造 Script 计划，`new` 仅 Windows 的 `plan_shell` 使用。
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    /// 暂存脚本路径（spawn 时 `-File` 参数引用）。
+    pub(crate) fn path(&self) -> &Path {
+        self.path
+            .as_deref()
+            .expect("guard path is only taken by cleanup/drop")
+    }
+
+    /// 显式提前删除；幂等——已删过（或 Drop 触发）不再触碰文件系统。
+    pub(crate) fn cleanup(&mut self) {
+        if let Some(path) = self.path.take() {
+            // 与既有 cleanup 语义一致：删除失败（文件被占用等）尽力而为；
+            // NotFound 属幂等路径，静默忽略。
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+impl Drop for TempScriptGuard {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
 /// 已解析的 shell 调用方式。
 #[derive(Debug)]
 pub(crate) enum ShellPlan {
@@ -234,7 +282,8 @@ pub(crate) enum ShellPlan {
         program: String,
         /// `-File` 之前的固定参数。
         leading: Vec<String>,
-        script_path: PathBuf,
+        /// 临时脚本路径（Drop 守卫持有：任何退出路径都会删除暂存文件）。
+        script: TempScriptGuard,
     },
 }
 
@@ -249,9 +298,9 @@ impl ShellPlan {
             Self::Inline { dialect, .. } | Self::Script { dialect, .. } => *dialect,
         }
     }
-    pub(crate) fn cleanup(&self) {
-        if let Self::Script { script_path, .. } = self {
-            let _ = std::fs::remove_file(script_path);
+    pub(crate) fn cleanup(&mut self) {
+        if let Self::Script { script, .. } = self {
+            script.cleanup();
         }
     }
 }
@@ -325,7 +374,8 @@ if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}\n"
                     "Bypass".to_string(),
                     "-File".to_string(),
                 ],
-                script_path,
+                // 守卫接管删除：正常收尾经显式 cleanup，中途丢弃由 Drop 兜底。
+                script: TempScriptGuard::new(script_path),
             })
         }
         // 没有 PowerShell 的极端情况（精简版 Windows）：退到 cmd.exe。
@@ -383,26 +433,44 @@ fn clip_stream(raw: &[u8]) -> String {
 /// 中止，已经读到的内容也不会丢；这用于「进程已退出、但某个继承管道句柄的
 /// 后代还没退」的场景——我们只给 `DRAIN_GRACE` 宽限，随后带部分输出返回。
 struct StreamDrain {
-    buffer: Arc<Mutex<Vec<u8>>>,
+    state: Arc<Mutex<DrainState>>,
     task: tokio::task::JoinHandle<()>,
+}
+
+/// 排空任务与收集方共享的缓冲状态。
+#[derive(Default)]
+struct DrainState {
+    bytes: Vec<u8>,
+    /// 缓冲达到 `MAX_DRAIN_BUFFER_BYTES` 后是否丢弃过后续字节。
+    /// 为 true 时最终输出追加上限截断标记（与 `clip_stream` 的标记同风格）。
+    truncated: bool,
 }
 
 fn spawn_stream_drain<R>(mut reader: R) -> StreamDrain
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let shared = Arc::clone(&buffer);
+    let state = Arc::new(Mutex::new(DrainState::default()));
+    let shared = Arc::clone(&state);
     let task = tokio::spawn(async move {
         let mut chunk = [0u8; 8192];
         loop {
             match reader.read(&mut chunk).await {
                 Ok(0) | Err(_) => break,
-                Ok(n) => shared.lock().await.extend_from_slice(&chunk[..n]),
+                Ok(n) => {
+                    let mut guard = shared.lock().await;
+                    if guard.bytes.len() < MAX_DRAIN_BUFFER_BYTES {
+                        guard.bytes.extend_from_slice(&chunk[..n]);
+                    } else {
+                        // 内存上限已到：字节继续读走（否则管道写端会阻塞），
+                        // 但不再入缓冲——进程余生的高输出只留截断标记。
+                        guard.truncated = true;
+                    }
+                }
             }
         }
     });
-    StreamDrain { buffer, task }
+    StreamDrain { state, task }
 }
 
 impl StreamDrain {
@@ -415,7 +483,17 @@ impl StreamDrain {
                 let _ = self.task.await;
             }
         }
-        self.buffer.lock().await.clone()
+        let mut state = self.state.lock().await;
+        let mut bytes = std::mem::take(&mut state.bytes);
+        if state.truncated {
+            // 排空期截断标记：告知模型输出在内存上限处被截断、其后内容未捕获。
+            // `clip_stream` 的 MAX_STREAM_CHARS 头尾保留截断仍照常叠加在上层。
+            bytes.extend_from_slice(
+                format!("\n… [输出超过 {MAX_DRAIN_BUFFER_BYTES} 字节，已在内存上限处截断] …\n")
+                    .as_bytes(),
+            );
+        }
+        bytes
     }
 }
 
@@ -518,6 +596,34 @@ async fn execute_bash(
     abort_flag: Option<&AtomicBool>,
     shell_override: Option<&str>,
 ) -> Result<String, ProductError> {
+    execute_bash_observation(input, abort_flag, shell_override)
+        .await
+        .map(|observation| observation.diagnosed_output)
+}
+
+/// Raw and diagnosed views of one shell execution. This is exposed for the deterministic corpus
+/// evaluator so it can measure the diagnosis transform itself without executing a stateful command
+/// twice. Product tool calls continue to receive only `diagnosed_output` through [`BashTool`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BashEvaluationObservation {
+    pub raw_output: String,
+    pub diagnosed_output: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+}
+
+#[doc(hidden)]
+pub async fn execute_bash_for_evaluation(
+    input: serde_json::Value,
+) -> Result<BashEvaluationObservation, ProductError> {
+    execute_bash_observation(input, None, None).await
+}
+
+async fn execute_bash_observation(
+    input: serde_json::Value,
+    abort_flag: Option<&AtomicBool>,
+    shell_override: Option<&str>,
+) -> Result<BashEvaluationObservation, ProductError> {
     let command = input
         .get("command")
         .and_then(|v| v.as_str())
@@ -551,7 +657,7 @@ async fn execute_bash(
     // 拦截命中时由 cleanup 收走）。方言档是拦截门控的唯一依据：Git Bash 档放行
     // Unix 工具，PowerShell/cmd 回落档保持前置拦截。设置覆盖指向不存在的 bash
     // 时在这里报错，绝不静默回落（PRD §4.1 第 1 级）。
-    let plan = plan_shell(command, shell_override)?;
+    let mut plan = plan_shell(command, shell_override)?;
     if let Some(rejection) = unix_only_rejection(command, plan.dialect()) {
         plan.cleanup();
         return Err(ProductError::Other(rejection));
@@ -563,11 +669,9 @@ async fn execute_bash(
             cmd.args(args);
         }
         ShellPlan::Script {
-            leading,
-            script_path,
-            ..
+            leading, script, ..
         } => {
-            cmd.args(leading).arg(script_path);
+            cmd.args(leading).arg(script.path());
         }
     }
     cmd.current_dir(cwd_path)
@@ -663,11 +767,13 @@ async fn execute_bash(
 
     let rendered = render_output(command, exit_code, timed_out, timeout_ms, &stdout, &stderr);
     // 诊断提示（R-DX-01）：失败输出经签名分类后追加有界提示；正常输出零污染。
-    Ok(crate::diagnosis::append_diagnosis(
-        &rendered,
+    let diagnosed_output = crate::diagnosis::append_diagnosis(&rendered, exit_code, plan.dialect());
+    Ok(BashEvaluationObservation {
+        raw_output: rendered,
+        diagnosed_output,
         exit_code,
-        plan.dialect(),
-    ))
+        timed_out,
+    })
 }
 
 /// Git Bash 档的 MSYS 环境治理（PRD R-SHELL-03）。
@@ -881,6 +987,118 @@ mod tests {
         let clipped = clip_stream(long.as_bytes());
         assert!(clipped.contains("中间省略"));
         assert!(clipped.ends_with("TAIL_MARKER"));
+    }
+
+    #[tokio::test]
+    async fn stream_drain_caps_buffer_at_memory_limit_and_marks_truncation() {
+        // P1 回归：超过内存上限的流边读边丢，缓冲停在上限附近（而非无限增长），
+        // 且结果尾部带截断标记；MAX_STREAM_CHARS 的模型侧截断不受影响。
+        let oversized = vec![b'x'; MAX_DRAIN_BUFFER_BYTES + 3 * 8192];
+        let drain = spawn_stream_drain(std::io::Cursor::new(oversized));
+        let taken = drain.finish().await;
+        assert!(
+            taken.len() >= MAX_DRAIN_BUFFER_BYTES,
+            "must keep up to the cap, got {}",
+            taken.len()
+        );
+        assert!(
+            taken.len() < MAX_DRAIN_BUFFER_BYTES + 8192 + 200,
+            "buffer must stop at the cap (len={})",
+            taken.len()
+        );
+        let text = String::from_utf8_lossy(&taken);
+        assert!(
+            text.contains("已在内存上限处截断"),
+            "truncation marker missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_drain_keeps_small_output_intact() {
+        // 上限之内的输出必须原样保留，且不带任何截断标记。
+        let drain = spawn_stream_drain(std::io::Cursor::new(b"small-output".to_vec()));
+        let taken = drain.finish().await;
+        assert_eq!(taken, b"small-output");
+    }
+
+    #[test]
+    fn temp_script_guard_cleans_on_drop_and_is_idempotent() {
+        let path = std::env::temp_dir().join(format!(
+            "r-code-bash-guard-test-{}.ps1",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(&path, b"test").unwrap();
+        let mut guard = TempScriptGuard::new(path.clone());
+        assert!(path.exists());
+        guard.cleanup();
+        assert!(!path.exists(), "explicit cleanup must remove the script");
+        guard.cleanup(); // 幂等：重复清理不报错也不再动文件系统。
+        drop(guard); // Drop 与显式清理共存，同样无事发生。
+    }
+
+    /// %TEMP% 里现存的 r-code-bash-*.ps1 暂存脚本。
+    #[cfg(windows)]
+    fn staged_ps1_files() -> Vec<PathBuf> {
+        std::fs::read_dir(std::env::temp_dir())
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .is_some_and(|name| name.to_string_lossy().starts_with("r-code-bash-"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn dropping_the_tool_future_does_not_leak_the_staged_ps1() {
+        // P2 回归：工具 future 在 await 点被丢弃（真实取消路径）时，
+        // Drop 守卫必须把 %TEMP% 里的暂存 .ps1 删掉，而不是等永远不会来的
+        // 显式 cleanup。空串 shell_override 强制 PowerShell 回落档（唯一产生
+        // .ps1 的档位）；cmd-only 的极端机器自动跳过。
+        let mut probe = plan_shell("echo hi", Some("")).unwrap();
+        let is_script_tier = matches!(probe, ShellPlan::Script { .. });
+        probe.cleanup();
+        if !is_script_tier {
+            return;
+        }
+
+        let dir = TempDir::new().unwrap();
+        let context = ToolExecutionContext {
+            origin_request_key: None,
+            task_id: "task-ps1-leak".to_string(),
+            run_id: "run-ps1-leak".to_string(),
+            tool_call_id: "call-ps1-leak".to_string(),
+            caller: None,
+            access_mode: r_code_core::dto::ProjectAccessMode::FullAccess,
+            shell_override: Some(String::new()),
+        };
+        let input = serde_json::json!({
+            "command": "Start-Sleep -Seconds 30",
+            "cwd": dir.path().to_str().unwrap(),
+            "timeout_ms": 60_000,
+        });
+        let before = staged_ps1_files();
+        let task = tokio::spawn(async move {
+            BashTool
+                .execute_with_context_and_abort(input, &context, None)
+                .await
+        });
+        // 等 .ps1 落盘、pwsh 起跑并挂在 await 点（wait 轮询循环）。
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        task.abort(); // 在 await 点丢弃工具 future
+        let _ = task.await;
+
+        let after = staged_ps1_files();
+        let leaked: Vec<_> = after.iter().filter(|path| !before.contains(path)).collect();
+        assert!(
+            leaked.is_empty(),
+            "temp .ps1 leaked on cancellation: {leaked:?}"
+        );
     }
 
     #[test]
@@ -1281,7 +1499,7 @@ mod tests {
         // 计划方案必须与解析档一致：Git Bash 档 Inline `-c` 直传；PowerShell 档
         // 走 .ps1 暂存（否则引号会被 -Command 重解析拆坏）；cmd 档 Inline `/D /C`。
         let resolved = crate::win_shell::resolve_windows_shell(None).unwrap();
-        let plan = plan_shell("echo hi", None).unwrap();
+        let mut plan = plan_shell("echo hi", None).unwrap();
         assert_eq!(
             plan.dialect(),
             resolved.dialect,
@@ -1310,7 +1528,7 @@ mod tests {
     fn plan_shell_override_empty_forces_fallback() {
         // execution.bash_shell_path="" 表示强制回落：跳过 bash 各级，直接进
         // pwsh → powershell → cmd 链（PRD §4.5 空串语义）。
-        let plan = plan_shell("echo hi", Some("")).unwrap();
+        let mut plan = plan_shell("echo hi", Some("")).unwrap();
         assert_ne!(
             plan.dialect(),
             ShellDialect::GitBash,
