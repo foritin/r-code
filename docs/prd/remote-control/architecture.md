@@ -139,3 +139,38 @@ approvals:decide 审批 pending op 的批准/拒绝（R3；每次决策审计落
 | 凭据不出机 | settings/plugins/device 管理方法硬编码不可远程 |
 | 命令持久去重 | 复用 CommandDedup，device_id 作 client_id |
 | 事件来源区分 | 远程只读 EventEnvelope，无伪造 Provenance 的写口 |
+
+
+## 11. 原生 App（R6）
+
+### 11.1 工程形态
+
+- React Native（新裸工程或 Expo prebuild——实现时按“最小原生模块依赖、可自管签名”选择，默认裸 RN + 社区稳定库）；目录 `mobile/`（monorepo 新成员，独立 package.json，不进 src-tauri/frontend 的构建）。
+- **TS core 共享**：连接/握手/指纹/能力/事件投影/命令去重逻辑抽到纯 TS 包（建议 `crates` 之外的 `packages/remote-core`，或 `src-tauri/frontend/src/remote/core` 编译为平台无关入口），Web PWA 与 RN 共同消费；平台差异收敛到 5 个接口：transport（WS）、secureStore、camera/qr、notifications、haptics。
+- App 是瘦客户端：无模型 SDK、无工具执行、无文件系统工作区访问、无插件代码；所有效果经 daemon 授权后产生。
+
+### 11.2 推送通道（无账号前提下）
+
+待审批/run 完成需要在 App 未前台时触达。无账号推送仍可做：配对时 daemon（经中继）登记该设备的推送句柄（APNs device token / FCM registration token，按平台走各自系统推送服务——这是设备→苹果/谷歌的通道，不需要 R-Code 账号）：
+
+```
+daemon 侧事件（approval.requested / run.completed）
+   → relay 持有该 owner 的设备推送句柄（仅传输，不读内容）
+   → APNs/FCM 静默/通知（正文可空，敏感内容只写“1 项待处理”）
+   → App 点开后经 E2EE 通道取明文
+```
+
+- 推送句柄是设备登记的一部分（RA/R18/R21 任务），可吊销；通知不携带命令内容/密钥；relay 推送凭据（APNs key/FCM service account）属于**自托管运维密钥**，由用户在自己的 relay 部署时配置（production 外部放行：需要 Apple/Google 开发者账号）。
+- 实现验证（implementation_verified）：句柄登记/吊销/前台降级为页内通知可用本地 fake push adapter 闭环；真实 APNs/FCM 投递归 production_release_ready。
+
+### 11.3 iOS 合规红线（实现时逐条核对）
+
+- 不下载/解释执行远程代码（JSC/Hermes 只跑打包进 App 的 JS）；
+- 配对是用户主动、显式的主机授权（UI 必须说明“连接到你自己的电脑并允许其命令被审批”）；
+- 加密合规使用系统 CryptoKit/等价库，无自定义弱算法；
+- App 内不出现支付/外部市场链接（如后续有付费另走应用内购，本期无账号无付费）。
+
+### 11.4 Android 红线
+
+- targetSdk 跟当前商店要求；前台服务仅在“活跃连接”会话使用，后台触达走 FCM；
+- 通知渠道分级（待审批高优先/完成普通）；网络安全配置禁止明文（cleartextTrafficPermitted=false，仅 debug 构建对 localhost 放行）。

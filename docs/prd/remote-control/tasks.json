@@ -418,6 +418,138 @@
         "compose 起服务+ACME 证书；verify 守卫：密文不可见/注册码一次性/吊销纵深防御/默认无中继配置"
       ],
       "acceptance": "最小 VPS（1vCPU/512MB）部署文档+容器或 systemd 二选一；运维手册含升级、日志轮转、限速、故障恢复"
+    },
+    {
+      "id": "R21",
+      "title": "RN 工程与 TS core 抽包",
+      "phase": "R6",
+      "depends_on": [
+        "R20"
+      ],
+      "files": [
+        "mobile/package.json",
+        "mobile/App.tsx",
+        "packages/remote-core/*",
+        "src-tauri/frontend/src/remote/core/*"
+      ],
+      "tests": [
+        "Jest：core 在 RN 与 node 环境跑同一套握手/指纹/事件投影单测；metro 双平台构建产物生成"
+      ],
+      "acceptance": "monorepo 新增 mobile/（裸 RN 或 Expo prebuild 二选一，记录依据）；连接/WS/能力/事件/命令去重抽到平台无关 TS core，PWA 与 RN 共同消费；5 个平台接口（transport/secureStore/camera/notifications/haptics）有接口定义与 Web/RN 双实现；iOS/Android debug 包可启动到配对页"
+    },
+    {
+      "id": "R22",
+      "title": "原生配对（相机扫码+密钥/句柄安全存储）",
+      "phase": "R6",
+      "depends_on": [
+        "R21",
+        "R09"
+      ],
+      "files": [
+        "mobile/src/pairing/*",
+        "packages/remote-core/*"
+      ],
+      "tests": [
+        "相机扫 rcode://pair 全字段解析（含损坏/过期/错指纹拒绝）；设备令牌存入 Keychain/Keystore（断言未落入 UserDefaults/明文 SharedPreferences）；手动码路径可用"
+      ],
+      "acceptance": "真机/模拟器完成经中继与局域网两路配对；指纹 TOFU 钉死不可绕过；iOS NSCameraUsageDescription/Android CAMERA 权限只在扫码时请求；授权说明文案明确主机关系"
+    },
+    {
+      "id": "R23",
+      "title": "原生任务列表与会话屏",
+      "phase": "R6",
+      "depends_on": [
+        "R22"
+      ],
+      "files": [
+        "mobile/src/screens/*"
+      ],
+      "tests": [
+        "Maestro/Detox e2e（或 RN Testing Library 集成）：列表真实字段、事件流渲染、发送/取消/排队、断网重连后 after_seq 不丢"
+      ],
+      "acceptance": "对照 prototype.html 屏②③；长输出折叠、工具卡、run 状态实时；深色 obsidian 皮肤；命中区≥44pt/iOS 48dp Android；无障碍标签/动态字体"
+    },
+    {
+      "id": "R24",
+      "title": "原生审批体验",
+      "phase": "R6",
+      "depends_on": [
+        "R23",
+        "R12"
+      ],
+      "files": [
+        "mobile/src/screens/approvals/*",
+        "mobile/src/notifications/*"
+      ],
+      "tests": [
+        "待审批聚合 tab、批准/拒绝、决策后消失；无 approvals:decide 能力时无决策按钮"
+      ],
+      "acceptance": "审批卡含命令全文/风险档/来源；高敏“需桌面确认”态；锁屏通知操作按钮（可配）；所有决策审计 device_id"
+    },
+    {
+      "id": "R25",
+      "title": "推送句柄登记与原生通知（APNs/FCM）",
+      "phase": "R6",
+      "depends_on": [
+        "R24"
+      ],
+      "files": [
+        "crates/r-code-relay/src/push/*",
+        "mobile/src/notifications/*",
+        "docs/support/operations/relay.md"
+      ],
+      "tests": [
+        "本地 fake push adapter：句柄登记/吊销/前台降级页内通知全闭环；无句柄设备不发；通知正文不含命令内容（快照断言）"
+      ],
+      "acceptance": "approval.requested/run.completed 触发推送，敏感场景正文仅通用文案；App 点开经 E2EE 取明文；implementation_verified 用 fake 闭环，真实 APNs/FCM 投递+Apple/Google 开发者账号配置归 production_release_ready"
+    },
+    {
+      "id": "R26",
+      "title": "设备设置/中继配置/连接诊断原生屏",
+      "phase": "R6",
+      "depends_on": [
+        "R23"
+      ],
+      "files": [
+        "mobile/src/screens/settings/*"
+      ],
+      "tests": [
+        "能力开关只读展示（授予在桌面端）、中继地址显示、连接质量/重连日志、令牌清除"
+      ],
+      "acceptance": "对照 prototype 屏④；局域网直连优先/中继回落策略可见可手动切换；清除令牌即从本机注销（设备吊销仍在桌面侧）"
+    },
+    {
+      "id": "R27",
+      "title": "签名、商店素材与合规清单",
+      "phase": "R6",
+      "depends_on": [
+        "R25",
+        "R26"
+      ],
+      "files": [
+        "mobile/ios/*",
+        "mobile/android/*",
+        "docs/prd/remote-control/app-store-review.md"
+      ],
+      "tests": [
+        "release 构建产物生成；iOS 静态分析无热更/下载执行代码路径（grep+人工清单）；Android cleartext=false release manifest"
+      ],
+      "acceptance": "implementation_verified：签名配置位/图标/隐私清单/审核话术（自有主机远程终端类目）齐备；production_release_ready：真实商店提交（需开发者账号，外部放行）"
+    },
+    {
+      "id": "R28",
+      "title": "真机外网验收与文档收口",
+      "phase": "R6",
+      "depends_on": [
+        "R27"
+      ],
+      "files": [
+        "docs/support/guides/remote-control.md"
+      ],
+      "tests": [
+        "实现侧：relay 本地 loopback 全流程 e2e（配对→4G 模拟网络拓扑用网络命名空间/代理限速）"
+      ],
+      "acceptance": "implementation_verified 全门禁绿；production_release_ready 取证清单（真机 iOS+Android 经真实中继在蜂窝网络完成 观察/发送/审批/推送/吊销）写入手册，待用户外部放行"
     }
   ],
   "execution_contract": "docs/prd/remote-control/worklist.md",

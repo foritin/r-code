@@ -8,6 +8,7 @@ R-Code 守护进程的远程接入计划：配对、网络传输、设备能力�
 - [统一验收入口](../../../scripts/verify-remote.mjs) —— `node scripts/verify-remote.mjs --through R0`
 - [转换固化清单](./transformation-freeze.yaml) —— 稳定指纹与解冻条件
 - [架构说明](./architecture.md) —— 传输/配对/中继的数据流与威胁模型
-- [自托管中继部署](./relay.md) —— 自有云服务器/公网 IP 作中继（R5，R16–R20）
+- [自托管中继部署](./relay.md) —— 自有云服务器/公网 IP 作中继（R5，R16–R20，原生 App 外网必需）
+- **终态：iOS + Android 原生 App**（React Native 瘦客户端，R6/R21–R28）；PWA 为开发/内测通道
 
 状态：`draft`（计划评审中，未开始实施）。

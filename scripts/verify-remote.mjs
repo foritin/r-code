@@ -22,13 +22,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ── 里程碑出口（累计门禁，按依赖顺序执行组）─────────────────────────────────
-const MILESTONES = {
+export const MILESTONES = {
   R0: ["RA1", "RA2", "RA3"],
   R1: ["R00", "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08"],
   R2: ["R09", "R10", "R11"],
   R3: ["R12", "R07b", "R07c"],
   R4: ["R13", "R14"],
   R5: ["R15", "R16", "R17", "R18", "R19", "R20"],
+  R6: ["R21", "R22", "R23", "R24", "R25", "R26", "R27", "R28"],
 };
 
 // ── Assertion registry ──────────────────────────────────────────────────────
@@ -37,30 +38,21 @@ const MILESTONES = {
 // 未实现任务的断言状态为 "pending"：--task 遇到 pending 断言以 exit 2 报告
 // （“断言尚未实现”），绝不静默通过。
 export const ASSERTIONS = {
-  RA1: {
-    milestone: "R0",
-    required: ["RA1.A1", "RA1.A2", "RA1.A3"],
-  },
-  RA2: {
-    milestone: "R0",
-    required: ["RA2.A1", "RA2.A2"],
-  },
-  RA3: {
-    milestone: "R0",
-    required: ["RA3.A1", "RA3.A2"],
-  },
+  RA1: { milestone: "R0", required: ["RA1.A1", "RA1.A2", "RA1.A3"] },
+  RA2: { milestone: "R0", required: ["RA2.A1", "RA2.A2"] },
+  RA3: { milestone: "R0", required: ["RA3.A1", "RA3.A2"] },
   R00: { milestone: "R1", required: ["R00.A1"] },
   R01: { milestone: "R1", required: ["R01.A1", "R01.A2", "R01.A3"] },
-  R02: { milestone: "RR0", required: ["R02.A1", "R02.A2", "R02.A3"] },
-  R03: { milestone: "RR0", required: ["R03.A1", "R03.A2", "R03.A3"] },
-  R04: { milestone: "RR1", required: ["R04.A1", "R04.A2", "R04.A3", "R04.A4"] },
-  R05: { milestone: "RR1", required: ["R05.A1", "R05.A2", "R05.A3"] },
+  R02: { milestone: "R1", required: ["R02.A1", "R02.A2", "R02.A3"] },
+  R03: { milestone: "R1", required: ["R03.A1", "R03.A2", "R03.A3"] },
+  R04: { milestone: "R1", required: ["R04.A1", "R04.A2", "R04.A3", "R04.A4"] },
+  R05: { milestone: "R1", required: ["R05.A1", "R05.A2", "R05.A3"] },
   R06: { milestone: "R1", required: ["R06.A1", "R06.A2"] },
   R07: { milestone: "R1", required: ["R07.A1", "R07.A2"] },
   R08: { milestone: "R1", required: ["R08.A1", "R08.A2", "R08.A3"] },
-  R09: { milestone: "RR2", required: ["R09.A1", "R09.A2"] },
-  R10: { milestone: "RR2", required: ["R10.A1", "R10.A2", "R10.A3"] },
-  R11: { milestone: "RR2", required: ["R11.A1", "R11.A2", "R11.A3"] },
+  R09: { milestone: "R2", required: ["R09.A1", "R09.A2"] },
+  R10: { milestone: "R2", required: ["R10.A1", "R10.A2", "R10.A3"] },
+  R11: { milestone: "R2", required: ["R11.A1", "R11.A2", "R11.A3"] },
   R12: { milestone: "R3", required: ["R12.A1", "R12.A2"] },
   "R07b": { milestone: "R3", required: ["R07b.A1", "R07b.A2"] },
   "R07c": { milestone: "R3", required: ["R07c.A1"] },
@@ -70,8 +62,16 @@ export const ASSERTIONS = {
   R16: { milestone: "R5", required: ["R16.A1", "R16.A2"] },
   R17: { milestone: "R5", required: ["R17.A1", "R17.A2"] },
   R18: { milestone: "R5", required: ["R18.A1"] },
-  R19: { milestone: "RR5", required: ["R19.A1", "R19.A2", "R19.A3"] },
+  R19: { milestone: "R5", required: ["R19.A1", "R19.A2", "R19.A3"] },
   R20: { milestone: "R5", required: ["R20.A1", "R20.A2"] },
+  R21: { milestone: "R6", required: ["R21.A1", "R21.A2"] },
+  R22: { milestone: "R6", required: ["R22.A1", "R22.A2"] },
+  R23: { milestone: "R6", required: ["R23.A1", "R23.A2"] },
+  R24: { milestone: "R6", required: ["R24.A1", "R24.A2"] },
+  R25: { milestone: "R6", required: ["R25.A1", "R25.A2"] },
+  R26: { milestone: "R6", required: ["R26.A1"] },
+  R27: { milestone: "R6", required: ["R27.A1", "R27.A2"] },
+  R28: { milestone: "R6", required: ["R28.A1", "R28.A2"] },
 };
 
 // 断言→命令映射在实现任务时填充。键为 assertion id。

@@ -86,19 +86,9 @@ Harness v2 已把“客户端”与“执行面”切开，这是本计划能低
 - **SSE / WebSocket 推送**：daemon 在 journal 有新事件时向已认证连接扇出（复用 RunManager 的观察抽头模式，新增一个 per-connection 订阅者；游标恢复仍走 `task.events`，断线重连不丢事件——seq 单调）；
 - 轮询保留为降级路径。
 
-### 3.5 公网中继（可选里程碑，独立分期）
+### 3.5 公网中继（原生 App 的外网通道，必需）
 
-家宽无公网 IP 时不裸暴露端口：
-
-```
-PWA ──wss──► relay（自托管 VPS）◄──wss(出站)── daemon
-                  ▲ 只转发密文，端到端加密
-配对时交换 E2EE 公钥；relay 无会话密钥
-```
-
-- daemon 与 PWA 都主动外连 relay（出站 443，家庭 NAT 友好）；relay 按设备令牌路由字节，不解密（配对阶段协商会话密钥，Noise XX 或等价）；
-- relay 是独立小二进制/小服务，**不属于 r-code-service**，可后续放到 `crates/r-code-relay/`；
-- 首期 PRD 只冻结接口（daemon 侧“中继传输”是 IpcTransport 的第三种实现），不实现服务端。
+家宽无公网 IP，原生 App 在 4G/外网 Wi-Fi 下必须经中继（详见 [relay.md](./relay.md)）：App 与 daemon 均出站 443，中继只转 E2EE 密文。R5 是 R6 的前置；不配置中继时 App 仅局域网可用，产品不内置官方运营中继。
 
 ### 3.6 威胁模型与红线
 
@@ -109,6 +99,12 @@ PWA ──wss──► relay（自托管 VPS）◄──wss(出站)── daemon
 - **凭据不出机**：`settings.apply` 不可远程；手机端不接触 provider API key。
 - **会话劫持面**：设备令牌被盗=该设备能力上限内的风险；因此高敏能力默认关 + 可一键吊销 + 批准动作可要求二次确认（桌面通知联动）。
 - 绑定范围：RemoteListener 初始只绑配对时选定的网卡（默认仅局域网私网段），不绑 0.0.0.0。
+
+### 3.7 客户端形态：原生 App（终态）与 PWA（开发通道）
+
+- **原生 App（终态，R6）**：React Native 出 iOS + Android。网络/加密/配对/投影全部复用 TS core（RN 与 Web 共用，平台仅适配 WebSocket、相机、Keychain/Keystore、推送）。执行永远在 daemon/插件侧：App 不含模型调用、工具执行、脚本引擎，也不运行下载代码（iOS 3.3.2/2.5.2 合规姿态：用户自有主机的远程终端，配对=显式主机授权）。
+- **PWA（R1–R4）**：daemon `/app` 托管的独立 Vite entry，复用桌面前端投影；用于协议联调/内测/免安装体验；保留但非正式分发形态。
+- 两形态共用同一套任务/会话/审批 UI 状态机；无账号、无多 profile 切换（配对绑定一个 profile）。
 
 ## 4. 分期
 
