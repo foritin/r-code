@@ -115,7 +115,7 @@ PWA ──wss──► relay（自托管 VPS）◄──wss(出站)── daemon
 - **R2（完整局域网控制）**：QR 配对 + mDNS 发现 + `tasks:write` + 取消；PWA 发送/中止；设备管理（列出/吊销）。
 - **R3（远程审批）**：`approvals:decide` 能力 + 手机审批卡片 + 审计；桌面端能力授予 UI。
 - **R4（打磨与打包）**：PWA manifest/图标/离线壳、通知（完成/待审批）、自签证书钉扎的首次配对 UX、文档。
-- **R5（可选，公网中继）**：中继服务端 + E2EE 握手 + relay 传输实现；独立评审后再开。
+- **R5（公网中继，支持自托管 VPS）**：见 [relay.md](./relay.md)——用户自有云服务器作为中继的标准部署（r-code-relay 二进制/容器、owner 注册、E2EE 握手、RelayTransport、配置 UX、运维物料，任务 R16–R20）；不依赖 Tailscale 等组网，daemon 与 PWA 均出站 443。**不内置官方运营中继**（除非另立项目）。
 
 ## 5. 测试与验收原则
 
