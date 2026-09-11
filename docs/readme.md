@@ -6,6 +6,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
+| [远程控制（草案）](./prd/remote-control/plan.md) | `draft`：扫码配对、局域网 PWA 控制、设备能力分档、可选公网中继 |
 | [可插拔 Harness 重构计划](./prd/pluggable-harness/plan.md) | 当前实施方案、架构边界、插件协议、验收和恢复；v2 已落地（见下方实施合同） |
 | [重构前架构基线](./support/archive/architecture-before-harness-v2.md) | 已归档的现有实现说明，用于代码取证与迁移对照 |
 | [联网工具与 MCP](./support/guides/mcp.md) | 原生联网、MCP 管理、Registry、安全确认、跨平台启动和故障恢复 |

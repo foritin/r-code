@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "milestone": "remote-control",
+  "status": "draft",
+  "updated": "2026-09-10",
+  "tasks": [
+    {
+      "id": "R00",
+      "title": "基线复核与传输抽象",
+      "phase": "R1",
+      "depends_on": [],
+      "files": ["crates/r-code-client/src/lib.rs", "crates/r-code-runtime/src/ipc.rs"],
+      "tests": ["传输 trait 抽象后管道/socket 既有 t06a/t35 测试不回归"],
+      "acceptance": "DaemonClient 的帧读写与连接建立可按 transport 注入；命名管道/Unix socket 路径零行为变化；不引入网络监听"
+    },
+    {
+      "id": "R01",
+      "title": "DeviceRegistry 与能力模型",
+      "phase": "R1",
+      "depends_on": ["R00"],
+      "files": ["crates/r-code-runtime/src/remote/registry.rs", "crates/r-code-runtime/src/remote/capabilities.rs"],
+      "tests": ["设备注册/令牌哈希校验/吊销/能力持久化往返；registry.json 不含明文令牌"],
+      "acceptance": "devices/registry.json 按 architecture.md §7 落盘；令牌仅存 SHA-256；吊销立即生效；能力枚举 events:read/tasks:write/approvals:decide；settings/plugins/device/service 方法标记为永不远程"
+    },
+    {
+      "id": "R02",
+      "title": "一次性配对会话",
+      "phase": "R1",
+      "depends_on": ["R01"],
+      "files": ["crates/r-code-runtime/src/remote/pairing.rs"],
+      "tests": ["配对码 120s TTL；一次性消费；过期/重放/二次使用被拒；daemon 重启不保留"],
+      "acceptance": "pairingStart 仅本机 transport 可调；内存态 pair_secret ≥128 位熵；颁发设备令牌后立即失效；返回 lan_endpoints 与 QR 载荷（architecture.md §3）"
+    },
+    {
+      "id": "R03",
+      "title": "自签证书与指纹钉扎",
+      "phase": "R1",
+      "depends_on": ["R02"],
+      "files": ["crates/r-code-runtime/src/remote/tls.rs"],
+      "tests": ["首次生成证书私钥入平台凭据存储；指纹不匹配硬拒（无绕过）；证书持久化重启复用"],
+      "acceptance": "rcode://pair QR 含 fp=SHA-256；listener 仅 TLS；客户端 TOFU 一次后钉死；无明文远程口存在（端口扫描集成测试）"
+    },
+    {
+      "id": "R04",
+      "title": "RemoteListener（WS over TLS）",
+      "phase": "R1",
+      "depends_on": ["R03"],
+      "files": ["crates/r-code-runtime/src/remote/listener.rs"],
+      "tests": ["未配对时无网络监听；配对后仅绑私网地址；认证失败即断连；命令经同一 ApplicationHandler 且 CommandDedup 跨 transport 生效"],
+      "acceptance": "hello 帧认证（architecture.md §4）；能力注入分发器，无能力返回 PermissionDenied{required_capability}；settings/plugins/device/service 方法远程硬拒；最后一台设备吊销后监听自动关闭"
+    },
+    {
+      "id": "R05",
+      "title": "事件长连接扇出",
+      "phase": "R1",
+      "depends_on": ["R04"],
+      "files": ["crates/r-code-runtime/src/remote/fanout.rs"],
+      "tests": ["subscribe 后实时收到新事件；杀连接重连用 after_seq 不丢不重；超 1MiB 背压关连接"],
+      "acceptance": "events.subscribe 推送与 task.events 逐字节同形（EventEnvelope，seq 单调）；轮询保留为降级路径"
+    },
+    {
+      "id": "R06",
+      "title": "r-code-client WebSocket transport",
+      "phase": "R1",
+      "depends_on": ["R05"],
+      "files": ["crates/r-code-client/src/ws.rs"],
+      "tests": ["真实 TLS 连接跑 task.list/events 往返；断线重连+command_id 重放返回原结果"],
+      "acceptance": "与管道 transport 同一 DaemonClient API；指纹钉扎与设备令牌注入；无新增 tauri 依赖"
+    },
+    {
+      "id": "R07",
+      "title": "PWA 只读控制台（事件/列表）",
+      "phase": "R1",
+      "depends_on": ["R06"],
+      "files": ["src-tauri/frontend/src/remote/*", "src-tauri/frontend/vite.remote.config.*"],
+      "tests": ["mjs：WS 连接/事件投影/断网重连 UI；构建产物被 daemon 静态托管"],
+      "acceptance": "daemon /app 提供静态 PWA；会话列表+实时 transcript 投影复用现有投影层；PWA manifest 可加主屏；任务数据不入 SW 缓存"
+    },
+    {
+      "id": "R08",
+      "title": "手动配对端到端（PoC 收口）",
+      "phase": "R1",
+      "depends_on": ["R07"],
+      "files": ["crates/r-code-runtime/tests/r1_remote_readonly.rs"],
+      "tests": ["真 TLS：本机命令发起配对→另一进程用配对码+指纹完成 WS 连接→只读到任务事件"],
+      "acceptance": "局域网只读闭环；未认证连接零数据；默认配置下 netstat 无远程口；三平台（Win/macOS/Linux）监听测试"
+    },
+    {
+      "id": "R09",
+      "title": "QR 配对与 mDNS 发现",
+      "phase": "R2",
+      "depends_on": ["R08"],
+      "files": ["crates/r-code-runtime/src/remote/qr.rs", "crates/r-code-runtime/src/remote/mdns.rs", "src-tauri/src/remote_pair_ui.rs"],
+      "tests": ["QR 载荷往返解析；mDNS _rcode._tcp 广播/发现；QR 与手动两路产生等价设备登记"],
+      "acceptance": "桌面端显示 QR（GUI 弹层或 TUI /pair 命令）；PWA 扫码直连；无摄像头时手动输入 host:port+码"
+    },
+    {
+      "id": "R10",
+      "title": "tasks:write 远程写路径",
+      "phase": "R2",
+      "depends_on": ["R09"],
+      "files": ["src-tauri/frontend/src/remote/"],
+      "tests": ["有能力设备 send/cancel 成功；无能力设备 PermissionDenied；运行中发送=排队（v2 既有语义）"],
+      "acceptance": "PWA 输入框发送/中止/继续对话；能力默认关，配对时桌面勾选授予；写动作审计（device_id 入 journal 扩展字段或事件）"
+    },
+    {
+      "id": "R11",
+      "title": "设备管理（桌面端）",
+      "phase": "R2",
+      "depends_on": ["R10"],
+      "files": ["src-tauri/src/tauri_commands.rs", "src-tauri/frontend/src/components/scenes/DevicesSettingsPane.tsx", "crates/r-code-tui/src/remote_commands.rs"],
+      "tests": ["列出设备（名称/能力/最后连接）；单台吊销立即断连；一键关闭远程口使全部设备令牌暂时失效"],
+      "acceptance": "device.list/revoke/setListener/updateCapabilities 仅本机；GUI 与 TUI /remote 两处入口；吊销后重连被拒"
+    },
+    {
+      "id": "R12",
+      "title": "approvals:decide 远程审批",
+      "phase": "R3",
+      "depends_on": ["R11"],
+      "files": ["crates/r-code-runtime/src/remote/", "src-tauri/frontend/src/remote/approval-card.*"],
+      "tests": ["远程批准/拒绝落到同一 pending op；无能力拒绝；批准审计含 device_id；迟到决策拒入（v2 既有门不变）"],
+      "acceptance": "复用 v2 审批语义（op 宿主创建、单 op、作用域校验）；PWA 审批卡片含工具名/参数预览/风险档位；可配置“高敏动作要求桌面二次确认”"
+    },
+    {
+      "id": "R13",
+      "title": "通知与移动端打磨",
+      "phase": "R4",
+      "depends_on": ["R12"],
+      "files": ["src-tauri/frontend/src/remote/", "src-tauri/frontend/public/manifest.remote.webmanifest"],
+      "tests": ["run 完成/待审批触发 Web Push 或页内通知（PWA 前台/后台两路径手测取证）"],
+      "acceptance": "iOS/Android 加主屏全屏体验；图标/启动色；断网/重连状态可见；不缓存凭据与任务正文"
+    },
+    {
+      "id": "R14",
+      "title": "防火墙/安装/文档",
+      "phase": "R4",
+      "depends_on": ["R13"],
+      "files": ["docs/support/guides/remote-control.md", "scripts/verify-remote.test.mjs", "src-tauri/tauri.conf.json"],
+      "tests": ["verify 脚本：默认无监听/配对开关/证书钉扎/能力拒绝四条安全守卫；Windows 首监听防火墙提示取证；macOS/Linux 等价路径"],
+      "acceptance": "用户向文档（配对/使用/吊销/安全含义）；打包不默认开放端口；verify 守卫进 CI（不默认跑真实网卡，用 loopback+自签）"
+    },
+    {
+      "id": "R15",
+      "title": "中继接口冻结（仅设计门）",
+      "phase": "R5",
+      "depends_on": ["R14"],
+      "files": ["docs/prd/remote-control/relay-interface.md"],
+      "tests": ["RelayTransport 作为 IpcTransport 第三种实现的接口评审通过；不在本期写服务端"],
+      "acceptance": "冻结 owner 注册码/device 令牌两类认证、路由键、Noise XX E2EE、限速与背压；明确 crates/r-code-relay 预留但不创建"
+    }
+  ]
+}
