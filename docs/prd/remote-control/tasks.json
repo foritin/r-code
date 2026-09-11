@@ -121,9 +121,41 @@
         "src-tauri/frontend/vite.remote.config.*"
       ],
       "tests": [
-        "mjs：WS 连接/事件投影/断网重连 UI；构建产物被 daemon 静态托管"
+        "mjs：WS 连接/事件投影/断网重连 UI；构建产物被 daemon 静态托管；四屏布局对照 prototype.html 做像素级走查（配对/列表/会话/设置）"
       ],
-      "acceptance": "daemon /app 提供静态 PWA；会话列表+实时 transcript 投影复用现有投影层；PWA manifest 可加主屏；任务数据不入 SW 缓存"
+      "acceptance": "daemon /app 提供静态 PWA；按 prototype.html v1 四屏实现：①配对（QR+指纹+默认只读说明+手动码）②任务列表（task.list 真实字段：title/state/running/updatedAt，不伪造 detail 字段）③会话（事件流投影+工具卡+发送/中止+排队提示）④设备设置（能力开关/吊销/接入）；会话列表与 transcript 投影复用现有前端投影层；client 从 invoke 编译特性切换为 WebSocket transport；PWA manifest 可加主屏；任务数据不入 SW 缓存"
+    },
+    {
+      "id": "R07b",
+      "title": "PWA 四屏交互实现（原型基线）",
+      "phase": "R2",
+      "depends_on": [
+        "R07"
+      ],
+      "files": [
+        "src-tauri/frontend/src/remote/screens/*",
+        "src-tauri/frontend/src/remote/components/*"
+      ],
+      "tests": [
+        "mjs 组件测试：列表行只用真实字段；审批卡缺能力时隐藏决策按钮而非禁用可点；断网态全屏+自动重连倒计时；安全区 inset（iPhone 底部 34px）"
+      ],
+      "acceptance": "四屏均可操作的真实 PWA（非静态原型）：底部三 tab（任务/审批/设置，审批 tab 无 approvals:decide 时只读徽标）；会话屏长输出折叠、run 状态与事件流实时一致；输入框遵守 WCAG 2.5.8（命中区≥24px）；深色 obsidian 皮肤与桌面一致"
+    },
+    {
+      "id": "R07c",
+      "title": "审批聚合 tab 与通知前置",
+      "phase": "R3",
+      "depends_on": [
+        "R07b",
+        "R12"
+      ],
+      "files": [
+        "src-tauri/frontend/src/remote/screens/approvals.*"
+      ],
+      "tests": [
+        "多任务待审批聚合排序；批准/拒绝后卡片即时消失；审批事件断线不丢（after_seq 重放）"
+      ],
+      "acceptance": "底部审批 tab 列出全部 pending op（跨任务），支持快速批准/拒绝；高敏动作显示“需桌面确认”态；为 R13 Web Push 提供通知数据来源（不本任务实现推送）"
     },
     {
       "id": "R08",
@@ -197,13 +229,15 @@
         "R11"
       ],
       "files": [
+        "crates/r-code-runtime/src/run_manager.rs",
         "crates/r-code-runtime/src/remote/",
         "src-tauri/frontend/src/remote/approval-card.*"
       ],
       "tests": [
-        "远程批准/拒绝落到同一 pending op；无能力拒绝；批准审计含 device_id；迟到决策拒入（v2 既有门不变）"
+        "前置：host.approvals 请求产生持久审批事件（approval.requested/decided），QuestionSink 落地为真实通道（现状 IgnoreQuestions 占位）；远程批准/拒绝落到同一 pending op",
+        "无能力拒绝；批准审计含 device_id；迟到决策拒入（v2 既有门不变）"
       ],
-      "acceptance": "复用 v2 审批语义（op 宿主创建、单 op、作用域校验）；PWA 审批卡片含工具名/参数预览/风险档位；可配置“高敏动作要求桌面二次确认”"
+      "acceptance": "复用 v2 审批语义（op 宿主创建、单 op、作用域校验）；**先补齐 daemon 审批事件面**（当前协议只有请求位、事件未外发——R12 验收包含这一前置接线）；PWA 审批卡片（对照 prototype.html 屏③：命令全文/风险档/来源/批准拒绝）；可配置“高敏动作要求桌面二次确认”"
     },
     {
       "id": "R13",
