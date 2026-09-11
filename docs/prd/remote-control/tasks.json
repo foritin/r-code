@@ -5,6 +5,55 @@
   "updated": "2026-09-10",
   "tasks": [
     {
+      "id": "RA1",
+      "title": "审批 pending op 持久化与事件外发",
+      "phase": "R0（主链前置）",
+      "depends_on": [],
+      "files": [
+        "crates/r-code-runtime/src/run_manager.rs",
+        "crates/r-code-runtime/src/plugins/router.rs",
+        "crates/r-code-runtime/src/application.rs",
+        "crates/r-code-store/src/v2/journal.rs"
+      ],
+      "tests": [
+        "host.approvals.request 产生 approval.requested 事件（op id/工具名/参数/风险档/runId）；决策后 approval.decided；重启后 pending op 从 journal 重建；迟到/重复决策拒入；插件等待期间阻塞直到决策或超时"
+      ],
+      "acceptance": "ApprovalRegistry 从内存改为 journal 支撑（或 run 持有持久句柄）；事件经既有 task.events 扇出，与 assistant.message 同通道；daemon 无客户端连接时 op 保持 pending（不自动拒绝）；IgnoreQuestions 仅用于明确无人值守场景"
+    },
+    {
+      "id": "RA2",
+      "title": "daemon 审批决策方法面",
+      "phase": "R0（主链前置）",
+      "depends_on": [
+        "RA1"
+      ],
+      "files": [
+        "crates/r-code-runtime/src/bin/r-code-service.rs",
+        "crates/r-code-harness-protocol/src/application.rs"
+      ],
+      "tests": [
+        "approvals.list 列出 pending；approvals.decide 批准/拒绝落到同一 op；无关联 run/op 返回 not_found；重复决策幂等拒入"
+      ],
+      "acceptance": "新增 approvals.list/decide 方法（命令去重同既有面）；decision 经 router registry 唤醒阻塞的插件调用；审计字段含 client_id（后续设备 id 天然复用）"
+    },
+    {
+      "id": "RA3",
+      "title": "审批能力接线进 RunManager 构造",
+      "phase": "R0（主链前置）",
+      "depends_on": [
+        "RA2"
+      ],
+      "files": [
+        "crates/r-code-runtime/src/run_manager.rs",
+        "crates/r-code-runtime/src/application.rs",
+        "crates/r-code-tui/src/engine.rs"
+      ],
+      "tests": [
+        "真实插件请求审批→事件→daemon 决策→插件继续执行的端到端（conversation_engine 模式扩展）；拒绝时插件收到 Denied 并继续/中止按协议"
+      ],
+      "acceptance": "RunManager 不再无条件 IgnoreQuestions：挂接持久 QuestionSink/ApprovalRegistry；TUI 经 daemon approvals.* 能完成一次工具审批（本地链路先绿，远程只是多一个决策来源）"
+    },
+    {
       "id": "R00",
       "title": "基线复核与传输抽象",
       "phase": "R1",
@@ -226,7 +275,8 @@
       "title": "approvals:decide 远程审批",
       "phase": "R3",
       "depends_on": [
-        "R11"
+        "R11",
+        "RA3"
       ],
       "files": [
         "crates/r-code-runtime/src/run_manager.rs",

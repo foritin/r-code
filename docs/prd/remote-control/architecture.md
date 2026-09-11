@@ -87,7 +87,7 @@ approvals:decide 审批 pending op 的批准/拒绝（R3；每次决策审计落
 - 事件订阅：连接认证后可发 `events.subscribe {after_seq}`（长连接推送）；daemon 在 journal append 时向匹配 task 范围的订阅连接推 `EventEnvelope`（与 `task.events` 逐字节同形）。
   - 无 task 过滤参数（首期：订阅=该 profile 全部任务，只读能力持有者即可看全部——配对本身是 owner 授权行为）；
   - 背压：单连接发送缓冲超过上限（1 MiB / 1000 帧）→ 关连接，客户端 after_seq 重连续传，不丢事件。
-- 审批事件：待审批 op 以既有事件形状到达；`approvals:decide` 的方法形状与本地审批一致（op 由宿主创建这一前提不变）。
+- 审批事件：待审批 op 以 `approval.requested`/`approval.decided` 事件到达。**前置条件（R0，主链工作）**：当前 router 的 ApprovalRegistry 为内存态、RunManager 挂 IgnoreQuestions，必须先完成 pending op 持久化、事件外发与 daemon `approvals.list/decide`（tasks RA1–RA3）；在此之前远程能力表不出现 `approvals:decide`。`approvals:decide` 的方法形状与本地决策一致（op 由宿主创建这一前提不变）。
 
 ## 7. 设备登记格式
 

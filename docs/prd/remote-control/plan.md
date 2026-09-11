@@ -13,7 +13,7 @@
 
 1. 用户在桌面端发起一次**显式配对**（扫码或手动输入配对码），手机浏览器打开控制页（PWA，可加主屏）即可在同一局域网内连接本机 daemon；
 2. 手机端实时看到任务事件（assistant 回复、工具调用、run 状态），可以发送消息、取消 run；
-3. 工具调用的审批在手机端可批准/拒绝（能力可单独关闭）；
+3. 工具调用的审批在手机端可批准/拒绝（能力可单独关闭；依赖 R0 的持久审批通道先行落地）；
 4. 每台已配对设备有独立令牌，可在桌面端列出和吊销；daemon 默认不监听任何网络地址，配对是唯一开启远程口的方式；
 5. 可选里程碑：通过自托管中继在公网（NAT 外）访问，端到端加密，中继看不到明文。
 
@@ -73,7 +73,7 @@ Harness v2 已把“客户端”与“执行面”切开，这是本计划能低
 | --- | --- | --- |
 | `events:read` | `task.events/list/detail/branches`、`models.available`、`plugins.list` | 开 |
 | `tasks:write` | `task.create/sendMessage/cancel/rename/clone` | **配对时询问，默认关** |
-| `approvals:decide` | 审批 pending op 的批准/拒绝 | **默认关**（最敏感：等于放行工具执行） |
+| `approvals:decide` | 审批 pending op 的批准/拒绝 | **默认关**（最敏感：等于放行工具执行）；**硬前置 R0 完成**，否则该能力位永不出现 |
 | `settings:write` / `plugins:write` | 设置与插件管理 | **永不授予远程**（首期硬拒） |
 
 命令分发处按 `(client_id → capabilities)` 校验；无能力方法返回结构化 `PermissionDenied{required_capability}`，不静默降级。
@@ -111,6 +111,7 @@ PWA ──wss──► relay（自托管 VPS）◄──wss(出站)── daemon
 
 ## 4. 分期
 
+- **R0（主链前置：v2 审批通道，3 任务 RA1–RA3）**：远程审批暴露的是一个主链路既有缺口——协议有 `host.approvals.request/reply`、router 有内存 ApprovalRegistry，但 RunManager 目前喂的是 IgnoreQuestions 占位，op 不持久化、不外发事件、无决策方法面。R0 把它补齐：pending op 持久化 + `approval.requested/decided` 事件（RA1）、daemon `approvals.list/decide` 方法（RA2）、RunManager 真实接线并让 TUI 本地审批先绿（RA3）。**这是远程能力 approvals:decide 的硬前置，且独立于远程控制本身就有产品价值**（插件工具授权目前事实上无 UI 闭环）。
 - **R1（局域网只读 PoC）**：transport 抽象 + TLS/WS listener + 配对码（先手动输入，不做 QR）+ 设备令牌 + 事件推送；PWA 能看任务列表与实时事件。
 - **R2（完整局域网控制）**：QR 配对 + mDNS 发现 + `tasks:write` + 取消；PWA 发送/中止；设备管理（列出/吊销）。
 - **R3（远程审批）**：`approvals:decide` 能力 + 手机审批卡片 + 审计；桌面端能力授予 UI。
