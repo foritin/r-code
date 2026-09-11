@@ -1,0 +1,60 @@
+schema_version: ai-worklist-freeze.v1
+skill_contract:
+  name: prd-to-ai-worklist
+  version: 1.1.0
+
+status: frozen # 文档完成门禁已过（26 任务/58 断言全链接）；规范输入实质变化时转 stale
+
+source_document: docs/prd/remote-control/{plan.md,architecture.md,relay.md,tasks.json,prototype.html}
+
+normative_input:
+  files:
+    - docs/prd/remote-control/plan.md
+    - docs/prd/remote-control/architecture.md
+    - docs/prd/remote-control/relay.md
+    - docs/prd/remote-control/tasks.json
+  refs:
+    - docs/prd/remote-control/prototype.html # 视觉验收基线（R07/R07b 引用），非规范性文本来源
+  digest_algorithm: sha256
+  normalization: ai-worklist-norm.v1
+  # 规范化：四文件拼接（文件名+规范化正文），去除行尾空白/多空行；不纳入进度、证据、checkbox
+  digest: cc4dee55aa2423a3c002a281a147e7d05e88af2e01943ef8092d23778bd0002d
+
+worklist:
+  task_count: 26
+  required_task_count: 26 # R15 为设计门但仍有 required 断言（文档结构校验）
+  digest_algorithm: sha256
+  normalization: ai-worklist-contract-norm.v1
+  # 规范化：checkbox 统一为未选；排除 current/evidence 派生状态
+  digest: 0898fb3e2a95990ec14f3630548799715d7150c8e6c177880320ab299d069b88
+
+verification_harness:
+  entry: node scripts/verify-remote.mjs
+  task_command: "node scripts/verify-remote.mjs --task <ID>"
+  milestone_command: "node scripts/verify-remote.mjs --through <R0|R1|R2|R3|R4|R5>"
+  report_dir: artifacts/ai-tasks/verification/implementation/
+  note: >-
+    注册表 ASSERTIONS 已登记 26 任务/58 断言；COMMANDS 映射待实施任务时填充。
+    断言未实现时 harness 退出码 2（pending），实现后为 0（通过）/1（失败），绝不静默通过。
+
+completion_gate:
+  passed: true
+  blocking_issues: 0
+  major_issues: 0
+  report: 26 tasks/58 assertions 双向链接校验通过；依赖无环（DAG）；首个 ready 项 RA1
+  report_path: null
+
+material_change_triggers:
+  - normative_requirement_changed
+  - repository_fact_invalidates_task
+  - blocking_or_major_gate_failure
+  - state_or_evidence_contradiction
+  - explicit_scope_change
+
+volatile_fields_excluded:
+  - checkbox_state
+  - progress_counts
+  - current_task
+  - evidence_paths
+  - run_metadata
+  - artifacts/ai-tasks/ 下除本文件外全部运行产物

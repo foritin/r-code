@@ -4,6 +4,7 @@
 > 发布日期：2026-09-10
 > 前置基线：Harness v2 全闭环（commit `6fbf7fd`）——聊天链路统一为 前端 → r-code-client → r-code-service → Harness 插件。
 > 任务权威源：[tasks.json](./tasks.json)；架构说明：[architecture.md](./architecture.md)。
+> **AI 执行**：[worklist.md](./worklist.md)（任务卡/验收/恢复协议）+ `node scripts/verify-remote.mjs`。
 
 ## 1. 目标、终态与范围
 

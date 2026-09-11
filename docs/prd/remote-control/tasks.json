@@ -419,5 +419,7 @@
       ],
       "acceptance": "最小 VPS（1vCPU/512MB）部署文档+容器或 systemd 二选一；运维手册含升级、日志轮转、限速、故障恢复"
     }
-  ]
+  ],
+  "execution_contract": "docs/prd/remote-control/worklist.md",
+  "verification_harness": "node scripts/verify-remote.mjs"
 }
