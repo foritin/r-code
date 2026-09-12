@@ -458,6 +458,14 @@ export const COMMANDS = {
     kind: "node-test",
     file: "scripts/remote/r27-compliance.test.mjs",
   },
+  "R28.A1": {
+    kind: "node-test",
+    file: "scripts/remote/r28-checklist.test.mjs",
+  },
+  "R28.A2": {
+    kind: "node-test",
+    file: "scripts/remote/r28-checklist.test.mjs",
+  },
 };
 
 function runCommand(spec) {
@@ -551,7 +559,7 @@ function main() {
     ids = [args[taskIdx + 1]];
   } else if (throughIdx >= 0) {
     const milestone = args[throughIdx + 1];
-    const chain = ["R0", "R1", "R2", "R3", "R4", "R5"];
+    const chain = ["R0", "R1", "R2", "R3", "R4", "R5", "R6"];
     const upto = chain.indexOf(milestone);
     if (upto < 0) {
       console.error(`unknown milestone: ${milestone}`);
@@ -559,7 +567,7 @@ function main() {
     }
     ids = chain.slice(0, upto + 1).flatMap((m) => MILESTONES[m]);
   } else {
-    console.error("usage: verify-remote.mjs --task <ID> | --through <R0..R5> [--profile ...]");
+    console.error("usage: verify-remote.mjs --task <ID> | --through <R0..R6> [--profile ...]");
     process.exit(64);
   }
 

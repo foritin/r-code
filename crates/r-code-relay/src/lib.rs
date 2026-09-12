@@ -294,12 +294,6 @@ async fn serve_owner(
             .is_some_and(|entry| entry.verifying_key == vk);
         known && verify_sig(&vk, "rcode-owner-resume", &owner_id, &sig)
     };
-    eprintln!(
-        "RELAY-DBG: {} authenticated={} owner={}",
-        kind,
-        authenticated,
-        &owner_id[..8]
-    );
     if !authenticated {
         let code = if kind == "owner.register" {
             E_OWNER_CODE_INVALID
@@ -327,7 +321,6 @@ async fn serve_owner(
                 generation: my_generation,
             },
         ) {
-            eprintln!("RELAY-DBG: superseding previous owner conn");
             previous.closed.notify_waiters();
         }
     }
@@ -385,7 +378,6 @@ async fn serve_owner(
                             .values()
                             .next()
                             .cloned();
-                        eprintln!("RELAY-DBG: downlink frame bytes={} routed={}", payload.len(), downlink.is_some());
                         if let Some(down_tx) = downlink {
                             let _ = down_tx.send(Message::Binary(payload)).await;
                         }
@@ -406,7 +398,6 @@ async fn serve_owner(
             }
         }
     }
-    eprintln!("RELAY-DBG: owner retire gen={my_generation}");
     {
         let mut owners = state.owners.lock().expect("owners");
         if owners

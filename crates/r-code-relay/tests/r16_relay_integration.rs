@@ -7,6 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use r_code_relay::{sign_message, RelayState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
@@ -186,6 +187,21 @@ async fn r16_a1_register_bind_reject_forward_paths() {
     let welcome = next_text(&mut device_ws).await;
     assert_eq!(welcome["type"], "device.welcome");
 
+    // Consume the owner.bind.ack (R21 protocol) — it is queued before
+    // any binary uplink arrives.
+    loop {
+        match tokio::time::timeout(Duration::from_secs(2), owner_ws.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if value["type"] == "owner.bind.ack" {
+                    break;
+                }
+            }
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
+            _ => break,
+        }
+    }
+
     // Device → owner: opaque binary ciphertext, byte-for-byte.
     let ciphertext: Vec<u8> = (0..64u8).collect();
     device_ws
@@ -198,6 +214,20 @@ async fn r16_a1_register_bind_reject_forward_paths() {
     match up {
         Some(Ok(Message::Binary(received))) => assert_eq!(received, ciphertext, "bytes identical"),
         other => panic!("expected binary frame, got {other:?}"),
+    }
+
+    // Consume the owner.bind.ack (R21 protocol) before downlink binary.
+    loop {
+        match tokio::time::timeout(Duration::from_secs(2), owner_ws.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if value["type"] == "owner.bind.ack" {
+                    break;
+                }
+            }
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
+            _ => break,
+        }
     }
 
     // Owner → device (downlink through the active bridge).

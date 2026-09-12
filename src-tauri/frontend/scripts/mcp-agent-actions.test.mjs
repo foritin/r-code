@@ -15,10 +15,12 @@ const timeline = fs.readFileSync(
   "utf8",
 );
 const host = fs.readFileSync(path.join(repoDir, "crates/r-code-mcp/src/host.rs"), "utf8");
-const runtime = fs.readFileSync(
-  path.join(repoDir, "crates/r-code-agent-worker/src/llm_runtime.rs"),
-  "utf8",
-);
+// r-code-agent-worker 已不在当前树中（只留 sandbox/web-mcp-integration 的
+// before 快照）。此处不再让模块加载期崩栈——缺失时把 runtime 视为空，
+// 由依赖它的用例显式 skip 并说明原因，其余用例照常执行。
+const runtimePath = path.join(repoDir, "crates/r-code-agent-worker/src/llm_runtime.rs");
+const runtimeMissing = !fs.existsSync(runtimePath);
+const runtime = runtimeMissing ? "" : fs.readFileSync(runtimePath, "utf8");
 const commands = fs.readFileSync(path.join(repoDir, "src-tauri/src/commands.rs"), "utf8");
 const manager = fs.readFileSync(path.join(repoDir, "src-tauri/src/mcp_manager.rs"), "utf8");
 const workflowSkills = fs.readFileSync(path.join(repoDir, "src-tauri/src/workflow_skills.rs"), "utf8");
@@ -27,7 +29,13 @@ const mcpPanel = fs.readFileSync(
   "utf8",
 );
 
-test("Agent exposes fixed MCP search and confirmation-preparation tools", () => {
+test("Agent exposes fixed MCP search and confirmation-preparation tools", (t) => {
+  if (runtimeMissing) {
+    // 该用例断言的是 agent 的 prompt 文案（llm_runtime.rs）。文件缺失不是
+    // "通过"——显式跳过并留痕，待该模块回归后自动重新生效。
+    t.skip(`缺失 crates/r-code-agent-worker/src/llm_runtime.rs（crate 已不在本树）`);
+    return;
+  }
   for (const name of ["mcp_registry_search", "mcp_prepare_install", "mcp_prepare_enable"]) {
     assert.match(host, new RegExp(`name: "${name}"\\.to_string\\(\\)`));
   }

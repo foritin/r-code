@@ -139,6 +139,21 @@ fn hex_nonce() -> String {
     sha256_hex(&key.to_bytes())[..32].to_string()
 }
 
+/// Control-frame types the relay may legitimately still have queued when
+/// the owner adopts its socket (relay-interface.md: owner.bind.ack).
+const BENIGN_CONTROL_TYPES: [&str; 1] = ["owner.bind.ack"];
+
+/// Only whitelisted, contentless relay acks may be skipped mid-handshake.
+fn is_benign_control(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    value
+        .get("type")
+        .and_then(|kind| kind.as_str())
+        .is_some_and(|kind| BENIGN_CONTROL_TYPES.contains(&kind))
+}
+
 async fn next_binary<S>(ws: &mut WebSocketStream<S>) -> Result<Vec<u8>, E2eeError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -150,8 +165,15 @@ where
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => return Err(E2eeError::Closed),
             Some(Ok(Message::Text(text))) => {
-                // A control error frame during the handshake (owner_offline
-                // etc.) surfaces as a failed handshake with the code inline.
+                // Benign control frames may still be queued when the owner
+                // adopts its socket right after owner.bind (owner.bind.ack).
+                // Skip exactly those; every other text frame during a Noise
+                // exchange is unexpected (relay errors like owner_offline, or
+                // an injecting relay) and must fail the handshake instead of
+                // being silently absorbed.
+                if is_benign_control(&text) {
+                    continue;
+                }
                 return Err(E2eeError::Handshake(format!("control frame: {text}")));
             }
             Some(Err(e)) => return Err(E2eeError::Transport(e.to_string())),
@@ -238,12 +260,10 @@ impl E2eeStream<MaybeTlsStream<TcpStream>> {
                 welcome["error"]["code"].as_str().unwrap_or("unknown")
             )));
         }
-        eprintln!("DEV-DBG: admitted, noise starting");
         // Noise over the bridged binary plane. The initiator's static key
         // is ephemeral per session (device identity rides the control flow).
         let ephemeral = SigningKey::generate(&mut rand_core::OsRng);
         let stream = Self::finish_handshake(ws, ephemeral.to_bytes(), psk, true).await?;
-        eprintln!("DEV-DBG: noise transport ready");
         // Pin the owner's static key: hash what the handshake revealed.
         let remote = stream
             .transport
@@ -293,6 +313,11 @@ where
         static_key: &[u8; 32],
         psk: &[u8; 32],
     ) -> Result<E2eeStream<S>, E2eeError> {
+        // No pre-read here: a queued owner.bind.ack is skipped *inside* the
+        // handshake's frame loop (see `next_binary`). Pre-reading would
+        // consume whichever frame arrives first — including the Noise msg1
+        // the device may already have sent — and swallowing that message
+        // deadlocks both ends (every caller that dials immediately).
         Self::finish_handshake(ws, *static_key, psk, false).await
     }
 

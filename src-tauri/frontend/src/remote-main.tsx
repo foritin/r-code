@@ -13,6 +13,7 @@ import {
   type SessionRow,
 } from "./remote/core/projection.ts";
 import { RemoteConnection, type RemoteConnectionConfig } from "./remote/transport.ts";
+import { domSocketFactory } from "./remote/dom-socket.ts";
 import {
   initialSnapshot,
   stateBanner,
@@ -630,9 +631,19 @@ function ConnectScreen({
         port: Number(port),
         deviceId: deviceId.trim(),
         token: token.trim(),
+        // 浏览器端注入 DOM WebSocket 工厂（transport 保持平台无关）。
+        openSocket: domSocketFactory,
       };
       const conn = await RemoteConnection.connect(config);
-      localStorage.setItem("r-code-remote-connection", JSON.stringify(config));
+      localStorage.setItem(
+        "r-code-remote-connection",
+        JSON.stringify({
+          host: config.host,
+          port: config.port,
+          deviceId: config.deviceId,
+          token: config.token,
+        }),
+      );
       const labels = await conn.firstWelcomeCapabilities();
       onConnected(conn, capabilitiesFromLabels(labels));
     } catch (failure) {
