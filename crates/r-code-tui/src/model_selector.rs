@@ -356,6 +356,7 @@ mod tests {
                     model: Some(entry.provider.clone()),
                     inference: None,
                     mode: None,
+                    require_desktop_confirm: false,
                 },
             )
             .await

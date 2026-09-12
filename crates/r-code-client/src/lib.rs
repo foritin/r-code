@@ -7,6 +7,7 @@
 //! replay by cursor.
 
 pub mod outbox;
+pub mod ws;
 
 pub use outbox::{Outbox, OutboxEntry};
 

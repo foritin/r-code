@@ -1,0 +1,35 @@
+task: R07
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R07
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R07.json
+
+assertions:
+  R07.A1: { status: passed, kind: node-test, file: src-tauri/frontend/src/remote/core/projection.test.mjs (4 tests：行投影/审批状态/未知 kind 前向兼容/失败终态) }
+  R07.A2: { status: passed, test: r07_a2_app_served_when_built_and_honest_404_when_not (200+content-type / 未配置诚实 404 / path traversal 403) }
+
+regressions:
+  - r04_remote_listener / r05_fanout_stream / r06_ws_transport：适配 app_dir 参数后全绿（手动 HTTP 分流不破坏 tungstenite 握手）
+  - npm run build：remote entry 构建产物产出（dist/remote.html + dist/remote/{manifest,sw.js} + remote-*.js），bundle budget 过
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/projection.ts (new：平台无关 EventEnvelope→SessionRow 投影器，R21 抽包前身)
+  - src-tauri/frontend/src/remote/core/projection.test.mjs (new)
+  - src-tauri/frontend/src/remote/transport.ts (new：浏览器 WS 客户端，§4 hello + 命令/事件帧)
+  - src-tauri/frontend/src/remote-main.tsx (new：连接屏/任务列表/会话实时流，obsidian tokens)
+  - src-tauri/frontend/remote.html (new entry)
+  - src-tauri/frontend/public/remote/manifest.webmanifest + sw.js (new：SW 只缓存壳)
+  - src-tauri/frontend/vite.config.ts (multi-entry)
+  - crates/r-code-runtime/src/remote/listener.rs (serve_tls：手动 HTTP 头解析分流 /app 静态 vs /remote WS——derive_accept_key 手写 101；serve_static_app)
+  - crates/r-code-runtime/tests/r07_app_hosting.rs (new)
+  - 相关测试 fixture 适配 (r04/r05/r06)
+  - scripts/verify-remote.mjs (R07.A1–A2 registered；首个 node-test 断言)
+
+decisions:
+  - DM47: HTTP/WS 分流 = 手动读请求头（限 8KiB/10s）→ /app 静态（tokio::fs， traversal 拒绝）→ 其余手写 101（tungstenite handshake::derive_accept_key）+ from_raw_socket——绕开 accept_async 吞流问题，路径完全自控（后续 /events 路由同点扩展）。
+  - DM48: app 目录 = listen 的 app_dir 参数（装配处 env R_CODE_REMOTE_APP_DIR 或 <harness-v2>/remote-app；service main 装配接在 R08/R14）。未配置=404+修复指引（不做假页面）。
+  - DM49: PWA transport 是 DOM WebSocket adapter（R21 PlatformAdapter 注入点）；core 投影器零 DOM 依赖（node --test 直跑，Node 24 原生 strip-types）。
+  - DM50: 连接屏为占位（手动 host/port/deviceId/token——真配对流 R08/R09；凭据存 localStorage 本机，F10）。
+  - DM51: PWA 的 TLS 自签信任：同源 wss 由用户首跳接受（浏览器层 TOFU）；码内指纹校验（rcode://pair fp=）在 R08 配对闭环中作为不可绕过的应用层校验。

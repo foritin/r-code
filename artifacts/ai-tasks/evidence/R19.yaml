@@ -1,0 +1,58 @@
+task: R19
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R19
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R19.json
+
+assertions:
+  R19.A1: { status: passed, test: r19_a1_e2ee_bridge_roundtrip_and_wrong_secret_refused（E2EE 桥上应用帧往返 F1 同形；错密语在 owner responder msg3 MAC 拒绝——无副作用） }
+  R19.A2: { status: passed, test: r19_a2_revocation_enforced_by_daemon_through_a_live_bridge（中继放行转发，daemon 按 registry 吊销状态拒绝——纵深防御） }
+  R19.A3: { status: passed, kind: node-test, file: r19-connection-strategy.test.mjs (5 tests：直连优先/失败回落/强制中继/无端点诚实报错/吊销清缓存) }
+
+revalidated:
+  at: 2026-09-12
+  reason: >
+    R19.A1/A2 死锁（测试永久挂起，--through R6 随之卡死 18 分钟无输出）。
+    根因：crates/r-code-relay/src/e2ee.rs 的 drain_control 在 owner adopt 后预读
+    一个帧来吸收 owner.bind.ack，但 WebSocket 没有 peek——预读若抢到 Noise 握手
+    msg1（Binary），该帧被 next() 消费后即丢弃，owner 永远等不到 msg1、device 永远
+    等 msg2，双方互等。R17 因测试里 100ms sleep 使 ack 先到、msg1 后到而偶然躲过；
+    R19 的 duplex 桥中 device 立即拨号，必触雷。同一份代码还带 E0733（递归 async fn），
+    连带让 r-code-relay 无法编译，所以该缺陷此前从未真正跑起来。
+  fix: >
+    删除 drain_control 与 accept_owner 中的预读调用；改由握手自身的帧循环吸收控制帧——
+    next_binary 对白名单内的良性控制帧（owner.bind.ack，内容为空语义）continue 跳过，
+    其余 Text 帧仍按"控制帧即握手失败"处理（恶意中继注入不放松）。
+  result: >
+    r19_relay_path 2 passed in 0.11s（此前 >60s 无进展后被 kill）；--task R19 3/3。
+  verify_exit_code: 0
+  regressions_rechecked:
+    - --task R16/R17/R18/R19/R20：全绿（2/2、2/2、1/1、3/3、2/2）
+    - 逐任务跑完 --through R6 等价集合：34 任务 / 73 断言全通过
+    - cargo clippy -p r-code-relay / -p r-code-runtime --all-targets -- -D warnings：0 警告
+    - cargo fmt -p r-code-relay --check：干净
+
+regressions:
+  - r16_relay_integration 2/2；r17_e2ee 2/2（E2eeStream 泛型化后）
+  - clippy -D warnings: clean; fmt applied; --through R0 7/7
+
+changed_paths:
+  - crates/r-code-relay/src/e2ee.rs（E2eeStream 泛型化 <S: AsyncRead+AsyncWrite+Unpin>；connect_device_stream 公开入口）
+  - crates/r-code-relay/src/lib.rs（owner.bind.ack v1.1 + generation 守卫 retire；vk Copy 化）
+  - docs/prd/remote-control/relay-interface.md（v1.1：owner.bind.ack 时序化）
+  - crates/r-code-runtime/tests/r19_relay_path.rs (new：duplex E2EE 桥 + 纵深吊销)
+  - src-tauri/frontend/src/remote/core/connection-strategy.ts (new) + r19-connection-strategy.test.mjs (new)
+  - scripts/verify-remote.mjs (R19.A1–A3 registered)
+
+decisions:
+  - DM133: 【复验修复】握手前不预读帧。owner.bind.ack 由 next_binary 白名单跳过
+    （BENIGN_CONTROL_TYPES），而不是在握手前用 timeout(150ms) 抢读——预读会吞掉
+    device 已发出的 Noise msg1 造成双端互等；删除 drain_control 而非改写它，
+    因为 WebSocketStream 没有 peek/回放，任何"先读一帧"的方案性质上都不可靠。
+  - DM107: 【实现中修复】relay supersede 竞态——旧 owner 连接 retire 时无条件 remove(owner_id) 会删掉新连接的 entry（data_tx drop → 新桥死亡）；OwnerEntry 加 generation，retire 仅删除自身代际。
+  - DM108: 【协议 v1.1】owner.bind 增加 ack 帧——console 可时序化"先绑定后设备拨入"，消除 admission 竞态（已写回 relay-interface.md）。
+  - DM109: 【实现中修复】E2eeStream 硬编码 MaybeTlsStream<TcpStream> → 泛型 <S>，duplex（测试）与 TLS（生产）同用；poll_write 直写 Sink（start_send 同步入队 + poll_flush 驱动），避免 async 块 Pending 被 drop 丢数据。
+  - DM110: 【测试修复】duplex 桥的 accept_async 先于 client_async 顺序 await 会死锁（等对方 upgrade 请求）——responder 侧 spawn 化（与 A1 responder 同模式）。
+  - DM111: R19 测试用内存 duplex 对接 E2EE 两端——relay 转发平面由 R16 验证、E2EE 握手由 R17 验证，此处聚焦"桥上应用协议 + 纵深吊销"，消除 socket 时序噪音。
+  - DM112: 连接策略（直连优先/回落/强制中继）为 TS core 模块（PWA/RN 共享，R21 抽包）；Rust 侧 RelayTransport 的拨号编排对接该语义（R19 卡的 PWA 验证路径）。

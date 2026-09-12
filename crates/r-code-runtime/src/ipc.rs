@@ -7,6 +7,14 @@
 use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+/// Transport-neutral stream over which application frames flow (F1): the
+/// named-pipe/Unix listener and the future remote transports (R04's
+/// WebSocket over TLS, R17's relay) feed the *same* connection loop through
+/// this seam — there is no second command dispatch path.
+pub trait AppStream: AsyncRead + AsyncWrite + Unpin + Send {}
+
+impl<T> AppStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
 /// Platform stream over which application frames flow.
 pub struct IpcStream {
     #[cfg(windows)]

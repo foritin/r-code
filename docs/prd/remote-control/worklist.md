@@ -135,54 +135,86 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
 ## §6 主 Checklist（唯一完成状态源）
 
 **R0 主链前置**
-- [ ] **RA1** 审批 pending op 持久化与事件外发
-- [ ] **RA2** daemon 审批决策方法面
-- [ ] **RA3** 审批接线进 RunManager（本地闭环）
+- [x] **RA1** 审批 pending op 持久化与事件外发（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/RA1.yaml`）
+- [x] **RA2** daemon 审批决策方法面（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/RA2.yaml`）
+- [x] **RA3** 审批接线进 RunManager（本地闭环）（2026-09-12 implementation_verified，`--through R0` 7/7，证据 `artifacts/ai-tasks/evidence/RA3.yaml`）
 
 **R1 局域网只读**
-- [ ] **R00** 传输抽象
-- [ ] **R01** DeviceRegistry 与能力模型
-- [ ] **R02** 一次性配对会话
-- [ ] **R03** 自签证书与指纹钉扎
-- [ ] **R04** RemoteListener（WS over TLS）
-- [ ] **R05** 事件长连接扇出
-- [ ] **R06** r-code-client WebSocket transport
-- [ ] **R07** PWA 只读控制台
-- [ ] **R08** 手动配对端到端
+- [x] **R00** 传输抽象（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R00.yaml`）
+- [x] **R01** DeviceRegistry 与能力模型（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R01.yaml`）
+- [x] **R02** 一次性配对会话（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R02.yaml`）
+- [x] **R03** 自签证书与指纹钉扎（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R03.yaml`）
+- [x] **R04** RemoteListener（WS over TLS）（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R04.yaml`）
+- [x] **R05** 事件长连接扇出（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R05.yaml`）
+- [x] **R06** r-code-client WebSocket transport（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R06.yaml`）
+- [x] **R07** PWA 只读控制台（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R07.yaml`）
+- [x] **R08** 手动配对端到端（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R08.yaml`）
 
 **R2 局域网控制**
-- [ ] **R09** QR 配对与 mDNS 发现
-- [ ] **R10** tasks:write 远程写路径
-- [ ] **R11** 设备管理（桌面端）
+- [x] **R09** QR 配对与 mDNS 发现（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R09.yaml`；TUI/GUI QR 展示合并 R11）
+- [x] **R10** tasks:write 远程写路径（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R10.yaml`）
+- [x] **R11** 设备管理（桌面端）（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R11.yaml`；GUI/TUI 列表 UI 归 R14/R18）
 
 **R3 远程审批**
-- [ ] **R12** approvals:decide 远程审批
-- [ ] **R07b** PWA 四屏交互
-- [ ] **R07c** 审批聚合 tab
+- [x] **R12** approvals:decide 远程审批（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R12.yaml`）
+- [x] **R07b** PWA 四屏交互（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R07b.yaml`；真机视觉走查归 R13/R28）
+- [x] **R07c** 审批聚合 tab（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R07c.yaml`）
 
 **R4 打磨打包**
-- [ ] **R13** 通知与连接打磨
-- [ ] **R14** 防火墙/安装/文档/CI 守卫
+- [x] **R13** 通知与连接打磨（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R13.yaml`）
+- [x] **R14** 防火墙/安装/文档/CI 守卫（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R14.yaml`）
 
 **R5 公网中继**
-- [ ] **R15** 中继接口冻结门
-- [ ] **R16** r-code-relay 二进制
-- [ ] **R17** RelayTransport（出站+E2EE）
-- [ ] **R18** 桌面中继配置 UX
-- [ ] **R19** PWA/App 经中继配对连接
-- [ ] **R20** 中继部署物料与安全验收
+- [x] **R15** 中继接口冻结门（2026-09-12 design frozen，证据 `artifacts/ai-tasks/evidence/R15.yaml`）
+- [x] **R16** r-code-relay 二进制（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R16.yaml`；本次修复 e2ee.rs 递归 async fn（E0733）造成的 crate 编译回归后复验 2/2）
+- [x] **R17** RelayTransport（出站+E2EE）（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R17.yaml`）
+- [x] **R18** 桌面中继配置 UX（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R18.yaml`；与 R16 同根因的编译回归修复后复验 1/1）
+- [x] **R19** PWA/App 经中继配对连接（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R19.yaml`）
+- [x] **R20** 中继部署物料与安全验收（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R20.yaml`）
 
 **R6 原生 App**
-- [ ] **R21** RN 工程与 TS core 抽包
-- [ ] **R22** 原生配对与安全存储
-- [ ] **R23** 原生任务列表与会话屏
-- [ ] **R24** 原生审批体验
-- [ ] **R25** 推送句柄与原生通知
-- [ ] **R26** 原生设置/诊断屏
-- [ ] **R27** 签名/商店素材/合规
-- [ ] **R28** 真机外网验收与文档
+- [x] **R21** RN 工程与 TS core 抽包（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R21.yaml`；裸 RN 决策，真实构建产物=外部放行）
+- [x] **R22** 原生配对与安全存储（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R22.yaml`；真机相机/Keychain 取证=外部放行）
+- [x] **R23** 原生任务列表与会话屏（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R23.yaml`；真机 e2e/视觉走查=外部放行）
+- [x] **R24** 原生审批体验（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R24.yaml`）
+- [x] **R25** 推送句柄与原生通知（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R25.yaml`；真实 APNs/FCM=外部放行）
+- [x] **R26** 原生设置/诊断屏（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R26.yaml`；core 投影 `remote/core/settings-diagnostics.ts` + RN 屏④ `mobile/src/screens/SettingsScreen.tsx` 接入 App；真机视觉走查=外部放行）
+- [x] **R27** 签名/商店素材/合规（2026-09-12 implementation_verified，证据 `artifacts/ai-tasks/evidence/R27.yaml`）
+- [x] **R28** 真机外网验收与文档（2026-09-12 真机外网验收清单 production_release_ready：[production-release-checklist.md](./production-release-checklist.md)；真机/蜂窝取证=外部放行）
 
-进度：0/34。下一执行项：**RA1**。
+进度：34/34。累计门禁 `node scripts/verify-remote.mjs --through R6` **73/73 passed（退出 0）**；剩余仅为外部放行项（真机/蜂窝/APNs·FCM 生产凭证/商店提交/真实 VPS），见 [production-release-checklist.md](./production-release-checklist.md)。
+
+**本轮执行摘要（2026-09-12）**
+
+| 项 | 动作 | 结果 |
+| --- | --- | --- |
+| R16 | 修复 `crates/r-code-relay/src/e2ee.rs::drain_control` 递归 async fn（E0733）导致 crate 无法编译的回归 | `--task R16` 2/2 退出 0 |
+| R18 | 同一根因连带恢复 | `--task R18` 1/1 退出 0 |
+| R19 | **死锁修复**：`drain_control` 预读一帧吸收 owner.bind.ack，却吞掉了 device 已发出的 Noise msg1 → 双端互等永久挂起（`--through R6` 卡死 18 分钟无输出）。改为握手帧循环白名单跳过良性控制帧 | `r19_relay_path` 2 passed in 0.11s；`--task R19` 3/3 |
+| R26 | 新增屏④ core 投影 + RN 设置/诊断屏 + App 接线，断言扩到 7 条 | `--task R26` 1/1 退出 0 |
+| 附带 | `push-fake.ts` 的 `PushEvent` 类型对齐实际入栈形状（TS2353） | `tsc --noEmit` 0 错误 |
+| 门禁 | `node scripts/verify-remote.mjs --through R6`（单命令，带超时） | **73/73 passed，退出 0**；clippy `-D warnings` 0 警告 |
+
+**第二轮：RN 侧验证补全（同日）**
+
+| 项 | 动作 | 结果 |
+| --- | --- | --- |
+| mobile CI | `mobile.yml` 头部用 `//` 当注释 → YAML 解析失败（pyyaml 实测），workflow **从未执行**；且 android/ios job 末步是 `echo … && exit 0` 占位 | 改为真门禁：checks(tsc+jest) / bundle-android / bundle-ios |
+| RN 类型 | 装 RN 依赖后 `tsc --noEmit` 首次运行 | 抓到既有 bug：adapter import 路径少一级、`transport.ts` 的 DOM 类型不兼容 |
+| RN 测试 | 写 2 个测试文件（5 用例），jest 配置原先搜不到任何测试 | **5/5 绿**（此前 "No tests found" 靠 `--passWithNoTests` 冒充通过） |
+| RN 打包 | metro 真实打包两平台 | android 2,166,751B / ios 2,153,884B |
+| transport | 去掉 DOM 依赖，改平台注入 socket 工厂 | RN 的 WebSocket 无 `addEventListener`，初版在真机必崩；顺带修 client_id 写成 "pwa" 的身份 bug |
+| R21.A2 | 从"只匹配字样"升级为可证伪守卫 | 能抓 JS 风格注释行与 exit-0 占位 |
+| R27.A1 | 装了 RN 依赖后 F14 合规扫描误报（扫到 node_modules 里第三方的 `eval`） | 扫描排除依赖与构建产物目录，只查本仓库自己的代码 |
+
+**已知遗留（不属远程控制，如实记录，未擅自改动）**
+
+| 现象 | 根因（已核实） | 建议 |
+| --- | --- | --- |
+| `room-file-activity.test.mjs` ×2 红 | Playwright 等不到 `button[耗时]` / `textbox[给 Agent 的消息]`；相关 UI 文件在 HEAD 无未提交改动 → **HEAD 即红** | 主界面功能域处理：确认是 UI 有意重构（改测试期望）还是回归（修 UI） |
+| `send-mode-switch.test.mjs` 红 | 同上（Playwright，UI 结构变化） | 同上 |
+| `i18n-hardcoded.test.mjs` 红 | 基线漂移：`SettingsScene.tsx` 509→523 条、新文件 `remote-main.tsx` 53 条硬编码文案 | 需产品决策：新增文案抽 i18n key，还是把新控制台入口加入 reviewed baseline。**未擅自刷新基线**（那等于把违规合法化） |
+| `mcp-agent-actions.test.mjs` | 原引用 `crates/r-code-agent-worker/src/llm_runtime.rs`，该 crate 已不在本树（仅在 sandbox 快照中）→ 模块加载期崩栈 | 已修：缺失时显式 skip 并说明，其余 4 条断言照常执行（4 pass / 1 skip） |
 
 ---
 

@@ -1,0 +1,27 @@
+task: R17
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R17
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R17.json
+
+assertions:
+  R17.A1: { status: passed, test: r17_a1_e2ee_roundtrip_and_stream_semantics_match_a_pipe（真 relay 上 Noise XXpsk3 双向明文往返 + 100KB 多 chunk 保真；字节流语义=管道同形 F1） }
+  R17.A2: { status: passed, test: r17_a2_malicious_relay_cannot_read_tamper_or_inject（错指纹 TOFU 拒；错 PSK 在 owner responder msg3 MAC 验证暴露拒绝——恶意中继/攻击者无副作用） }
+
+regressions:
+  - r16_relay_integration 2/2（e2ee 模块加入后）
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - Cargo.toml / crates/r-code-relay/Cargo.toml（snow 0.9 + x25519-dalek）
+  - crates/r-code-relay/src/e2ee.rs (new：E2eeStream——Noise XXpsk3 握手 + AppStream 字节流；device=initiator 全 admission 流 + owner=responder；指纹钉扎 get_remote_static)
+  - crates/r-code-relay/src/lib.rs（pub mod e2ee；pub fn owner_id_of）
+  - crates/r-code-relay/tests/r17_e2ee.rs (new)
+  - scripts/verify-remote.mjs (R17.A1–A2 registered)
+
+decisions:
+  - DM97: Noise 静态密钥 = Ed25519 seed 直接作 X25519 私钥（owner）；钉扎指纹 = SHA-256(对应 X25519 公钥)——与 Ed25519 身份密钥体系分层（身份签名走 R16 控制帧，Noise 静态是传输层密钥）；测试用 x25519-dalek 派生指纹。
+  - DM98: 【实现中修复×3】①poll_flush 的 async 块 Pending 被 drop 导致 write_buffer 丢失/挂死 → 改 futures Sink 状态机（start_send 同步入队 + poll_flush 驱动）；②connect_device 缺 device.hello/challenge 控制流（Noise msg1 被 relay bad_frame 拒→双向等待挂死）→ 补全 admission 流；③测试侧顺序 await responder（等 msg1）先于 device dial → 鸡生蛋死锁 → responder 全部 tokio::spawn。
+  - DM99: 恶意中继语义验证路径=错 PSK 在 owner responder 的 msg3 MAC 暴露（XXpsk3 psk(3) 混入第三消息；snow 索引 psk(3) 而非 psk(2)——"MissingPsk" 错误修正）；错指纹=设备 TOFU 钉扎检查。中继只转发不注入测试面归 R19.A2（篡改帧→AEAD 失败）。
+  - DM100: 每条 wire message ≤48KiB 明文分块（Noise 65535 上限内含 tag/开销）；读侧 coalesce，AppStream 消费者看到连续字节流。

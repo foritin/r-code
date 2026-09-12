@@ -1,0 +1,27 @@
+task: R02
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R02
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R02.json
+
+assertions:
+  R02.A1: { status: passed, test: r02_a1_expired_replayed_and_wrong_codes_are_distinct_errors }
+  R02.A2: { status: passed, test: r02_a2_successful_pairing_yields_a_device_and_one_time_token }
+  R02.A3: { status: passed, test: r02_a3_remote_source_cannot_start_pairing }
+  extra:
+    - a_new_start_supersedes_the_previous_session（单会话模型：新 start 作废旧码）
+
+regressions:
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/remote/pairing.rs (new)
+  - crates/r-code-runtime/src/remote/mod.rs (exports)
+  - scripts/verify-remote.mjs (R02.A1–A3 registered)
+
+decisions:
+  - DM23: 配对会话纯内存（Mutex<Option<Session>>，daemon 重启自然清空）；码=2×UUIDv4（≥128bit）；校验顺序 consumed→expired→code_hash（先消费检查防重放优先）；单会话模型（新 start 作废旧码，任务卡默认）。
+  - DM24: lanEndpoints 由装配注入（会话层不碰网络栈）——本任务返回注入值，真实网卡发现在 R04/R08 装配时接（无头 CI 空数组不报错的原则由注入方遵守）。
+  - DM25: 错误码冻结为 pairing_expired / pairing_consumed / pairing_rejected / pairing_unavailable / remote_not_enabled；qr_payload 为 R09 冻结格式的稳定前缀（rcode://pair?v=1&p=&fp=）。
+  - DM26: pairingStart 的 source 检查用 R02 库层 CommandSource（RA2 引入），A3 直接以 Remote source 断言拒绝且不留会话。

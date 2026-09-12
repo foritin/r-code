@@ -1,63 +1,59 @@
 schema_version: ai-task-packet.v1
-project_id: product-experience-gap-closure
-task_id: M2-03
+project_id: remote-control
+task_id: RA1
 status: active
 
 source:
-  document: docs/product-experience-redesign/r-code-experience-redesign-prd.md
+  document: docs/prd/remote-control/worklist.md
   refs:
-    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#m2-03-简化-composer运行配置与-settings-ia
-    - docs/product-experience-redesign/r-code-experience-redesign-prd.md#57-完整-settings-scene-页面矩阵
+    - docs/prd/remote-control/worklist.md#RA1-审批-pending-op-持久化与事件外发
+    - docs/prd/remote-control/architecture.md#6-命令与事件复用既有协议
 
-objective: Composer 状态机/RunConfig/停止分离 + 12 页 Settings registry 驱动 + CAS lifecycle + canonical snapshot + Provider/Image/Codex/MCP/Subagent/Shell 合同 + 四 GuideSheet（A1..A13 全合同，见任务卡）。
-depends_on: ["M2-01", "M1-03"]
+objective: 审批 pending op 持久化与事件外发——journal 出现 approval.requested/decided；阻塞中的插件调用在决策（或超时拒绝）后继续；daemon 重启后未决 op 从事件重建。
+depends_on: []
 fixed_constraints:
-  - Enter 在 running 永不停止；IME 不发送；stop 独立危险动作；12 页按 §5.7；capability 归并不得删语义；planned 默认隐藏且后端拒绝。
+  - op id 只能宿主生成/校验；插件自造 id 拒绝（RpcError，不产生事件）
+  - 事件与 assistant.message 同通道（task.events，payload.journalKind 判别）
+  - 无人连接时 op 保持 pending；默认决策超时 300s 后 Denied 并记事件（RunManager 构造可配）
+  - 同 op 重复 request 幂等返回等待中的同一个决策
+  - 迟到/重复/冲突决策：第一次有效，同决策重放原结果、异决策拒绝
 
 steps:
-  - id: M2-03.S1
+  - id: RA1.S1
     status: completed
-    action: Composer IME/stop 静态闸 + send-mode 套件接线（A1 passed）。
-    expected_result: A1 ✅
-  - id: M2-03.S2
-    status: completed
-    action: 建立 §5.7 12 页 Pane 注册表工件（settings-pane-registry.json：7 implemented + 6 pending 显式登记），A4 演进门接线并带 pending 惩罚（诚实红）。
-    expected_result: 注册表完整性 ✅；12 页派生 ⏳
-  - id: M2-03.S3
-    status: active
-    action: 补齐 6 个 pending Pane（permissions/security/appearance/notifications/lifecycle/updates，updates 消费 M1-04 域）并迁移 SettingsScene 派生；随后接线 A2/A3/A5-A10/A13（executor 骨架与部分套件已就绪：mcp-management/mcp-agent-actions/subagent-provider-autoprobe/codex-question-card）。
-    expected_result: A4 去惩罚转绿，其余逐腿过闸
-  - id: M2-03.S4
+    action: 预检——cargo check/clippy 绿；router.rs:383 语义、ApprovalRegistry 调用点（仅 t10）、compose 调用方（签名不变零波及）已核实。
+    expected_result: 基线绿 ✅
+  - id: RA1.S2
+    status: in_progress
+    action: 契约冻结——requested {opId,summary,runId,createdSeq}（task_id 走事件列）；decided {opId,decision,decidedBy,decidedSeq,runId}；createdSeq/decidedSeq=写入前 journal 水位（事件无法自引用自身 seq）；EventKind::ApprovalRaised。
+    expected_result: approval_store.rs + envelope_of 映射
+  - id: RA1.S3
     status: pending
-    action: CAS conflict 三路恢复 reducer 与 canonical snapshot 统一（A8/A10 核心），capability 映射表与 alias registry（A7/A9）。
-    expected_result: A5-A10 通过
+    action: ApprovalStore（tokio Mutex 串行化；先写 journal 再提交内存——决策生效⟹事件已持久）+ router request 分支重写 + RunManager/application 装配。
+    expected_result: 编译绿
+  - id: RA1.S4
+    status: pending
+    action: 测试 ra1_persistent_approvals.rs（A1 时序阻塞+granted 续行；A2 重启重建+冲突拒绝；A3 未登记 RpcError 无事件；超时 Denied）+ t10 契约演进更新。
+    expected_result: 全绿
+  - id: RA1.S5
+    status: pending
+    action: 回归 harness_conformance/conversation_engine/t32 + clippy/fmt + verify-remote --task RA1 注册 + 证据归档。
+    expected_result: --task RA1 退出 0
 
 acceptance_assertions:
-  - { id: M2-03.A1, level: reliability, status: passed }
-  - { id: M2-03.A2, level: integration, status: pending }
-  - { id: M2-03.A3, level: accessibility, status: pending }
-  - { id: M2-03.A4, level: contract, status: in_progress, note: "注册表✅ 派生⏳(pending 惩罚生效)" }
-  - { id: M2-03.A5, level: integration, status: pending }
-  - { id: M2-03.A6, level: e2e, status: pending }
-  - { id: M2-03.A7, level: contract, status: pending }
-  - { id: M2-03.A8, level: integration, status: pending }
-  - { id: M2-03.A9, level: contract-migration, status: pending, note: registry.generated 目前仅登记 A1..A8，A9..A13 需 regenerate registry 后接线 }
-  - { id: M2-03.A10, level: reliability-e2e, status: pending, note: 同上 }
-  - { id: M2-03.A11, level: contract-integration, status: in_progress, note: "executor 腿已备(a11: subagent-provider-autoprobe)，待 registry 扩容" }
-  - { id: M2-03.A12, level: security-e2e, status: in_progress, note: "executor 腿已备(a12: mcp 双套件)，待 registry 扩容" }
-  - { id: M2-03.A13, level: accessibility-e2e, status: pending }
+  - { id: RA1.A1, level: integration, status: pending }
+  - { id: RA1.A2, level: reliability, status: pending }
+  - { id: RA1.A3, level: security-negative, status: pending }
 
-completed_assertions: [M2-03.A1]
-remaining_assertions: [M2-03.A2, M2-03.A3, M2-03.A4, M2-03.A5, M2-03.A6, M2-03.A7, M2-03.A8, M2-03.A9, M2-03.A10, M2-03.A11, M2-03.A12, M2-03.A13]
-changed_paths:
-  - src-tauri/frontend/src/lib/settings-pane-registry.json
-  - src-tauri/frontend/scripts/m2-03-a4-pane-registry.test.mjs
-  - scripts/product-experience/m2-03-checks.mjs
-  - scripts/product-experience/wiring.mjs
+completed_assertions: []
+remaining_assertions: [RA1.A1, RA1.A2, RA1.A3]
+changed_paths: []
 decisions:
-  - DM0: 门禁环境约定沿用 M0-02.yaml DM6（VERIFY_PRODUCT_EXPERIENCE_PYTHON / BASELINE_M0_REUSE）。
-  - DM1: A4 采用「注册表完整性先行绿 + pending 惩罚显式红」双信号，防 7 页虚报 12 页完成。
-  - DM2: registry.generated.json 当前仅含 M2-03.A1..A8；A9..A13 在 PRD 有文本但未入 registry——需重跑 generate_registry_from_prd.py 并复核差异后扩接线。
+  - DM1: created_seq/decided_seq 冻结为"事件写入前的 journal 水位"（max_event_seq）——append-only 事件无法自引用自身 seq；单调可比，满足 RA2 list 排序需求。
+  - DM2: JournalStore trait 加默认方法 max_event_seq（默认全量读 last），V2Store 用 SELECT MAX(seq) 覆盖，MemoryJournal 覆盖——生产路径一次 SQL。
+  - DM3: ApprovalStore 内部 tokio::sync::Mutex 串行化 register/decide/pending/rebuild；decide 先写 journal 成功再提交内存+watch 发送（决策生效⟹已持久）；并发重复 decided 事件在 rebuild 投影时 first-wins 去重。
+  - DM4: t10 契约演进——未登记 op 从"返回 denied 决策"升级为"PROTOCOL_VIOLATION RpcError、不产生事件"（拒绝语义不削弱且更强）；宿主决策路径 set_decision 改为 register+decide。
+  - DM5: 等待原语 watch::Sender<Option<DecisionRecord>>——"先注册等待者后决策"与"决策早于等待者"两时序都覆盖。
 attempts: 1
 evidence: []
-last_verified_revision: null
+last_verified_revision: f5a744a

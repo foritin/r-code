@@ -1,0 +1,89 @@
+# R21.A2 — mobile CI（平台矩阵归属，依 §0 平台覆盖纪律）。
+#
+# 本机是 Windows，产不出 macOS 构建；CI runner 负责两平台各自的验证。
+# 诚实口径：**这里验证的是 JS/TS 层**——类型检查（tsc）、RN 渲染与
+# adapter 行为（jest）、两平台 metro bundle（真实打包产物）。APK/IPA 需要
+# Android SDK / Xcode + 签名，属 production_release_ready 的外部放行项。
+#
+# 历史教训：本文件曾用 `//` 当注释（YAML 只认 `#`）→ 整个 workflow 无法解析、
+# 从未执行；且 android/ios 两个 job 的末步是 `echo ... && exit 0` 占位，
+# 即使跑起来也不产出任何东西。两处均已修正。
+name: mobile
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "mobile/**"
+      - "src-tauri/frontend/src/remote/**"
+      - ".github/workflows/mobile.yml"
+  pull_request:
+    paths:
+      - "mobile/**"
+      - "src-tauri/frontend/src/remote/**"
+
+jobs:
+  checks:
+    name: Typecheck + RN tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
+      - name: Install mobile deps
+        working-directory: mobile
+        run: npm install --no-audit --no-fund
+      - name: Typecheck RN app + shared core (tsc --noEmit)
+        working-directory: mobile
+        run: node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+      - name: RN tests (jest)
+        working-directory: mobile
+        # 不加 --passWithNoTests：零测试必须失败，不能冒充通过。
+        run: node node_modules/jest/bin/jest.js --ci
+
+  bundle-android:
+    name: Android bundle (metro)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
+      - name: Install mobile deps
+        working-directory: mobile
+        run: npm install --no-audit --no-fund
+      - name: Bundle (android)
+        working-directory: mobile
+        run: node scripts/bundle.mjs android
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rn-bundle-android
+          path: mobile/bundle-out/main.android.jsbundle.js
+          if-no-files-found: error
+
+  bundle-ios:
+    name: iOS bundle (metro)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
+      - name: Install mobile deps
+        working-directory: mobile
+        run: npm install --no-audit --no-fund
+      - name: Bundle (ios)
+        working-directory: mobile
+        run: node scripts/bundle.mjs ios
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rn-bundle-ios
+          path: mobile/bundle-out/main.ios.jsbundle.js
+          if-no-files-found: error

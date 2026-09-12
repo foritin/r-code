@@ -1,0 +1,35 @@
+task: R18
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R18
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R18.json
+
+assertions:
+  R18.A1: { status: passed, tests: [r18_a1_config_persists_and_unconfigured_never_dials, r18_a1_backoff_machine_visible_in_status, r18_live_registration_against_a_real_relay_reaches_online, r18_registration_code_shape_and_fingerprint_stability, r18_daemon_method_surface_roundtrip] }
+
+revalidated:
+  at: 2026-09-12
+  reason: >
+    R18.A1 的失败根因与 R16 相同——crates/r-code-relay 因 e2ee.rs 的 E0733
+    递归 async fn 编译失败（测试目标依赖该 crate）。根因修复后 --task R18
+    退出 0（1/1）。
+
+regressions:
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/remote/relay_config.rs (new：RelayConfig 持久化 + RelayLink 出站状态机 + RelayMethods daemon 方法面 + 注册码生成 + owner identity 0600)
+  - crates/r-code-runtime/src/remote/mod.rs（模块注册）
+  - crates/r-code-runtime/Cargo.toml（rand_core/ed25519-dalek/r-code-relay dev-dep）
+  - Cargo.toml（r-code-relay workspace dep）
+  - crates/r-code-runtime/tests/r18_relay_config.rs (new)
+  - scripts/verify-remote.mjs (R18.A1 registered)
+
+decisions:
+  - DM101: 空配置零出站 = RelayLink::open 无 enabled+url 时不 spawn 任何任务 + attempts 计数器测试探针（0 断言含后台竞态窗口复测）——F12 opt-in 的构造性保证。
+  - DM102: 状态机 = Unconfigured/Connecting{attempt}/Online/Backoff{attempt}（watch 通道，前端可订阅）；退避 200ms×2^n 封顶 30s；disable 拆任务回 Unconfigured。
+  - DM103: 配置持久化 = relay.json（url/registration_code/enabled）+ relay-identity.json（Ed25519 seed 0600，Noise 静态派生自它）；不进插件清单（F12）。
+  - DM104: daemon 方法面 = relay.status / relay.configure / relay.issueCode（一次性码仅显示一次，导入 relay 侧 R_CODE_RELAY_CODES）；FORBIDDEN_REMOTE_METHODS 已含 relay.* 管理面（R01 冻结）。
+  - DM105: GUI DevicesSettingsPane / TUI /remote relay 状态入口归 R14/R18 桌面打磨批次（method 面与状态机已冻结，UI 是薄投影；worklist 注明）。
+  - DM106: QR relay= 字段扩展（rcode://pair 加 relay=）与 device 侧行走中继配对在 R19 落地（本任务的 owner 注册是前置）。

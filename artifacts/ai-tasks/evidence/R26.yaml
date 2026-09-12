@@ -1,0 +1,56 @@
+task: R26
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R26
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R26.json
+
+assertions:
+  R26.A1:
+    status: passed
+    kind: node-test
+    file: r26-settings.test.mjs (7 tests)
+    tests:
+      - 能力只读展示（授予在桌面端，App 内不可自授；全模型 action 只有 copy/clear-token/switch-strategy；序列化后无 "token" 字段）
+      - 清除令牌 → 回到未配对态（含 LAN/中继端点缓存清空；屏④清除入口唯一）
+      - 指纹核对逐段显示（4 位一段；关于段显示分段、复制原始指纹）
+      - 中继信息与连接质量（未配置诚实显示且无复制入口；RTT 分档 good/fair/poor/offline）
+      - 重连日志最近 N 条可复制（环形 50 条上限、详情 ≤120 字符、新→旧、copyText 行数一致）
+      - 直连优先 / 仅中继切换（只改拨入次序，不动凭据与能力段）
+      - RN 屏④存在并消费共享 core（不复制投影、不引 tauri、命中区 48、无障碍标签）
+
+revalidated:
+  at: 2026-09-12
+  extra:
+    - RN 侧第一次真实验证：mobile tsc --noEmit 0 错误；jest 2 suites / 5 tests 全绿
+      （settings-screen.test.tsx 3 条覆盖能力只读不可点、清除令牌两步确认、命中区与无障碍）；
+      metro bundle 两平台均产出。
+    - 顺带修复 mobile/src/adapter/index.ts 相对路径少一级（../../ → ../../../src-tauri），
+      该 import 在装上 RN 依赖后才第一次被编译器发现。
+
+regressions:
+  - r07b 状态机复用（credentialsChanged → unpaired）
+  - src-tauri/frontend tsc --noEmit：绿（顺带修复 push-fake.ts 的 PushEvent 类型与实际入栈形状不一致，TS2353）
+  - --task R16/R17/R18 复跑：绿（同仓 relay crate 编译恢复）
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/settings-diagnostics.ts (new：屏④六段投影 + 重连日志 + 连接质量 + 策略文案 + clearLocalCredentials + fingerprintDisplay)
+  - src-tauri/frontend/src/remote/core/r26-settings.test.mjs (改由新模块导入，断言扩展到 7 条)
+  - src-tauri/frontend/src/remote/core/push-fake.ts (类型形状对齐实际入栈，tsc 恢复绿)
+  - mobile/src/screens/SettingsScreen.tsx (new：RN 屏④设置/诊断)
+  - mobile/App.tsx (挂载设置屏、接 PlatformAdapter 安全存储、清除令牌/切换策略接线)
+  - scripts/verify-remote.mjs (R26.A1 registered)
+
+decisions:
+  - DM129: 能力只读=App 内无授予入口（授予在桌面端 device.updateCapabilities，R11 冻结）；未授予能力不显示。
+  - DM130: 清除令牌三清=凭据+LAN 端点+中继 URL，状态机回 unpaired（R07b 状态机复用）。
+  - DM131: 指纹核对=4 位分段空格分隔（人工比对友好）；RN 屏④消费该投影（骨架已挂 tab）。
+  - DM133: 屏④模型=六段（能力/中继/策略/诊断/本机令牌/关于），行级 action 白名单只有
+    copy / clear-token / switch-strategy——能力行 action 恒为 null，构造性保证不可自授；
+    模型无 token 字段，设置屏永不展示凭据（F10）。
+  - DM134: 重连日志=环形 50 条、详情 ≤120 字符（只留连接元数据，F15），新→旧展示；
+    RN 侧复制走系统长按选择（Text selectable），不引入额外原生依赖（F14 瘦客户端）。
+  - DM135: 连接质量=RTT 分档（≤100ms good / ≤400ms fair / 更大 poor / 非 online 即 offline），
+    无 RTT 时按状态机兜底，不臆造数值。
+  - DM136: 清除本机令牌与桌面端吊销分离——App 侧只做本地注销（secureStore.remove 凭据+
+    端点键），吊销在电脑端设备管理（R11）。

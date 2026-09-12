@@ -33,6 +33,52 @@ struct ServiceHandler {
     /// Profile v2 root: hosts the persistent side-effect counter used by
     /// dedup contract tests.
     harness_root: std::path::PathBuf,
+    /// The remote-control surface (R08 wiring): device registry, pairing
+    /// sessions, the TLS identity and the pairing-gated listener.
+    remote: RemoteSurface,
+}
+
+/// Everything the remote-control surface needs, owned by the daemon.
+/// Management logic lives in [`r_code_runtime::remote::RemoteManager`] so
+/// the console methods here are one-liners (R11 shares it with tests).
+struct RemoteSurface {
+    manager: Arc<r_code_runtime::remote::RemoteManager>,
+}
+
+impl std::ops::Deref for RemoteSurface {
+    type Target = r_code_runtime::remote::RemoteManager;
+    fn deref(&self) -> &Self::Target {
+        &self.manager
+    }
+}
+
+impl RemoteSurface {
+    /// `remote.pairingStart` payload shape for the console.
+    async fn pairing_start(&self) -> Result<serde_json::Value, String> {
+        let reply = self
+            .manager
+            .pairing_start()
+            .await
+            .map_err(|e| e.to_string())?;
+        let port = self.manager.listening_port().await.unwrap_or_default();
+        Ok(serde_json::json!({
+            "pairingCode": reply.pairing_code,
+            "qrPayload": r_code_runtime::remote::pairing::qr_payload_v1(
+                &self.manager.bind_ip.to_string(),
+                port,
+                &reply.pairing_code,
+                &self.identity_fingerprint(),
+            ),
+            "lanEndpoints": reply.lan_endpoints,
+            "expiresAtMs": reply.expires_at_ms,
+            "port": port,
+            "fingerprint": self.identity_fingerprint(),
+        }))
+    }
+
+    fn identity_fingerprint(&self) -> String {
+        self.manager.identity.fingerprint.clone()
+    }
 }
 
 fn method_error(error: ApplicationError) -> String {
@@ -160,8 +206,11 @@ impl ApplicationHandler for ServiceHandler {
             "task.sendMessage" => {
                 let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
                 let text = params["text"].as_str().ok_or("missing text")?;
+                // Audit actor: the connection identity (device id on remote
+                // transports — the listener overwrites client_id before the
+                // handler sees it).
                 self.service
-                    .send_message(task_id, text)
+                    .send_message_as(task_id, text, Some(&command.client_id))
                     .await
                     .map_err(method_error)
             }
@@ -202,6 +251,9 @@ impl ApplicationHandler for ServiceHandler {
                     model: params["model"].as_str().map(str::to_string),
                     inference: params.get("inference").cloned(),
                     mode: params["mode"].as_str().map(str::to_string),
+                    require_desktop_confirm: params["requireDesktopConfirm"]
+                        .as_bool()
+                        .unwrap_or(false),
                 };
                 self.service
                     .set_task_preferences(task_id, preferences)
@@ -290,6 +342,84 @@ impl ApplicationHandler for ServiceHandler {
                 let limit = params["limit"].as_u64().unwrap_or(200).min(u32::MAX as u64) as u32;
                 let events = self.service.events_after(after_seq, limit).await;
                 Ok(serde_json::to_value(events).unwrap_or_default())
+            }
+            "approvals.list" => {
+                let pending = self.service.approvals_list().await;
+                Ok(serde_json::json!({"pending": pending}))
+            }
+            "device.list" => Ok(serde_json::json!({
+                "devices": self.remote.manager.list_devices()
+            })),
+            "device.revoke" => {
+                let device_id = params["deviceId"].as_str().ok_or("missing deviceId")?;
+                self.remote
+                    .manager
+                    .revoke(device_id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::Value::Null)
+            }
+            "device.updateCapabilities" => {
+                let device_id = params["deviceId"].as_str().ok_or("missing deviceId")?;
+                let labels: Vec<&str> = params["capabilities"]
+                    .as_array()
+                    .map(|values| values.iter().filter_map(|value| value.as_str()).collect())
+                    .unwrap_or_default();
+                let applied = self
+                    .remote
+                    .manager
+                    .update_capabilities(device_id, &labels)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({"capabilities": applied}))
+            }
+            "device.setListener" => {
+                let enabled = params["enabled"].as_bool().unwrap_or(false);
+                self.remote
+                    .manager
+                    .set_listener(enabled)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({"enabled": enabled}))
+            }
+            "remote.pairingStart" => {
+                // F4/F5: the pairing console is local-only; the remote gate
+                // refuses this method outright (FORBIDDEN_REMOTE_METHODS).
+                self.remote.pairing_start().await
+            }
+            "remote.listenerStatus" => {
+                let port = self.remote.manager.listening_port().await;
+                Ok(serde_json::json!({
+                    "listening": port.is_some(),
+                    "port": port,
+                    "devices": self.remote.registry.list().len(),
+                }))
+            }
+            "approvals.decide" => {
+                // Local console decision (the remote transport arrives as
+                // "approvals.decide$remote", injected by the listener's
+                // gate — the suffix is unreachable from the wire).
+                self.service
+                    .approvals_decide(
+                        &params,
+                        &command.client_id,
+                        r_code_runtime::application::CommandSource::Local,
+                    )
+                    .await
+                    .map_err(method_error)
+            }
+            "approvals.decide$remote" => {
+                // R12: a remote device with the approvals:decide capability
+                // (enforced by the listener gate before this runs). The
+                // audit identity is the authenticated device id.
+                self.service
+                    .approvals_decide(
+                        &params,
+                        &command.client_id,
+                        r_code_runtime::application::CommandSource::Remote,
+                    )
+                    .await
+                    .map_err(method_error)
             }
             methods::SHUTDOWN => {
                 self.shutdown.notify_waiters();
@@ -410,6 +540,52 @@ fn main() {
                 std::process::exit(6);
             }
         };
+        // Undecided approvals from a previous daemon stay decidable: the
+        // pending index rebuilds from the journal (RA1).
+        service.rebuild_approvals().await;
+        // Remote surface (R08): registry/pairing/identity under the profile
+        // root; the console app directory comes from the bundle or env.
+        let harness_root = profile.harness_v2_root();
+        let registry = match r_code_runtime::remote::DeviceRegistry::open(&harness_root) {
+            Ok(registry) => Arc::new(registry),
+            Err(error) => {
+                eprintln!("r-code-service: device registry failure: {error}");
+                std::process::exit(7);
+            }
+        };
+        let tls_identity = match r_code_runtime::remote::ensure_identity(&harness_root) {
+            Ok(identity) => identity,
+            Err(error) => {
+                eprintln!("r-code-service: TLS identity failure: {error}");
+                std::process::exit(7);
+            }
+        };
+        let app_dir = std::env::var("R_CODE_REMOTE_APP_DIR")
+            .map(std::path::PathBuf::from)
+            .ok()
+            .or_else(|| Some(harness_root.join("remote-app")));
+        let remote = RemoteSurface {
+            manager: Arc::new(r_code_runtime::remote::RemoteManager::new(
+                registry,
+                Arc::new(r_code_runtime::remote::PairingSessions::new(
+                    r_code_runtime::remote::PAIRING_TTL,
+                )),
+                tls_identity,
+                r_code_runtime::remote::FanoutHub::new(),
+                app_dir,
+                "127.0.0.1".parse().expect("loopback"),
+            )),
+        };
+        // The pairing listener keeps the journal-cursor publisher fed.
+        {
+            let store_for_events =
+                Arc::new(V2Store::open(&profile.database_path()).expect("store reopen"));
+            let hub = remote.manager.hub.clone();
+            tokio::spawn(async move {
+                let publisher = r_code_runtime::remote::CursorPublisher::new(store_for_events, hub);
+                publisher.run(std::time::Duration::from_millis(250)).await;
+            });
+        }
         // Built-in harnesses register through the normal immutable registry
         // from the bundle's staged plugin resources (T38). Dev layouts can
         // point at one explicitly via R_CODE_BUILTIN_PLUGINS_DIR.
@@ -430,9 +606,17 @@ fn main() {
             service,
             shutdown: Arc::new(Notify::new()),
             harness_root: profile.harness_v2_root(),
+            remote,
         });
         let shutdown = handler.shutdown.clone();
-        let dedup = Arc::new(CommandDedup::new(&profile.profile_id(), store, handler));
+        let dedup = Arc::new(CommandDedup::new(
+            &profile.profile_id(),
+            store,
+            handler.clone(),
+        ));
+        // The remote listener serves remote connections through the same
+        // dedup-wrapped handler as the local pipe (F1).
+        handler.remote.manager.wire_handler(dedup.clone()).await;
         let daemon = match Daemon::start(&profile.ipc_endpoint(), identity, dedup) {
             Ok(daemon) => daemon,
             Err(error) => {

@@ -443,10 +443,40 @@ async fn run_interactive_tui(
         });
     });
 
-    // M2-05：审批决策。v2 首版守护进程尚无审批请求事件——pending 投影恒
-    // 空；保留回调消费能力（请求接入后无需改装配结构）。
+    // M2-05 / RA3：审批决策。daemon 审批（approval.requested 投影出的
+    // 浮层）经 approvals.decide 落账；本地 PermissionEngine 流（op_id
+    // 为空）维持既有语义——意图消费在宿主侧，这里只处理 daemon 来源。
+    let decide_engine = engine.clone();
+    let decide_tui = tui_state.clone();
     let decide_approval: Arc<dyn Fn(r_code_tui::approval::ApprovalDecision) + Send + Sync> =
-        Arc::new(|_| {});
+        Arc::new(move |decision| {
+            let engine = decide_engine.clone();
+            let tui = decide_tui.clone();
+            tokio::runtime::Handle::current().spawn(async move {
+                let pending = tui
+                    .lock()
+                    .map(|st| st.pending_approval().cloned())
+                    .ok()
+                    .flatten();
+                let Some(pending) = pending.filter(|p| p.is_daemon()) else {
+                    return;
+                };
+                let Some(op_id) = pending.op_id else {
+                    return;
+                };
+                let approve = !matches!(decision, r_code_tui::approval::ApprovalDecision::Deny);
+                if let Err(error) = engine.decide_approval(&op_id, approve).await {
+                    if let Ok(mut st) = tui.lock() {
+                        st.push_system(format!("审批决策失败：{error}"));
+                    }
+                }
+                // decided 事件到达时浮层由 project_events 收起；这里先收
+                // 起避免事件延迟期间重复决策。
+                if let Ok(mut st) = tui.lock() {
+                    st.take_pending_approval();
+                }
+            });
+        });
 
     // M3-01：用量刷新泵（task.detail.usage 聚合投影；resume 后仍准确）。
     {

@@ -1,0 +1,26 @@
+task: R06
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R06
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R06.json
+
+assertions:
+  R06.A1: { status: passed, test: r06_a1_wss_roundtrip_task_list_and_events }
+  R06.A2: { status: passed, test: r06_a2_reconnect_replays_the_same_command_id }
+
+regressions:
+  - clippy -D warnings: clean (r-code-client); fmt applied
+
+changed_paths:
+  - crates/r-code-client/src/ws.rs (new: RemoteEndpoint/RemoteClient — pinned TLS + WS + device hello + call/call_with_id/subscribe_events)
+  - crates/r-code-client/src/lib.rs (pub mod ws)
+  - crates/r-code-client/Cargo.toml (sha2/tokio-rustls/tokio-tungstenite/futures-util + dev kernel/store/trait)
+  - crates/r-code-client/tests/r06_ws_transport.rs (new)
+  - scripts/verify-remote.mjs (R06.A1–A2 registered)
+
+decisions:
+  - DM43: RemoteClient 独立类型而非 DaemonClient 泛型化——帧层（WS message vs NDJSON 行）与握手（remote hello vs owner token）都不同，共享的命令语义经同形 API 保证（call/call_with_id 签名一致）；现有全部本地调用方零波及。
+  - DM44: pinned verifier 在 client 侧独立实现（~40 行重复 fingerprint_of/verifier）——client 不得依赖 runtime（F13 层次约束）；daemon 侧 tls.rs 保留服务端 acceptor。
+  - DM45: welcome 解析按 §4 自定义形状（{"ok":bool,...}）而非 ApplicationFrame；hello 拒绝码 unauthorized/revoked 映射 ClientError::Handshake；传输/TLS 失败=Unreachable（错 pin 也归 Unreachable——TLS 层拒绝，无绕过路径）。
+  - DM46: 重试策略=客户端重连带同 command_id（F7 receipt 回放已由 R04 CommandDedup 跨 transport 验证）；指数退避归 PWA/App 连接策略层（R07/R13）。

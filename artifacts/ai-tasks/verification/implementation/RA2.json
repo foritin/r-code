@@ -1,0 +1,27 @@
+{
+  "profile": "implementation",
+  "generated_at": "2026-09-12T10:33:49.399Z",
+  "tasks": [
+    "RA2"
+  ],
+  "totals": {
+    "evaluated": 2,
+    "passed": 2,
+    "failed": 0,
+    "pending": 0
+  },
+  "results": [
+    {
+      "task": "RA2",
+      "assertion": "RA2.A1",
+      "passed": true,
+      "ms": 14904
+    },
+    {
+      "task": "RA2",
+      "assertion": "RA2.A2",
+      "passed": true,
+      "ms": 1094
+    }
+  ]
+}

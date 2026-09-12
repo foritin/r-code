@@ -68,8 +68,10 @@ async fn approvals_and_questions_map_to_common_host_services() {
         .unwrap()
         .starts_with("q-run-1-"));
 
-    // Approvals citing unknown pending operations are denied (fail closed).
-    let denied: serde_json::Value = router
+    // Approvals citing unknown pending operations are refused as protocol
+    // violations (RA1 hardened the fail-closed default into an explicit
+    // error; nothing is journaled).
+    let error = router
         .handle_request(request(
             "host.approvals.request",
             serde_json::json!({
@@ -78,14 +80,23 @@ async fn approvals_and_questions_map_to_common_host_services() {
             }),
         ))
         .await
-        .expect("handled");
-    assert_eq!(denied["decision"], "denied");
+        .expect_err("forged reference refused");
+    assert_eq!(error.code, r_code_harness_protocol::rpc::error_code::PROTOCOL_VIOLATION);
 
-    // Granted host decisions flow through.
-    router.approvals.set_decision(
-        "op-codex-1",
-        r_code_harness_protocol::services::ApprovalDecision::Granted,
-    );
+    // Granted host decisions flow through (host registers, then decides).
+    router
+        .approvals
+        .register("op-codex-1", "run codex apply_patch", "run-1", "t1")
+        .await;
+    router
+        .approvals
+        .decide(
+            "op-codex-1",
+            r_code_harness_protocol::services::ApprovalDecision::Granted,
+            "client-host",
+        )
+        .await
+        .expect("decide");
     let granted: serde_json::Value = router
         .handle_request(request(
             "host.approvals.request",

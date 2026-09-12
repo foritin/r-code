@@ -89,6 +89,16 @@ impl JournalStore for MemoryJournal {
             .collect()
     }
 
+    async fn max_event_seq(&self) -> u64 {
+        self.inner
+            .lock()
+            .unwrap()
+            .events
+            .last()
+            .map(|event| event.seq)
+            .unwrap_or(0)
+    }
+
     async fn save_receipt(&self, receipt: OperationReceipt) -> Result<(), ServiceError> {
         self.inner.lock().unwrap().receipts.insert(
             (receipt.attempt_id.clone(), receipt.operation_key.0.clone()),

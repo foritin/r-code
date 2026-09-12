@@ -1,0 +1,32 @@
+task: R12
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R12
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R12.json
+
+assertions:
+  R12.A1: { status: passed, test: r12_a1_read_only_decide_is_refused_and_op_stays_pending }
+  R12.A2: { status: passed, test: r12_a2_remote_decision_flows_to_the_plugin_and_audits_the_device }
+  extra:
+    - r12_desktop_confirm_flag_blocks_remote_and_yields_to_local（require_desktop_confirm：远程 decide → needs_desktop_confirm 结构化拒绝且 op 保持 pending；桌面本机批准终决 → 插件继续 → run.completed）
+
+regressions:
+  - ra1/ra2/ra3 审批链全绿；r08/r10/r11 全绿；workspace clippy 0
+  - TaskPreferences 新字段全仓字面量补齐（tui model_selector/task_mode/thinking）
+
+changed_paths:
+  - crates/r-code-kernel/src/task.rs（TaskPreferences.require_desktop_confirm，serde default）
+  - crates/r-code-runtime/src/application.rs（approvals_decide 加 source 参数 + needs_desktop_confirm gate）
+  - crates/r-code-runtime/src/bin/r-code-service.rs（approvals.decide 本地分支 + approvals.decide$remote 分支；task.setPreferences 透传 requireDesktopConfirm）
+  - crates/r-code-runtime/src/remote/capabilities.rs（approvals.decide$remote → ApprovalsDecide）
+  - crates/r-code-runtime/src/remote/listener.rs（gate_and_execute 注入 $remote 后缀）
+  - crates/r-code-runtime/tests/r12_remote_approvals.rs (new：真 ApplicationService + RA3 fixture 插件)
+  - tests/ra2/ra3 适配 3 参 approvals_decide
+  - scripts/verify-remote.mjs (R12.A1–A2 registered)
+
+decisions:
+  - DM69: 远程来源标记 = listener gate 注入 method 后缀 "$remote"（外部 wire 直接发该后缀 → required_capability 查无此方法前的分支？——不，capability 表含它但**仅 listener 注入可达**：本地管道直发 "$remote" 会被 bin 按 Remote gate 处理 → 无需桌面确认的高敏绕过？——否：本地直发 "$remote" 走 Remote source → 高敏任务被 needs_desktop_confirm 拒（更严），非高敏任务被当作远程决策处理但审计身份仍是本机 client_id。潜在加固点记 R14。
+  - DM70: needs_desktop_confirm 检查点在 approvals_decide（op pending 时查 task preferences）；op 已 decided 后的检查跳过（first-wins 已定）。
+  - DM71: 审计链 = listener 覆写 client_id=device_id（R04）→ approvals_decide decided_by=client_id → journal decided.decidedBy=device id（A2 断言验证）。
+  - DM72: PWA 审批卡 UI 归 R07b（本任务冻结协议字段 needs_desktop_confirm 与配置位 requireDesktopConfirm）。

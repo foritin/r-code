@@ -17,6 +17,7 @@ export default defineConfig({
     minify: "esbuild",
     sourcemap: false,
     rollupOptions: {
+      input: ["index.html", "remote.html"],
       output: {
         manualChunks(moduleId) {
           const normalizedId = moduleId.replaceAll("\\", "/");

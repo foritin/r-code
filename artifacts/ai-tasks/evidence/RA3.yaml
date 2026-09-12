@@ -1,0 +1,41 @@
+task: RA3
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task RA3; node scripts/verify-remote.mjs --through R0
+verify_exit_code: 0 / 0 (7/7)
+report: artifacts/ai-tasks/verification/implementation/RA3.json
+
+assertions:
+  RA3.A1: { status: passed, test: ra3_a1_grant_unblocks_the_plugin_and_completes_the_run }
+  RA3.A2: { status: passed, test: ra3_a2_deny_settles_and_timeout_denies_without_hanging }
+  extra:
+    - TUI lib 投影测试 daemon_approval_events_drive_the_overlay（requested 浮层/decided 收起/超时注记/op_id 来源标记）
+    - r-code-tui --lib 全套 124/124 绿
+
+regressions:
+  - r-code-tui --lib: 124/124 ok
+  - clippy -D warnings: clean (runtime+tui); fmt applied
+  - R0 累计门禁 --through R0: 7/7 passed
+
+changed_paths:
+  - crates/r-code-runtime/src/bin/harness-test-helper.rs (approval fixture mode: cites op from objective, blocks on decision, reports + proposes on grant)
+  - crates/r-code-runtime/src/application.rs (compose_with_approval_timeout)
+  - crates/r-code-runtime/src/plugins/approval_store.rs (watch keepalive fix)
+  - crates/r-code-runtime/src/run_manager.rs (pump settle-drain: stop drains until a full tick passes empty)
+  - crates/r-code-runtime/tests/ra3_approval_e2e.rs (new: real-process chain grant/deny/timeout)
+  - crates/r-code-tui/src/approval_overlay.rs (PendingApproval.op_id + from_requested_event)
+  - crates/r-code-tui/src/engine.rs (project_events approval branches + decide_approval client method + projection test)
+  - crates/r-code-tui/src/main.rs (decide_approval callback → daemon approvals.decide)
+  - crates/r-code-tui/src/display.rs (test literal op_id field)
+  - scripts/verify-remote.mjs (RA3.A1–A2 registered)
+
+decisions:
+  - DM11: 审批型 fixture = harness-test-helper 新 `approval` 模式（test-only 二进制，不污染 native 包）；op id 从 objective `approve:<op>` 提取（宿主 register 先行，插件引用）。
+  - DM12: 【真实缺陷修复】tokio watch 在全部 Receiver drop 后 channel 关闭、send 值不存储——PendingOp 持 keepalive_rx 修复"决策早于任何等待者"时序（RA1 测试因测试变量保活而侥幸通过）。
+  - DM13: 【真实缺陷修复】run_manager 事件泵停止协议竞态：stop 通知与插件 notification 入 router 无同步，插件在 run 响应前后的 harness.event 可能永久丢失；泵停止后连续一拍（250ms）drain 为空才退出。
+  - DM14: TUI 决策分派按来源：PendingApproval.op_id=Some 走 daemon approvals.decide（审计=连接 client id）；本地 PermissionEngine 流（op_id=None）维持既有语义。a 键对 daemon 审批落 granted（任务级放行语义不适用于 host approval）。
+  - DM15: RA3.A2 超时路径用 compose_with_approval_timeout(400ms)（不真等 300s）；RunManager 泵 settle-drain 给每个 run 结束加 ≤250ms×2 延迟（正确性优先）。
+
+known_limitations:
+  - PTY 级审批脚本测试（daemon_common staging 审批 fixture）未做——lib 投影单测 + runtime 真进程 e2e 已覆盖状态机与决策链路；PTY 层留待 R0 之外的常规回归。
+  - verify-harness-v2 full 未跑（约 45min 全量）；R0 门禁 7/7 + 相关定向回归绿。用户指示不全量测试；需要时单独跑。

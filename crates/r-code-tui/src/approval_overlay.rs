@@ -14,6 +14,9 @@ pub struct PendingApproval {
     pub tool_name: String,
     pub command: String,
     pub risk: RiskLevel,
+    /// Daemon 审批（RA1 持久化通道）的 op id；`None` = 本地
+    /// PermissionEngine 流。决策按来源分派落账路径。
+    pub op_id: Option<String>,
 }
 
 impl PendingApproval {
@@ -23,7 +26,34 @@ impl PendingApproval {
             tool_name: request.tool_name.clone(),
             command: request.input_summary.clone(),
             risk: request.risk_level,
+            op_id: None,
         }
+    }
+
+    /// RA3：`approval.requested` 事件投影（daemon 决策面，非本地
+    /// PermissionEngine）。风险档无事件数据，按中风险只显示单次允许。
+    pub fn from_requested_event(payload: &serde_json::Value) -> Self {
+        let op_id = payload
+            .get("opId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        Self {
+            request_id: op_id.clone(),
+            tool_name: "host approval".to_string(),
+            command: payload
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            risk: RiskLevel::R2,
+            op_id: Some(op_id),
+        }
+    }
+
+    /// 该审批是否经 daemon `approvals.decide` 落账。
+    pub fn is_daemon(&self) -> bool {
+        self.op_id.is_some()
     }
 }
 

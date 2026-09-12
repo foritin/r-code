@@ -1,0 +1,25 @@
+task: R00
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R00
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R00.json
+
+assertions:
+  R00.A1: { status: passed, tests: [r00_a1_injected_stream_serves_the_frame_protocol, r00_a1_runtime_has_no_network_listener_before_r04] }
+
+regressions:
+  - t06a (owner 竞争): 5/5 ok，断言未修改
+  - t06b (命令去重): 4/4 ok，断言未修改
+  - t35 (daemon 全流程, r-code-tui): 3/3 ok，断言未修改
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/ipc.rs (AppStream trait: AsyncRead+AsyncWrite+Unpin+Send blanket impl)
+  - crates/r-code-runtime/src/daemon.rs (serve_connection → pub serve_app_frames(Box<dyn AppStream>, identity, handler); pipe path delegates)
+  - crates/r-code-runtime/tests/r00_transport_seam.rs (new: injected duplex drives the identical handshake→command protocol; bad-token refusal; TcpListener guard over src/)
+  - scripts/verify-remote.mjs (R00.A1 registered)
+
+decisions:
+  - DM16: seam 形状 = pub 自由函数 serve_app_frames + Box<dyn AppStream>；Daemon::serve_connection 薄委托（owner 锁/帧上限/队列上限语义全部在原路径未动）。客户端侧 connect_endpoint 已返回 Box<dyn AsyncReadWrite>（既有），无需改动。
+  - DM17: TcpListener 守卫为 Rust 测试（扫 crates/r-code-runtime/src/**/*.rs），比脚本 grep 更可移植且随 --task R00 可重复执行；R04 落地监听时移除该守卫并换 R04.A1 的真实监听断言。

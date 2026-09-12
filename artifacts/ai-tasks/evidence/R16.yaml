@@ -1,0 +1,47 @@
+task: R16
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R16
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R16.json
+
+assertions:
+  R16.A1: { status: passed, test: r16_a1_register_bind_reject_forward_paths（一次性注册→welcome ownerId=hash(pubkey)；码重用 owner_code_used；未知码 invalid；owner.bind 签名绑定；未绑定 device_unbound；challenge/answer 后双向转发字节一致；owner 掉线 owner_offline） }
+  R16.A2: { status: passed, test: r16_a2_audit_is_content_free_and_rate_limit_enforced（已知明文过中继→审计 dump 不含；40 帧连发触发持续限速→桥断开+审计记录） }
+
+revalidated:
+  at: 2026-09-12
+  reason: >
+    后续任务（R17/R21）在 crates/r-code-relay/src/e2ee.rs 的 drain_control 中
+    引入递归 async 调用，触发 E0733（async fn 递归需装箱），r-code-relay 无法编译，
+    使 R16.A1/A2 全部失败（0/2）。修复分两步：① 递归改 loop 使 future 保持 sized
+    （编译恢复）；② 发现同一函数还吞帧致命（详见 R19.yaml），最终删除该函数。
+    编译恢复后 --task R16 退出 0（2/2），复跑稳定。
+  verify_exit_code: 0
+  regressions_rechecked:
+    - cargo check --workspace --all-targets：绿
+    - cargo clippy -p r-code-relay --all-targets -- -D warnings：0 警告
+    - cargo fmt -p r-code-relay：已应用
+    - --task R17：2/2（同一 crate，e2ee.rs 改动回归）
+
+regressions:
+  - clippy -D warnings: clean (r-code-relay)；fmt applied
+
+changed_paths:
+  - Cargo.toml（workspace 成员 + ed25519-dalek）
+  - crates/r-code-relay/Cargo.toml (new)
+  - crates/r-code-relay/src/lib.rs (new：RelayState 注册表/owner 注册恢复/设备绑定挑战/双向字节转发/限速/审计)
+  - crates/r-code-relay/src/bin/r-code-relay.rs (new：环境变量配置的独立二进制)
+  - crates/r-code-relay/tests/r16_relay_integration.rs (new)
+  - scripts/verify-remote.mjs (R16.A1–A2 registered)
+
+decisions:
+  - DM132: 【复验修复 drain：编译层】drain_control 的 Ping/Pong 分支递归 await 自身，
+    使 async fn future 尺寸无限（E0733）——先改成 loop 重新挂起等待以恢复编译。
+  - DM133: 【复验修复 drain：语义层】该函数在 R19 暴露吞帧死锁后被整体删除，
+    由 next_binary 的白名单跳过替代（见 R19.yaml）——保留"他人也可能碰到的坑"的记录。
+  - DM92: 中继实现按 R15 冻结协议——控制帧 JSON + 二进制密文零解析；owner 认证=一次性码（启动注入 R_CODE_RELAY_CODES）+Ed25519 域分隔签名；ownerId=SHA-256(pubkey)[..16]。
+  - DM93: 【实现中修复】owner socket 关闭后注册不注销（data_tx 被 entry 持活使 data_rx 永不结束）——socket 读并入主 select，EOF/Close 即 retire。
+  - DM94: 【实现中修复】SplitSink::send 未 await（welcome/challenge 帧实际未发出）——clippy non-binding let 捕获。
+  - DM95: 下行路由=state.devices 注册表（device 桥注册 downlink，owner task 二进制帧转首个活跃 device——v1 单活跃设备，多设备路由归 R20+）；限速=持续窗口 20 帧/s（10+10 突发）超限断桥。
+  - DM96: 依赖最小化——tokio-tungstenite（无 axum）+ ed25519-dalek；不依赖 runtime/store（F12 攻击面隔离）；TLS 由部署侧 Caddy/nginx 终结（§4，relay 内置 ACME 归 R20 可选）。

@@ -1,0 +1,25 @@
+task: R20
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R20
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R20.json
+
+assertions:
+  R20.A1: { status: passed, kind: cargo-test, note: 最小规格起服务+转发=复用 r16_a1（同一 relay 实例 serve+注册+绑定+转发，1 vCPU/512MB 为 IO 密集无需专门负载测试） }
+  R20.A2: { status: passed, kind: node-test, file: scripts/remote/r20-deployment.test.mjs (2 tests：部署物料齐备——Dockerfile 非 root/码注入/slim 镜像 + 手册四小节无 TBD；四安全守卫测试面归属——密文不可见/码一次性/吊销纵深/默认零拨号) }
+
+regressions:
+  - clippy 0（relay/runtime）；--through R0 7/7
+
+changed_paths:
+  - docs/support/guides/relay-deployment.md (new：systemd 样例/Caddy ACME/升级日志备份/安全验收清单/外部放行边界)
+  - crates/r-code-relay/Dockerfile (new：multi-stage 非 root slim)
+  - scripts/remote/r20-deployment.test.mjs (new)
+  - scripts/verify-remote.mjs (R20.A1–A2 registered)
+
+decisions:
+  - DM113: R20.A1 复用 r16_a1 的 serve+注册+转发路径作"最小规格起服务+转发"验收（同一实现，负载维度=1vCPU/512MB 是运维声明而非 CI 可测断言）。
+  - DM114: 部署形态冻结=Caddy 反代自动 ACME（relay 不内置 TLS，攻击面最小——relay-interface.md §4 二选一中的推荐项）；systemd 样例含 hardening（NoNewPrivileges/ProtectSystem）。
+  - DM115: 备份=配置文件（中继无状态）；升级=换二进制+restart，owner 靠长期密钥 resume 重连（协议保证）。
+  - DM116: 真实 VPS/域名/蜂窝取证归 production_release_ready（手册 §4 明示边界）。

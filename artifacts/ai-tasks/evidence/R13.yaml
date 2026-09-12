@@ -1,0 +1,25 @@
+task: R13
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R13
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R13.json
+
+assertions:
+  R13.A1: { status: passed, kind: node-test, file: r13.test.mjs (4 tests：事件触发矩阵 approved/completed/其余 null / 正文快照通用文案无命令路径令牌 / 能力降级三态诚实标注 / 指纹不符→重新配对引导) }
+
+regressions:
+  - npm run build 绿（通知+引导进 bundle）
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/notifications.ts (new)
+  - src-tauri/frontend/src/remote/core/error-guidance.ts (new)
+  - src-tauri/frontend/src/remote/core/r13.test.mjs (new)
+  - src-tauri/frontend/src/remote-main.tsx (前台通知接线 + 应用内横幅降级 + 连接错误引导投影)
+  - scripts/verify-remote.mjs (R13.A1 registered)
+
+decisions:
+  - DM79: 通知正文=固定通用文案快照（"有 1 项工具调用待审批"/"一个会话已完成"）——summary/opId/路径绝不进入正文（F15）；bodyIsSanitized 守卫运行时与测试共用。
+  - DM80: 无 Notification API 或权限被拒 → 应用内横幅降级 + 诚实文案（不是静默失败）；横幅点击消失。
+  - DM81: 指纹不符/revoked/unauthorized → repair 动作（清除本机凭据重新配对）；不可达 → host 动作（防火墙/同网提示）——技术错误全部映射为用户可行动文案。
+  - DM82: SW 缓存名单断言已在 R07b-layout 覆盖（预缓存仅壳 /app/，数据路径不进缓存逻辑）——R13.A1 的"缓存名单只含壳"复用该测试（R13 gate 的测试文件内不再重复）。

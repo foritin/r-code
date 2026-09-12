@@ -1,0 +1,59 @@
+{
+  "profile": "implementation",
+  "generated_at": "2026-09-12T05:06:11.463Z",
+  "tasks": [
+    "RA1",
+    "RA2",
+    "RA3"
+  ],
+  "totals": {
+    "evaluated": 7,
+    "passed": 7,
+    "failed": 0,
+    "pending": 0
+  },
+  "results": [
+    {
+      "task": "RA1",
+      "assertion": "RA1.A1",
+      "passed": true,
+      "ms": 535
+    },
+    {
+      "task": "RA1",
+      "assertion": "RA1.A2",
+      "passed": true,
+      "ms": 698
+    },
+    {
+      "task": "RA1",
+      "assertion": "RA1.A3",
+      "passed": true,
+      "ms": 417
+    },
+    {
+      "task": "RA2",
+      "assertion": "RA2.A1",
+      "passed": true,
+      "ms": 446
+    },
+    {
+      "task": "RA2",
+      "assertion": "RA2.A2",
+      "passed": true,
+      "ms": 430
+    },
+    {
+      "task": "RA3",
+      "assertion": "RA3.A1",
+      "passed": true,
+      "ms": 1318
+    },
+    {
+      "task": "RA3",
+      "assertion": "RA3.A2",
+      "passed": true,
+      "ms": 2220
+    }
+  ]
+}

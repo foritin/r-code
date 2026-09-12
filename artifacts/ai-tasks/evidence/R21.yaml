@@ -1,0 +1,93 @@
+task: R21
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R21
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R21.json
+
+assertions:
+  R21.A1:
+    status: passed
+    kind: node-test
+    file: r21-purity.test.mjs (core 零平台 import 守卫 + 测试齐备)
+    note: >
+      core 的纯逻辑断言由 `node --test` 在仓库根执行；RN 侧跑
+      mobile/__tests__（渲染 + adapter），两侧分工明确，不互相冒充。
+  R21.A2:
+    status: passed
+    kind: node-test
+    file: r21-ci.test.mjs (5 tests)
+    tests:
+      - mobile workflow 是合法 YAML 形状（注释必须 #，不能 //）
+      - 不存在占位命令（echo...exit 0 之类的空转步骤）
+      - 两平台各自有真实 bundle 门禁，且脚本存在（含空/过小产物判失败）
+      - jest 门禁不用 --passWithNoTests 且测试集非空
+      - RN 骨架齐备且 adapter 走平台注入（不为 RN 复制协议）
+
+revalidated:
+  at: 2026-09-12
+  reason: >
+    本轮把 R21.A2 从"只匹配字样"升级为可证伪守卫，并让 RN 侧第一次真正
+    被编译器与工具链验证。原状态存在三处虚假：
+    (1) mobile.yml 头部用 `//` 当注释 → YAML 解析失败（pyyaml 实测
+        "mapping values are not allowed here"），workflow 从未执行；
+    (2) 即便执行，android/ios job 末步是 `echo ... && exit 0` 占位，不产任何产物；
+    (3) jest job 的 testMatch 指向 `<rootDir>/../` 之外且目录为空，
+        "No tests found" + `--passWithNoTests` 把零测试判为通过。
+  fixes:
+    - mobile.yml：注释改 `#`；job 改为 checks（tsc + jest）/ bundle-android /
+      bundle-ios（metro 真实打包 + 产物上传，if-no-files-found: error）；
+      jest 去掉 --passWithNoTests。
+    - mobile/scripts/bundle.mjs（新）：绕开未发布的 @react-native/cli，直接用
+      metro runBuild 打包；显式 watchFolders（默认是空数组，会导致
+      "Failed to get the SHA-1 ... file is not watched"）与 nodeModulesPaths
+      （共享 core 在 mobile 之外，babel helper 需回落）；产物过小判失败。
+    - mobile/jest.config.js：只匹配 mobile 自身 __tests__，不再假装跨目录复跑。
+    - mobile/__tests__/（新增 2 个测试文件，5 个用例）：屏④行为 + transport hello 身份。
+  result:
+    - mobile tsc --noEmit：0 错误（此前从未被编译器看过）
+    - mobile jest：2 suites / 5 tests 全绿
+    - metro bundle：android 2,166,751B / ios 2,153,884B 均产出
+    - frontend tsc --noEmit：0 错误
+  verify_exit_code: 0
+
+regressions:
+  - --task R07/R07b/R19/R21/R22/R23/R26：全绿（transport 重构后）
+  - core node 测试全绿（purity 守卫不破坏既有投影/策略/通知断言）
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/platform-adapter.ts (new：PlatformAdapter 冻结接口——transport/secureStore/camera/notifications/haptics)
+  - src-tauri/frontend/src/remote/core/r21-purity.test.mjs (new)
+  - mobile/package.json / metro.config.js / babel.config.js / jest.config.js / tsconfig.json (new：裸 RN 工程——决策记录：裸 RN 而非 Expo，自管签名、无云依赖)
+  - mobile/App.tsx (new：三 tab 骨架，obsidian tokens)
+  - mobile/src/adapter/index.ts (new：RN PlatformAdapter)
+  - mobile/src/adapter/rn-socket.ts (new：RN socket 工厂 + 离线 fake factory)
+  - mobile/jest.config.js (改：只匹配 mobile 自身测试)
+  - mobile/scripts/bundle.mjs (new：metro bundle 门禁)
+  - mobile/__tests__/settings-screen.test.tsx, transport-hello.test.tsx (new)
+  - src-tauri/frontend/src/remote/transport.ts (改：零 DOM 依赖 + socket 工厂注入)
+  - src-tauri/frontend/src/remote/dom-socket.ts (new：浏览器 socket 工厂)
+  - .github/workflows/mobile.yml (改：真门禁替代占位)
+  - scripts/remote/r21-ci.test.mjs (重写：可证伪守卫)
+  - scripts/verify-remote.mjs (R21.A1–A2 registered)
+
+decisions:
+  - DM117: 裸 RN 而非 Expo prebuild（任务卡默认；自管签名/无云依赖）。
+  - DM118: TS core 不搬家——mobile 经 metro watchFolders 直接引用 src-tauri/frontend/src/remote/core（monorepo 内共享，避免拷贝漂移）；"packages/remote-core 独立包"推迟到 R27 发布需求出现时。
+  - DM119: 【本轮修正】CI 的真实可达成产物 = **两平台 metro bundle**（JS 层构建证据），
+    不是 APK/IPA。APK/IPA 需 Android SDK / Xcode + 签名，明确归
+    production_release_ready 外部放行；job 名不再叫 "debug build" 以免暗示不存在的产物。
+  - DM137: 【本轮修复】workflow 注释必须是 `#`——`//` 让整个文件无法解析，
+    这类"文件存在即通过"的静态守卫没有证伪能力，是虚假映射的温床；
+    守卫改为主动检测 JS 风格注释行与 exit-0 占位。
+  - DM138: 【本轮修复】transport.ts 去掉 DOM 依赖，改由平台注入 socket 工厂。
+    根因：RN 的 WebSocket 没有 addEventListener（初版直连 DOM API，在真机必崩），
+    且该文件被 RN 的 tsc 拉进编译图后暴露一堆 DOM 类型错误。
+    PWA 侧新增 dom-socket.ts，RN 侧新增 rn-socket.ts；帧协议/命令语义零重复。
+  - DM139: 【本轮修复】RN 命令帧的 client_id 用 deviceId（原来沿用了写死的 "pwa"）。
+    F6 要求 daemon 按 client_id 强制能力，发错身份会让 RN 被当作 PWA 设备。
+    PWA 侧仍默认 "pwa" 以保持既有行为。
+  - DM140: 【本轮修复】RemoteConnection.connect 的阶段判断改用显式 streaming 标志。
+    重构时曾用"帧处理器是否已挂上"来判断，导致 welcome 帧被当成常规帧丢弃
+    （常规帧只认 command_id / 事件数组），连接永远等不到握手——由新增的
+    transport-hello 测试抓出。

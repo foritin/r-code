@@ -154,6 +154,20 @@ impl V2ChatClient {
         client.call(method, params).await.map_err(|e| e.to_string())
     }
 
+    /// RA3：daemon 审批决策（`approvals.decide`；审计身份=本连接 client
+    /// id，服务端强制）。approve=false 落 denied。
+    pub async fn decide_approval(&self, op_id: &str, approve: bool) -> Result<(), String> {
+        self.call(
+            "approvals.decide",
+            serde_json::json!({
+                "operationId": op_id,
+                "decision": if approve { "granted" } else { "denied" },
+            }),
+        )
+        .await
+        .map(|_| ())
+    }
+
     pub fn profile(&self) -> &RuntimeProfile {
         &self.profile
     }
@@ -506,6 +520,21 @@ pub fn project_events(state: &mut crate::TuiState, events: &[EventEnvelope]) {
             "run.started" => {
                 state.mark_running(true);
             }
+            "approval.requested" => {
+                // RA3：daemon 审批（RA1 持久化通道）驱动浮层——本地
+                // PermissionEngine 流不产生该事件，两条路径不冲突。
+                state.set_pending_approval(
+                    crate::approval_overlay::PendingApproval::from_requested_event(&event.payload),
+                );
+            }
+            "approval.decided" => {
+                // 决策（或超时拒绝）落地：浮层消失，超时给用户可见注记。
+                if state.take_pending_approval().is_some()
+                    && event.payload.get("decidedBy").and_then(|v| v.as_str()) == Some("<timeout>")
+                {
+                    state.push_system("审批已超时自动拒绝".to_string());
+                }
+            }
             "run.completed" | "run.cancelled" => {
                 state.mark_running(false);
             }
@@ -704,6 +733,94 @@ mod tests {
         );
         assert!(
             matches!(&projected[1], crate::TranscriptEvent::Assistant { text, .. } if text == "答")
+        );
+    }
+
+    /// RA3：daemon 审批事件投影——requested 立浮层，decided 收起，
+    /// 超时拒绝给用户可见注记；决策来源标记 daemon（op_id）。
+    #[test]
+    fn daemon_approval_events_drive_the_overlay() {
+        let mut state = crate::TuiState::new();
+        state.set_task_id("t1");
+        assert!(state.pending_approval().is_none());
+
+        project_events(
+            &mut state,
+            &[envelope(
+                5,
+                "t1",
+                "approval.requested",
+                with_kind(
+                    "approval.requested",
+                    serde_json::json!({
+                        "opId": "op-9",
+                        "summary": "run tests",
+                        "runId": "run-t1-1",
+                    }),
+                ),
+            )],
+        );
+        let pending = state.pending_approval().expect("overlay raised").clone();
+        assert!(pending.is_daemon());
+        assert_eq!(pending.op_id.as_deref(), Some("op-9"));
+        assert_eq!(pending.command, "run tests");
+
+        // Client decision: overlay collapses without a timeout note.
+        project_events(
+            &mut state,
+            &[envelope(
+                6,
+                "t1",
+                "approval.decided",
+                with_kind(
+                    "approval.decided",
+                    serde_json::json!({
+                        "opId": "op-9",
+                        "decision": "granted",
+                        "decidedBy": "r-code-tui",
+                    }),
+                ),
+            )],
+        );
+        assert!(state.pending_approval().is_none());
+
+        // Timeout denial surfaces the auto-deny note.
+        project_events(
+            &mut state,
+            &[envelope(
+                7,
+                "t1",
+                "approval.requested",
+                with_kind(
+                    "approval.requested",
+                    serde_json::json!({"opId": "op-10", "summary": "deploy"}),
+                ),
+            )],
+        );
+        assert!(state.pending_approval().is_some());
+        project_events(
+            &mut state,
+            &[envelope(
+                8,
+                "t1",
+                "approval.decided",
+                with_kind(
+                    "approval.decided",
+                    serde_json::json!({
+                        "opId": "op-10",
+                        "decision": "denied",
+                        "decidedBy": "<timeout>",
+                    }),
+                ),
+            )],
+        );
+        assert!(state.pending_approval().is_none());
+        assert!(
+            state
+                .rows()
+                .iter()
+                .any(|row| matches!(row, crate::TranscriptRow::System { text } if text.contains("审批已超时自动拒绝"))),
+            "timeout denial is visible to the user"
         );
     }
 }

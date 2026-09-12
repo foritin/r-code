@@ -693,6 +693,7 @@ mod tests {
                 tool_name: "bash".into(),
                 command: "cargo test".into(),
                 risk: r_code_core::dto::RiskLevel::R2,
+                op_id: None,
             },
         ));
         view.mode_badge = Some(("[plan]", crate::task_mode::BadgeColor::Magenta));

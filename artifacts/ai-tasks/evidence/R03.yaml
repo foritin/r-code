@@ -1,0 +1,29 @@
+task: R03
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R03
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R03.json
+
+assertions:
+  R03.A1: { status: passed, test: r03_a1_identity_is_stable_across_restarts }
+  R03.A2: { status: passed, test: r03_a2_wrong_fingerprint_fails_in_the_tls_handshake }
+  R03.A3: { status: passed, test: r03_a3_plaintext_client_cannot_get_frames_through }
+
+regressions:
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - Cargo.toml (workspace: rcgen 0.13 / rustls 0.23 ring / tokio-rustls 0.26 ring)
+  - crates/r-code-runtime/Cargo.toml (deps)
+  - crates/r-code-runtime/src/remote/tls.rs (new: Identity/ensure_identity/server_config/PinnedVerifier/pinned_client_config/fingerprint_of)
+  - crates/r-code-runtime/src/remote/mod.rs (exports)
+  - crates/r-code-runtime/tests/r03_tls_pinning.rs (new: real loopback TLS)
+  - scripts/verify-remote.mjs (R03.A1–A3 registered)
+
+decisions:
+  - DM27: rustls provider=ring（对齐 reqwest 传递依赖，避免 aws-lc-rs 交叉编译；CI 交叉 lint 陷阱记忆）。rcgen 0.13.2 KeyPair::generate() 默认即 ECDSA P-256。
+  - DM28: 私钥存 certs/identity.pem（cert+key 合一，0600/Unix；Windows 靠 %LOCALAPPDATA% profile 目录用户私有语义）——任务卡允许"平台存储或 0600"；PEM 解析自实现（无 pem 依赖）。
+  - DM29: 指纹=DER cert 的 sha256 小写 hex（无冒号，QR 省空间）；PinnedVerifier 实现 ServerCertVerifier——不看 CA/主机名/有效期，只比 pin；错指纹在 TLS 握手内失败（断言真 connect().await is_err）。
+  - DM30: A3 语义精确化——明文客户端对 TLS 口写 NDJSON：服务端回 TLS alert（≤7B 非 JSON）或直接关；断言"绝不回应用应用帧（不含 '{'）"而非"零字节"（alert 是 TLS 层合法拒绝）。
+  - DM31: 证书 CN=r-code-daemon；SAN/局域网 IP 扩展留给 R04/R09（客户端只看指纹，主机名永不参与校验）。

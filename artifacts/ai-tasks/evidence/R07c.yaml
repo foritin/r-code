@@ -1,0 +1,23 @@
+task: R07c
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R07c
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R07c.json
+
+assertions:
+  R07c.A1: { status: passed, kind: node-test, file: r07c.test.mjs (4 tests：createdSeq 升序聚合+坏行丢弃 / decided 移除+requested 去重添加 / 重连重放不重不丢（seq<=lastSeq 跳过）/ 乐观移除+列表回滚) }
+
+regressions:
+  - npm run build 绿（审批 tab 换聚合模块）
+  - R07b 布局断言不受影响（bundle 文案与 tokens 保持）
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/approvals-aggregate.ts (new：排序/事件合并/游标去重/乐观移除)
+  - src-tauri/frontend/src/remote/core/r07c.test.mjs (new)
+  - src-tauri/frontend/src/remote-main.tsx (审批 tab 接入聚合模块：list 快照 + 事件流合并 + 乐观回滚共用同一实现)
+  - scripts/verify-remote.mjs (R07c.A1 registered)
+
+decisions:
+  - DM77: 聚合状态 = list 快照（approvals.list 权威全量）∪ 事件流增量（requested 添加去重/decided 移除），seq 游标单调——重连后服务端重放旧区间被 lastSeq 跳过（与 R05 扇出同源语义，A1 第三测）。
+  - DM78: 乐观移除与回滚共用 mergePendingList（决策失败重拉列表即回滚）——UI 状态单一来源，测试与实现同一模块（PWA/RN 可共享，R21 抽包）。

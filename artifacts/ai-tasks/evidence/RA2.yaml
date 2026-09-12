@@ -1,0 +1,28 @@
+task: RA2
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task RA2
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/RA2.json
+
+assertions:
+  RA2.A1: { status: passed, test: ra2_a1_list_then_decide_with_connection_auditing }
+  RA2.A2: { status: passed, test: ra2_a2_command_dedup_replays_and_conflicts_are_refused }
+  extra:
+    - ra2_negatives_unknown_op_bad_decision_remote_gate (approval_unknown structured error; invalid decision input; remote gate refuses until R04)
+
+regressions:
+  - conversation_engine: ok (3/3)
+  - t32_compose_the_headless_applicationservice: ok
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/application.rs (approvals_list/approvals_decide + CommandSource gate + now_ms)
+  - crates/r-code-runtime/src/bin/r-code-service.rs (approvals.list / approvals.decide dispatch, decided_by=connection client_id, source gate Local)
+  - crates/r-code-runtime/tests/ra2_approval_methods.rs (new)
+  - scripts/verify-remote.mjs (RA2.A1–A2 registered)
+
+decisions:
+  - DM8: structured errors are stable String codes on the ApplicationResult error channel ("approval_unknown: <op>" / "approval_conflict: <op>" / "remote_not_enabled: ..."); protocol ApplicationResult.outcome is Result<Value, String>, so codes are the machine-readable contract.
+  - DM9: CommandDedup semantics confirmed: same (client,command_id)+same payload replays the receipt; same id+different payload is the dedup's own conflict (F7); a fresh command id with an opposite decision hits the store's approval_conflict. Watch-based decide is idempotent (re-decide same = replay original record) — matches RA2 失败处理 guidance.
+  - DM10: source placeholder = CommandSource enum + approval_decision_source_gate in application.rs (unit-tested Remote refusal); ServiceHandler passes Local; R04 swaps in per-connection source.

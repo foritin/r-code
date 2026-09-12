@@ -1,0 +1,23 @@
+task: R15
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R15
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R15.json
+
+assertions:
+  R15.A1: { status: passed, kind: node-test, file: scripts/remote/r15-relay-interface.test.mjs (4 tests：七小节齐全 / 无悬空标记 / 十错误码+三 close code 全有客户端行为 / Noise XX 时序+限流数值冻结) }
+
+regressions: 无代码变更（纯设计文档+静态校验）
+
+changed_paths:
+  - docs/prd/remote-control/relay-interface.md (new：字段级线协议冻结)
+  - scripts/remote/r15-relay-interface.test.mjs (new)
+  - scripts/verify-remote.mjs (R15.A1 registered)
+
+decisions:
+  - DM87: 帧协议=文本控制帧(JSON 信封，字段级冻结)+二进制数据帧(Noise transport message 零解析)；未知 type fail closed；首帧必须认证。
+  - DM88: 错误码 10 个+close code 3 个全部映射双侧行为（无悬空）；认证类错误（注册码/device_unbound）不自动重试——需要用户行动。
+  - DM89: E2EE=Noise XX + PSK（配对密语）；密语错=第三步 MAC 失败即断连；owner 静态公钥指纹钉扎与局域网 TOFU 同源；rekey 1h/2^32 条。
+  - DM90: 限流数值冻结（单 owner 1 连接、relay 256、帧 64KiB、device 10 帧/s、吞吐 256KiB/s 突发 1MiB、认证失败 10 次/10min IP 拉黑）——R16 实现，配置可覆盖但默认即此。
+  - DM91: R17 接口对齐=RelayTransport/DeviceRelayStream 都产出 AppStream（R00 seam）——命令行为与管道逐字节同形（F1/F7/F12）。

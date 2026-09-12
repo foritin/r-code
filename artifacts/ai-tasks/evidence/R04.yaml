@@ -1,0 +1,35 @@
+task: R04
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R04
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R04.json
+
+assertions:
+  R04.A1: { status: passed, test: r04_a1_a4_listener_lifecycle_follows_devices_and_switch }
+  R04.A2: { status: passed, test: r04_a2_authenticated_commands_replay_and_bad_tokens_drop }
+  R04.A3: { status: passed, test: r04_a3_capabilities_and_forbidden_methods_are_enforced }
+  R04.A4: { status: passed, test: r04_a1_a4_listener_lifecycle_follows_devices_and_switch }
+  extra:
+    - listener.rs lib 单测：public_and_wildcard_binds_are_refused（0.0.0.0/8.8.8.8/公网 v6 拒；loopback/RFC1918/链路本地/ULA 过）、gate_semantics（权限/禁止/未知方法 fail-closed）
+
+regressions:
+  - R00 守卫更新后 1/1 绿（监听收口 remote/listener.rs 单一模块）
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - Cargo.toml / crates/r-code-runtime/Cargo.toml (tokio-tungstenite 0.26 + futures-util)
+  - crates/r-code-runtime/src/remote/listener.rs (new: listen/serve_remote_ws/gate_and_execute/validate_bind_address/AuthFailures)
+  - crates/r-code-runtime/src/remote/tls.rs (Identity::duplicate)
+  - crates/r-code-runtime/src/remote/mod.rs (exports)
+  - crates/r-code-runtime/tests/r04_remote_listener.rs (new: real TLS+WS loopback)
+  - crates/r-code-runtime/tests/r00_transport_seam.rs (guard: listening confined to remote/listener.rs)
+  - scripts/verify-remote.mjs (R04.A1–A4 registered)
+
+decisions:
+  - DM32: TLS 在 TCP 层（TlsAcceptor）、WS 升级其上（accept_async）；tungstenite 无 TLS feature（自管 pinned rustls config）——测试客户端 client_async_with_config over pinned TLS 流。
+  - DM33: hello 契约照 architecture §4 冻结（"r-code-remote/1"）；revoked 与 unauthorized 区分（查 registry.list 的 revoked 标记）；认证失败计数按 peer IP 内存态（重启清零）。
+  - DM34: 远程命令 client_id 强制覆盖为认证 device_id（审计身份不可由 wire 指定）；gate 顺序 forbidden→capability→handler；未知方法 fail-closed（forbidden_remote_method）。
+  - DM35: 生命周期 = listen() 前置检查（无设备/开关关→拒绝启动）+ supervision 2s tick（设备清零/开关关闭→退出并释放端口）；已建立连接的主动断连归 R11（连接索引）。
+  - DM36: R00 守卫语义演进——"无 TcpListener" → "TcpListener 只允许出现在 remote/listener.rs"（监听面单点收口，持续有效）。
+  - DM37: 绑定校验 validate_bind_address：loopback（测试替身）/RFC1918/169.154/ULA fc00::7/fe80；0.0.0.0 与公网直接 PublicBind 拒绝（R08.A3 的静态部分已覆盖）。

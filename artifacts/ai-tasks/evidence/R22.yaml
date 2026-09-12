@@ -1,0 +1,23 @@
+task: R22
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R22
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R22.json
+
+assertions:
+  R22.A1: { status: passed, kind: node-test, file: r22-pairing.test.mjs (3 tests：v1 载荷解析/畸形全拒——未知键重复键 fail closed 与 Rust 同规则/相机权限降级手动输入) }
+  R22.A2: { status: passed, kind: node-test, file: r21-purity.test.mjs — 安全存储断言归属：RNSecureStore 骨架在 PlatformAdapter（mobile/src/adapter），真机 Keychain/Keystore 取证=外部放行清单（R22 步骤③的"断言不进 UserDefaults/明文日志"需真机 instrumentation） }
+
+regressions:
+  - r21 purity 2/2；R19 策略 5/5
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/pairing.ts (new：PairPayload 严格解析 + PairingFailure 文案投影 + 相机权限语义)
+  - src-tauri/frontend/src/remote/core/r22-pairing.test.mjs (new)
+  - scripts/verify-remote.mjs (R22.A1–A2 registered)
+
+decisions:
+  - DM120: 解析契约双端同规则（TS 与 Rust parse_qr_payload）——本轮修复 TS 侧未知键放行的偏差（Rust 拒 TS 收），双端一致性由两侧测试锁定。
+  - DM121: 相机权限拒绝不阻塞配对（手动输入路径等价，R09 冻结语义）；错误文案全部用户可行动。
+  - DM122: 真机双路扫码 e2e（vision-camera）+ Keychain 断言 = 外部放行清单（需 iOS/Android 真机+原生模块构建；R21.A2 的 CI 产出后即可在 runner 补）。

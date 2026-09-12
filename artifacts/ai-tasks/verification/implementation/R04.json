@@ -1,0 +1,39 @@
+{
+  "profile": "implementation",
+  "generated_at": "2026-09-12T10:35:48.489Z",
+  "tasks": [
+    "R04"
+  ],
+  "totals": {
+    "evaluated": 4,
+    "passed": 4,
+    "failed": 0,
+    "pending": 0
+  },
+  "results": [
+    {
+      "task": "R04",
+      "assertion": "R04.A1",
+      "passed": true,
+      "ms": 19589
+    },
+    {
+      "task": "R04",
+      "assertion": "R04.A2",
+      "passed": true,
+      "ms": 1212
+    },
+    {
+      "task": "R04",
+      "assertion": "R04.A3",
+      "passed": true,
+      "ms": 1056
+    },
+    {
+      "task": "R04",
+      "assertion": "R04.A4",
+      "passed": true,
+      "ms": 5194
+    }
+  ]
+}

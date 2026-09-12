@@ -1,0 +1,41 @@
+task: RA1
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task RA1
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/RA1.json
+
+assertions:
+  RA1.A1: { status: passed, test: ra1_a1_request_persists_blocks_and_unblocks_on_grant }
+  RA1.A2: { status: passed, test: ra1_a2_pending_ops_rebuild_from_journal_after_restart }
+  RA1.A3: { status: passed, test: ra1_a3_forged_reference_is_refused_without_events }
+  extra:
+    - undecided_request_times_out_denied_and_journals_it (timeout denial, short-timeout config)
+    - repeated_requests_are_idempotent_on_the_same_operation (idempotent register + late waiter)
+
+regressions:
+  - t10_implement_session_binding_and_host_rpc_router: ok (approval branch updated to new contract)
+  - t39/harness_conformance: ok
+  - conversation_engine: ok (3/3)
+  - t32_compose_the_headless_applicationservice: ok
+  - clippy -D warnings: clean (runtime/kernel/store); fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/plugins/approval_store.rs (new: ApprovalStore + payload contract)
+  - crates/r-code-runtime/src/plugins/router.rs (request branch: waiter-or-RpcError + blocking await + timeout)
+  - crates/r-code-runtime/src/plugins/mod.rs (exports)
+  - crates/r-code-runtime/src/run_manager.rs (approval_store param + with_approvals wiring + ApprovalRaised mapping)
+  - crates/r-code-runtime/src/application.rs (compose creates store; rebuild_approvals; approvals())
+  - crates/r-code-runtime/src/bin/r-code-service.rs (startup rebuild)
+  - crates/r-code-kernel/src/ports.rs (JournalStore::max_event_seq default)
+  - crates/r-code-kernel/src/testing.rs (MemoryJournal override)
+  - crates/r-code-store/src/v2/journal.rs (SELECT MAX(seq) override)
+  - crates/r-code-runtime/tests/ra1_persistent_approvals.rs (new)
+  - crates/r-code-runtime/tests/t10_implement_session_binding_and_host_rpc_router.rs (contract evolution)
+  - scripts/verify-remote.mjs (RA1.A1–A3 registered)
+
+decisions:
+  - DM1: createdSeq/decidedSeq = journal water level before write (append-only event cannot self-reference its rowid); monotonic, sufficient for RA2 ordering.
+  - DM4: t10 contract evolution — forged op reference upgrades "denied reply" to PROTOCOL_VIOLATION RpcError with zero journal side effects (strictly stronger refusal, required by RA1.A3).
+  - DM6: ApprovalStore::decide journals BEFORE the in-memory commit (decision visible ⟹ event persisted); concurrent duplicate decided events are first-wins deduped by the rebuild projection.
+  - DM7: timeout denial reuses decide() (first-wins race with concurrent human decision); "<timeout>" literal as decided_by; configurable per ApprovalStore::new.

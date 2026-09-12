@@ -136,6 +136,7 @@ mod tests {
                         model: None,
                         inference: Some(inference),
                         mode: None,
+                        require_desktop_confirm: false,
                     },
                 )
                 .await

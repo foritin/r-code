@@ -12,7 +12,7 @@
 
 use crate::plugins::catalog::Availability;
 use crate::plugins::transport::PluginProcess;
-use crate::plugins::{HostRouter, PluginCatalog, PluginSession, TransportLimits};
+use crate::plugins::{ApprovalStore, HostRouter, PluginCatalog, PluginSession, TransportLimits};
 use crate::services::models::ProviderResolver as _;
 use crate::services::settings_store::SettingsStore;
 use r_code_harness_protocol::{
@@ -64,6 +64,7 @@ pub struct RunManager {
     tools: Arc<dyn r_code_kernel::ports::ToolService>,
     processes: Arc<dyn r_code_kernel::ports::ProcessService>,
     settings: Arc<SettingsStore>,
+    approvals: Arc<ApprovalStore>,
     slots: Mutex<HashMap<String, Arc<Mutex<RunSlot>>>>,
 }
 
@@ -77,6 +78,7 @@ impl RunManager {
         tools: Arc<dyn r_code_kernel::ports::ToolService>,
         processes: Arc<dyn r_code_kernel::ports::ProcessService>,
         settings: Arc<SettingsStore>,
+        approvals: Arc<ApprovalStore>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
@@ -86,6 +88,7 @@ impl RunManager {
             tools,
             processes,
             settings,
+            approvals,
             slots: Mutex::new(HashMap::new()),
         })
     }
@@ -107,6 +110,17 @@ impl RunManager {
         self: Arc<Self>,
         task_id: &str,
         text: &str,
+    ) -> Result<serde_json::Value, RunError> {
+        self.send_as(task_id, text, None).await
+    }
+
+    /// [`Self::send`] with an audit actor (device id / client id) stamped
+    /// into the `input.queued` journal event (R10).
+    pub async fn send_as(
+        self: Arc<Self>,
+        task_id: &str,
+        text: &str,
+        actor: Option<&str>,
     ) -> Result<serde_json::Value, RunError> {
         let state = self
             .store
@@ -136,7 +150,7 @@ impl RunManager {
         }
 
         self.kernel_tasks
-            .enqueue(task_id, InputKind::User, text, None)
+            .enqueue_as(task_id, InputKind::User, text, None, actor)
             .await
             .map_err(|e| RunError::Failure(e.to_string()))?;
 
@@ -343,16 +357,19 @@ impl RunManager {
         });
 
         let grants = entry.manifest.requested_host_services.clone();
-        let router = Arc::new(HostRouter::new(
-            identity.clone(),
-            guard.clone(),
-            grants.clone(),
-            self.tools.clone(),
-            self.models.clone(),
-            self.processes.clone(),
-            self.store.clone(),
-            Arc::new(crate::plugins::IgnoreQuestions),
-        ));
+        let router = Arc::new(
+            HostRouter::new(
+                identity.clone(),
+                guard.clone(),
+                grants.clone(),
+                self.tools.clone(),
+                self.models.clone(),
+                self.processes.clone(),
+                self.store.clone(),
+                Arc::new(crate::plugins::IgnoreQuestions),
+            )
+            .with_approvals(self.approvals.clone()),
+        );
         let platform = entry
             .manifest
             .supported_platforms
@@ -404,7 +421,24 @@ impl RunManager {
                 loop {
                     tokio::select! {
                         _ = ticker.tick() => {}
-                        _ = stop_pump.notified() => break,
+                        _ = stop_pump.notified() => {
+                            // Settle drain: plugin notifications can land in
+                            // the router microseconds after the run's own
+                            // response resolved the caller. Keep draining
+                            // until a full tick passes with nothing new —
+                            // stopping on the first notification would race
+                            // the reader task and drop events.
+                            loop {
+                                tokio::time::sleep(Duration::from_millis(250)).await;
+                                let observations = drain_observations(&router);
+                                if observations.is_empty() {
+                                    break;
+                                }
+                                let snapshot = shared_state.lock().await.clone();
+                                let _ = store.save_task_and_events(&snapshot, observations).await;
+                            }
+                            break;
+                        }
                     }
                     let observations = drain_observations(&router);
                     if observations.is_empty() {
@@ -665,6 +699,7 @@ pub fn envelope_of(event: r_code_kernel::ports::JournalEvent) -> EventEnvelope {
         "assistant.message" => EventKind::ModelStream,
         "tool.call" => EventKind::ToolStarted,
         "tool.result" => EventKind::ToolFinished,
+        "approval.requested" | "approval.decided" => EventKind::ApprovalRaised,
         _ => EventKind::Progress,
     };
     let payload = {

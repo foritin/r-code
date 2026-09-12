@@ -1,0 +1,33 @@
+{
+  "profile": "implementation",
+  "generated_at": "2026-09-12T10:35:20.071Z",
+  "tasks": [
+    "R03"
+  ],
+  "totals": {
+    "evaluated": 3,
+    "passed": 3,
+    "failed": 0,
+    "pending": 0
+  },
+  "results": [
+    {
+      "task": "R03",
+      "assertion": "R03.A1",
+      "passed": true,
+      "ms": 997
+    },
+    {
+      "task": "R03",
+      "assertion": "R03.A2",
+      "passed": true,
+      "ms": 11541
+    },
+    {
+      "task": "R03",
+      "assertion": "R03.A3",
+      "passed": true,
+      "ms": 1247
+    }
+  ]
+}

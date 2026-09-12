@@ -1,0 +1,22 @@
+task: R24
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R24
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R24.json
+
+assertions:
+  R24.A1: { status: passed, kind: node-test, file: r24-approval-experience.test.mjs (needs_desktop_confirm 引导投影 / 无能力隐藏按钮复用 capability-ui) }
+  R24.A2: { status: passed, kind: node-test, file: 同文件（聚合回滚恢复；decidedBy 端到端审计由 r19/r12 集成断言锁定） }
+
+regressions:
+  - r22 pairing 3/3；r19 策略 5/5
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/r24-approval-experience.test.mjs (new；desktopConfirmGuidance 投影随测试导出)
+  - scripts/verify-remote.mjs (R24.A1–A2 registered)
+
+decisions:
+  - DM123: needs_desktop_confirm 引导=core 投影（协议字符串前缀匹配，R12 冻结）；RN/PWA UI 消费同一投影。
+  - DM124: 审计端到端（decidedBy=device id）已在 r12_a2/r19 集成断言——此处不重复（执行协议：不重复断言）。
+  - DM125: 通知深链进详情（R25 联动）随 R25 的 fake push adapter 投影落地。

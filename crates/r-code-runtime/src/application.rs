@@ -7,7 +7,7 @@
 
 use crate::plugins::catalog::CatalogEntry;
 use crate::plugins::package::InstalledPackage;
-use crate::plugins::PluginCatalog;
+use crate::plugins::{ApprovalStore, PluginCatalog, DEFAULT_DECISION_TIMEOUT};
 use crate::profile::RuntimeProfile;
 use crate::run_manager::{envelope_of, RunManager};
 use crate::services::settings_store::SettingsStore;
@@ -83,6 +83,7 @@ pub struct ApplicationService {
     catalog: Arc<PluginCatalog>,
     runs: Arc<RunManager>,
     settings: Arc<SettingsStore>,
+    approvals: Arc<ApprovalStore>,
     nonce: String,
 }
 
@@ -94,6 +95,17 @@ impl ApplicationService {
         models: Arc<dyn r_code_kernel::ports::ModelService>,
         tools: Arc<dyn r_code_kernel::ports::ToolService>,
     ) -> Result<Self, ApplicationError> {
+        Self::compose_with_approval_timeout(profile, models, tools, DEFAULT_DECISION_TIMEOUT)
+    }
+
+    /// [`Self::compose`] with an explicit approval decision timeout
+    /// (undecided requests deny after this long; tests use short values).
+    pub fn compose_with_approval_timeout(
+        profile: &RuntimeProfile,
+        models: Arc<dyn r_code_kernel::ports::ModelService>,
+        tools: Arc<dyn r_code_kernel::ports::ToolService>,
+        approval_timeout: std::time::Duration,
+    ) -> Result<Self, ApplicationError> {
         let store = Arc::new(
             V2Store::open(&profile.database_path())
                 .map_err(|e| ApplicationError::Store(e.to_string()))?,
@@ -101,6 +113,7 @@ impl ApplicationService {
         let kernel_tasks = Arc::new(KernelTaskService::new(store.clone()));
         let catalog = Arc::new(PluginCatalog::new(profile.plugins_root(), store.clone()));
         let settings = Arc::new(SettingsStore::new(profile.harness_v2_root()));
+        let approvals = Arc::new(ApprovalStore::new(store.clone(), approval_timeout));
         let runs = RunManager::new(
             store.clone(),
             kernel_tasks.clone(),
@@ -109,6 +122,7 @@ impl ApplicationService {
             tools,
             Arc::new(r_code_kernel::testing::FakeProcessService::default()),
             settings.clone(),
+            approvals.clone(),
         );
         Ok(Self {
             store,
@@ -116,6 +130,7 @@ impl ApplicationService {
             catalog,
             runs,
             settings,
+            approvals,
             nonce: uuid::Uuid::new_v4().simple().to_string(),
         })
     }
@@ -133,6 +148,116 @@ impl ApplicationService {
     /// The settings store.
     pub fn settings(&self) -> &Arc<SettingsStore> {
         &self.settings
+    }
+
+    /// The shared approval store (pending-op index over the journal).
+    pub fn approvals(&self) -> &Arc<ApprovalStore> {
+        &self.approvals
+    }
+
+    /// Rebuild pending approvals from the journal (daemon restart): an
+    /// undecided operation stays decidable, its state projected from the
+    /// `approval.requested`/`approval.decided` events.
+    pub async fn rebuild_approvals(&self) {
+        let events =
+            r_code_kernel::ports::JournalStore::read_events(&*self.store, 0, u32::MAX).await;
+        self.approvals.rebuild_from_events(&events).await;
+    }
+
+    // -- approvals (RA2) ---------------------------------------------------
+
+    /// `approvals.list`: undecided operations, `createdSeq` ascending.
+    pub async fn approvals_list(&self) -> Vec<serde_json::Value> {
+        let now = now_ms();
+        self.approvals
+            .pending()
+            .await
+            .into_iter()
+            .map(|row| {
+                let age_ms = if row.created_ms > 0 {
+                    now - row.created_ms
+                } else {
+                    0
+                };
+                serde_json::json!({
+                    "opId": row.op_id,
+                    "summary": row.summary,
+                    "runId": row.run_id,
+                    "taskId": row.task_id,
+                    "createdSeq": row.created_seq,
+                    "createdMs": row.created_ms,
+                    "ageMs": age_ms.max(0),
+                })
+            })
+            .collect()
+    }
+
+    /// `approvals.decide`: decide a pending operation. `decided_by` is the
+    /// *connection identity* (never a param — audit integrity); the
+    /// journal event carries it. `source` discriminates local vs remote
+    /// callers (R12): a remote decision on a task flagged
+    /// `require_desktop_confirm` is refused with `needs_desktop_confirm` —
+    /// the desktop console holds the final say. Structured error codes:
+    /// `approval_unknown` (never implicitly created) and `approval_conflict`
+    /// (first decision wins).
+    pub async fn approvals_decide(
+        &self,
+        params: &serde_json::Value,
+        decided_by: &str,
+        source: CommandSource,
+    ) -> Result<serde_json::Value, ApplicationError> {
+        let operation_id = params["operationId"]
+            .as_str()
+            .ok_or_else(|| ApplicationError::Session("missing operationId".into()))?;
+        let decision = match params["decision"].as_str() {
+            Some("granted") => r_code_harness_protocol::ApprovalDecision::Granted,
+            Some("denied") => r_code_harness_protocol::ApprovalDecision::Denied,
+            other => {
+                return Err(ApplicationError::Session(format!(
+                    "decision must be \"granted\"|\"denied\", got {other:?}"
+                )))
+            }
+        };
+        if source == CommandSource::Remote {
+            // High-sensitivity tasks keep the final say on the desktop.
+            let op = self
+                .approvals
+                .pending()
+                .await
+                .into_iter()
+                .find(|row| row.op_id == operation_id);
+            if let Some(row) = op {
+                if let Some(task) = self.store.load_task(&row.task_id).await {
+                    if task.preferences.require_desktop_confirm {
+                        return Err(ApplicationError::Session(
+                            "needs_desktop_confirm: this task requires a desktop approval".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        match self
+            .approvals
+            .decide(operation_id, decision, decided_by)
+            .await
+        {
+            Ok(record) => Ok(serde_json::json!({
+                "operationId": operation_id,
+                "decision": match record.decision {
+                    r_code_harness_protocol::ApprovalDecision::Granted => "granted",
+                    _ => "denied",
+                },
+                "decidedBy": record.decided_by,
+                "decidedSeq": record.decided_seq,
+            })),
+            Err(crate::plugins::approval_store::DecideError::Unknown(op)) => {
+                Err(ApplicationError::Session(format!("approval_unknown: {op}")))
+            }
+            Err(crate::plugins::approval_store::DecideError::Conflict(op)) => Err(
+                ApplicationError::Session(format!("approval_conflict: {op}")),
+            ),
+            Err(error) => Err(ApplicationError::Session(error.to_string())),
+        }
     }
 
     // -- plugin management ------------------------------------------------
@@ -373,9 +498,20 @@ impl ApplicationService {
         task_id: &str,
         text: &str,
     ) -> Result<serde_json::Value, ApplicationError> {
+        self.send_message_as(task_id, text, None).await
+    }
+
+    /// [`Self::send_message`] with an audit actor (R10): remote sends carry
+    /// the authenticated device id; local sends the client id.
+    pub async fn send_message_as(
+        &self,
+        task_id: &str,
+        text: &str,
+        actor: Option<&str>,
+    ) -> Result<serde_json::Value, ApplicationError> {
         self.runs
             .clone()
-            .send(task_id, text)
+            .send_as(task_id, text, actor)
             .await
             .map_err(|e| ApplicationError::Session(e.to_string()))
     }
@@ -482,6 +618,39 @@ impl ApplicationService {
             .map(envelope_of)
             .collect()
     }
+}
+
+/// Wall-clock milliseconds since the epoch (best-effort; used for ages).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Where an application command arrived from. RA2 placeholder: every
+/// transport is local until R04 lands the remote listener; the gate keeps
+/// the future remote decision path explicit instead of implicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandSource {
+    Local,
+    Remote,
+}
+
+/// Remote approval decisions stay disabled until R04 wires capability
+/// enforcement (`approvals:decide` is default-off even for devices).
+pub const REMOTE_APPROVAL_DECISIONS_ENABLED: bool = false;
+
+/// Source gate for `approvals.decide` (RA2): remote callers get a
+/// structured refusal until R04 enables the capability path.
+pub fn approval_decision_source_gate(source: CommandSource) -> Result<(), String> {
+    if source == CommandSource::Remote && !REMOTE_APPROVAL_DECISIONS_ENABLED {
+        return Err(
+            "remote_not_enabled: approvals.decide is local-only until the remote listener lands (R04)"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn default_title(state: &TaskState) -> String {

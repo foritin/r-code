@@ -58,6 +58,13 @@ pub struct ReadEventsRequest {
     pub limit: u32,
 }
 
+/// Long-lived event subscription (R05): the daemon first replays the
+/// journal after `after_seq`, then streams live events as they persist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventsSubscribeRequest {
+    pub after_seq: u64,
+}
+
 /// One line-framed message on the application connection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -67,6 +74,7 @@ pub enum ApplicationFrame {
     Command(ApplicationCommand),
     Result(ApplicationResult),
     ReadEvents(ReadEventsRequest),
+    EventsSubscribe(EventsSubscribeRequest),
     Events(Vec<crate::events::EventEnvelope>),
     Error { message: String },
 }

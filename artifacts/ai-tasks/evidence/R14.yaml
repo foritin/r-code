@@ -1,0 +1,27 @@
+task: R14
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R14
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R14.json
+
+assertions:
+  R14.A1: { status: passed, kind: script, command: node scripts/verify-remote-guards.mjs（默认无口 TcpListener 收口 / 配对开关 r04_a1_a4 / 钉扎 r03_a2 / 能力矩阵 r04_a3 / 吊销 r11_a2 / 绑定校验 public_and_wildcard） }
+  R14.A2: { status: passed, kind: script, command: 同脚本文档校验（十小节结构 + 无 TBD/TODO） }
+
+regressions:
+  - r04_remote_listener 3/3（approvals.decide$remote 拒绝消息演进断言同步）
+  - clippy 0（workspace）；全部门禁仍绿
+
+changed_paths:
+  - docs/support/guides/remote-control.md (new：配对/能力/吊销/安全模型/三平台端口防火墙/中继关系/故障排查)
+  - scripts/verify-remote-guards.mjs (new：四安全守卫 + 文档结构校验，CI 可直接调用)
+  - .github/workflows/ci.yml (new remote-guards job：守卫 + R07b/R07c/R13 前端投影 node-test)
+  - crates/r-code-runtime/tests/r04_remote_listener.rs ($remote 拒绝消息断言演进)
+  - scripts/verify-remote.mjs (R14.A1–A2 registered；runCommand script kind 修复)
+
+decisions:
+  - DM83: 四安全守卫=对既有真实测试断言的聚合调用（不复制断言逻辑），加 TcpListener 静态收口扫描——CI 无真实网卡依赖（loopback+自签）。
+  - DM84: CI job 归属说明——跨平台不变量在本 job（ubuntu 即可）；平台特有行为（Windows 防火墙弹窗/macOS 隐身模式/Linux ufw）由文档章节固化 + 平台矩阵 test job 覆盖（遵 §0 平台覆盖纪律）。
+  - DM85: Windows 首监听防火墙提示取证=文档固化标准路径（"允许（专用网络）"），手工取证留档归 production 清单（真机/真实防火墙交互无法在 CI 取证）。
+  - DM86: 打包默认不开口已由 F2 构造保证（registry.listener 默认 disabled + 无设备拒绝启动，r04_a1_a4 守卫覆盖装机首跑）。

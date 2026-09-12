@@ -21,6 +21,16 @@ futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+chrono = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio-tungstenite = { workspace = true }
+qrcode = { workspace = true }
+rand_core = { version = "0.6", features = ["getrandom"] }
+ed25519-dalek = { workspace = true }
+mdns-sd = { workspace = true }
+futures-util = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 dirs = { workspace = true }
@@ -56,6 +66,9 @@ libc = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+r-code-relay = { workspace = true }
+x25519-dalek = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tempfile = { workspace = true }
 zip = { workspace = true }
 r-code-client = { workspace = true }

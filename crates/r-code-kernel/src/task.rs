@@ -220,6 +220,12 @@ pub struct TaskPreferences {
     pub inference: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// High-sensitivity approvals on this task require a desktop (local)
+    /// confirmation: remote `approvals.decide` answers
+    /// `needs_desktop_confirm` instead of a final decision (R12; frozen
+    /// protocol field, default off).
+    #[serde(default)]
+    pub require_desktop_confirm: bool,
 }
 
 /// Who is trying to perform a transition.

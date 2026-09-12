@@ -41,6 +41,19 @@ Thumbs.db
 # Local agent session state (ZCode)
 /.zcode/
 
+# WorkBuddy project data (local agent memory/state, machine-local)
+/.workbuddy/
+
+# React Native (mobile/) — deps and build outputs are regenerable
+/mobile/node_modules/
+/mobile/bundle-out/
+/mobile/android/
+/mobile/ios/
+/mobile/.metro-health-check*
+/mobile/vendor/
+*.jsbundle
+*.jsbundle.js
+
 # Local autonomous-loop run configuration (may contain task or machine context)
 /loop.run.yaml
 

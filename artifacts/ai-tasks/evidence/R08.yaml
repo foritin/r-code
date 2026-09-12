@@ -1,0 +1,30 @@
+task: R08
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R08
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R08.json
+
+assertions:
+  R08.A1: { status: passed, test: r08_a1_manual_pairing_read_only_loop（真 r-code-service 进程：pipe pairingStart → 码换 token（pinned TLS）→ 码重放拒绝 → 只读 task.list + sendMessage PermissionDenied → 本机驱动真 run → 设备订阅读到事件链） }
+  R08.A2: { status: passed, test: r08_a2_unauthenticated_connections_get_nothing（错码 unauthorized + 无 hello 直接发命令帧只有结构化拒绝/关闭，绝无任务数据） }
+  R08.A3: { status: passed, test: public_and_wildcard_binds_are_refused（validate_bind_address：0.0.0.0/8.8.8.8/公网 v6 拒；loopback/RFC1918/链路本地/ULA 过） }
+
+regressions:
+  - r04/r05/r07/r06 listener 相关测试全绿（pairing 扩展零破坏）
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/remote/listener.rs（listen_pairing + hello 配对分支：token miss→PairingSessions.pair→welcome 携带一次性 minted token；supervision 认 pairing 窗口）
+  - crates/r-code-runtime/src/remote/mod.rs（listen_pairing/ListenerConfig 导出）
+  - crates/r-code-runtime/src/bin/r-code-service.rs（RemoteSurface 装配：registry/pairing/identity/hub/app_dir/listener + remote.pairingStart/remote.listenerStatus + dedup 注入 + CursorPublisher 250ms 泵）
+  - crates/r-code-runtime/tests/r08_manual_pairing_e2e.rs（new：真 service binary staging e2e）
+  - scripts/verify-remote.mjs（R08.A1–A3 registered）
+
+decisions:
+  - DM52: 配对通道 = hello.token 携带一次性码（device_id 留空触发 pairing 分支）；成功 welcome 扩展字段 {paired, deviceId, token, serverFingerprint}——token 仅经 pinned TLS 通道交付一次。
+  - DM53: supervision 存活条件 = has_live_devices || pairing.is_active()（修复"配对 listener 出生即死"缺陷——首 tick 立即触发 + 无设备即关）；配对窗口 120s 过期且无设备→端口自动关（F2）。
+  - DM54: RemoteSurface 两阶段装配（handler 字段在 ServiceHandler 构造后注入 dedup Arc）——Arc 环随 daemon 单例进程生命周期，注释明示。
+  - DM55: pairingStart 幂等开启 listener.enabled（F2 首次配对打开监听面；R11 管理面拥有持久开关）；bind_ip 首期 127.0.0.1（LAN 绑定与网卡选择在 R09/R14 与防火墙取证一起做）。
+  - DM56: e2e 用 harness-test-helper serve 模式做真 run 事件源（内置包 staging：R_CODE_BUILTIN_PLUGINS_DIR 下 plugins/<id>/ 层级）。
+  - DM57: 测试 connect_with_retry 抹平 owner.json 先于管道 bind 的既有窗口（t06a 同样存在的良性竞态）。

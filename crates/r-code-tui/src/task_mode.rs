@@ -95,6 +95,7 @@ mod tests {
                     model: None,
                     inference: None,
                     mode: Some("plan".to_string()),
+                    require_desktop_confirm: false,
                 },
             )
             .await

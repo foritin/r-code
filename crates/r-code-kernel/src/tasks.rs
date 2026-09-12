@@ -221,6 +221,22 @@ impl TaskService {
         text: &str,
         operation_key: Option<OperationKey>,
     ) -> Result<InputMessage, TaskServiceError> {
+        self.enqueue_as(task_id, kind, text, operation_key, None)
+            .await
+    }
+
+    /// [`Self::enqueue`] with an audit actor: the input's `input.queued`
+    /// journal event carries `actor` (device id for remote sends, the
+    /// client id locally). Unknown payload fields are ignored by existing
+    /// consumers (forward compatible).
+    pub async fn enqueue_as(
+        &self,
+        task_id: &str,
+        kind: InputKind,
+        text: &str,
+        operation_key: Option<OperationKey>,
+        actor: Option<&str>,
+    ) -> Result<InputMessage, TaskServiceError> {
         let state = self.load(task_id).await?;
         if let TaskExecution::Terminal { .. } = state.execution {
             return Err(TaskServiceError::Transition(
@@ -247,6 +263,7 @@ impl TaskService {
                 }
             }
             let message = self.allocate(task_id, kind, text).await?;
+            let _ = actor;
             self.store
                 .save_receipt(crate::task::OperationReceipt {
                     attempt_id: scope,
@@ -258,11 +275,11 @@ impl TaskService {
                     },
                 })
                 .await?;
-            self.persist_queued(&state, &message).await?;
+            self.persist_queued(&state, &message, actor).await?;
             return Ok(message);
         }
         let message = self.allocate(task_id, kind, text).await?;
-        self.persist_queued(&state, &message).await?;
+        self.persist_queued(&state, &message, actor).await?;
         Ok(message)
     }
 
@@ -287,13 +304,18 @@ impl TaskService {
         &self,
         state: &TaskState,
         message: &InputMessage,
+        actor: Option<&str>,
     ) -> Result<(), TaskServiceError> {
+        let mut payload = serde_json::to_value(message).unwrap_or_default();
+        if let (Some(actor), Some(map)) = (actor, payload.as_object_mut()) {
+            map.insert("actor".to_string(), serde_json::json!(actor));
+        }
         self.save(
             state,
             vec![Self::event(
                 &state.contract.task_id,
                 "input.queued",
-                serde_json::to_value(message).unwrap_or_default(),
+                payload,
             )],
         )
         .await?;

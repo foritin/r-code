@@ -10,18 +10,17 @@
 
 use r_code_harness_protocol::rpc::{error_code, RpcError, RpcNotification, RpcRequest};
 use r_code_harness_protocol::services::*;
-use r_code_harness_protocol::{
-    ApprovalDecision, ApprovalsRequest, HostService, OperationKey, RunIdentity,
-};
+use r_code_harness_protocol::{ApprovalsRequest, HostService, OperationKey, RunIdentity};
 use r_code_kernel::children::ChildrenSupervisor;
 use r_code_kernel::ports::{
     GenerationToken, JournalStore, ModelService, ProcessService, RunGuard, ServiceError,
     ToolService,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+
+use crate::plugins::approval_store::{ApprovalStore, DEFAULT_DECISION_TIMEOUT};
 
 /// A persisted question raised by a plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,31 +43,6 @@ impl QuestionSink for IgnoreQuestions {
     fn raised(&self, _question: RaisedQuestion) {}
 }
 
-/// Host-side registry of pending operations that approvals may reference.
-/// Only the host creates entries; generic questions can never mint one.
-#[derive(Default)]
-pub struct ApprovalRegistry {
-    decisions: Mutex<HashMap<String, ApprovalDecision>>,
-}
-
-impl ApprovalRegistry {
-    /// Host records a pending operation and (later) its decision.
-    pub fn set_decision(&self, operation_id: &str, decision: ApprovalDecision) {
-        self.decisions
-            .lock()
-            .expect("approval registry")
-            .insert(operation_id.to_string(), decision);
-    }
-
-    fn decide(&self, operation_id: &str) -> Option<ApprovalDecision> {
-        self.decisions
-            .lock()
-            .expect("approval registry")
-            .get(operation_id)
-            .copied()
-    }
-}
-
 /// The router over the service ports.
 pub struct HostRouter {
     pub identity: RunIdentity,
@@ -79,7 +53,7 @@ pub struct HostRouter {
     pub processes: Arc<dyn ProcessService>,
     pub store: Arc<dyn JournalStore>,
     pub questions: Arc<dyn QuestionSink>,
-    pub approvals: Arc<ApprovalRegistry>,
+    pub approvals: Arc<ApprovalStore>,
     /// Observation stream for tests and the daemon event fan-out.
     pub observed_events: Mutex<Vec<RpcNotification>>,
     /// Host-side observation tap: `(kind, payload)` pairs the run manager
@@ -140,9 +114,9 @@ impl HostRouter {
             tools,
             models,
             processes,
-            store,
+            store: store.clone(),
             questions,
-            approvals: Arc::new(ApprovalRegistry::default()),
+            approvals: Arc::new(ApprovalStore::new(store, DEFAULT_DECISION_TIMEOUT)),
             observed_events: Mutex::new(Vec::new()),
             host_observations: Mutex::new(Vec::new()),
             recorded_proposals: Mutex::new(Vec::new()),
@@ -150,6 +124,13 @@ impl HostRouter {
             parent_ceiling: PermissionCeiling::Full,
             checkpoint_revision: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Share the daemon-wide approval store (RunManager wiring); a router
+    /// built standalone keeps its own store over the same journal.
+    pub fn with_approvals(mut self, approvals: Arc<ApprovalStore>) -> Self {
+        self.approvals = approvals;
+        self
     }
 
     /// Attach child supervision (the daemon shares one supervisor).
@@ -384,11 +365,22 @@ impl HostRouter {
                 let approval: ApprovalsRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
                 // Only host-created pending operation references are valid;
-                // an unknown reference is denied, never auto-created.
-                let decision = self
-                    .approvals
-                    .decide(&approval.pending_operation.operation_id)
-                    .unwrap_or(ApprovalDecision::Denied);
+                // an unknown reference is a protocol violation (never
+                // auto-created, never journaled).
+                let op_id = approval.pending_operation.operation_id.clone();
+                let Some(mut waiter) = self.approvals.waiter(&op_id).await else {
+                    return Err(RpcError {
+                        code: error_code::PROTOCOL_VIOLATION,
+                        message: format!(
+                            "approvals may only reference host-created pending operations; \
+                             {op_id} was never registered"
+                        ),
+                        data: None,
+                    });
+                };
+                // Block until a decision (or the timeout denial — journaled
+                // as a decided event like any other decision).
+                let decision = self.approvals.await_decision(&op_id, &mut waiter).await;
                 Ok(serde_json::to_value(ApprovalsReply { decision }).unwrap_or_default())
             }
             "host.children.spawn" => {

@@ -1,0 +1,486 @@
+{
+  "profile": "implementation",
+  "generated_at": "2026-09-12T11:43:16.602Z",
+  "tasks": [
+    "RA1",
+    "RA2",
+    "RA3",
+    "R00",
+    "R01",
+    "R02",
+    "R03",
+    "R04",
+    "R05",
+    "R06",
+    "R07",
+    "R08",
+    "R09",
+    "R10",
+    "R11",
+    "R12",
+    "R07b",
+    "R07c",
+    "R13",
+    "R14",
+    "R15",
+    "R16",
+    "R17",
+    "R18",
+    "R19",
+    "R20",
+    "R21",
+    "R22",
+    "R23",
+    "R24",
+    "R25",
+    "R26",
+    "R27",
+    "R28"
+  ],
+  "totals": {
+    "evaluated": 73,
+    "passed": 73,
+    "failed": 0,
+    "pending": 0
+  },
+  "results": [
+    {
+      "task": "RA1",
+      "assertion": "RA1.A1",
+      "passed": true,
+      "ms": 1172
+    },
+    {
+      "task": "RA1",
+      "assertion": "RA1.A2",
+      "passed": true,
+      "ms": 1075
+    },
+    {
+      "task": "RA1",
+      "assertion": "RA1.A3",
+      "passed": true,
+      "ms": 1101
+    },
+    {
+      "task": "RA2",
+      "assertion": "RA2.A1",
+      "passed": true,
+      "ms": 1139
+    },
+    {
+      "task": "RA2",
+      "assertion": "RA2.A2",
+      "passed": true,
+      "ms": 1152
+    },
+    {
+      "task": "RA3",
+      "assertion": "RA3.A1",
+      "passed": true,
+      "ms": 2047
+    },
+    {
+      "task": "RA3",
+      "assertion": "RA3.A2",
+      "passed": true,
+      "ms": 3230
+    },
+    {
+      "task": "R00",
+      "assertion": "R00.A1",
+      "passed": true,
+      "ms": 1039
+    },
+    {
+      "task": "R01",
+      "assertion": "R01.A1",
+      "passed": true,
+      "ms": 1051
+    },
+    {
+      "task": "R01",
+      "assertion": "R01.A2",
+      "passed": true,
+      "ms": 1026
+    },
+    {
+      "task": "R01",
+      "assertion": "R01.A3",
+      "passed": true,
+      "ms": 1058
+    },
+    {
+      "task": "R02",
+      "assertion": "R02.A1",
+      "passed": true,
+      "ms": 1039
+    },
+    {
+      "task": "R02",
+      "assertion": "R02.A2",
+      "passed": true,
+      "ms": 1021
+    },
+    {
+      "task": "R02",
+      "assertion": "R02.A3",
+      "passed": true,
+      "ms": 993
+    },
+    {
+      "task": "R03",
+      "assertion": "R03.A1",
+      "passed": true,
+      "ms": 1066
+    },
+    {
+      "task": "R03",
+      "assertion": "R03.A2",
+      "passed": true,
+      "ms": 1061
+    },
+    {
+      "task": "R03",
+      "assertion": "R03.A3",
+      "passed": true,
+      "ms": 1053
+    },
+    {
+      "task": "R04",
+      "assertion": "R04.A1",
+      "passed": true,
+      "ms": 5213
+    },
+    {
+      "task": "R04",
+      "assertion": "R04.A2",
+      "passed": true,
+      "ms": 1175
+    },
+    {
+      "task": "R04",
+      "assertion": "R04.A3",
+      "passed": true,
+      "ms": 1135
+    },
+    {
+      "task": "R04",
+      "assertion": "R04.A4",
+      "passed": true,
+      "ms": 5208
+    },
+    {
+      "task": "R05",
+      "assertion": "R05.A1",
+      "passed": true,
+      "ms": 1086
+    },
+    {
+      "task": "R05",
+      "assertion": "R05.A2",
+      "passed": true,
+      "ms": 1117
+    },
+    {
+      "task": "R05",
+      "assertion": "R05.A3",
+      "passed": true,
+      "ms": 1093
+    },
+    {
+      "task": "R06",
+      "assertion": "R06.A1",
+      "passed": true,
+      "ms": 1090
+    },
+    {
+      "task": "R06",
+      "assertion": "R06.A2",
+      "passed": true,
+      "ms": 1111
+    },
+    {
+      "task": "R07",
+      "assertion": "R07.A1",
+      "passed": true,
+      "ms": 456
+    },
+    {
+      "task": "R07",
+      "assertion": "R07.A2",
+      "passed": true,
+      "ms": 1088
+    },
+    {
+      "task": "R08",
+      "assertion": "R08.A1",
+      "passed": true,
+      "ms": 3340
+    },
+    {
+      "task": "R08",
+      "assertion": "R08.A2",
+      "passed": true,
+      "ms": 2025
+    },
+    {
+      "task": "R08",
+      "assertion": "R08.A3",
+      "passed": true,
+      "ms": 1189
+    },
+    {
+      "task": "R09",
+      "assertion": "R09.A1",
+      "passed": true,
+      "ms": 1025
+    },
+    {
+      "task": "R09",
+      "assertion": "R09.A2",
+      "passed": true,
+      "ms": 7124
+    },
+    {
+      "task": "R10",
+      "assertion": "R10.A1",
+      "passed": true,
+      "ms": 6188
+    },
+    {
+      "task": "R10",
+      "assertion": "R10.A2",
+      "passed": true,
+      "ms": 1123
+    },
+    {
+      "task": "R10",
+      "assertion": "R10.A3",
+      "passed": true,
+      "ms": 6135
+    },
+    {
+      "task": "R11",
+      "assertion": "R11.A1",
+      "passed": true,
+      "ms": 1107
+    },
+    {
+      "task": "R11",
+      "assertion": "R11.A2",
+      "passed": true,
+      "ms": 1075
+    },
+    {
+      "task": "R11",
+      "assertion": "R11.A3",
+      "passed": true,
+      "ms": 1431
+    },
+    {
+      "task": "R12",
+      "assertion": "R12.A1",
+      "passed": true,
+      "ms": 1167
+    },
+    {
+      "task": "R12",
+      "assertion": "R12.A2",
+      "passed": true,
+      "ms": 3819
+    },
+    {
+      "task": "R07b",
+      "assertion": "R07b.A1",
+      "passed": true,
+      "ms": 432
+    },
+    {
+      "task": "R07b",
+      "assertion": "R07b.A2",
+      "passed": true,
+      "ms": 475
+    },
+    {
+      "task": "R07c",
+      "assertion": "R07c.A1",
+      "passed": true,
+      "ms": 433
+    },
+    {
+      "task": "R13",
+      "assertion": "R13.A1",
+      "passed": true,
+      "ms": 444
+    },
+    {
+      "task": "R14",
+      "assertion": "R14.A1",
+      "passed": true,
+      "ms": 9801
+    },
+    {
+      "task": "R14",
+      "assertion": "R14.A2",
+      "passed": true,
+      "ms": 9692
+    },
+    {
+      "task": "R15",
+      "assertion": "R15.A1",
+      "passed": true,
+      "ms": 420
+    },
+    {
+      "task": "R16",
+      "assertion": "R16.A1",
+      "passed": true,
+      "ms": 3121
+    },
+    {
+      "task": "R16",
+      "assertion": "R16.A2",
+      "passed": true,
+      "ms": 1226
+    },
+    {
+      "task": "R17",
+      "assertion": "R17.A1",
+      "passed": true,
+      "ms": 1028
+    },
+    {
+      "task": "R17",
+      "assertion": "R17.A2",
+      "passed": true,
+      "ms": 1066
+    },
+    {
+      "task": "R18",
+      "assertion": "R18.A1",
+      "passed": true,
+      "ms": 1085
+    },
+    {
+      "task": "R19",
+      "assertion": "R19.A1",
+      "passed": true,
+      "ms": 1162
+    },
+    {
+      "task": "R19",
+      "assertion": "R19.A2",
+      "passed": true,
+      "ms": 1071
+    },
+    {
+      "task": "R19",
+      "assertion": "R19.A3",
+      "passed": true,
+      "ms": 427
+    },
+    {
+      "task": "R20",
+      "assertion": "R20.A1",
+      "passed": true,
+      "ms": 909
+    },
+    {
+      "task": "R20",
+      "assertion": "R20.A2",
+      "passed": true,
+      "ms": 397
+    },
+    {
+      "task": "R21",
+      "assertion": "R21.A1",
+      "passed": true,
+      "ms": 424
+    },
+    {
+      "task": "R21",
+      "assertion": "R21.A2",
+      "passed": true,
+      "ms": 428
+    },
+    {
+      "task": "R22",
+      "assertion": "R22.A1",
+      "passed": true,
+      "ms": 425
+    },
+    {
+      "task": "R22",
+      "assertion": "R22.A2",
+      "passed": true,
+      "ms": 398
+    },
+    {
+      "task": "R23",
+      "assertion": "R23.A1",
+      "passed": true,
+      "ms": 440
+    },
+    {
+      "task": "R23",
+      "assertion": "R23.A2",
+      "passed": true,
+      "ms": 405
+    },
+    {
+      "task": "R24",
+      "assertion": "R24.A1",
+      "passed": true,
+      "ms": 439
+    },
+    {
+      "task": "R24",
+      "assertion": "R24.A2",
+      "passed": true,
+      "ms": 433
+    },
+    {
+      "task": "R25",
+      "assertion": "R25.A1",
+      "passed": true,
+      "ms": 427
+    },
+    {
+      "task": "R25",
+      "assertion": "R25.A2",
+      "passed": true,
+      "ms": 451
+    },
+    {
+      "task": "R26",
+      "assertion": "R26.A1",
+      "passed": true,
+      "ms": 449
+    },
+    {
+      "task": "R27",
+      "assertion": "R27.A1",
+      "passed": true,
+      "ms": 418
+    },
+    {
+      "task": "R27",
+      "assertion": "R27.A2",
+      "passed": true,
+      "ms": 449
+    },
+    {
+      "task": "R28",
+      "assertion": "R28.A1",
+      "passed": true,
+      "ms": 455
+    },
+    {
+      "task": "R28",
+      "assertion": "R28.A2",
+      "passed": true,
+      "ms": 412
+    }
+  ]
+}

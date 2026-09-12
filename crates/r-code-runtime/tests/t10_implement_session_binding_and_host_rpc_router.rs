@@ -385,8 +385,10 @@ async fn approvals_reference_only_host_created_pending_operations() {
     assert!(question_id.starts_with("q-run-1-"));
     assert_eq!(QUESTION_LOG.lock().unwrap().len(), 1);
 
-    // Approval citing an unknown pending operation: denied, never created.
-    let denied: serde_json::Value = router
+    // Approval citing an unknown pending operation: refused as a protocol
+    // violation, never auto-created, never journaled (RA1 hardened the
+    // pre-existing "denied" default into an explicit error).
+    let error = router
         .handle_request(request(
             "host.approvals.request",
             serde_json::json!({
@@ -395,13 +397,24 @@ async fn approvals_reference_only_host_created_pending_operations() {
             }),
         ))
         .await
-        .expect("handled");
-    assert_eq!(denied["decision"], "denied");
+        .expect_err("forged reference refused");
+    assert_eq!(error.code, error_code::PROTOCOL_VIOLATION);
 
-    // Host-side decision for a real pending operation is honoured.
+    // Host-side decision path: the host registers the pending operation,
+    // then decides it; the plugin's request observes that decision.
     router
         .approvals
-        .set_decision("op-7", r_code_harness_protocol::ApprovalDecision::Granted);
+        .register("op-7", "run tests", "run-1", "t1")
+        .await;
+    router
+        .approvals
+        .decide(
+            "op-7",
+            r_code_harness_protocol::ApprovalDecision::Granted,
+            "client-host",
+        )
+        .await
+        .expect("decide");
     let granted: serde_json::Value = router
         .handle_request(request(
             "host.approvals.request",

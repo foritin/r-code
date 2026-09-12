@@ -125,6 +125,16 @@ pub trait JournalStore: Send + Sync {
         events: Vec<JournalEvent>,
     ) -> Result<(), ServiceError>;
     async fn read_events(&self, after_seq: u64, limit: u32) -> Vec<JournalEvent>;
+    /// Highest allocated journal seq (0 when the journal is empty) — the
+    /// water level callers can stamp into payloads written *after* the
+    /// probe. Stores with direct SQL access override the full-scan default.
+    async fn max_event_seq(&self) -> u64 {
+        self.read_events(0, u32::MAX)
+            .await
+            .last()
+            .map(|event| event.seq)
+            .unwrap_or(0)
+    }
     async fn save_receipt(&self, receipt: OperationReceipt) -> Result<(), ServiceError>;
     async fn load_receipt(&self, attempt_id: &str, key: &OperationKey) -> Option<OperationReceipt>;
     async fn save_checkpoint(

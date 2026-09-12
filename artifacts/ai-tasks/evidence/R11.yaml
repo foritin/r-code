@@ -1,0 +1,31 @@
+task: R11
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R11
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R11.json
+
+assertions:
+  R11.A1: { status: passed, test: r11_a1_list_carries_the_device_fields }
+  R11.A2: { status: passed, test: r11_a2_revocation_drops_the_live_connection_and_refuses_reconnect（吊销→活动 socket Close→重连 revoked 结构化拒绝） }
+  R11.A3: { status: passed, test: r11_a3_listener_switch_drops_connections_but_keeps_devices }
+
+regressions:
+  - r04/r05/r08/r10 全绿（listener 连接租约重构后）
+  - clippy -D warnings: clean; fmt applied; --through R0 7/7
+
+changed_paths:
+  - crates/r-code-runtime/src/remote/manager.rs (new: RemoteManager——ensure_listener/pairing_start/list_devices/revoke/update_capabilities/set_listener 一处实现)
+  - crates/r-code-runtime/src/remote/listener.rs（ListenerHandle.connections 租约表 + disconnect_device；watch 通道断连；revoked 判别分支）
+  - crates/r-code-runtime/src/remote/mod.rs（exports）
+  - crates/r-code-runtime/src/bin/r-code-service.rs（RemoteSurface 变 RemoteManager 委托；device.list/revoke/updateCapabilities/setListener/listenerStatus 五方法）
+  - crates/r-code-client/src/ws.rs（next_wire_message 探针 API）
+  - crates/r-code-runtime/tests/r11_device_management.rs (new)
+  - scripts/verify-remote.mjs (R11.A1–A3 registered)
+
+decisions:
+  - DM64: 管理面实现提取 RemoteManager（bin 与测试共用；device.* dispatch 变一行委托）——测试直接打真实实现，非镜像。
+  - DM65: 【真实缺陷修复】tokio Notify::notify_waiters 只唤醒已注册等待者——吊销信号早于连接循环首次 poll 时永久丢失；连接租约改 watch::channel(bool)（版本化标记，晚 poll 也能看到）。
+  - DM66: 吊销判别=claimed id 或 token hash 命中 revoked 记录→"revoked"（可重配对）vs 未知→"unauthorized"；配对会话存在时 token miss 先过 revoked 再进 pairing（防吊销 token 被当配对码）。
+  - DM67: capability 收窄=立即断连迫重连（watch flag），能力在 R04 gate 按新记录即时生效；setListener(false) 断全部但保留设备记录，重开走 ensure_listener 重启。
+  - DM68: GUI DevicesSettingsPane / TUI /remote 列表 UI 归 R14/R18 桌面打磨批次（管理 RPC 面已冻结可用）。

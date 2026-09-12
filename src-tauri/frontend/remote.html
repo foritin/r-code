@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#181818" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="/remote/manifest.webmanifest" />
+  <title>R-Code Remote</title>
+  <style>
+    html, body { margin: 0; background: #181818; }
+    /* 立即呈现皮肤底色（bundle 加载前的首帧） */
+  </style>
+</head>
+<body>
+  <div id="remote-root"></div>
+  <script type="module" src="/src/remote-main.tsx"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+task: R10
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R10
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R10.json
+
+assertions:
+  R10.A1: { status: passed, test: r10_a1_a3_remote_send_is_audited_and_queue_semantics_match_local（含 input.queued.actor=device_id 审计断言） }
+  R10.A2: { status: passed, test: r10_a2_read_only_device_writes_are_all_refused（create/send/cancel/rename/clone 五路全拒） }
+  R10.A3: { status: passed, test: 同 A1（远程 sendMessage 走同一 RunManager 队列语义；queued 响应与本地一致） }
+
+regressions:
+  - conversation_engine / t32 / ra3_approval_e2e：全绿（send 链签名扩展后）
+  - PWA 构建绿（Composer 组件入 bundle）
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-kernel/src/tasks.rs（enqueue_as + persist_queued actor 字段）
+  - crates/r-code-runtime/src/run_manager.rs（send_as）
+  - crates/r-code-runtime/src/application.rs（send_message_as）
+  - crates/r-code-runtime/src/bin/r-code-service.rs（task.sendMessage 传 actor=command.client_id）
+  - src-tauri/frontend/src/remote-main.tsx（Composer：发送/中止/排队提示，IME 组合安全）
+  - crates/r-code-runtime/tests/r10_remote_write.rs（new）
+  - scripts/verify-remote.mjs（R10.A1–A3 registered）
+
+decisions:
+  - DM61: actor 审计=input.queued payload 可选字段（serde 前向兼容；TUI/GUI 事件泵按字段名读取、未知字段天然忽略——project_events/transcript_events_of 均为 payload.get 白名单读取，已核实）。
+  - DM62: 远程写无第二分发链——listener gate（R01 required_capability 映射已含 create/send/cancel/rename/clone）放行后进同一 ServiceHandler→RunManager；queued 语义一致性由构造保证（同一代码路径），A3 断言远程路径真实走通。
+  - DM63: PWA Composer 无能力时诚实显示 daemon 拒绝文案（permission_denied），不在客户端硬编码隐藏（能力投影隐藏在 R07b 统一做）。

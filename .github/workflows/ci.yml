@@ -45,6 +45,32 @@ jobs:
         working-directory: src-tauri/frontend
         run: npm run build
 
+  remote-guards:
+    name: Remote control security guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      # R14.A1: 四安全守卫（默认无口/配对开关/钉扎/能力矩阵）——全部
+      # loopback+自签，无真实网络依赖。三平台归属：平台特有监听行为
+      # （防火墙弹窗等）由平台矩阵 test job 覆盖，此 job 是跨平台不变量。
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run remote security guards
+        run: node scripts/verify-remote-guards.mjs
+      # R07b/R07c/R13 前端投影断言（node --test 直跑 TS）。
+      - name: Run remote PWA projections
+        working-directory: src-tauri/frontend
+        run: |
+          node --experimental-strip-types --test src/remote/core/r07b.test.mjs
+          node --experimental-strip-types --test src/remote/core/r07b-layout.test.mjs
+          node --experimental-strip-types --test src/remote/core/r07c.test.mjs
+          node --experimental-strip-types --test src/remote/core/r13.test.mjs
+
   npm-audit:
     name: Frontend dependency audit
     runs-on: ubuntu-latest

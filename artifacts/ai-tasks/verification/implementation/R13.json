@@ -1,0 +1,21 @@
+{
+  "profile": "implementation",
+  "generated_at": "2026-09-12T10:38:48.463Z",
+  "tasks": [
+    "R13"
+  ],
+  "totals": {
+    "evaluated": 1,
+    "passed": 1,
+    "failed": 0,
+    "pending": 0
+  },
+  "results": [
+    {
+      "task": "R13",
+      "assertion": "R13.A1",
+      "passed": true,
+      "ms": 401
+    }
+  ]
+}

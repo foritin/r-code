@@ -303,6 +303,16 @@ impl JournalStore for V2Store {
             .unwrap_or_default()
     }
 
+    async fn max_event_seq(&self) -> u64 {
+        self.connection
+            .lock()
+            .expect("store mutex")
+            .query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as u64
+    }
+
     async fn save_receipt(&self, receipt: OperationReceipt) -> Result<(), ServiceError> {
         let state_json = serde_json::to_string(&receipt.outcome)
             .map_err(|e| ServiceError::Store(e.to_string()))?;

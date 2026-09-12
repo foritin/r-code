@@ -1,0 +1,27 @@
+task: R07b
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R07b
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R07b.json
+
+assertions:
+  R07b.A1: { status: passed, kind: node-test, file: r07b.test.mjs (5 tests：断线退避倒计时/30s 封顶+denied 不重试/unpaired 引导/缺能力隐藏决策按钮+只读徽标/task.list 真实字段) }
+  R07b.A2: { status: passed, kind: node-test, file: r07b-layout.test.mjs (3 tests：viewport+viewport-fit=cover / bundle 布局约束 overflowX-hidden+minHeight44+safe-area+obsidian tokens / SW 预缓存仅壳) }
+
+regressions:
+  - npm run build 绿（四屏交互版入 bundle）
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/connection-state.ts (new：connecting/online/reconnecting/denied/unpaired 状态机+指数退避倒计时)
+  - src-tauri/frontend/src/remote/core/capability-ui.ts (new：能力→UI 投影)
+  - src-tauri/frontend/src/remote/core/r07b.test.mjs + r07b-layout.test.mjs (new)
+  - src-tauri/frontend/src/remote-main.tsx (重写：三 tab 任务/审批/设置 + 会话屏 + 断网全屏态 + 审批卡乐观更新回滚 + 命中区 44px + 安全区)
+  - src-tauri/frontend/src/remote/transport.ts (firstWelcomeCapabilities)
+  - scripts/verify-remote.mjs (R07b.A1–A2 registered)
+
+decisions:
+  - DM73: A2 采用 mjs 静态布局断言（构建产物特征检查：overflowX/minHeight44/safe-area/tokens/文案）而非 playwright——任务卡明示"或 mjs 像素/布局检查"；真机视觉走查（截图对照）归 R13/R28 外部放行批次。
+  - DM74: 退避语义=disconnected 步进 attempt（1,2,4…30s 封顶），tick 归零只切 connecting 不叠计数；denied/unpaired 不自动重试（防凭据风暴），引导重新配对。
+  - DM75: 审批 tab 聚合 approvals.list 轮询+事件刷新（R07c 深化）；无 decide 能力隐藏按钮（非禁用）+只读徽标；乐观移除失败回滚。
+  - DM76: 决策按钮显隐只是 UI 投影——daemon capability gate（F6）是权威，前端绕过无效（R12.A1 已验证）。

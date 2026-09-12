@@ -1,0 +1,32 @@
+task: R05
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R05
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R05.json
+
+assertions:
+  R05.A1: { status: passed, tests: [r05_a1_live_subscription_streams_new_events_by_seq (integration), r05_a1_subscribers_receive_events_in_seq_order (lib)] }
+  R05.A2: { status: passed, test: r05_a2_reconnect_with_cursor_resumes_without_loss_or_duplication (10+40 events across a disconnect; no loss, no dup) }
+  R05.A3: { status: passed, tests: [r05_a3_two_subscribers_isolation_on_the_wire (integration), r05_a3_slow_consumers_are_dropped_without_touching_others (lib backpressure drop)] }
+
+regressions:
+  - r04_remote_listener: 3/3 ok（listen 签名加 hub 后适配）
+  - clippy -D warnings: clean; fmt applied; --through R0 7/7
+
+changed_paths:
+  - crates/r-code-harness-protocol/src/application.rs (EventsSubscribeRequest + ApplicationFrame::EventsSubscribe variant — untagged 兼容：缺 limit 字段不匹配 ReadEvents)
+  - crates/r-code-runtime/src/remote/fanout.rs (new: FanoutHub/CursorPublisher)
+  - crates/r-code-runtime/src/remote/listener.rs (select 循环：命令/订阅推送/心跳 30s ping 复用；EventsSubscribe=先订阅后补齐+seq 去重)
+  - crates/r-code-runtime/src/remote/mod.rs (exports)
+  - crates/r-code-runtime/src/daemon.rs (本地管道对 EventsSubscribe 归 unexpected 帧)
+  - crates/r-code-runtime/tests/r05_fanout_stream.rs (new)
+  - crates/r-code-runtime/tests/r04_remote_listener.rs (hub 参数适配 + next_result 跳过 ping)
+  - scripts/verify-remote.mjs (R05.A1–A3 registered)
+
+decisions:
+  - DM38: 发布模型 = CursorPublisher 轮询 journal 游标（250ms 装配节奏）→ envelope_of 投影 → hub 扇出。"先持久化后推送"由构造保证（只发 read_events 返回的），且与 task.events 完全同源同形（F8 字节同形）。
+  - DM39: 订阅协议 = 先 hub.subscribe 再 events_after 补齐，接收侧 last_sent_seq 单调去重——订阅 seam 处不丢不重；断线重连由客户端带 after_seq 重走同一路径。
+  - DM40: 背压 = 每连接 mpsc(1000)，publish 用 try_send，Full/Closed 即地退订断连；journal 与其他订阅者零影响（lib 测试多线程 runtime 验证）。
+  - DM41: 心跳 30s WS Ping（首 tick 预耗避免立即 ping）；写失败即断；Pong 由 tungstenite 自动处理。
+  - DM42: daemon 装配（CursorPublisher run + hub 注入 listen）在 R08/R11 的 service 集成任务接——本任务 hub/协议/监听面全部就绪且 e2e 验证。

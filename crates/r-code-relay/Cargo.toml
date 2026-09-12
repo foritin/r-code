@@ -1,0 +1,26 @@
+[package]
+name = "r-code-relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Self-hosted stateless relay for R-Code remote control: owner/device registration, byte-level E2EE forwarding, rate limiting and connection-metadata audit. Never sees plaintext (F12)."
+
+[dependencies]
+r-code-harness-protocol = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand_core = { version = "0.6", features = ["getrandom"] }
+snow = { workspace = true }
+x25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

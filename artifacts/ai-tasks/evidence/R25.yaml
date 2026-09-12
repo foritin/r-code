@@ -1,0 +1,23 @@
+task: R25
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R25
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R25.json
+
+assertions:
+  R25.A1: { status: passed, kind: node-test, file: r25-push.test.mjs (登记→双句柄推送→前台降级→吊销清理→仅存活句柄收到；事件序列即闭环证据) }
+  R25.A2: { status: passed, kind: node-test, file: 同文件（正文快照锁定两句话；无命令/路径/op id；sanitize 守卫；无关事件零推送） }
+
+regressions:
+  - r13 通知投影复用（notificationForEvent），无重复实现
+
+changed_paths:
+  - src-tauri/frontend/src/remote/core/push-fake.ts (new：FakePushAdapter——句柄登记/触发/吊销/前台降级事件序列)
+  - src-tauri/frontend/src/remote/core/r25-push.test.mjs (new)
+  - scripts/verify-remote.mjs (R25.A1–A2 registered)
+
+decisions:
+  - DM126: implementation 验收=fake adapter（任务卡步骤 5 冻结）；真实 APNs/FCM 投递归 production_release_ready（需开发者账号+真机，手册清单）。
+  - DM127: 正文投影复用 R13 notificationForEvent（单一来源），sanitize 独立导出避免依赖环（规则同源同断言）。
+  - DM128: 句柄=设备登记字段（deviceId 关联），可吊销；前台降级=dropped-foreground 事件（页内通知由 R13 横幅承担）。

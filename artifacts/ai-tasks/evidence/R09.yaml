@@ -1,0 +1,28 @@
+task: R09
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R09
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R09.json
+
+assertions:
+  R09.A1: { status: passed, tests: [r09_a1_qr_payload_roundtrip_and_malformed_refusal, r09_a1_qr_and_manual_codes_pair_identically]（filter r09_a1 命中两测） }
+  R09.A2: { status: passed, test: r09_a2_mdns_advertises_port_and_fingerprint_until_stopped }
+
+regressions:
+  - r08_manual_pairing_e2e: 2/2（qrPayload 换 v1 后）
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/remote/pairing.rs（QrPairPayload/qr_payload_v1/parse_qr_payload 严格解析 + 测试）
+  - crates/r-code-runtime/src/remote/listener.rs（mDNS 集成：advertise_mdns 注册 _rcode._tcp.local 含 fp TXT；ListenerHandle.mdns_registered_info；stop 注销清空）
+  - crates/r-code-runtime/src/remote/mod.rs（exports）
+  - crates/r-code-runtime/src/bin/r-code-service.rs（pairingStart 返回完整 v1 qrPayload）
+  - crates/r-code-runtime/tests/r09_mdns_discovery.rs（new）
+  - Cargo.toml / crates/r-code-runtime/Cargo.toml（qrcode 0.14 / mdns-sd 0.11）
+  - scripts/verify-remote.mjs（R09.A1–A2 registered）
+
+decisions:
+  - DM58: QR v1 载荷严格解析（scheme/version/字段/fp 64-hex/未知键全拒——fail closed）；QR secret 即手动码（同一会话单秘密），等价性=同一 pair 路径同一 DeviceRecord 形状。
+  - DM59: mDNS 注册语义=同进程注册表真相（handle.mdns_registered_info）+ browse 网络验证 best-effort 不阻塞——Windows 本机多播回环不可依赖；网络层发现断言按平台覆盖纪律归 CI 矩阵（R14 落实）。注册失败软降级（发现是糖，配对不依赖它）。
+  - DM60: TUI /pair 终端 QR 与 GUI 设置页弹层合并进 R11（同批桌面设备管理 UI：/remote 列表+吊销+QR 展示）；qrcode crate 依赖已就位。PWA deep link 解析 TS 侧在 R10 PWA 接线时落（parse_qr_payload 的 TS 镜像）。

@@ -1,0 +1,27 @@
+{
+  "profile": "implementation",
+  "generated_at": "2026-09-12T11:37:11.708Z",
+  "tasks": [
+    "R07b"
+  ],
+  "totals": {
+    "evaluated": 2,
+    "passed": 2,
+    "failed": 0,
+    "pending": 0
+  },
+  "results": [
+    {
+      "task": "R07b",
+      "assertion": "R07b.A1",
+      "passed": true,
+      "ms": 430
+    },
+    {
+      "task": "R07b",
+      "assertion": "R07b.A2",
+      "passed": true,
+      "ms": 411
+    }
+  ]
+}

@@ -218,80 +218,90 @@ impl Daemon {
     }
 
     async fn serve_connection(&self, stream: crate::ipc::IpcStream) -> Result<(), String> {
-        let (reader, mut writer) = tokio::io::split(stream);
-        let mut lines = BufReader::new(reader);
-        let mut line = String::new();
-        // Handshake: token must match the profile owner's token.
+        serve_app_frames(Box::new(stream), &self.identity, &self.handler).await
+    }
+}
+
+/// Serve one application connection over any byte transport (F1/R00): the
+/// named-pipe/Unix accept path and future remote transports (WS over TLS in
+/// R04, relay in R17) feed the same handshake → command/event loop here.
+/// Byte-for-byte identical protocol on every transport.
+pub async fn serve_app_frames(
+    stream: Box<dyn crate::ipc::AppStream>,
+    identity: &OwnerIdentity,
+    handler: &Arc<dyn ApplicationHandler>,
+) -> Result<(), String> {
+    let identity = identity.clone();
+    let handler = handler.clone();
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut lines = BufReader::new(reader);
+    let mut line = String::new();
+    // Handshake: token must match the profile owner's token.
+    let n = lines
+        .read_line(&mut line)
+        .await
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("connection closed before handshake".into());
+    }
+    let handshake: DaemonHandshake =
+        serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
+    if handshake.token != identity.token || handshake.profile_id != identity.profile_id {
+        let reject = ApplicationFrame::Error {
+            message: "handshake rejected".into(),
+        };
+        let _ = write_frame(&mut writer, &reject).await;
+        return Err("handshake rejected".into());
+    }
+    let welcome = ApplicationFrame::Welcome(DaemonWelcome {
+        daemon_nonce: identity.nonce.clone(),
+        profile_id: identity.profile_id.clone(),
+    });
+    write_frame(&mut writer, &welcome)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    loop {
+        line.clear();
         let n = lines
             .read_line(&mut line)
             .await
             .map_err(|e| e.to_string())?;
         if n == 0 {
-            return Err("connection closed before handshake".into());
+            return Ok(());
         }
-        let handshake: DaemonHandshake =
+        let frame: ApplicationFrame =
             serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
-        if handshake.token != self.identity.token
-            || handshake.profile_id != self.identity.profile_id
-        {
-            let reject = ApplicationFrame::Error {
-                message: "handshake rejected".into(),
-            };
-            let _ = write_frame(&mut writer, &reject).await;
-            return Err("handshake rejected".into());
-        }
-        let welcome = ApplicationFrame::Welcome(DaemonWelcome {
-            daemon_nonce: self.identity.nonce.clone(),
-            profile_id: self.identity.profile_id.clone(),
-        });
-        write_frame(&mut writer, &welcome)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        loop {
-            line.clear();
-            let n = lines
-                .read_line(&mut line)
-                .await
-                .map_err(|e| e.to_string())?;
-            if n == 0 {
-                return Ok(());
+        match frame {
+            ApplicationFrame::Command(command) => {
+                let outcome = handler.execute(command.clone()).await;
+                let result = ApplicationResult {
+                    client_id: command.client_id,
+                    command_id: command.command_id,
+                    outcome,
+                };
+                write_frame(&mut writer, &ApplicationFrame::Result(result))
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
-            let frame: ApplicationFrame =
-                serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
-            match frame {
-                ApplicationFrame::Command(command) => {
-                    let outcome = self.handler.execute(command.clone()).await;
-                    let result = ApplicationResult {
-                        client_id: command.client_id,
-                        command_id: command.command_id,
-                        outcome,
-                    };
-                    write_frame(&mut writer, &ApplicationFrame::Result(result))
-                        .await
-                        .map_err(|e| e.to_string())?;
-                }
-                ApplicationFrame::ReadEvents(request) => {
-                    let events = self
-                        .handler
-                        .events_after(request.after_seq, request.limit)
-                        .await;
-                    write_frame(&mut writer, &ApplicationFrame::Events(events))
-                        .await
-                        .map_err(|e| e.to_string())?;
-                }
-                ApplicationFrame::Handshake(_)
-                | ApplicationFrame::Welcome(_)
-                | ApplicationFrame::Result(_)
-                | ApplicationFrame::Events(_)
-                | ApplicationFrame::Error { .. } => {
-                    let reject = ApplicationFrame::Error {
-                        message: "unexpected frame".into(),
-                    };
-                    write_frame(&mut writer, &reject)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                }
+            ApplicationFrame::ReadEvents(request) => {
+                let events = handler.events_after(request.after_seq, request.limit).await;
+                write_frame(&mut writer, &ApplicationFrame::Events(events))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            ApplicationFrame::Handshake(_)
+            | ApplicationFrame::Welcome(_)
+            | ApplicationFrame::Result(_)
+            | ApplicationFrame::Events(_)
+            | ApplicationFrame::EventsSubscribe(_)
+            | ApplicationFrame::Error { .. } => {
+                let reject = ApplicationFrame::Error {
+                    message: "unexpected frame".into(),
+                };
+                write_frame(&mut writer, &reject)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
         }
     }

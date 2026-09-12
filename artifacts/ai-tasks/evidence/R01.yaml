@@ -1,0 +1,32 @@
+task: R01
+status: implementation_verified
+verified_at: 2026-09-12
+verify_command: node scripts/verify-remote.mjs --task R01
+verify_exit_code: 0
+report: artifacts/ai-tasks/verification/implementation/R01.json
+
+assertions:
+  R01.A1: { status: passed, test: register_roundtrip_token_valid_and_not_on_disk }
+  R01.A2: { status: passed, test: revoke_blocks_authentication_immediately }
+  R01.A3: { status: passed, test: fresh_devices_are_read_only_and_versioned }
+  extra:
+    - wrong_token_is_rejected / update_capabilities_persists / note_seen_is_debounced
+    - capabilities 单测（默认只读/forbidden 矩阵/plugins.list=events-read）
+
+regressions:
+  - clippy -D warnings: clean; fmt applied
+
+changed_paths:
+  - crates/r-code-runtime/src/remote/mod.rs (new)
+  - crates/r-code-runtime/src/remote/capabilities.rs (new: Capability/CapabilitySet/FORBIDDEN_REMOTE_METHODS/required_capability)
+  - crates/r-code-runtime/src/remote/registry.rs (new: DeviceRegistry/DeviceRecord/ListenerConfig)
+  - crates/r-code-runtime/src/lib.rs (pub mod remote)
+  - crates/r-code-runtime/Cargo.toml (chrono dep)
+  - scripts/verify-remote.mjs (R01.A1–A3 registered)
+
+decisions:
+  - DM18: "src/remote/" 落在 crates/r-code-runtime/src/remote/（F1 远程是 daemon 的 transport 扩展；§3 基线里 daemon/ipc 均在此 crate）。
+  - DM19: capability serde 用 kebab-case（events-read/tasks-write/approvals-decide）——任务卡 v2 冻结措辞优先于 architecture.md §7 示例的冒号写法；CapabilitySet 只存增量授权（events-read 恒隐含）。
+  - DM20: 设备令牌 = 两个 UUIDv4 simple 拼接（64 hex=32B 随机），不加 rand 依赖；存储只落 sha256 hex；registry.json 同文件承载 ListenerConfig（单一持久状态源，R04/R11 消费）。
+  - DM21: last_seen 防抖 = 内存 60s 节流后才写盘；Windows 下 0600 等价物=profile 目录本身在 %LOCALAPPDATA% 用户私有段（文件继承用户 ACL）。
+  - DM22: required_capability 将 plugins.list 归 events-read（R04 gate 映射），FORBIDDEN 精确列 settings.*/plugins.install|remove|setEnabled/device.*/remote.*/service.shutdown（settings.get 也禁——provider 凭据在此面）。

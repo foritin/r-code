@@ -1,0 +1,10 @@
+{
+  "name": "R-Code Remote",
+  "short_name": "R-Code",
+  "start_url": "/app/",
+  "display": "standalone",
+  "background_color": "#181818",
+  "theme_color": "#181818",
+  "description": "R-Code 远程只读控制台——观察你的会话（配对后使用）",
+  "icons": []
+}

@@ -77,7 +77,388 @@ export const ASSERTIONS = {
 // 断言→命令映射在实现任务时填充。键为 assertion id。
 // 例：
 // "RA1.A1": { kind: "cargo-test", pkg: "r-code-runtime", filter: "approval_request_is_persisted" }
-export const COMMANDS = {};
+export const COMMANDS = {
+  "RA1.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "ra1_persistent_approvals",
+    filter: "ra1_a1_request_persists_blocks_and_unblocks_on_grant",
+  },
+  "RA1.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "ra1_persistent_approvals",
+    filter: "ra1_a2_pending_ops_rebuild_from_journal_after_restart",
+  },
+  "RA1.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "ra1_persistent_approvals",
+    filter: "ra1_a3_forged_reference_is_refused_without_events",
+  },
+  "RA2.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "ra2_approval_methods",
+    filter: "ra2_a1_list_then_decide_with_connection_auditing",
+  },
+  "RA2.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "ra2_approval_methods",
+    filter: "ra2_a2_command_dedup_replays_and_conflicts_are_refused",
+  },
+  "RA3.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "ra3_approval_e2e",
+    filter: "ra3_a1_grant_unblocks_the_plugin_and_completes_the_run",
+  },
+  "RA3.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "ra3_approval_e2e",
+    filter: "ra3_a2_deny_settles_and_timeout_denies_without_hanging",
+  },
+  "R00.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r00_transport_seam",
+    filter: "r00_a1",
+  },
+  "R01.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "register_roundtrip_token_valid_and_not_on_disk",
+  },
+  "R01.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "revoke_blocks_authentication_immediately",
+  },
+  "R01.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "fresh_devices_are_read_only_and_versioned",
+  },
+  "R02.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "r02_a1_expired_replayed_and_wrong_codes_are_distinct_errors",
+  },
+  "R02.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "r02_a2_successful_pairing_yields_a_device_and_one_time_token",
+  },
+  "R02.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "r02_a3_remote_source_cannot_start_pairing",
+  },
+  "R03.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "r03_a1_identity_is_stable_across_restarts",
+  },
+  "R03.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r03_tls_pinning",
+    filter: "r03_a2_wrong_fingerprint_fails_in_the_tls_handshake",
+  },
+  "R03.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r03_tls_pinning",
+    filter: "r03_a3_plaintext_client_cannot_get_frames_through",
+  },
+  "R04.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r04_remote_listener",
+    filter: "r04_a1_a4_listener_lifecycle_follows_devices_and_switch",
+  },
+  "R04.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r04_remote_listener",
+    filter: "r04_a2_authenticated_commands_replay_and_bad_tokens_drop",
+  },
+  "R04.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r04_remote_listener",
+    filter: "r04_a3_capabilities_and_forbidden_methods_are_enforced",
+  },
+  "R04.A4": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r04_remote_listener",
+    filter: "r04_a1_a4_listener_lifecycle_follows_devices_and_switch",
+  },
+  "R05.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r05_fanout_stream",
+    filter: "r05_a1_live_subscription_streams_new_events_by_seq",
+  },
+  "R05.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r05_fanout_stream",
+    filter: "r05_a2_reconnect_with_cursor_resumes_without_loss_or_duplication",
+  },
+  "R05.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r05_fanout_stream",
+    filter: "r05_a3_two_subscribers_isolation_on_the_wire",
+  },
+  "R06.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-client",
+    test: "r06_ws_transport",
+    filter: "r06_a1_wss_roundtrip_task_list_and_events",
+  },
+  "R06.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-client",
+    test: "r06_ws_transport",
+    filter: "r06_a2_reconnect_replays_the_same_command_id",
+  },
+  "R07.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/projection.test.mjs",
+  },
+  "R07.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r07_app_hosting",
+    filter: "r07_a2_app_served_when_built_and_honest_404_when_not",
+  },
+  "R08.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r08_manual_pairing_e2e",
+    filter: "r08_a1_manual_pairing_read_only_loop",
+  },
+  "R08.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r08_manual_pairing_e2e",
+    filter: "r08_a2_unauthenticated_connections_get_nothing",
+  },
+  "R08.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "public_and_wildcard_binds_are_refused",
+  },
+  "R09.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    lib: true,
+    filter: "r09_a1",
+  },
+  "R09.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r09_mdns_discovery",
+    filter: "r09_a2_mdns_advertises_port_and_fingerprint_until_stopped",
+  },
+  "R10.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r10_remote_write",
+    filter: "r10_a1_a3_remote_send_is_audited_and_queue_semantics_match_local",
+  },
+  "R10.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r10_remote_write",
+    filter: "r10_a2_read_only_device_writes_are_all_refused",
+  },
+  "R10.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r10_remote_write",
+    filter: "r10_a1_a3_remote_send_is_audited_and_queue_semantics_match_local",
+  },
+  "R11.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r11_device_management",
+    filter: "r11_a1_list_carries_the_device_fields",
+  },
+  "R11.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r11_device_management",
+    filter: "r11_a2_revocation_drops_the_live_connection_and_refuses_reconnect",
+  },
+  "R11.A3": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r11_device_management",
+    filter: "r11_a3_listener_switch_drops_connections_but_keeps_devices",
+  },
+  "R12.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r12_remote_approvals",
+    filter: "r12_a1_read_only_decide_is_refused_and_op_stays_pending",
+  },
+  "R12.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r12_remote_approvals",
+    filter: "r12_a2_remote_decision_flows_to_the_plugin_and_audits_the_device",
+  },
+  "R07b.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r07b.test.mjs",
+  },
+  "R07b.A2": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r07b-layout.test.mjs",
+  },
+  "R07c.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r07c.test.mjs",
+  },
+  "R13.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r13.test.mjs",
+  },
+  "R14.A1": {
+    kind: "script",
+    args: ["scripts/verify-remote-guards.mjs"],
+  },
+  "R14.A2": {
+    kind: "script",
+    args: ["scripts/verify-remote-guards.mjs"],
+  },
+  "R15.A1": {
+    kind: "node-test",
+    file: "scripts/remote/r15-relay-interface.test.mjs",
+  },
+  "R16.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-relay",
+    test: "r16_relay_integration",
+    filter: "r16_a1_register_bind_reject_forward_paths",
+  },
+  "R16.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-relay",
+    test: "r16_relay_integration",
+    filter: "r16_a2_audit_is_content_free_and_rate_limit_enforced",
+  },
+  "R17.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-relay",
+    test: "r17_e2ee",
+    filter: "r17_a1_e2ee_roundtrip_and_stream_semantics_match_a_pipe",
+  },
+  "R17.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-relay",
+    test: "r17_e2ee",
+    filter: "r17_a2_malicious_relay_cannot_read_tamper_or_inject",
+  },
+  "R18.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r18_relay_config",
+    filter: "r18_a1",
+  },
+  "R19.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r19_relay_path",
+    filter: "r19_a1_e2ee_bridge_roundtrip_and_wrong_secret_refused",
+  },
+  "R19.A2": {
+    kind: "cargo-test",
+    pkg: "r-code-runtime",
+    test: "r19_relay_path",
+    filter: "r19_a2_revocation_enforced_by_daemon_through_a_live_bridge",
+  },
+  "R19.A3": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r19-connection-strategy.test.mjs",
+  },
+  "R20.A1": {
+    kind: "cargo-test",
+    pkg: "r-code-relay",
+    test: "r16_relay_integration",
+    filter: "r16_a1",
+  },
+  "R20.A2": {
+    kind: "node-test",
+    file: "scripts/remote/r20-deployment.test.mjs",
+  },
+  "R21.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r21-purity.test.mjs",
+  },
+  "R21.A2": {
+    kind: "node-test",
+    file: "scripts/remote/r21-ci.test.mjs",
+  },
+  "R22.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r22-pairing.test.mjs",
+  },
+  "R22.A2": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r21-purity.test.mjs",
+  },
+  "R23.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r23-native-screens.test.mjs",
+  },
+  "R23.A2": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r23-native-screens.test.mjs",
+  },
+  "R24.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r24-approval-experience.test.mjs",
+  },
+  "R24.A2": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r24-approval-experience.test.mjs",
+  },
+  "R25.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r25-push.test.mjs",
+  },
+  "R25.A2": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r25-push.test.mjs",
+  },
+  "R26.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/r26-settings.test.mjs",
+  },
+  "R27.A1": {
+    kind: "node-test",
+    file: "scripts/remote/r27-compliance.test.mjs",
+  },
+  "R27.A2": {
+    kind: "node-test",
+    file: "scripts/remote/r27-compliance.test.mjs",
+  },
+};
 
 function runCommand(spec) {
   const started = Date.now();
@@ -95,7 +476,13 @@ function runCommand(spec) {
     } else {
       throw new Error(`unknown spec kind: ${spec.kind}`);
     }
-    execFileSync(spec.kind === "node-test" ? process.execPath : "cargo", args, {
+    const program =
+      spec.kind === "node-test"
+        ? process.execPath
+        : spec.kind === "script"
+          ? process.execPath
+          : "cargo";
+    execFileSync(program, args, {
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10 * 60 * 1000,
