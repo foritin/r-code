@@ -38,6 +38,9 @@ Thumbs.db
 # Local agent plans, ledgers, snapshots, and performance scratch data
 /sandbox/
 
+# Local design/prototype run outputs (UI refresh & prototype runs, machine-local)
+/outputs/
+
 # Local agent session state (ZCode)
 /.zcode/
 

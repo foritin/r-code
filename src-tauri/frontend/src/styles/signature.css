@@ -15,7 +15,11 @@
   position: relative;
   isolation: isolate;
   background-color: var(--signature-sidebar);
-  background-image: none;
+  background-image:
+    radial-gradient(210px 172px at var(--rc-current-rail) var(--rc-topbar-h), var(--signature-corner-glow-hot) 0%, var(--signature-corner-glow-soft) 34%, transparent 74%),
+    radial-gradient(112% 72% at 18% 112%, var(--signature-sidebar-glow-deep) 0%, rgba(176, 53, 34, 0.05) 34%, transparent 72%),
+    radial-gradient(82% 58% at -14% 28%, var(--signature-sidebar-glow-hot) 0%, transparent 73%),
+    linear-gradient(90deg, var(--signature-sidebar-wash), transparent 78%);
 }
 
 #app.r-code-signature .app-topbar,
@@ -44,7 +48,7 @@
   border-left: 1px solid var(--signature-divider);
   border-radius: var(--signature-workspace-radius) 0 0 0;
   background: var(--bg-app);
-  box-shadow: none;
+  box-shadow: -18px -18px 46px color-mix(in srgb, #000 12%, transparent);
 }
 
 :root[data-theme="studio-light"] #app.r-code-signature .main {
@@ -54,7 +58,7 @@
 
 #app.r-code-signature .main::before,
 #app.r-code-signature .main::after {
-  content: none;
+  content: "";
   position: absolute;
   z-index: 40;
   pointer-events: none;

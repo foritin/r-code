@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>R-Code · 最终高保真 Demo</title>
+  <link rel="stylesheet" href="tools/final-demo.css">
+</head>
+<body>
+  <main class="demo-stage" aria-label="R-Code 最终高保真 Demo">
+    <iframe id="demo-frame" title="R-Code 高保真界面" allow="clipboard-write"></iframe>
+    <div class="demo-loading" id="demo-loading" role="status"><span></span>正在切换版面</div>
+  </main>
+
+  <button class="drawer-scrim" id="drawer-scrim" type="button" aria-label="关闭版面目录" hidden></button>
+  <aside class="demo-drawer" id="demo-drawer" aria-label="版面目录" aria-hidden="true">
+    <header class="drawer-head">
+      <div><span class="drawer-kicker">FINAL / R2</span><h1>最终高保真 Demo</h1></div>
+      <button id="close-drawer" type="button" aria-label="关闭版面目录">×</button>
+    </header>
+    <p class="drawer-intro">30 个优化页面、3 个保留页面与 1 个补充状态。所有方案均已采用。</p>
+    <label class="demo-search"><span>查找</span><input id="demo-search" type="search" placeholder="页面名或 P18…" autocomplete="off"></label>
+    <nav class="demo-pages" id="demo-pages" aria-label="最终版面"></nav>
+    <footer class="drawer-foot">
+      <div class="theme-switch" aria-label="界面主题">
+        <button type="button" data-theme="dark" aria-pressed="true">深色</button>
+        <button type="button" data-theme="light" aria-pressed="false">浅色</button>
+      </div>
+      <span class="drawer-summary">34 个状态 · 深浅主题</span>
+    </footer>
+  </aside>
+
+  <div class="demo-controller" id="demo-controller" aria-label="原型控制器">
+    <button id="previous-page" type="button" aria-label="上一版面">‹</button>
+    <button class="current-page" id="open-drawer" type="button" aria-expanded="false" aria-controls="demo-drawer">
+      <code id="current-page-id">P01</code><span id="current-page-title">新对话</span><i>⌃</i>
+    </button>
+    <button id="next-page" type="button" aria-label="下一版面">›</button>
+    <span class="controller-rule"></span>
+    <button id="quick-theme" type="button" aria-label="切换深浅主题">◐</button>
+    <button id="hide-controller" type="button" aria-label="隐藏原型控制器">×</button>
+  </div>
+  <button class="restore-controller" id="restore-controller" type="button" aria-label="显示原型控制器" hidden>R</button>
+  <p class="demo-toast" id="demo-toast" role="status" aria-live="polite"></p>
+
+  <script>window.FINAL_DEMO={"revision":"R2","status":"approved","pages":[{"id":"home","sourceId":"home","pageId":"P01","number":"01","title":"新对话","group":"工作区","decision":"optimize","render":"renders/home.html"},{"id":"dashboard","sourceId":"dashboard","pageId":"P02","number":"02","title":"项目概览","group":"工作区","decision":"optimize","render":"renders/dashboard.html"},{"id":"conversations","sourceId":"conversations","pageId":"P03","number":"03","title":"对话列表","group":"工作区","decision":"optimize","render":"renders/conversations.html"},{"id":"conversation","sourceId":"conversation","pageId":"P04","number":"04","title":"任务会话","group":"会话与工具","decision":"optimize","render":"renders/conversation.html"},{"id":"tool-launcher","sourceId":"tool-launcher","pageId":"P05","number":"05","title":"工作台工具入口","group":"会话与工具","decision":"optimize","render":"renders/tool-launcher.html"},{"id":"runs","sourceId":"runs","pageId":"P06","number":"06","title":"运行与子代理","group":"会话与工具","decision":"optimize","render":"renders/runs.html"},{"id":"files","sourceId":"files","pageId":"P07","number":"07","title":"任务文件","group":"会话与工具","decision":"optimize","render":"renders/files.html"},{"id":"terminal","sourceId":"terminal","pageId":"P08","number":"08","title":"终端","group":"会话与工具","decision":"optimize","render":"renders/terminal.html"},{"id":"review","sourceId":"review","pageId":"P09","number":"09","title":"变更审核","group":"会话与工具","decision":"optimize","render":"renders/review.html"},{"id":"plan","sourceId":"plan","pageId":"P10","number":"10","title":"计划工作台","group":"会话与工具","decision":"optimize","render":"renders/plan.html"},{"id":"permission","sourceId":"permission","pageId":"P11","number":"11","title":"等待权限确认","group":"交互状态","decision":"optimize","render":"renders/permission.html"},{"id":"inbox","sourceId":"inbox","pageId":"P12","number":"12","title":"待处理","group":"工作区","decision":"optimize","render":"renders/inbox.html"},{"id":"activity","sourceId":"activity","pageId":"P13","number":"13","title":"活动","group":"工作区","decision":"keep","render":"renders/activity.html"},{"id":"archive","sourceId":"archive","pageId":"P14","number":"14","title":"归档","group":"工作区","decision":"keep","render":"renders/archive.html"},{"id":"projects","sourceId":"projects","pageId":"P15","number":"15","title":"项目管理","group":"工作区","decision":"optimize","render":"renders/projects.html"},{"id":"editor","sourceId":"editor","pageId":"P16","number":"16","title":"项目文件编辑器","group":"工作区","decision":"optimize","render":"renders/editor.html"},{"id":"settings-providers","sourceId":"settings-providers","pageId":"P17","number":"17","title":"模型服务","group":"设置","decision":"optimize","render":"renders/settings-providers.html"},{"id":"settings-agents","sourceId":"settings-agents","pageId":"P18","number":"18","title":"Agent 编排","group":"设置","decision":"optimize","render":"renders/settings-agents.html"},{"id":"settings-subagents","sourceId":"settings-subagents","pageId":"P19","number":"19","title":"子代理配置","group":"设置","decision":"optimize","render":"renders/settings-subagents.html"},{"id":"settings-tools","sourceId":"settings-tools","pageId":"P20","number":"20","title":"工具与连接","group":"设置","decision":"optimize","render":"renders/settings-tools.html"},{"id":"settings-knowledge","sourceId":"settings-knowledge","pageId":"P21","number":"21","title":"知识与指令 · 记忆","group":"设置","decision":"optimize","render":"renders/settings-knowledge.html"},{"id":"settings-permissions","sourceId":"settings-permissions","pageId":"P22","number":"22","title":"权限","group":"设置","decision":"optimize","render":"renders/settings-permissions.html"},{"id":"settings-security","sourceId":"settings-security","pageId":"P23","number":"23","title":"隐私与安全","group":"设置","decision":"optimize","render":"renders/settings-security.html"},{"id":"settings-appearance","sourceId":"settings-appearance","pageId":"P24","number":"24","title":"外观与语言","group":"设置","decision":"optimize","render":"renders/settings-appearance.html"},{"id":"settings-notifications","sourceId":"settings-notifications","pageId":"P25","number":"25","title":"通知","group":"设置","decision":"keep","render":"renders/settings-notifications.html"},{"id":"settings-lifecycle","sourceId":"settings-lifecycle","pageId":"P26","number":"26","title":"启动与关闭","group":"设置","decision":"optimize","render":"renders/settings-lifecycle.html"},{"id":"settings-updates","sourceId":"settings-updates","pageId":"P27","number":"27","title":"更新","group":"设置","decision":"optimize","render":"renders/settings-updates.html"},{"id":"settings-diagnostics","sourceId":"settings-diagnostics","pageId":"P28","number":"28","title":"诊断","group":"设置","decision":"optimize","render":"renders/settings-diagnostics.html"},{"id":"settings-prompts","sourceId":"settings-prompts","pageId":"P29","number":"29","title":"知识与指令 · Prompt","group":"设置","decision":"optimize","render":"renders/settings-prompts.html"},{"id":"settings-skills","sourceId":"settings-skills","pageId":"P30","number":"30","title":"知识与指令 · Skills","group":"设置","decision":"optimize","render":"renders/settings-skills.html"},{"id":"search","sourceId":"search","pageId":"P31","number":"31","title":"全局搜索","group":"交互状态","decision":"optimize","render":"renders/search.html"},{"id":"search-empty","sourceId":"search-empty","pageId":"P32","number":"32","title":"搜索无结果","group":"交互状态","decision":"optimize","render":"renders/search-empty.html"},{"id":"provider-editor","sourceId":"provider-editor","pageId":"P33","number":"33","title":"模型服务编辑","group":"交互状态","decision":"optimize","render":"renders/provider-editor.html"},{"id":"provider-discard","sourceId":"provider-editor","pageId":"P34","number":"34","title":"模型服务 · 放弃修改确认","group":"交互补充","decision":"optimize","render":"renders/provider-discard.html"}]};</script>
+  <script src="tools/final-demo.js"></script>
+</body>
+</html>

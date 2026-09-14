@@ -1,6 +1,6 @@
 {
   "profile": "implementation",
-  "generated_at": "2026-09-12T11:37:18.422Z",
+  "generated_at": "2026-09-12T11:45:18.267Z",
   "tasks": [
     "R21"
   ],
@@ -15,13 +15,13 @@
       "task": "R21",
       "assertion": "R21.A1",
       "passed": true,
-      "ms": 399
+      "ms": 444
     },
     {
       "task": "R21",
       "assertion": "R21.A2",
       "passed": true,
-      "ms": 468
+      "ms": 444
     }
   ]
 }
