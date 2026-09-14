@@ -178,6 +178,15 @@
   border-radius: var(--radius-sm);
 }
 
+/* 字段错误文案（QA 缺陷①补定义，SettingsScene 消费 role="alert"）：
+   与 .opt-setting-line p 同布局语系，色取 --danger，只做文字提示不叠边框 */
+.opt-field-error {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+  color: var(--danger);
+}
+
 .opt-routing-section .opt-setting-line + .opt-setting-line {
   margin-top: var(--sp-2);
 }

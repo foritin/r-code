@@ -65,7 +65,7 @@ export function Drawer({
   return createPortal(
     <>
       <div
-        className="drawer-backdrop"
+        className="drawer-backdrop opt-drawer-backdrop"
         onPointerDown={(event) => {
           if (!closeDisabled && event.target === event.currentTarget) onClose();
         }}
@@ -78,7 +78,7 @@ export function Drawer({
         aria-labelledby={titleId}
         tabIndex={-1}
       >
-        <header className="drawer-head">
+        <header className="drawer-head opt-panel-head">
           {icon && <div className="drawer-icon">{icon}</div>}
           <div className="drawer-titles">
             <h2 id={titleId}>{title}</h2>
@@ -94,8 +94,8 @@ export function Drawer({
             <IconClose width={14} height={14} />
           </button>
         </header>
-        <div className="drawer-body">{children}</div>
-        {footer && <footer className="drawer-foot">{footer}</footer>}
+        <div className="drawer-body opt-panel-body">{children}</div>
+        {footer && <footer className="drawer-foot opt-panel-footer">{footer}</footer>}
       </div>
     </>,
     document.body,

@@ -342,7 +342,7 @@ function InboxRow({
     }
   }
   return (
-    <button className={`opt-inbox-line${selected ? " selected" : ""}`} data-task-id={item.task.id} onClick={onSelect}>
+    <button className={`inbox-row opt-inbox-line${selected ? " selected" : ""}`} data-task-id={item.task.id} onClick={onSelect}>
       <span className="opt-icon">{item.kind === "permission" ? <IconShield width={16} height={16} /> : <IconFile width={16} height={16} />}</span>
       <span className="opt-inbox-subject"><strong>{taskTitle(item.task)}</strong><small>{description}</small></span>
       <span className={`opt-inline-state ${item.kind === "permission" ? "approval" : "review"}`}>{item.kind === "permission" ? "待授权" : reviewEntry?.status?.remaining_count === 0 ? "待完成" : "待审核"}</span>

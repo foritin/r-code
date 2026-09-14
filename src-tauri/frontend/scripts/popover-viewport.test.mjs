@@ -134,7 +134,7 @@ test("floating surfaces stay inside a very small viewport and scroll internally"
 
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "对话", exact: true }).click();
-  await page.locator(".conversation-row").filter({ hasText: "更新依赖并修复告警" }).locator(".conversation-main").click();
+  await page.locator(".conversation-row").filter({ hasText: "更新依赖并修复告警" }).locator("button.text-link").click();
   await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
 
   const modelTrigger = page.locator(".model-config-trigger");
@@ -278,7 +278,7 @@ test("long step popovers anchor to the trigger instead of clinging to the viewpo
   });
 
   await page.getByRole("button", { name: "对话", exact: true }).click();
-  await page.locator(".conversation-row").filter({ hasText: "修复任务队列并发问题" }).locator(".conversation-main").click();
+  await page.locator(".conversation-row").filter({ hasText: "修复任务队列并发问题" }).locator("button.text-link").click();
   await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
   const trigger = page.locator(".session-run-summary-trigger.step-trigger");
   await trigger.waitFor({ state: "visible" });

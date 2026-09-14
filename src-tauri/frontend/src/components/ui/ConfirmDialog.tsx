@@ -57,7 +57,7 @@ export function ConfirmDialog({
 
   return createPortal(
     <div
-      className="confirm-backdrop"
+      className="confirm-backdrop opt-confirm-backdrop"
       onPointerDown={(event) => {
         if (!busy && event.target === event.currentTarget) onCancel();
       }}
@@ -72,7 +72,7 @@ export function ConfirmDialog({
       >
         <h2 id={titleId}>{title}</h2>
         <p id={descriptionId}>{description}</p>
-        <div className="confirm-dialog-actions">
+        <div className="confirm-dialog-actions opt-actions">
           <button ref={cancelRef} type="button" className="rc-button" disabled={busy} onClick={onCancel}>
             取消
           </button>

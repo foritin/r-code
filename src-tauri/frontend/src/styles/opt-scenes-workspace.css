@@ -22,8 +22,11 @@
        * .opt-inbox 栅格列 354px（≤1279 收窄 330px）
        * .opt-inbox-columns / .opt-inbox-line 列宽 74/54/12px；
          .opt-inbox-line min-height 64px、圆角 3px；.opt-inbox-file min-height 44px
-       * .opt-file-layout 列宽 156px（.opt-editor 内 210px）；.opt-line-no min-width 32px
+       * .opt-line-no min-width 32px
        * 小箭头 chevron 图标视口 12/13px（设计稿定案，随行记录）
+   - R1c 归属裁定：.opt-editor / .opt-editor-code / .opt-file-layout /
+     .opt-panel-head 唯一定义点 = opt-room.css（T04，级联生效侧）；本文件
+     已去重不再重复定义（docs/design.md §5 已标注）。
    - .opt-home 不复制设计稿的 absolute 居中定位：.scene-home 既有 flex 居中
      即「居中浮动骨架」，宽度定案值保留（增量等价实现，回传已记录）。
    【断点】
@@ -598,28 +601,9 @@
   color: var(--warning);
 }
 
-/* ---------- P16 editor（.opt-editor / file 面板全家） ---------- */
-
-.opt-editor {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.opt-editor > .opt-panel-head {
-  padding: 0 var(--sp-9); /* 22px → 21-24 → sp-9（§1.3） */
-}
-
-.opt-file-layout {
-  display: grid;
-  grid-template-columns: 156px minmax(0, 1fr); /* 树宽定案值（文件头已注明） */
-  flex: 1;
-  min-height: 0;
-}
-
-.opt-editor > .opt-file-layout {
-  grid-template-columns: 210px minmax(0, 1fr); /* editor 树宽定案值（文件头已注明） */
-}
+/* ---------- P16 editor（file 树与代码页级件；R1c 裁定：.opt-editor /
+   .opt-editor-code / .opt-file-layout / .opt-panel-head 唯一定义点 =
+   opt-room.css（T04，级联生效侧），本文件不再重复定义） ---------- */
 
 .opt-file-tree {
   padding: var(--sp-7) var(--sp-4);
@@ -687,13 +671,6 @@
   font-size: var(--text-meta);
   line-height: var(--lh-relaxed);
   color: var(--fg-muted);
-}
-
-.opt-editor-code {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--surface-sunken); /* 代码底色统一沉底（§1.1） */
 }
 
 .opt-file-tab {

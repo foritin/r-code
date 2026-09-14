@@ -443,7 +443,7 @@
   padding: var(--sp-8); /* 20px → sp-8（§1.3） */
   overflow: auto;
   flex: 1;
-  min-height: 0;
+  min-height: 0; /* flex 列内滚动体的标准收口（flex:1 + min-height:0）；编辑器断链的真正落点在 .opt-editor-code */
 }
 
 .opt-panel-body .opt-card {
@@ -644,7 +644,7 @@
 .opt-file-layout {
   display: grid;
   grid-template-columns: 156px minmax(0, 1fr); /* 目录列 156px 定案值（文件头已登记） */
-  min-height: 0;
+  min-height: 0; /* 作为 .opt-editor flex 列的滚动体收口；grid 内部断链在 .opt-editor-code */
   flex: 1;
 }
 
@@ -724,6 +724,7 @@
   flex-direction: column;
   background: var(--surface-sunken); /* 代码底色统一沉底（design.md §1.1） */
   min-width: 0;
+  min-height: 0; /* grid item 默认可撑高，不收口则内部 pre(flex:1) 拿到全高、局部滚动失效（T-QA04 定位） */
 }
 
 .opt-file-tab {

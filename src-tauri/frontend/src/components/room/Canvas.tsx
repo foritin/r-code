@@ -2846,7 +2846,7 @@ function TerminalPanel({
 
   return (
     <div
-      className={`term-wrap opt-terminal${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
+      className={`term-wrap${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
       data-terminal-sidebar={sidebarCollapsed ? "collapsed" : "expanded"}
     >
       <div className="term-side" id={sidebarId} aria-hidden={sidebarCollapsed || undefined}>

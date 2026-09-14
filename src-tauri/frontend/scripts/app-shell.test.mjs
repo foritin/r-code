@@ -78,7 +78,7 @@ async function openProjectFiles(page, workspacePath = "D:/project/rust/r-code") 
     useAppStore.setState({ editorFile: null });
     useAppStore.getState().setScene("editor");
   }, workspacePath);
-  await page.locator(".file-workspace").waitFor({ state: "visible" });
+  await page.locator(".opt-editor").waitFor({ state: "visible" });
 }
 
 async function openKnowledgeSettings(page, tab = "memory") {
@@ -1085,10 +1085,10 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
 
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
   await page.locator("#main-content > .scene-conversations").waitFor({ state: "visible" });
-  await page.locator(".conversation-row").filter({ hasText: "修复任务队列并发问题" }).waitFor({ state: "visible" });
+  await page.locator(".opt-table tbody tr").filter({ hasText: "修复任务队列并发问题" }).waitFor({ state: "visible" });
   const conversationColors = await page.evaluate(() => {
     const statusFor = (title) => {
-      const rows = [...document.querySelectorAll(".conversation-row")];
+      const rows = [...document.querySelectorAll(".opt-table tbody tr")];
       const row = rows.find((candidate) => candidate.textContent?.includes(title));
       const status = row?.querySelector(".conversation-status i");
       if (!(status instanceof HTMLElement)) throw new Error(`missing conversation status: ${title}`);
@@ -2166,7 +2166,7 @@ test("project navigation opens its dashboard and project files without another c
   await page.locator("#main-content > .scene-dashboard").waitFor({ state: "visible" });
   await page.getByRole("heading", { name: "r-code", exact: true }).waitFor({ state: "visible" });
   await page.getByRole("button", { name: "项目文件", exact: true }).click();
-  await page.locator(".file-workspace").waitFor({ state: "visible" });
+  await page.locator(".opt-editor").waitFor({ state: "visible" });
   assert.equal(await page.getByRole("region", { name: "选择项目" }).count(), 0);
 
   await page.close();
@@ -2192,10 +2192,10 @@ test("project file preview highlights common syntax and both modes own their scr
 
   try {
     await openProjectFiles(page);
-    await page.locator(".file-tree-row").filter({ hasText: "README.md" }).click();
+    await page.locator(".opt-file-tree button").filter({ hasText: "README.md" }).click();
     await page.locator(".file-code .tok-kw").filter({ hasText: "# R-Code" }).waitFor({ state: "visible" });
-    await page.locator(".file-tree-row.folder").filter({ hasText: "src" }).click();
-    await page.locator(".file-tree-row").filter({ hasText: "main.rs" }).click();
+    await page.locator(".opt-file-tree .file-tree-folder > button").filter({ hasText: "src" }).click();
+    await page.locator(".opt-file-tree button").filter({ hasText: "main.rs" }).click();
 
     const preview = page.locator(".file-code");
     await preview.waitFor({ state: "visible" });
@@ -2250,9 +2250,9 @@ test("standalone Project Files refreshes the root and expanded folders in place"
 
   try {
     await openProjectFiles(page);
-    const sourceFolder = page.locator(".file-tree-row.folder").filter({ hasText: "src" });
+    const sourceFolder = page.locator(".opt-file-tree .file-tree-folder > button").filter({ hasText: "src" });
     await sourceFolder.click();
-    const sourceFile = page.locator(".file-tree-row").filter({ hasText: "main.rs" });
+    const sourceFile = page.locator(".opt-file-tree button").filter({ hasText: "main.rs" });
     await sourceFile.click();
     await page.locator(".file-code-preview .tok-kw").filter({ hasText: "fn" }).waitFor({ state: "visible" });
 
@@ -2290,9 +2290,9 @@ test("standalone Project Files exposes file-only actions and consumes task refer
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
   await openProjectFiles(page);
-  const sourceFolder = page.locator(".file-tree-row.folder").filter({ hasText: "src" });
+  const sourceFolder = page.locator(".opt-file-tree .file-tree-folder > button").filter({ hasText: "src" });
   await sourceFolder.click();
-  const sourceFile = page.locator(".file-tree-row").filter({ hasText: "main.rs" });
+  const sourceFile = page.locator(".opt-file-tree button").filter({ hasText: "main.rs" });
 
   await sourceFile.click({ button: "right" });
   let menu = page.getByRole("menu", { name: "文件操作" });
@@ -2597,7 +2597,7 @@ for (const viewport of [{ width: 800, height: 600 }, { width: 1200, height: 800 
     await page.goto(baseUrl, { waitUntil: "networkidle" });
     if (viewport.width < 1120) {
       await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
-      await page.locator(".conversation-main").first().click();
+      await page.locator(".opt-table tbody tr").first().locator("button.text-link").click();
     } else {
       await page.locator(".sidebar-task:visible").first().click();
     }
@@ -2727,15 +2727,15 @@ test("archived conversations remain available as read-only history", async () =>
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
 
-  const conversation = page.locator(".conversation-row").filter({ hasText: "更新依赖并修复告警" });
+  const conversation = page.locator(".opt-table tbody tr").filter({ hasText: "更新依赖并修复告警" });
   await conversation.locator(".task-actions-trigger").click();
   await page.getByRole("menuitem", { name: /归档对话/ }).click();
   await page.getByText("对话已归档", { exact: true }).waitFor({ state: "visible" });
 
   await page.getByRole("tab", { name: "已归档" }).click();
-  const archived = page.locator(".conversation-row").filter({ hasText: "更新依赖并修复告警" });
+  const archived = page.locator(".opt-table tbody tr").filter({ hasText: "更新依赖并修复告警" });
   await archived.waitFor({ state: "visible" });
-  await archived.locator(".conversation-main").click();
+  await archived.locator("button.text-link").click();
   await page.getByText("此对话已归档，只能查看历史。可在项目概览中还原，或通过右上角对话选项永久删除。").waitFor({ state: "visible" });
   assert.equal(await page.locator(".composer").count(), 0);
   await page.close();
@@ -2754,17 +2754,17 @@ test("project dashboard restores or permanently deletes archived conversations w
   const archived = page.locator(".dashboard-archived-row").filter({ hasText: "更新依赖并修复告警" });
   await archived.waitFor({ state: "visible" });
   assert.equal(
-    await page.locator(".project-activity-item").filter({ hasText: "更新依赖并修复告警" }).count(),
+    await page.locator(".opt-feed-item").filter({ hasText: "更新依赖并修复告警" }).count(),
     0,
     "archived conversation events must not remain in project activity",
   );
-  const activityLabels = await page.locator(".project-activity-item small").allTextContents();
+  const activityLabels = await page.locator(".opt-feed-item small").allTextContents();
   assert.ok(activityLabels.length <= 5, "project activity should stay intentionally short");
   assert.equal(new Set(activityLabels.map((label) => label.split(" · ")[0])).size, activityLabels.length, "each conversation should contribute only its latest key event");
 
   await archived.getByRole("button", { name: "还原", exact: true }).click();
   await page.getByText("对话已还原", { exact: true }).waitFor({ state: "visible" });
-  await page.locator(".dashboard-task-row").filter({ hasText: "更新依赖并修复告警" }).waitFor({ state: "visible" });
+  await page.locator(".opt-table tbody tr").filter({ hasText: "更新依赖并修复告警" }).waitFor({ state: "visible" });
   assert.equal(await archived.count(), 0);
 
   await page.evaluate(async () => {
@@ -2793,7 +2793,7 @@ test("desktop back and forward restore the actual visited page and project", asy
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   const back = page.getByRole("button", { name: "后退" });
   const forward = page.getByRole("button", { name: "前进" });
-  const heading = page.locator("#main-content .dashboard-header h1");
+  const heading = page.locator("#main-content .opt-page-head h1");
 
   assert.equal(await back.isDisabled(), true);
   await page.locator(".sidebar-project-head").filter({ hasText: "r-code" }).click();
@@ -3112,7 +3112,7 @@ test("clearing a project removes app records without implying disk deletion", as
   assert.equal(await page.locator(".sidebar-project").filter({ hasText: "api-server" }).count(), 0);
 
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
-  assert.equal(await page.locator(".conversation-row").filter({ hasText: "添加请求限流中间件" }).count(), 0);
+  assert.equal(await page.locator(".opt-table tbody tr").filter({ hasText: "添加请求限流中间件" }).count(), 0);
   await page.close();
 });
 
@@ -3143,7 +3143,7 @@ test("unsent Composer drafts survive scene and task switches without leaking bet
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().setScene("settings");
     });
-    await page.locator("#main-content .settings-layout").waitFor({ state: "visible" });
+    await page.locator("#main-content .opt-settings").waitFor({ state: "visible" });
     await page.evaluate(async (taskId) => {
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().openRoom(taskId);
@@ -3332,7 +3332,7 @@ test("Enter uses the selected run send mode and clears the accepted draft before
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().setScene("settings");
     });
-    await page.locator("#main-content .settings-layout").waitFor({ state: "visible" });
+    await page.locator("#main-content .opt-settings").waitFor({ state: "visible" });
     await page.evaluate(async (id) => {
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().openRoom(id);
@@ -4032,7 +4032,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
       "a configured deepseek provider must enable the customer switch without any evidence manifest");
     assert.match(
       await page
-        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator("#planning-suggestion-block .opt-field", { has: page.locator("#set-planning-suggest") })
         .locator(".hint")
         .textContent(),
       /开 = 复杂任务先询问/);
@@ -4084,7 +4084,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
       "temporarily unavailable routes must not disguise the saved preference as off");
     assert.match(
       await page
-        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator("#planning-suggestion-block .opt-field", { has: page.locator("#set-planning-suggest") })
         .locator(".hint")
         .textContent(),
       /尚未配置可用的 DeepSeek 服务/);
@@ -4106,7 +4106,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
     });
     assert.match(
       await page
-        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator("#planning-suggestion-block .opt-field", { has: page.locator("#set-planning-suggest") })
         .locator(".hint")
         .textContent(),
       /功能当前已暂停/);

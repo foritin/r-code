@@ -1,0 +1,194 @@
+{
+  "browser": "/usr/bin/chromium",
+  "errors": [],
+  "steps": {
+    "s0_shell": {
+      "appClass": "app-shell r-code-signature scene-home",
+      "appGridRows": "42px 758px",
+      "appGridCols": "272px 928px",
+      "appRect": [
+        0,
+        0,
+        1200,
+        800
+      ],
+      "mainRect": [
+        272,
+        42,
+        928,
+        758
+      ],
+      "mainChildren": [
+        {
+          "tag": "DIV",
+          "className": "scene scene-home",
+          "rect": [
+            273,
+            43,
+            927,
+            757
+          ],
+          "display": "flex"
+        }
+      ],
+      "menubarH": "42px",
+      "railW": "264px",
+      "railCurrentW": ""
+    },
+    "s1_conversations": {
+      "scene": {
+        "rect": [
+          273,
+          43,
+          927,
+          757
+        ],
+        "display": "block",
+        "visibility": "visible",
+        "overflow": "hidden auto",
+        "height": "757px"
+      },
+      "sceneAny": {
+        "rect": [
+          0,
+          0,
+          1200,
+          800
+        ],
+        "display": "grid",
+        "visibility": "visible",
+        "overflow": "hidden",
+        "height": "800px"
+      },
+      "mainChildren": [
+        {
+          "tag": "DIV",
+          "className": "scene scene-conversations",
+          "rect": [
+            273,
+            43,
+            927,
+            757
+          ],
+          "display": "block"
+        }
+      ]
+    },
+    "s2_editor": {
+      "fileWorkspace": null,
+      "sceneEditor": {
+        "rect": [
+          273,
+          43,
+          927,
+          757
+        ],
+        "display": "block",
+        "visibility": "visible",
+        "overflow": "hidden",
+        "height": "757px"
+      },
+      "sceneAny": {
+        "rect": [
+          0,
+          0,
+          1200,
+          800
+        ],
+        "display": "grid",
+        "visibility": "visible",
+        "overflow": "hidden",
+        "height": "800px"
+      }
+    },
+    "s3_dashboard": {
+      "scene": {
+        "rect": [
+          273,
+          43,
+          927,
+          757
+        ],
+        "display": "grid",
+        "visibility": "visible",
+        "overflow": "hidden",
+        "height": "757px"
+      },
+      "sceneAny": {
+        "rect": [
+          0,
+          0,
+          1200,
+          800
+        ],
+        "display": "grid",
+        "visibility": "visible",
+        "overflow": "hidden",
+        "height": "800px"
+      },
+      "mainChildren": [
+        {
+          "tag": "DIV",
+          "className": "scene scene-dashboard opt-dashboard",
+          "rect": [
+            273,
+            43,
+            927,
+            757
+          ],
+          "display": "grid"
+        }
+      ]
+    },
+    "s4_sidebar": {
+      "project": {
+        "rect": [
+          12,
+          395,
+          248,
+          176
+        ],
+        "display": "block",
+        "visibility": "visible",
+        "overflow": "visible",
+        "height": "176px"
+      },
+      "projectHead": {
+        "rect": [
+          30,
+          395,
+          202,
+          34
+        ],
+        "display": "flex",
+        "visibility": "visible",
+        "overflow": "visible",
+        "height": "34px"
+      },
+      "navItem": {
+        "rect": [
+          12,
+          164,
+          248,
+          34
+        ],
+        "display": "flex",
+        "visibility": "visible",
+        "overflow": "visible",
+        "height": "34px"
+      },
+      "sidebar": {
+        "rect": [
+          0,
+          42,
+          272,
+          758
+        ],
+        "display": "flex",
+        "visibility": "visible",
+        "overflow": "hidden",
+        "height": "758px"
+      }
+    }
+  }
+}

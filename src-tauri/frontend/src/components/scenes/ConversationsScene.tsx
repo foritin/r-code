@@ -136,20 +136,15 @@ function ConversationRow({ task, needsAttention, onChanged }: { task: Task; need
   const workspaces = useTasksStore((s) => s.workspaces);
   const openRoom = useAppStore((s) => s.openRoom);
   const visual = visualTaskState(task, detail);
-  const urgent = needsAttention || visual === "attention" || visual === "review";
-  const pillTone = urgent
-    ? " warning"
-    : visual === "stopped"
-      ? " danger"
-      : "";
+  const highlighted = needsAttention || visual === "attention";
   return (
-    <tr>
+    <tr className="conversation-row">
       <td>
-        <button className="text-link" onClick={() => openRoom(task.id)}><strong>{taskTitle(task)}</strong></button>
+        <button className="text-link conversation-main" onClick={() => openRoom(task.id)}><strong>{taskTitle(task)}</strong></button>
         <small>{taskActivity(task, detail)}</small>
       </td>
       <td>{workspaceName(task.workspace_path, workspaces)}</td>
-      <td><span className={`opt-pill${pillTone}`}>{taskStateLabel(task, detail)}</span></td>
+      <td><span className={`conversation-status ${visual}`}><i /></span><span className={`conversation-state${highlighted ? " needs" : ""}`}>{taskStateLabel(task, detail)}</span></td>
       <td><time>{elapsedMinutes(task.updated_at)}</time></td>
       <td className="opt-last"><TaskActionsMenu task={task} detail={detail} onChanged={onChanged} /></td>
     </tr>

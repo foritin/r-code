@@ -52,6 +52,7 @@ import {
   TimelineContextEvent,
   TimelineToolGroup,
 } from "./TimelineActivity";
+import { SubagentAvatar } from "./SubagentIdentity";
 import {
   TimelinePresentationCache,
   type TimelineDisplayItem,
@@ -1332,6 +1333,37 @@ const TimelineSubagentTrace = memo(function TimelineSubagentTrace({
             onInspectSubagent={onInspectSubagent}
           />
         ))}
+      </div>
+      {/* R2 定稿保留检查芯片（design/renders/conversation.html 仍含 timeline-subagent-chip；
+          e2e 以芯片为检查入口）：轨迹行之下原位恢复芯片行，样式沿用既有 keep 层。 */}
+      <div className="timeline-subagent-details">
+        <div className="timeline-subagent-chips">
+          {item.agents.map((agent, index) => {
+            const inspectable = Boolean(agent.runId && onInspectSubagent);
+            const selected = Boolean(agent.runId && selectedSubagentId === agent.runId);
+            return (
+              <button
+                key={`chip-${agent.id}`}
+                type="button"
+                className={`timeline-subagent-chip status-${agent.status}${selected ? " selected" : ""}`}
+                disabled={!inspectable}
+                aria-pressed={inspectable ? selected : undefined}
+                aria-label={`${agent.label}，${SUBAGENT_STATUS_TEXT[agent.status]}`}
+                title={[agent.goal, agent.summary, agent.model].filter(Boolean).join(" · ") || undefined}
+                onClick={() => agent.runId && onInspectSubagent?.(agent.runId)}
+              >
+                <SubagentAvatar
+                  index={index}
+                  identity={agent.id}
+                  runtimeKind={agent.runtimeKind}
+                  size="xs"
+                  className="timeline-subagent-avatar"
+                />
+                <span>{agent.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
