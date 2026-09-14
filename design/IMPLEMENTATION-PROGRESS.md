@@ -27,7 +27,14 @@
 | W0 | T01 设计系统基础层（tokens 增量 + opt.css + 5 starter + main.tsx import） | 寇豆码（工位 A） | ✅ 完成（一次打回后复核通过：tokens 六项独立取证、opt-*.css 零字面色、tsc 0 错误） |
 | W1 | T02 Shell 外壳→工位A；T03 工作区场景→工位B；T04 会话画布→工位C（并行） | A/B/C | ✅ 收口通过（tsc 0 错误、keep 页零 diff、零字面色全过；T03 曾因 UNC 丢盘打回重做一次；T04 超 800 行红线主动停手） |
 | W2 | T05 设置中心→工位A（含 T05b：ui/Drawer、ConfirmDialog className 透传特批）；T06 搜索叠层→工位B；T07 P07-P11 消费接入→工位C（T04 拆分增量，架构师补卡） | A/B/C | ✅ 收口通过（tsc 0 错误、build exit 0 2.12s；⚠️ bundle-budget 警告：CSS 529.4KiB 超预算 527.3KiB，因新增 ~3700 行 opt-*.css，待定是否调预算或瘦身） |
-| QA | T-QA01 集成验证（对照 png/dark、png/light；方案A：测试归 QA） | 严过关 | 🔄 进行中 |
+| QA | T-QA01 → T-QA04 全链验证 | 严过关 | ✅ 完成 |
+
+## 最终状态（2026-09-14 交付）
+
+- **分支**：feature/design-r2-implementation，3 个 commit：`d097333`（主体落地）→ `b20f431`（QA 返工轮）→ `b2a311c`（清理）
+- **e2e 回归**：25 例 R2 引入回归全部清零（16 例选择器失效→QA 更新测试定位器；9 例真实缺陷→工位修复）；app-shell 96/96、popover 4/4、run-guard 1/1、terminal 3/3、runs-panel/enhanced-review/m2-03-a6 全绿、design-impl 6/6
+- **遗留（非本分支，main 同样失败）**：harness-plugins ×1、i18n-hardcoded ×1、m1-03 ×1、room-file-activity ×2、send-mode-switch ×1、偶发 ×1
+- **契约沉淀**：docs/design.md（§5 归属标注：opt-editor 家族唯一归 opt-room.css）、双类并存模式（旧类+opt-* 类并列，新旧测试选择器共存）、conversation-status 四态语义恢复
 
 ## 契约追认与定案记录（W1/W2 期间）
 
