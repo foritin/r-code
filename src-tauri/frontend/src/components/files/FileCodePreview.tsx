@@ -105,7 +105,7 @@ export function FileCodePreview({
               ref={active ? activeLineRef : undefined}
               key={lineNumber}
             >
-              <i aria-hidden="true">{lineNumber}</i>
+              <i className="opt-line-no" aria-hidden="true">{lineNumber}</i>
               <span className="file-code-text">
                 {line.length
                   ? line.map((token, tokenIndex) => (

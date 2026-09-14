@@ -88,19 +88,19 @@ function PermissionCard({
     || t("approvals.currentAction");
   const canPersist = canPersistPermissionGrant(permission.risk_level);
   return (
-    <section className="perm-card" role="region" aria-labelledby={headingId} aria-describedby={scopeId}>
+    <section className="perm-card opt-card" role="region" aria-labelledby={headingId} aria-describedby={scopeId}>
       <div className="perm-head">
-        <span className="chip risk" title={permissionRiskLabel(permission.risk_level)}>
+        <span className="chip risk opt-pill warning" title={permissionRiskLabel(permission.risk_level)}>
           {permission.risk_level} · {permissionRiskLabel(permission.risk_level)}
         </span>
         <span className="perm-tool" id={headingId}>{permission.tool_name}</span>
         <span className={"perm-owner owner-" + attribution.kind}>{attribution.label}</span>
-        <span className="perm-hint">{t("approvals.waitingLabel")}</span>
+        <span className="perm-hint opt-inline-state approval">{t("approvals.waitingLabel")}</span>
       </div>
-      <div className="perm-summary" title={permission.input_summary}>
+      <div className="perm-summary opt-mono" title={permission.input_summary}>
         {permission.input_summary}
       </div>
-      <div className="perm-scope" id={scopeId}>
+      <div className="perm-scope opt-help" id={scopeId}>
         {canPersist
           ? t("approvals.persistentScope", {
               tool: permission.tool_name,
@@ -109,16 +109,16 @@ function PermissionCard({
             })
           : t("approvals.singleUseScope", { risk: permission.risk_level })}
       </div>
-      <div className="perm-actions">
-        <button type="button" className="btn accent sm" disabled={busy} onClick={() => void onDecide(permission.id, "allow")}>
+      <div className="perm-actions opt-actions">
+        <button type="button" className="btn accent sm opt-button primary" disabled={busy} onClick={() => void onDecide(permission.id, "allow")}>
           {t("approvals.allowOnce")}
         </button>
         {canPersist && (
-          <button type="button" className="btn sm" disabled={busy} onClick={() => void onDecide(permission.id, "allow_always")}>
+          <button type="button" className="btn sm opt-button" disabled={busy} onClick={() => void onDecide(permission.id, "allow_always")}>
             {t("approvals.allowAlways")}
           </button>
         )}
-        <button type="button" className="btn danger sm" disabled={busy} onClick={() => void onDecide(permission.id, "deny")}>
+        <button type="button" className="btn danger sm opt-button danger" disabled={busy} onClick={() => void onDecide(permission.id, "deny")}>
           {t("approvals.deny")}
         </button>
       </div>

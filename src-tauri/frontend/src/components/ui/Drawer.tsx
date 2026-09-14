@@ -15,6 +15,8 @@ interface Props {
   /** 保存/测试进行中时锁定关闭入口（Esc、背板、按钮一并禁用）。 */
   closeDisabled?: boolean;
   footer?: ReactNode;
+  /** 追加到面板根元素的设计系统类（T05b 特批透传，默认为空不影响既有样式）。 */
+  className?: string;
   children: ReactNode;
 }
 
@@ -31,6 +33,7 @@ export function Drawer({
   onClose,
   closeDisabled = false,
   footer,
+  className,
   children,
 }: Props) {
   const titleId = useId();
@@ -69,7 +72,7 @@ export function Drawer({
       />
       <div
         ref={panelRef}
-        className="drawer-panel"
+        className={`drawer-panel${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

@@ -563,9 +563,8 @@ export function HomeScene() {
 
   return (
     <div className="scene scene-home">
-      <div className="home-stage">
-        <div className="home-intro">
-          <div className="home-eyebrow">
+      <div className="opt-home">
+        <div className="opt-eyebrow">
             <span className={`status-dot${engineReady ? " ready" : ""}`} />
             {engineReady ? `新任务 · ${agentEngine === "codex" ? "CODEX" : "R-CODE"}` : "连接 AGENT"}
             {needsYou.length > 0 && (
@@ -576,34 +575,13 @@ export function HomeScene() {
           </div>
 
           <h1>从结果开始，而不是从工具开始。</h1>
-          <p className="home-subtitle">
+          <p>
             {engineReady
               ? `描述你要完成的事情。${agentEngine === "codex" ? "Codex CLI" : "R-Code"} 会在当前权限边界内执行。`
               : agentEngine === "codex"
                 ? "Codex 主 Agent 需要本机 CLI、登录状态和一个已附加的工作区。"
                 : "连接任意兼容模型服务后，直接描述目标；工作区仍可在需要读取或修改代码时再附加。"}
-          </p>
-
-          {engineReady && (
-            <div className="home-suggestions" aria-label="任务示例">
-              <button className="home-suggestion" type="button" onClick={() => setGoal("定位失败的测试，说明根因并修复。")}>
-                <IconTerminal width={15} height={15} />
-                <span>定位失败的测试，说明根因并修复</span>
-                <IconArrowRight width={15} height={15} />
-              </button>
-              <button className="home-suggestion" type="button" onClick={() => setGoal("解释模块调用路径并标出关键文件。")}>
-                <IconProjects width={15} height={15} />
-                <span>解释模块调用路径并标出关键文件</span>
-                <IconArrowRight width={15} height={15} />
-              </button>
-              <button className="home-suggestion" type="button" onClick={() => setGoal("审核未提交变更并指出行为回归。")}>
-                <IconShield width={15} height={15} />
-                <span>审核未提交变更并指出行为回归</span>
-                <IconArrowRight width={15} height={15} />
-              </button>
-            </div>
-          )}
-        </div>
+        </p>
 
         {hasRecovery && recovery && (
           <StatusBar
@@ -903,6 +881,31 @@ export function HomeScene() {
             {error ?? providerError}
           </StatusBar>
         )}
+
+        {engineReady && (
+          <div className="opt-suggestions" aria-label="任务示例">
+            <button className="opt-suggestion" type="button" onClick={() => setGoal("定位失败的测试，说明根因并修复。")}>
+              <IconTerminal width={15} height={15} />
+              <span>定位失败的测试，说明根因并修复</span>
+              <IconArrowRight width={15} height={15} />
+            </button>
+            <button className="opt-suggestion" type="button" onClick={() => setGoal("解释模块调用路径并标出关键文件。")}>
+              <IconProjects width={15} height={15} />
+              <span>解释模块调用路径并标出关键文件</span>
+              <IconArrowRight width={15} height={15} />
+            </button>
+            <button className="opt-suggestion" type="button" onClick={() => setGoal("审核未提交变更并指出行为回归。")}>
+              <IconShield width={15} height={15} />
+              <span>审核未提交变更并指出行为回归</span>
+              <IconArrowRight width={15} height={15} />
+            </button>
+          </div>
+        )}
+
+        <div className="opt-home-foot">
+          <span>示例仅用于占位填充，点击可直接填入。</span>
+          <span>Enter 发送 · Shift + Enter 换行</span>
+        </div>
       </div>
 
     </div>

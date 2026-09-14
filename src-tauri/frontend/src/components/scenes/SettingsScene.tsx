@@ -722,12 +722,12 @@ export function SettingsScene() {
   return (
     <div className="scene">
       <div className="scene-scroll">
-        <div className="page-head">
+        <div className="opt-page-head">
           <h1>{t("settings.pageTitle")}</h1>
-          <div className="settings-search">
-            <IconSearch width={14} height={14} aria-hidden="true" />
+          <div className="opt-settings-topline opt-search-field">
+            <IconSearch width={16} height={16} aria-hidden="true" />
             <input
-              className="input settings-search-input"
+              className="settings-search-input"
               type="search"
               value={searchQuery}
               placeholder="搜索设置项（如：默认服务、OCR、子代理）"
@@ -769,8 +769,8 @@ export function SettingsScene() {
           </div>
         </div>
 
-        <div className="settings-layout">
-          <nav className="settings-nav" role="tablist" aria-label={t("settings.categoriesLabel")}>
+        <div className="opt-settings">
+          <nav className="opt-settings-nav" role="tablist" aria-label={t("settings.categoriesLabel")}>
             {settingsPanes.map((item, index) => (
               <button
                 key={item.key}
@@ -790,14 +790,14 @@ export function SettingsScene() {
           </nav>
 
           <div
-            className={`settings-detail${activePane === "agents" ? " settings-agent-detail" : ""}`}
+            className={`opt-settings-main${activePane === "agents" ? " settings-agent-detail" : ""}`}
             id={`settings-panel-${pane.key}`}
             role="tabpanel"
             aria-labelledby={`settings-tab-${pane.key}`}
             tabIndex={0}
           >
-            <header className="settings-detail-head">
-              {activePane === "agents" && <span className="settings-detail-eyebrow">AGENT</span>}
+            <header className="opt-page-head">
+              {activePane === "agents" && <span className="opt-eyebrow">AGENT</span>}
               <h2>{pane.label}</h2>
               <p>{pane.description}</p>
             </header>
@@ -806,7 +806,7 @@ export function SettingsScene() {
               <div className="errbar" role="alert">
                 读取配置失败：{configErr}
                 <span className="spacer" />
-                <button className="btn" onClick={() => void loadConfig()}>
+                <button className="opt-button" onClick={() => void loadConfig()}>
                   重试
                 </button>
               </div>
@@ -819,7 +819,7 @@ export function SettingsScene() {
             )}
 
             {activePane === "providers" && (
-              <div className="settings-sheet">
+              <div className="opt-content">
                 {config ? (
                   <>
                     <ProviderSection config={config} providerStatus={providerStatus} availability={modelAvailabilitySnapshot} reload={loadConfig} onOpenGuide={setOpenGuide} />
@@ -832,7 +832,7 @@ export function SettingsScene() {
             )}
 
             {activePane === "appearance" && (
-              <div className="settings-preferences">
+              <div className="opt-content settings-preferences">
                 <LanguageSettingsSection />
                 <AppearanceSection />
                 <CompanionSection />
@@ -840,13 +840,13 @@ export function SettingsScene() {
             )}
 
             {activePane === "notifications" && (
-              <div className="settings-preferences">
+              <div className="opt-content settings-preferences">
                 <NativeNotificationSettings />
               </div>
             )}
 
             {activePane === "updates" && (
-              <div className="settings-preferences">
+              <div className="opt-content settings-preferences">
                 <ApplicationUpdaterSettings />
               </div>
             )}
@@ -858,7 +858,7 @@ export function SettingsScene() {
             {activePane === "lifecycle" && <LifecycleSection />}
 
             {activePane === "tools" && (
-              <div className="settings-sheet settings-tools-sheet">
+              <div className="opt-content settings-tools-sheet">
                 <ExecutionEnvCard />
                 <McpPanel />
               </div>
@@ -867,7 +867,7 @@ export function SettingsScene() {
             {activePane === "knowledge" && <KnowledgeSettingsPane />}
 
             {activePane === "agents" && (
-              <div className="settings-sheet settings-orchestration-sheet">
+              <div className="opt-content settings-orchestration-sheet">
                 {config ? (
                   <OrchestrationSection
                     config={config}
@@ -885,7 +885,7 @@ export function SettingsScene() {
             )}
 
             {activePane === "diagnostics" && (
-              <div className="settings-sheet">
+              <div className="opt-content">
                 {config && <RequestAuditSection config={config} reload={loadConfig} />}
                 {config && <LogLevelSection config={config} reload={loadConfig} />}
                 <LogSection />
@@ -894,7 +894,7 @@ export function SettingsScene() {
             )}
 
             {activePane === "subagents" && (
-              <div className="settings-sheet subagent-configuration-sheet">
+              <div className="opt-content subagent-configuration-sheet">
                 <SubagentProvidersPanel
                   providerKinds={providerKinds}
                   refreshSignal={subagentRefreshSignal}
@@ -1356,13 +1356,13 @@ function ProviderSection({
     || pendingVars.length > 0;
 
   return (
-    <section className="settings-block provider-settings" id="providers-block">
-      <div className="section-heading">
+    <section className="opt-card provider-settings" id="providers-block">
+      <div className="opt-card-head">
         <div>
           <h3>对话模型</h3>
           <p className="desc">R-Code 对话使用的模型服务。访问密钥只保存在当前设备的安全凭据存储中，界面不会回显已保存内容。</p>
         </div>
-        <div className="section-heading-actions">
+        <div className="opt-actions">
           <button
             type="button"
             className="guide-link"
@@ -1372,7 +1372,7 @@ function ProviderSection({
             指引手册 <span aria-hidden="true">→</span>
           </button>
           <button
-            className="btn"
+            className="opt-button"
             disabled={busy}
             onClick={startNewProvider}
           >
@@ -1491,6 +1491,7 @@ function ProviderSection({
       </div>
 
       <Drawer
+        className="opt-drawer"
         open={editorOpen && (drafting || selectedProvider != null)}
         title={editing ? providerLabel(selectedProvider ?? "") : "新建服务"}
         subtitle={editing ? "编辑服务 · 更改保存后立即生效" : "选择预设，填入密钥后保存即可开始对话"}
@@ -1507,7 +1508,7 @@ function ProviderSection({
             )}
             {editing && selectedProvider && selectedProvider !== configDefault && (
               <button
-                className="btn"
+                className="opt-button"
                 disabled={busy || !providerStatus[selectedProvider]?.ready}
                 title="设为默认后，新对话将使用这项服务；已开始的对话不受影响"
                 onClick={() => selectProvider(selectedProvider)}
@@ -1516,10 +1517,10 @@ function ProviderSection({
               </button>
             )}
             {drafting && (
-              <button className="btn" disabled={busy} onClick={cancelDraft}>取消</button>
+              <button className="opt-button" disabled={busy} onClick={cancelDraft}>取消</button>
             )}
             <span className="spacer" />
-            <button className="btn accent" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并设为默认</button>
+            <button className="opt-button primary" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并设为默认</button>
           </>
         }
       >
@@ -1599,7 +1600,7 @@ function ProviderSection({
               <div className="provider-form-field">
                 <label htmlFor="set-profile-name">配置名称</label>
                 <input id="set-profile-name"
-                  className="input"
+                  className="opt-input"
                   value={profileName}
                   readOnly={Boolean(editing)}
                   placeholder="例如：DeepSeek 工作账户"
@@ -1613,7 +1614,7 @@ function ProviderSection({
                   <span className={credential?.configured ? "saved" : undefined}>{credentialLabel}</span>
                 </div>
                 <input id="set-api-key"
-                  className="input"
+                  className="opt-input"
                   type="password"
                   autoComplete="off"
                   placeholder={credential?.configured ? "留空则保留当前密钥" : "粘贴访问密钥"}
@@ -1759,7 +1760,7 @@ function ProviderSection({
                 <div className="provider-form-field provider-form-field-wide">
                   <label htmlFor="set-base-url">接口地址</label>
                   <input id="set-base-url"
-                    className="input"
+                    className="opt-input"
                     value={fields.base_url}
                     placeholder="https://api.example.com/v1"
                     onChange={(event) => mutateFields((value) => ({ ...value, base_url: event.target.value }))}
@@ -1828,7 +1829,7 @@ function ProviderSection({
                 <div className="provider-form-field provider-form-field-wide">
                   <label htmlFor="set-protocol">线路协议 <InfoTip label="线路协议说明">协议决定请求体形状与计费线路：同一厂商的不同入口常是不同协议（如火山 /api/coding 是 Anthropic、/api/coding/v3 是 OpenAI）。切换接口线路时协议会一起切换。</InfoTip></label>
                   <select id="set-protocol"
-                    className="input"
+                    className="opt-input"
                     disabled={busy}
                     value={fields.protocol}
                     onChange={(event) =>
@@ -1868,7 +1869,7 @@ function ProviderSection({
                 <div className="provider-form-field">
                   <label htmlFor="set-max-tokens">每轮最大输出</label>
                   <input id="set-max-tokens"
-                    className="input"
+                    className="opt-input"
                     inputMode="numeric"
                     value={fields.max_tokens}
                     disabled={maxOutputLocked}
@@ -1899,7 +1900,7 @@ function ProviderSection({
                 <div className="provider-form-field">
                   <label htmlFor="set-temperature">随机性</label>
                   <input id="set-temperature"
-                    className="input"
+                    className="opt-input"
                     inputMode="decimal"
                     value={fields.temperature}
                     onChange={(event) => mutateFields((value) => ({ ...value, temperature: event.target.value }))}
@@ -1919,6 +1920,7 @@ function ProviderSection({
         </Drawer>
 
       <ConfirmDialog
+        className="opt-confirm"
         open={discard != null}
         title="放弃未保存的更改？"
         description="抽屉里有尚未保存的修改，继续将丢弃这些内容。"
@@ -2063,7 +2065,7 @@ function ImageUnderstandingSection({
   };
 
   return (
-    <section className="settings-block image-understanding-block" id="image-understanding-block">
+    <section className="opt-card image-understanding-block" id="image-understanding-block">
       <div className="block-title-row">
         <h3>图片理解 <InfoTip label="图片理解说明">辅助引擎只服务文本主模型：主模型目录确认多模态时原图直发，不经本机 OCR 或视觉模型。OCR 只提取文字（离线免费）；视觉模型理解整张图并生成描述（消耗调用）。</InfoTip></h3>
         <button
@@ -2127,11 +2129,11 @@ function ImageUnderstandingSection({
             </p>
           ) : (
             <>
-              <div className="field">
+              <div className="opt-field">
                 <label htmlFor="set-image-provider">服务</label>
                 <select
                   id="set-image-provider"
-                  className="input"
+                  className="opt-input"
                   value={configuredProvider}
                   disabled={busy != null || engine !== "model"}
                   onChange={(event) => selectProvider(event.target.value)}
@@ -2150,11 +2152,11 @@ function ImageUnderstandingSection({
                 </select>
                 <span className="hint">列出全部已配置服务；未就绪的服务需先在上方补全密钥。</span>
               </div>
-              <div className="field">
+              <div className="opt-field">
                 <label htmlFor="set-image-model">模型</label>
                 <select
                   id="set-image-model"
-                  className="input"
+                  className="opt-input"
                   value={modelValue}
                   disabled={busy != null || !selected || engine !== "model"}
                   onChange={(event) => void save("model", event.target.value || null)}
@@ -2258,7 +2260,7 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
   };
 
   return (
-    <section className="settings-block" id="planning-suggestion-block">
+    <section className="opt-card" id="planning-suggestion-block">
       <div className="block-title-row">
         <h3>复杂任务先建议制定计划</h3>
         <button
@@ -2275,7 +2277,7 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
         主动弹出，仍可随时手动选择 Plan 模式。只对使用 DeepSeek 服务的任务生效，
         无需把 DeepSeek 设为默认服务。
       </p>
-      <div className="field">
+      <div className="opt-field">
         <label htmlFor="set-planning-suggest">复杂任务先建议制定计划 <InfoTip label="开关效果说明">开启后 DeepSeek 在识别到复杂任务时询问一次"先列计划还是直接继续"；每个任务最多一次，拒绝后本任务不再弹出。按任务实际使用的服务生效，无需把 DeepSeek 设为默认。</InfoTip></label>
         <input
           id="set-planning-suggest"
@@ -2288,7 +2290,7 @@ function PlanningSuggestionCard({ config, reload, onOpenGuide }: {
         />
         <span className="hint">{availabilityHint}</span>
       </div>
-      {err ? <p className="field-error" role="alert">{err}</p> : null}
+      {err ? <p className="opt-field-error" role="alert">{err}</p> : null}
       <AnchoringToggle config={config} reload={reload} status={status} busy={busy} setBusy={setBusy} />
     </section>
   );
@@ -2332,7 +2334,7 @@ function AnchoringToggle({ config, reload, status, busy, setBusy }: {
   };
 
   return (
-    <div className="field" id="planning-anchoring-field">
+    <div className="opt-field" id="planning-anchoring-field">
       <label htmlFor="set-planning-anchoring">
         DeepSeek Plan 锚定
         <InfoTip label="锚定效果说明">规划时仅保留必要的只读工具和上下文；批准实施后恢复当前任务的全部可用能力。开关只影响之后创建的计划；活动计划的设置在创建时已冻结。</InfoTip>
@@ -2347,7 +2349,7 @@ function AnchoringToggle({ config, reload, status, busy, setBusy }: {
         onChange={(event) => void toggle(event.target.checked)}
       />
       <span className="hint anchoring-hint">{hint}</span>
-      {err ? <p className="field-error" role="alert">{err}</p> : null}
+      {err ? <p className="opt-field-error" role="alert">{err}</p> : null}
     </div>
   );
 }
@@ -2400,15 +2402,15 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
 
   return (
     <>
-      <section className="settings-block" id="orchestration-main-agent">
+      <section className="opt-card" id="orchestration-main-agent">
         <h3>主 Agent</h3>
         <p className="desc">默认值只影响新会话。每个会话都能在输入区单独切换，运行中不会静默换引擎。</p>
         {err && <div className="errbar" role="alert">保存编排策略失败：{err}</div>}
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="set-default-agent">新会话默认</label>
           <select
             id="set-default-agent"
-            className="input"
+            className="opt-input"
             value={policy.default_agent_engine}
             disabled={busy != null}
             onChange={(event) => void save("default_agent_engine", event.target.value)}
@@ -2422,14 +2424,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
 
       {codexRuntime}
 
-      <section className="settings-block" id="orchestration-delegation">
+      <section className="opt-card" id="orchestration-delegation">
         <h3>委派路由</h3>
         <p className="desc">选择不同复杂度任务的首选执行者；Codex 不可用时仍会保留清晰的回退原因。</p>
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="set-delegation-router">复杂度策略</label>
           <select
             id="set-delegation-router"
-            className="input"
+            className="opt-input"
             value={policy.delegation_router}
             disabled={busy != null}
             onChange={(event) => void save("delegation_router", event.target.value)}
@@ -2440,7 +2442,7 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             <option value="manual">仅显式选择</option>
           </select>
         </div>
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="set-cross-agent">允许 Codex 子代理</label>
           <input
             id="set-cross-agent"
@@ -2455,14 +2457,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
         </div>
       </section>
 
-      <section className="settings-block" id="orchestration-quality">
+      <section className="opt-card" id="orchestration-quality">
         <h3>质量复核</h3>
         <p className="desc">默认关闭以避免额外延迟和模型消耗；开启后，运行阶段、复核者和轮次都会明确显示。</p>
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="set-quality-loop">触发方式</label>
           <select
             id="set-quality-loop"
-            className="input"
+            className="opt-input"
             value={policy.quality_loop}
             disabled={busy != null}
             onChange={(event) => void save("quality_loop", event.target.value)}
@@ -2472,11 +2474,11 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             <option value="always">始终复核</option>
           </select>
         </div>
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="set-quality-reviewer">复核者</label>
           <select
             id="set-quality-reviewer"
-            className="input"
+            className="opt-input"
             value={policy.quality_reviewer}
             disabled={busy != null || policy.quality_loop === "off"}
             onChange={(event) => void save("quality_reviewer", event.target.value)}
@@ -2486,11 +2488,11 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             <option value="codex">Codex</option>
           </select>
         </div>
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="set-review-rounds">修订上限</label>
           <select
             id="set-review-rounds"
-            className="input"
+            className="opt-input"
             value={policy.max_review_rounds}
             disabled={busy != null || policy.quality_loop === "off"}
             onChange={(event) => void save("max_review_rounds", Number(event.target.value))}
@@ -2504,7 +2506,7 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
 
       <PlanningSuggestionCard config={config} reload={reload} onOpenGuide={onOpenGuide} />
 
-      <section className="settings-block" id="orchestration-run-budget">
+      <section className="opt-card" id="orchestration-run-budget">
         <h3>运行护栏</h3>
         <p className="desc">
           宿主侧硬上限与停止信号：工具轮数、运行时长、思考量、同错连败、零进展、变更范围发散和测试连败
@@ -2513,14 +2515,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
         <div className="orchestration-budget-grid">
           <div className="orchestration-budget-group" role="group" aria-labelledby="orchestration-budget-execution">
             <h4 id="orchestration-budget-execution">执行上限</h4>
-            <div className="field">
+            <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-rounds">工具轮数上限</label>
             <InfoTip label="工具轮数上限说明">默认 60；模型回合产出工具调用即计 1 轮。</InfoTip>
           </div>
           <input
             id="set-budget-rounds"
-            className="input"
+            className="opt-input"
             type="number"
             min={4}
             max={200}
@@ -2530,14 +2532,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.max_tool_rounds", Number(event.target.value))}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-seconds">运行时长上限（秒）</label>
             <InfoTip label="运行时长上限说明">默认 14400（4 小时）；超时前仍会先做收尾总结。</InfoTip>
           </div>
           <input
             id="set-budget-seconds"
-            className="input"
+            className="opt-input"
             type="number"
             min={300}
             max={86_400}
@@ -2547,14 +2549,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.max_run_seconds", Number(event.target.value))}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-reasoning">思考量上限（字符）</label>
             <InfoTip label="思考量上限说明">默认 120000；无流式用量时按 4 字符/token 估算。</InfoTip>
           </div>
           <input
             id="set-budget-reasoning"
-            className="input"
+            className="opt-input"
             type="number"
             min={20_000}
             max={4_000_000}
@@ -2564,14 +2566,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.reasoning_budget_chars", Number(event.target.value))}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-same-error">同一错误连败上限</label>
             <InfoTip label="同一错误连败上限说明">默认 3；按「工具名 + 稳定参数 + 错误码」识别同一错误，成功即清零。</InfoTip>
           </div>
           <input
             id="set-budget-same-error"
-            className="input"
+            className="opt-input"
             type="number"
             min={1}
             max={10}
@@ -2581,14 +2583,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.same_error_limit", Number(event.target.value))}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-no-progress">零进展轮数上限</label>
             <InfoTip label="零进展轮数上限说明">默认 24；连续没有成功修改或通过测试的轮次达到上限即停。</InfoTip>
           </div>
           <input
             id="set-budget-no-progress"
-            className="input"
+            className="opt-input"
             type="number"
             min={2}
             max={200}
@@ -2601,14 +2603,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
           </div>
           <div className="orchestration-budget-group" role="group" aria-labelledby="orchestration-budget-scope">
             <h4 id="orchestration-budget-scope">范围与恢复</h4>
-            <div className="field">
+            <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-diff-files">修改文件数上限</label>
             <InfoTip label="修改文件数上限说明">默认 60；超过即视为变更范围发散并停止。</InfoTip>
           </div>
           <input
             id="set-budget-diff-files"
-            className="input"
+            className="opt-input"
             type="number"
             min={1}
             max={1_000}
@@ -2618,14 +2620,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.diff_file_limit", Number(event.target.value))}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-diff-bytes">累计变更字节上限</label>
             <InfoTip label="累计变更字节上限说明">默认 262144（256 KiB）；按 old+new 内容长度累计。</InfoTip>
           </div>
           <input
             id="set-budget-diff-bytes"
-            className="input"
+            className="opt-input"
             type="number"
             min={65_536}
             max={1_073_741_824}
@@ -2635,14 +2637,14 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.diff_byte_limit", Number(event.target.value))}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-test-fails">测试连败上限</label>
             <InfoTip label="测试连败上限说明">默认 3；覆盖 cargo/pytest/npm/pnpm/yarn/go/dotnet 测试命令。</InfoTip>
           </div>
           <input
             id="set-budget-test-fails"
-            className="input"
+            className="opt-input"
             type="number"
             min={1}
             max={10}
@@ -2652,7 +2654,7 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.test_fail_limit", Number(event.target.value))}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-replay">循环重放检测</label>
             <InfoTip label="循环重放检测说明">连续 3 轮工具调用与成败形态完全一致时停止。失败重试由同错连败统计；触发后先做一次无工具收尾总结再结束，改动保留。</InfoTip>
@@ -2667,7 +2669,7 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
             onChange={(event) => void save("run_budget.replay_detection", event.target.checked)}
           />
         </div>
-        <div className="field">
+        <div className="opt-field">
           <div className="orchestration-budget-label">
             <label htmlFor="set-budget-checkpoint">绿灯 git checkpoint</label>
             <InfoTip label="绿灯 git checkpoint 说明">测试全绿后用 git stash 快照；审核页可一键回滚到最近绿灯，untracked 文件不回滚。</InfoTip>
@@ -2686,7 +2688,7 @@ function OrchestrationSection({ config, reload, onOpenGuide, codexRuntime }: {
         </div>
       </section>
 
-      <section className="settings-block" id="orchestration-skills">
+      <section className="opt-card" id="orchestration-skills">
         <h3>内置编排能力</h3>
         <div className="orchestration-cards">
           {skills.map((skill) => (
@@ -2722,14 +2724,14 @@ function RequestAuditSection({ config, reload }: { config: AppConfig; reload: ()
   };
 
   return (
-    <section className="settings-block" id="request-audit-block">
+    <section className="opt-card" id="request-audit-block">
       <h3>请求构成审计</h3>
       <p className="desc">
         开启后，每个会话发给模型的请求信封（工具清单、托管工具、输出上限）会写入旁路审计文件，
         用于核对请求构成；正式的会话记录不受影响。对新开始的会话生效。
       </p>
       {err && <div className="errbar" role="alert">{err}</div>}
-      <div className="field">
+      <div className="opt-field">
         <label htmlFor="set-request-audit">旁路审计</label>
         <input
           id="set-request-audit"
@@ -2761,13 +2763,13 @@ function LogLevelSection({ config, reload }: { config: AppConfig; reload: () => 
   };
 
   return (
-      <section className="settings-block" id="log-level-block">
+      <section className="opt-card" id="log-level-block">
       <h3>日志记录</h3>
       {err && <div className="errbar" role="alert">{err}</div>}
-      <div className="field">
+      <div className="opt-field">
         <label htmlFor="set-log-level">记录级别</label>
         <select id="set-log-level"
-          className="input"
+          className="opt-input"
           value={config.log_level ?? "info"}
           onChange={(e) => void setLevel(e.target.value)}
         >
@@ -2795,8 +2797,8 @@ function AppearanceSection() {
   ];
 
   return (
-    <section className="preference-section preference-appearance" id="appearance-block" aria-labelledby="appearance-heading">
-      <div className="preference-section-heading">
+    <section className="opt-card preference-section preference-appearance" id="appearance-block" aria-labelledby="appearance-heading">
+      <div className="opt-card-head preference-section-heading">
         <div>
           <h3 id="appearance-heading">界面主题</h3>
           <p>让工作区保持舒适的明暗关系，其他视觉细节沿用系统设计。</p>
@@ -2867,7 +2869,7 @@ function CompanionSection() {
   };
 
   return (
-    <section className="preference-section preference-companion" id="companion-block" aria-labelledby="companion-heading">
+    <section className="opt-card preference-section preference-companion" id="companion-block" aria-labelledby="companion-heading">
       <header className="companion-preference-head">
         <div>
           <h3 id="companion-heading">R-Code 初音小助手</h3>
@@ -2936,7 +2938,7 @@ function CompanionSection() {
           </div>
           <select
             id="set-companion-motion"
-            className="input preference-select"
+            className="opt-input preference-select"
             value={motion}
             disabled={!enabled}
             onChange={(event) => setMotion(event.target.value as CompanionMotion)}
@@ -3003,10 +3005,10 @@ function LogSection() {
   }, [logs]);
 
   return (
-    <section className="settings-block" id="log-section">
+    <section className="opt-card" id="log-section">
       <h3>诊断日志</h3>
       <p className="desc">当前进程与近期历史会实时汇合；日志按日滚动，固定保留最近 7 天。</p>
-      <div className="field">
+      <div className="opt-field">
         <div className="chips" role="radiogroup" aria-label="日志级别过滤">
           {LOG_FILTERS.map((l) => (
             <button
@@ -3075,12 +3077,12 @@ function SupportSection() {
   };
 
   return (
-    <section className="settings-block" id="support-block">
+    <section className="opt-card" id="support-block">
       <h3>支持包</h3>
       <p className="desc">导出近 7 天脱敏后的 warning/error 明细、版本、平台和本地统计；预览不会写入文件。</p>
       {err && <div className="errbar" role="alert">{err}</div>}
       <div className="footbar">
-        <button className="btn" disabled={busy} onClick={() => void doPreview()}>
+        <button className="opt-button" disabled={busy} onClick={() => void doPreview()}>
           生成预览
         </button>
       </div>
@@ -3102,7 +3104,7 @@ function SupportSection() {
         </dl>
       )}
       <div className="footbar">
-        <button className="btn accent" disabled={busy} onClick={() => void doExport()}>
+        <button className="opt-button primary" disabled={busy} onClick={() => void doExport()}>
           选择目录并导出
         </button>
       </div>
@@ -3298,7 +3300,7 @@ function CodexRuntimePreferences() {
         <div className="errbar" role="alert">
           {err}
           <span className="spacer" />
-          <button className="btn sm" disabled={loading || saving} onClick={() => void load()}>
+          <button className="opt-button" disabled={loading || saving} onClick={() => void load()}>
             重试
           </button>
         </div>
@@ -3314,7 +3316,7 @@ function CodexRuntimePreferences() {
               </span>
               <select
                 id="codex-model"
-                className="input"
+                className="opt-input"
                 value={draft.model}
                 onChange={(event) => changeModel(event.target.value)}
               >
@@ -3335,7 +3337,7 @@ function CodexRuntimePreferences() {
               </span>
               <select
                 id="codex-reasoning"
-                className="input"
+                className="opt-input"
                 value={draft.reasoningEffort}
                 onChange={(event) => {
                   setDraft((current) => ({ ...current, reasoningEffort: event.target.value }));
@@ -3358,7 +3360,7 @@ function CodexRuntimePreferences() {
               </span>
               <select
                 id="codex-verbosity"
-                className="input"
+                className="opt-input"
                 value={draft.verbosity}
                 onChange={(event) => {
                   setDraft((current) => ({ ...current, verbosity: event.target.value }));
@@ -3389,7 +3391,7 @@ function CodexRuntimePreferences() {
               </span>
               <select
                 id="codex-permission-mode"
-                className="input"
+                className="opt-input"
                 value={draft.permissionMode}
                 onChange={(event) => {
                   setDraft((current) => ({ ...current, permissionMode: event.target.value }));
@@ -3409,7 +3411,7 @@ function CodexRuntimePreferences() {
 
           <div className="codex-runtime-actions">
             {notice && <span role="status">{notice}</span>}
-            <button className="btn accent" disabled={!dirty || saving} onClick={() => void save()}>
+            <button className="opt-button primary" disabled={!dirty || saving} onClick={() => void save()}>
               {saving ? "正在保存…" : "应用"}
             </button>
           </div>
@@ -3621,7 +3623,7 @@ function CodexIntegrationSection({
         : undefined;
 
   return (
-    <section className="settings-block codex-setup" id="codex-setup-block">
+    <section className="opt-card codex-setup" id="codex-setup-block">
       <div className="codex-setup-heading">
         <div>
           <h3 className="codex-setup-title">
@@ -3651,7 +3653,7 @@ function CodexIntegrationSection({
           <strong>{status?.cli_available ? status.cli_version || "Codex CLI" : "需要 Codex CLI"}</strong>
           <p className={updateResult?.update_state === "failed" ? "is-warning" : ""}>{cliUpdateLabel}</p>
           {status && !status.cli_available && (
-            <button className="btn sm accent" disabled={mainDisabled} onClick={() => void completeSetup()}>
+            <button className="opt-button" disabled={mainDisabled} onClick={() => void completeSetup()}>
               {busy ? "正在处理…" : copy.action}
             </button>
           )}
@@ -3667,15 +3669,15 @@ function CodexIntegrationSection({
           {!authReady && status?.cli_available && (
             <div className="codex-runtime-card-actions">
               {setupState === "check" ? (
-                <button className="btn sm" disabled={busy || checking || syncingCli} onClick={() => void refresh()}>
+                <button className="opt-button" disabled={busy || checking || syncingCli} onClick={() => void refresh()}>
                   重新检测
                 </button>
               ) : (
                 <>
-                  <button className="btn sm accent" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("browser")}>
+                  <button className="opt-button" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("browser")}>
                     浏览器登录
                   </button>
-                  <button className="btn sm ghost" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("device")}>
+                  <button className="opt-button quiet" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("device")}>
                     设备码
                   </button>
                 </>
@@ -3692,7 +3694,7 @@ function CodexIntegrationSection({
           <strong>{collaborationReady ? "R-Code 协作已连接" : "Skill 与 MCP"}</strong>
           <p>{collaborationReady ? "可用于跨引擎委派与 Codex 子代理。" : `Skill：${skillLabel} · MCP：${status?.mcp_server_configured ? "已启用" : "尚未启用"}`}</p>
           {authReady && !collaborationReady && (
-            <button className="btn sm accent" disabled={mainDisabled} onClick={() => void completeSetup()}>
+            <button className="opt-button" disabled={mainDisabled} onClick={() => void completeSetup()}>
               {busy ? "正在配置…" : "完成协作配置"}
             </button>
           )}
@@ -3760,15 +3762,15 @@ function CodexPermissionSection() {
   }, []);
 
   return (
-    <div className="settings-sheet">
-      <section className="settings-block" id="permissions-codex-block">
+    <div className="opt-content">
+      <section className="opt-card" id="permissions-codex-block">
         <h3>Codex 子代理权限</h3>
         {err && <div className="errbar" role="alert">{err}</div>}
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="perm-current-mode">当前生效模式</label>
           <input
             id="perm-current-mode"
-            className="input"
+            className="opt-input"
             value={mode ? (CODEX_PERMISSION_LABELS[mode] ?? mode) : "读取中…"}
             readOnly
             aria-readonly="true"
@@ -3780,7 +3782,7 @@ function CodexPermissionSection() {
         </div>
         <button
           type="button"
-          className="btn primary"
+          className="opt-button primary"
           onClick={() => {
             setActivePane("agents");
             setTimeout(() => document.getElementById("codex-permission-mode")?.focus(), 60);
@@ -3801,13 +3803,13 @@ function SecuritySection() {
     { title: "CSP / sandbox", body: "WebView 内容安全策略与 Tauri sandbox 为编译期强制状态，仅允许预览。" },
   ];
   return (
-    <div className="settings-sheet">
-      <section className="settings-block" id="security-forced-block">
+    <div className="opt-content">
+      <section className="opt-card" id="security-forced-block">
         <h3>强制安全状态（只读）</h3>
         {items.map((item) => (
-          <div className="field" key={item.title}>
+          <div className="opt-field" key={item.title}>
             <label>🔒 {item.title}</label>
-            <input className="input" value={`${item.title}：已强制启用`} readOnly aria-readonly="true" />
+            <input className="opt-input" value={`${item.title}：已强制启用`} readOnly aria-readonly="true" />
             <small className="settings-hint">{item.body}</small>
           </div>
         ))}
@@ -3843,15 +3845,15 @@ function LifecycleSection() {
   };
 
   return (
-    <div className="settings-sheet">
-      <section className="settings-block" id="lifecycle-block">
+    <div className="opt-content">
+      <section className="opt-card" id="lifecycle-block">
         <h3>启动与关闭</h3>
         {err && <div className="errbar" role="alert">{err}</div>}
-        <div className="field">
+        <div className="opt-field">
           <div style={{ display: "flex", gap: 8 }}>
             <button
               type="button"
-              className="btn"
+              className="opt-button"
               onClick={() => void setBehavior("ask")}
               disabled={!loaded || behavior === "ask"}
             >
@@ -3859,18 +3861,18 @@ function LifecycleSection() {
             </button>
             <button
               type="button"
-              className="btn danger"
+              className="opt-button danger"
               onClick={() => { void import("../../lib/ipc").then((m) => m.lifecycleExplicitQuit()); }}
             >
               立即退出应用
             </button>
           </div>
         </div>
-        <div className="field">
+        <div className="opt-field">
           <label htmlFor="lifecycle-close-behavior">点击窗口关闭按钮时</label>
           <select
             id="lifecycle-close-behavior"
-            className="input"
+            className="opt-input"
             value={behavior}
             disabled={!loaded}
             onChange={(e) => void setBehavior(e.target.value)}
@@ -3964,13 +3966,13 @@ function HarnessPluginsSection() {
   );
 
   return (
-    <section className="settings-block" id="harness-plugins-block" data-block-id="harness-plugins-block">
+    <section className="opt-card" id="harness-plugins-block" data-block-id="harness-plugins-block">
       <h2>{t("settings.harness.title")}</h2>
       <p className="settings-hint">{t("settings.harness.description")}</p>
       {error && <div className="settings-error" role="alert">{error}</div>}
       <div className="settings-row">
         <input
-          className="input"
+          className="opt-input"
           type="text"
           value={installPath}
           placeholder={t("settings.harness.installPlaceholder")}
@@ -3979,13 +3981,13 @@ function HarnessPluginsSection() {
         />
         <button
           type="button"
-          className="btn"
+          className="opt-button"
           disabled={busy || !installPath.trim()}
           onClick={() => void install()}
         >
           {t("settings.harness.install")}
         </button>
-        <button type="button" className="btn quiet" disabled={busy} onClick={() => void reload()}>
+        <button type="button" className="opt-button quiet" disabled={busy} onClick={() => void reload()}>
           {t("settings.harness.refresh")}
         </button>
       </div>
@@ -4009,7 +4011,7 @@ function HarnessPluginsSection() {
               <div className="settings-item-actions">
                 <button
                   type="button"
-                  className="btn quiet"
+                  className="opt-button quiet"
                   disabled={busy}
                   onClick={() => void setEnabled(entry, !entry.enabled)}
                 >
@@ -4017,7 +4019,7 @@ function HarnessPluginsSection() {
                 </button>
                 <button
                   type="button"
-                  className="btn quiet danger"
+                  className="opt-button quiet danger"
                   disabled={busy}
                   onClick={() => void remove(entry)}
                 >

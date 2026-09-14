@@ -4,10 +4,10 @@
  * 主对话只保留一条可展开的运行树和扁平列表；完整审计在右侧详情中查看，避免
  * “面板 → 分组 → 卡片”三层边框。这里不渲染模型私有推理。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useSharedNow } from "../../lib/shared-clock";
 import type { ActivitySubagent, ActivityTraceState } from "./activity";
-import { IconChevronDown, IconChevronRight, IconStop } from "../icons";
+import { IconCheck, IconChevronDown, IconChevronRight, IconStop, IconSubagent } from "../icons";
 
 interface Props {
   state: ActivityTraceState;
@@ -81,7 +81,7 @@ export function SubagentPanel({
       </button>
 
       {open && (
-        <div className="subagent-list">
+        <div className="subagent-list opt-subagent-lines in-panel">
           {active.length > 0 && <div className="subagent-list-label">正在运行</div>}
           {active.map((child) => (
             <AgentRow
@@ -128,28 +128,53 @@ function AgentRow({
   onStop?: () => void;
 }) {
   const observation = childObservation(child);
+  const running = isActive(child.status);
+  // sheen 交错延迟与 opt-room.css 的 --agent-delay 消费点对齐（面板内行）。
+  const delayStyle = { "--agent-delay": "0s" } as CSSProperties;
   return (
-    <div className={`subagent-row status-${child.status}${selected ? " selected" : ""}`}>
-      <button className="subagent-row-main" type="button" onClick={onInspect} disabled={!onInspect}>
-        <span className="subagent-row-lamp" aria-hidden="true" />
-        <span className="subagent-row-copy">
-          <span className="subagent-row-topline">
-            <strong title={child.label}>{child.label}</strong>
-            <span>{statusLabel(child.status)}</span>
-          </span>
-          <span className="subagent-row-observation" title={observation}>{observation}</span>
-        </span>
-        <span className="subagent-row-time">
-          {elapsedLabel(child.startedAt, child.endedAt ?? now)}
-        </span>
-        {onInspect && <IconChevronRight className="subagent-row-arrow" width={13} height={13} />}
-      </button>
+    <div
+      className={`opt-subagent-line${selected ? " selected" : ""}`}
+      style={delayStyle}
+      role={onInspect ? "button" : undefined}
+      tabIndex={onInspect ? 0 : undefined}
+      aria-pressed={onInspect ? selected : undefined}
+      title={[statusLabel(child.status), observation, elapsedLabel(child.startedAt, child.endedAt ?? now)]
+        .filter(Boolean)
+        .join(" · ")}
+      onClick={onInspect}
+      onKeyDown={
+        onInspect
+          ? (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onInspect();
+            }
+          : undefined
+      }
+    >
+      <span className="opt-icon" aria-hidden="true">
+        {running ? <IconSubagent width={16} height={16} /> : <IconCheck width={16} height={16} />}
+      </span>
+      <span className="opt-agent-kind">子智能体</span>
+      <span
+        className={`opt-agent-name ${running ? "is-running" : "is-complete"}`}
+        data-name={child.label}
+      >
+        {child.label}
+      </span>
+      <span className="opt-agent-separator" aria-hidden="true">·</span>
+      <span className="opt-agent-description">
+        {statusLabel(child.status)} · {elapsedLabel(child.startedAt, child.endedAt ?? now)} · {observation}
+      </span>
       {onStop && (
         <button
-          className="subagent-row-stop"
+          className="opt-agent-stop"
           type="button"
           disabled={stopping}
-          onClick={onStop}
+          onClick={(event) => {
+            event.stopPropagation();
+            onStop();
+          }}
           aria-label={`停止 ${child.label}`}
           title="停止子代理"
         >

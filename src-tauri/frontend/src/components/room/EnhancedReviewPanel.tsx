@@ -310,7 +310,7 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
     });
   };
 
-  if (loading && !view) return <div className="enhanced-review-empty">加载当前 Plan 的功能变更…</div>;
+  if (loading && !view) return <div className="enhanced-review-empty opt-inline-state review">加载当前 Plan 的功能变更…</div>;
 
   return (
     <div className="enhanced-review" data-testid="enhanced-review">
@@ -375,24 +375,24 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                       {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
                     </span>
                   </button>
-                  <span className={`enhanced-feature-state state-${group.state}`}>
+                  <span className={`enhanced-feature-state state-${group.state} opt-inline-state`}>
                     {group.state === "in_progress" && <i aria-hidden="true" />}
                     {STATE_LABEL[group.state]}
                   </span>
                   {group.decision ? (
-                    <span className={`enhanced-decision ${group.decision}`}>{decisionLabel(group.decision)}</span>
+                    <span className={`enhanced-decision ${group.decision} opt-pill ${group.decision === "accepted" ? "success" : "danger"}`}>{decisionLabel(group.decision)}</span>
                   ) : (
                     <span className="enhanced-actions">
                       <button
                         type="button"
-                        className="btn sm"
+                        className="btn sm opt-button"
                         disabled={!terminal || busy || hasFileDecision}
                         title={featureActionTitle ?? "接受这个功能点的全部文件"}
                         onClick={() => void perform(group, null, "accepted")}
                       >{featureBusy ? "处理中…" : "接受整组"}</button>
                       <button
                         type="button"
-                        className={`btn sm enhanced-reject${confirmRejects.has(featureKey) ? " confirm" : ""}`}
+                        className={`btn sm opt-button enhanced-reject${confirmRejects.has(featureKey) ? " confirm" : ""}`}
                         disabled={!terminal || busy || hasFileDecision}
                         title={featureActionTitle ?? "拒绝并恢复这个功能点的全部事件补丁"}
                         onClick={() => void perform(group, null, "rejected")}
@@ -456,14 +456,15 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                         {fileExpanded && (
                           <div className="enhanced-file-body" id={fileBodyId}>
                             <div className="enhanced-file-toolbar">
-                              <span className="enhanced-file-meta">事件 {file.events.length}</span>
-                              {isBinary && <span className="enhanced-binary">二进制</span>}
+                              <span className="enhanced-file-meta opt-faint">事件 {file.events.length}</span>
+                              {isBinary && <span className="enhanced-binary opt-pill">二进制</span>}
                               {file.decision ? (
-                                <span className={`enhanced-decision ${file.decision}`}>{decisionLabel(file.decision)}</span>
+                                <span className={`enhanced-decision ${file.decision} opt-pill ${file.decision === "accepted" ? "success" : "danger"}`}>{decisionLabel(file.decision)}</span>
                               ) : (
                                 <span className="enhanced-actions">
                                   <button
                                     type="button"
+                                    className="opt-button"
                                     disabled={!terminal || isBusy}
                                     title={!terminal
                                       ? group.state === "blocked" ? "功能暂时受阻，尚可恢复实施" : "功能仍在实施"
@@ -472,7 +473,7 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                                   >{pending.has(key) ? "…" : "接受"}</button>
                                   <button
                                     type="button"
-                                    className={confirmRejects.has(key) ? "confirm" : ""}
+                                    className={`opt-button${confirmRejects.has(key) ? " confirm" : ""}`}
                                     disabled={!terminal || isBusy}
                                     title={!terminal
                                       ? group.state === "blocked" ? "功能暂时受阻，尚可恢复实施" : "功能仍在实施"
@@ -489,10 +490,10 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                                   <span>不提供行级预览 · {event.before_exists ? "已有文件" : "新文件"} → {event.after_exists ? "保留" : "删除"}</span>
                                 </div>
                               ) : (
-                                <pre className="enhanced-patch" key={event.event_id} aria-label={`${file.path} 的事件补丁 ${event.sequence}`}>
+                                <pre className="enhanced-patch opt-diff" key={event.event_id} aria-label={`${file.path} 的事件补丁 ${event.sequence}`}>
                                   {(event.patch ?? "").split("\n").map((line, index) => (
-                                    <code className={`patch-${patchLineKind(line)}`} key={`${event.event_id}:${index}`}>
-                                      <span>{index + 1}</span>{line || " "}
+                                    <code className={`patch-${patchLineKind(line)}${patchLineKind(line) === "add" ? " opt-diff-add" : patchLineKind(line) === "del" ? " opt-diff-del" : patchLineKind(line) === "hunk" || patchLineKind(line) === "meta" ? " opt-faint" : ""}`} key={`${event.event_id}:${index}`}>
+                                      <span className="opt-line-no">{index + 1}</span>{line || " "}
                                     </code>
                                   ))}
                                 </pre>

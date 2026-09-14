@@ -181,7 +181,7 @@ export function LocalImageArtifact({
       <span className="md-image-meta">
         <span className="md-image-copy">
           <strong>{label || alt || "图片产物"}</strong>
-          <small title={target?.absolute_path ?? href}>{target?.absolute_path ?? href}</small>
+          <small className="opt-mono" title={target?.absolute_path ?? href}>{target?.absolute_path ?? href}</small>
         </span>
         {src && (
           <span className="md-image-actions">
@@ -267,7 +267,7 @@ function ImagePreviewDialog({
         <header>
           <span>
             <strong>{alt}</strong>
-            <small title={path}>{path}</small>
+            <small className="opt-mono" title={path}>{path}</small>
           </span>
           <button ref={closeRef} type="button" aria-label="关闭图片预览" onClick={onClose}>
             <IconClose width={17} height={17} />

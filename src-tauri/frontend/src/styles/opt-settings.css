@@ -1,0 +1,749 @@
+/* ============================================================================
+   opt-settings.css —— 设置中心增量层（T01 创建 → T05 接管 · W2 工位 A）
+   ----------------------------------------------------------------------------
+   【作用域】
+   - 13 个 optimize 设置页 + P33/P34 provider 编辑/放弃确认的设置面 opt-*
+     增量：opt-settings 骨架四件（settings / settings-nav / settings-main /
+     settings-topline）、opt-setting-line/control、opt-routing-section、
+     opt-runtime-*、opt-agent-choice、opt-mcp-*、opt-service-title、
+     opt-environment-*、opt-skill-*、opt-theme-*、opt-validation-line、
+     opt-file-list-caption、opt-inbox-file、opt-inbox-detail-note。
+   - settings-prompts 的 sticky footer 特例按页实现：作用域收敛到知识页
+     prompts 区块的 .opt-settings-prompts 类（禁用 body[data-proposal] 机制）。
+   - P33/P34 复用 ui/Drawer（挂 opt-drawer）与 ui/ConfirmDialog（挂
+     opt-confirm），公共件样式在 opt.css，本文件不重复定义。
+   【令牌依据】
+   - 零字面色；几何走 design.md §1.3 刻度映射（就近取档、密度优先向下）。
+     裸 px 例外清单（容器/列宽/尺寸定案值，文件头集中注明）：
+       * .opt-settings 左导航 188px（≤1279→166px，≤1049→154px）
+       * .opt-settings-main .opt-content max-width 1040px
+       * .opt-setting-line 控制列 300px（≤1279→250px）
+       * .opt-skill-layout 列表列 220px（≤1049→170px）
+       * .opt-theme-window 预览窗高 96px（≤1049→78px）、内部条 14px、
+         em 预览块 18px
+       * .opt-inbox-file 行高 44px
+     ⚠ 契约缺口（待主理人定案）：opt-theme-window 主题预览小窗在
+     proposal.css:150 为整块字面色；本实现改走令牌（当前主题外观预览），
+     .dark 变体用 brightness 过滤、.system 用 saturate(.35)（同 proposal）。
+     如 QA 要求逐色还原需契约豁免字面色。
+   【断点】
+   - ≤1279px：设置导航 166px、setting-line 控制列 250px（revision-2.css:137）。
+   - ≤1049px：导航 154px、搜索框隐藏、opt-two 转单列、skill 列表 170px。
+   【骨架】
+   - .opt-settings = grid(188px, minmax(0,1fr))；nav 纵向 tablist；主区
+     .opt-settings-main 滚动容器 > .opt-page-head（eyebrow+h2+p）+
+     .opt-content（宽度约束在此叠加）。
+   ============================================================================ */
+
+/* ---------- 骨架：设置页双栏 ---------- */
+
+.opt-settings {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr); /* 左导航定案宽 */
+}
+
+.opt-settings-nav {
+  padding: var(--sp-10) var(--sp-7);
+  border-right: 1px solid var(--border);
+  overflow: auto;
+}
+
+.opt-settings-nav h2 {
+  margin: 0 var(--sp-5) var(--sp-9);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
+}
+
+.opt-settings-nav .group-label {
+  display: block;
+  margin: var(--sp-8) var(--sp-5) var(--sp-3);
+  font-size: var(--text-meta);
+  letter-spacing: 0.04em;
+  color: var(--fg-faint);
+}
+
+.opt-settings-nav button {
+  display: block;
+  width: 100%;
+  padding: var(--sp-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-tight);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.opt-settings-nav button:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.opt-settings-nav button:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-offset);
+}
+
+/* active：accent 文字 + tint-accent 底（§2.6 胶囊变体同源配方） */
+.opt-settings-nav button.active {
+  color: var(--accent);
+  background: var(--tint-accent);
+  font-weight: var(--weight-strong);
+}
+
+.opt-settings-main {
+  padding: var(--sp-10);
+  height: 100%;
+  overflow: auto;
+}
+
+.opt-settings-main > .opt-page-head {
+  margin-bottom: var(--sp-10);
+}
+
+/* 设置页主区标题走 h2（外层 page-head 已用 h1），排版对齐 opt-page-head h1 */
+.opt-settings-main .opt-page-head h2 {
+  margin: 0 0 var(--sp-5);
+  font-size: var(--text-2xl);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.025em;
+  font-weight: var(--weight-strong);
+}
+
+.opt-settings-main .opt-content {
+  max-width: 1040px; /* 内容宽度定案值 */
+}
+
+.opt-settings-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-9);
+}
+
+.opt-settings-topline > span {
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+/* settings-prompts sticky footer 特例（§3 按页定案） */
+.opt-settings .opt-settings-prompts .opt-footer {
+  position: sticky;
+  bottom: 0;
+  padding: var(--sp-6) 0 var(--sp-4);
+  background: var(--bg-app);
+  z-index: var(--z-sticky);
+  box-shadow: 0 calc(-1 * var(--sp-5)) var(--sp-8) var(--bg-app);
+}
+
+/* ---------- 设置行（revision-2.css:99-103） ---------- */
+
+.opt-setting-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px; /* 控制列定案宽 */
+  align-items: center;
+  gap: var(--sp-10);
+  min-height: calc(var(--sp-10) + var(--sp-9)); /* 56px 定案行高 */
+  padding: var(--sp-4) 0;
+}
+
+.opt-setting-line strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--lh-base);
+}
+
+.opt-setting-line p {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+  color: var(--fg-muted);
+}
+
+.opt-setting-control {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.opt-setting-control select {
+  min-height: var(--control-h-lg);
+  padding: var(--sp-4) var(--sp-6);
+  font-size: var(--text-meta);
+  border-radius: var(--radius-sm);
+}
+
+.opt-routing-section .opt-setting-line + .opt-setting-line {
+  margin-top: var(--sp-2);
+}
+
+/* ---------- 运行时行（revision-2.css:104-111） ---------- */
+
+.opt-runtime-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-5) 0 var(--sp-6);
+}
+
+.opt-runtime-row > .opt-icon {
+  align-self: flex-start;
+  margin-top: var(--sp-1);
+  width: 20px; /* 图标视口例外 */
+  color: var(--fg-faint);
+}
+
+.opt-runtime-copy {
+  flex: 1;
+}
+
+.opt-runtime-copy strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.opt-runtime-copy p {
+  margin: var(--sp-1) 0 var(--sp-5);
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+}
+
+.opt-runtime-row > .opt-button {
+  font-size: var(--text-meta);
+  min-height: var(--control-h-lg);
+  padding: var(--sp-3) var(--sp-6);
+}
+
+.opt-runtime-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-7);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-runtime-steps b {
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.opt-runtime-steps > span:nth-child(even) {
+  opacity: 0.5;
+}
+
+.opt-runtime-detail {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-5);
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+/* ---------- Agent 选择卡（§5 契约类；形态按 §2.3 可点击卡片配方） ---------- */
+
+.opt-agent-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.opt-agent-choice:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.opt-agent-choice.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.opt-agent-choice:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-offset);
+}
+
+/* ---------- MCP（revision-2.css:115-127） ---------- */
+
+.opt-mcp-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: var(--sp-9) 0 var(--sp-6);
+}
+
+.opt-mcp-section-head h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.opt-mcp-section-head h2 > span {
+  margin-left: var(--sp-4);
+  font: var(--weight-normal) var(--text-meta) var(--font-mono);
+  color: var(--fg-faint);
+}
+
+.opt-mcp-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--text-meta);
+}
+
+.opt-mcp-table th {
+  padding: var(--sp-5) var(--sp-6);
+  border-bottom: 1px solid var(--border);
+  font-weight: var(--weight-normal);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+  text-align: left;
+}
+
+.opt-mcp-table th:first-child {
+  padding-left: var(--sp-10);
+}
+
+.opt-mcp-table th.right {
+  text-align: right;
+  padding-right: var(--sp-8);
+}
+
+.opt-mcp-table td {
+  padding: var(--sp-8) var(--sp-6);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--fg-muted);
+  vertical-align: middle;
+}
+
+.opt-mcp-table td:first-child {
+  padding-left: 0;
+}
+
+.opt-service-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+}
+
+.opt-service-title > .opt-icon {
+  width: 20px; /* 图标视口例外 */
+  height: 20px;
+  color: var(--fg-faint);
+}
+
+.opt-service-title strong {
+  display: block;
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+.opt-service-title small {
+  display: block;
+  margin-top: var(--sp-2);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+  color: var(--fg-faint);
+}
+
+.opt-mcp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-7);
+}
+
+.opt-mcp-actions .opt-button {
+  font-size: var(--text-meta);
+  min-height: var(--control-h);
+  padding: var(--sp-3);
+}
+
+.opt-mcp-actions .text-accent {
+  color: var(--accent);
+}
+
+.opt-mcp-note {
+  margin: var(--sp-6) 0 0;
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+  color: var(--fg-faint);
+}
+
+/* ---------- 执行环境摘要（revision-2.css:128-136） ---------- */
+
+.opt-environment-summary {
+  margin-top: var(--sp-10);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-8);
+}
+
+.opt-environment-summary > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-7);
+}
+
+.opt-environment-summary h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.opt-environment-summary .opt-button {
+  font-size: var(--text-meta);
+}
+
+.opt-environment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-10);
+}
+
+.opt-environment-grid > div {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-6);
+  padding: var(--sp-2) 0 var(--sp-7);
+}
+
+.opt-environment-grid .opt-icon {
+  width: 16px; /* 图标视口收敛：17px → 16 */
+  height: 16px;
+  margin-top: var(--sp-1);
+  color: var(--fg-faint);
+}
+
+.opt-environment-grid small {
+  display: block;
+  margin-bottom: var(--sp-4);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-environment-grid strong {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--lh-base);
+}
+
+.opt-environment-grid em {
+  display: block;
+  margin-top: var(--sp-2);
+  font-size: var(--text-meta);
+  font-style: normal;
+  color: var(--fg-muted);
+}
+
+/* ---------- Skills（proposal.css:148） ---------- */
+
+.opt-skill-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr); /* 列表列定案宽 */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.opt-skill-list {
+  padding: var(--sp-5);
+  border-right: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.opt-skill-list > div,
+.opt-skill-list > button {
+  display: block;
+  width: 100%;
+  padding: var(--sp-6) var(--sp-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  margin-bottom: var(--sp-3);
+  font-size: var(--text-meta);
+}
+
+.opt-skill-list > div.selected,
+.opt-skill-list > button.selected {
+  background: var(--bg-chip);
+}
+
+.opt-skill-list strong {
+  display: block;
+  margin-bottom: var(--sp-3);
+  font: var(--weight-strong) var(--text-meta) var(--font-mono);
+}
+
+.opt-skill-list small {
+  color: var(--fg-muted);
+  line-height: var(--lh-relaxed);
+}
+
+.opt-skill-detail {
+  padding: var(--sp-9);
+  background: var(--bg-panel);
+}
+
+.opt-skill-detail h2 {
+  margin: var(--sp-6) 0;
+  font: var(--weight-strong) var(--text-xl) var(--font-mono);
+}
+
+.opt-skill-detail p {
+  font-size: var(--text-sm);
+  line-height: var(--lh-relaxed);
+  color: var(--fg-muted);
+}
+
+/* ---------- 主题选择（proposal.css:149-150，令牌化实现） ---------- */
+
+.opt-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-7);
+}
+
+.opt-theme-choice {
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  text-align: left;
+  cursor: pointer;
+}
+
+.opt-theme-choice:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.opt-theme-choice.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.opt-theme-choice:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-offset);
+}
+
+.opt-theme-choice strong {
+  display: block;
+  margin: var(--sp-5) 0 0;
+  font-size: var(--text-meta);
+}
+
+/* 预览小窗：全部走令牌（当前主题外观）；字面色豁免诉求见文件头契约缺口 */
+.opt-theme-window {
+  height: 96px; /* 预览窗定案高 */
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 27% 1fr;
+  grid-template-rows: 14px 1fr; /* 顶部 chrome 条定案高 */
+  background: var(--bg-chip);
+  border: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
+.opt-theme-window > i {
+  grid-column: 1 / 3;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+.opt-theme-window > aside {
+  background: var(--signature-sidebar);
+  padding: var(--sp-6) var(--sp-4);
+}
+
+.opt-theme-window > aside b {
+  display: block;
+  height: var(--sp-1);
+  background: color-mix(in srgb, var(--fg) 25%, transparent);
+  margin-bottom: var(--sp-4);
+}
+
+.opt-theme-window > main {
+  background: var(--bg-app);
+  border-radius: var(--radius-md) 0 0 0;
+  padding: var(--sp-7) var(--sp-6);
+}
+
+.opt-theme-window > main b {
+  display: block;
+  height: var(--sp-2);
+  width: 54%;
+  background: color-mix(in srgb, var(--fg) 25%, transparent);
+}
+
+.opt-theme-window > main em {
+  display: block;
+  height: 18px; /* 预览 accent 块定案高 */
+  margin-top: var(--sp-7);
+  border: 1px solid var(--edge-accent);
+  border-radius: var(--radius-xs);
+  background: var(--tint-accent-hi);
+}
+
+.opt-theme-window.dark {
+  filter: brightness(0.55);
+}
+
+.opt-theme-window.system {
+  filter: saturate(0.35);
+}
+
+/* ---------- 校验行 / 文件列表（revision-2.css:67-76） ---------- */
+
+.opt-validation-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-9) 0 var(--sp-8);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-meta);
+}
+
+.opt-validation-line > .opt-icon {
+  width: 16px; /* 图标视口例外 */
+  height: 16px;
+  color: var(--success);
+}
+
+.opt-validation-line strong {
+  font: var(--weight-medium) var(--text-meta) var(--font-mono);
+}
+
+.opt-validation-line > span:last-child {
+  margin-left: auto;
+  font-size: var(--text-meta);
+  color: var(--success);
+}
+
+.opt-file-list-caption {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--sp-8) 0 var(--sp-4);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-file {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  min-height: 44px; /* 列表行定案高 */
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  text-align: left;
+  font-size: var(--text-meta);
+}
+
+.opt-inbox-file > .opt-icon {
+  width: 16px; /* 图标视口收敛：15px → 16 */
+  height: 16px;
+  color: var(--fg-faint);
+}
+
+.opt-inbox-file > .opt-icon:last-child {
+  width: 13px; /* 尾部箭头收敛档（13px 定案，文件头注明） */
+  height: 13px;
+  opacity: 0.65;
+}
+
+.opt-inbox-file small {
+  margin-left: auto;
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-detail-note {
+  margin-top: var(--sp-7);
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+  color: var(--fg-faint);
+}
+
+/* ---------- 卡片头小按钮（§2.2 小尺寸变体的上下文落点） ---------- */
+
+.opt-card-head .opt-button,
+.opt-mcp-section-head .opt-button,
+.opt-environment-summary > header .opt-button {
+  font-size: var(--text-meta);
+  min-height: var(--control-h);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+/* ---------- 响应式（design.md §3 定案断点） ---------- */
+
+@media (max-width: 1279px) {
+  .opt-settings {
+    grid-template-columns: 166px minmax(0, 1fr);
+  }
+
+  .opt-setting-line {
+    grid-template-columns: minmax(0, 1fr) 250px;
+    gap: var(--sp-7);
+  }
+}
+
+@media (max-width: 1049px) {
+  .opt-settings {
+    grid-template-columns: 154px minmax(0, 1fr);
+  }
+
+  .opt-settings-main {
+    padding: var(--sp-9);
+  }
+
+  .opt-settings-main .opt-two {
+    grid-template-columns: 1fr;
+  }
+
+  .opt-settings-topline.opt-search-field {
+    display: none;
+  }
+
+  .opt-skill-layout {
+    grid-template-columns: 170px minmax(0, 1fr);
+  }
+
+  .opt-theme-window {
+    height: 78px;
+  }
+}
+
+/* ---------- T05b 特批：叠层容器窄屏安全网 ----------
+ * ui/Drawer 与 ui/ConfirmDialog 挂 opt-drawer / opt-confirm 后（T05b 特批透传），
+ * 定案宽 510px / 460px 为定值，失去基础 .drawer-panel / .confirm-dialog 的
+ * min(定值, 100vw-*) 窄屏钳制。此处补 max-width 恢复保护，仅此二条，不动其他行为。 */
+.opt-drawer {
+  max-width: calc(100vw - var(--sp-8));
+}
+
+.opt-confirm {
+  max-width: calc(100vw - var(--sp-8));
+}
+

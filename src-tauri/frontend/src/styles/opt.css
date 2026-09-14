@@ -1,0 +1,815 @@
+/* ============================================================================
+   opt.css —— opt-* 增量设计系统层：骨架 + 基础件 + 叠层公共件
+   ----------------------------------------------------------------------------
+   【作用域】
+   - 本文件是 docs/design.md §5 中「骨架 / 基础件 / 叠层」三族 opt-* 类名的
+     唯一定义点（T01 · 工位 A）。页面级类名分属各场景增量文件：
+     opt-shell.css（T02）/ opt-scenes-workspace.css（T03）/ opt-room.css（T04）/
+     opt-settings.css（T05）/ opt-overlays.css（T06）。
+   - 以增量方式覆盖在既有样式之上，不改任何既有 CSS 文件；与既有规则同
+     特异性时靠 import 顺序（本层在 main.tsx 样式引入序列末尾）取后。
+   【令牌依据】
+   - 颜色一律走 tokens.css 主题变量（data-theme='obsidian' | 'studio-light'），
+     本文件零字面色；设计稿的静态近似色值一律不落地（见 design/tools/proposal.css）。
+   - 手调 color-mix 收敛为 tokens 的 tint/edge 四档（10/18/40/62）；
+     列表行分隔线统一 color-mix(in srgb, var(--border) 60%, transparent)
+     （design.md §2.4 定案）；遮罩背景一律 var(--overlay-scrim)（§1.1）。
+   - 几何按 design.md §1.3 映射（就近取档、密度优先向下），裸 px 例外仅：
+     图标视口 16/20、68ch 行长、2px 选中内嵌条、1px 线宽，以及本文件头
+     注明的容器/尺寸定案值：
+       * .opt-search-field min-width 220px（搜索框宽度定案值）
+       * .opt-kv 首列 94px（键值表列宽定案值）
+       * textarea.opt-input min-height 132px（多行输入高度定案值）
+       * .opt-empty p max-width 44ch（空态文案行长定案值，§1.3 未映射，
+         待主理人记录）
+       * .opt-drawer 宽 510px / .opt-confirm 宽 460px（叠层容器宽度定案值，
+         与搜索 modal 650px 同性质）
+       * .opt-drawer .opt-panel-head 高 77px（抽屉头定案高）
+       * .opt-drawer-backdrop blur 2px（遮罩模糊定案值，与搜索 5px 同性质）
+   - 组件五态按 design.md §2 状态矩阵逐条实现；焦点环统一配方
+     outline: var(--ring-w) solid var(--ring-color); outline-offset:
+     var(--ring-offset)（先例 workbench-page.css）。
+   【断点】
+   - 本文件无断点：骨架/基础件类名本身不携带响应式；≤1279 / ≤1049 页面
+     密度断点由各 opt-* 场景文件按 design.md §3 自行落地。
+   【骨架】
+   - .opt-page（页面容器，padding 走 --sp-10）内：.opt-page-head（eyebrow +
+     h1 + 说明 p）与 .opt-actions 组成页头；内容纵向由 .opt-card /
+     .opt-section-head / .opt-row / .opt-table / .opt-footer 编排；
+     .opt-content 为内容列基准容器（页面级宽度约束由场景文件叠加）。
+   - 叠层公共件：.opt-drawer（右侧抽屉，供 ui/Drawer 挂类）与 .opt-confirm
+     （居中确认框，供 ui/ConfirmDialog 挂类）；遮罩 z 走 --z-overlay，
+     面板 z 走 --z-modal。
+   ============================================================================ */
+
+/* ---------- 骨架：页面容器与页头 ---------- */
+
+.opt-page {
+  height: 100%;
+  overflow: auto;
+  padding: var(--sp-10); /* 38px 46px → 页边距类收敛 --sp-10（§1.3） */
+  font-size: var(--text-sm);
+}
+
+.opt-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-9);
+  margin-bottom: var(--sp-10);
+}
+
+.opt-page-head h1 {
+  margin: 0 0 var(--sp-5);
+  font-size: var(--text-2xl);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.025em;
+  font-weight: var(--weight-strong);
+}
+
+.opt-page-head p {
+  margin: 0;
+  font-size: var(--text-base); /* 页面说明段走 base（§1.3） */
+  line-height: var(--lh-relaxed);
+  color: var(--fg-muted);
+  max-width: 68ch; /* 排版例外值（design.md §1.3 定案） */
+}
+
+.opt-eyebrow {
+  display: block;
+  margin-bottom: var(--sp-5);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.025em;
+  color: var(--fg-faint);
+}
+
+.opt-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+/* 内容列基准容器；页面级宽度约束（如设置主区 1040px）由场景文件叠加 */
+.opt-content {
+  min-width: 0;
+}
+
+.opt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  margin-top: var(--sp-9);
+  padding-top: var(--sp-7);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+}
+
+/* ---------- 基础件：图标 ---------- */
+
+.opt-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px; /* 图标视口例外：工具格 20（§1.3 收敛档） */
+  height: 20px;
+  flex: none;
+  color: var(--fg-muted);
+}
+
+.opt-icon svg {
+  width: 16px; /* 图标视口例外：行内 16 */
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- 基础件：按钮（三变体 × 五态，design.md §2.2） ---------- */
+
+.opt-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  min-height: var(--control-h-lg);
+  padding: var(--sp-3) var(--sp-5); /* 7px 13px → 契约 §2.2 定档 sp-3 / sp-5 */
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.opt-button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.opt-button.quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-muted);
+}
+
+.opt-button.danger {
+  background: transparent;
+  border-color: transparent;
+  color: var(--danger);
+}
+
+/* hover：default 变体 bg-hover；primary 向 --accent-2 方向加深 12%；
+   danger 走 tint-danger（§2.2 状态矩阵） */
+.opt-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.opt-button.quiet:hover:not(:disabled) {
+  color: var(--fg);
+}
+
+.opt-button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--accent-2));
+}
+
+.opt-button.danger:hover:not(:disabled) {
+  background: var(--tint-danger);
+}
+
+/* active（按下）：default 再深一档；primary 同源再加深一档；
+   danger 走 tint-danger-hi */
+.opt-button:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.opt-button.primary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 76%, var(--accent-2));
+}
+
+.opt-button.danger:active:not(:disabled) {
+  background: var(--tint-danger-hi);
+}
+
+.opt-button:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-offset);
+}
+
+.opt-button:disabled {
+  opacity: 0.46; /* 三变体一致（§2.2） */
+  cursor: not-allowed;
+}
+
+.opt-button .opt-icon {
+  width: 16px; /* 图标视口例外：行内 16 */
+  height: 16px;
+  color: inherit;
+}
+
+.opt-button .opt-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 小尺寸变体（面板头/表格行内）按 §2.2 走 --control-h + --text-meta，
+   由消费方场景文件以父级上下文选择器叠加（opt-panel-head 等归 T04/T05） */
+
+/* ---------- 基础件：标签（pill，四语义变体） ---------- */
+
+.opt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-4);
+  border-radius: var(--radius-sm);
+  background: var(--bg-chip);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+  font-weight: var(--weight-medium);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.opt-pill.accent {
+  color: var(--accent);
+  background: var(--tint-accent);
+}
+
+.opt-pill.success {
+  color: var(--success);
+  background: var(--tint-success);
+}
+
+.opt-pill.warning {
+  color: var(--warning);
+  background: var(--tint-warning);
+}
+
+.opt-pill.danger {
+  color: var(--danger);
+  background: var(--tint-danger);
+}
+
+/* ---------- 基础件：卡片（design.md §2.3） ---------- */
+
+.opt-card {
+  margin-bottom: var(--sp-8);
+  padding: var(--sp-9);
+  background: var(--bg-panel); /* 消费用 surface 语义（§1.1：--bg-card → 语义别名层） */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.opt-card > :last-child {
+  margin-bottom: 0;
+}
+
+.opt-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-7);
+}
+
+.opt-card-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: var(--lh-tight);
+  font-weight: var(--weight-strong);
+}
+
+.opt-card-head p {
+  margin: var(--sp-3) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-relaxed);
+}
+
+/* 可点击卡片（tool-tile / theme-choice 等归场景文件）的 hover/selected
+   配方参照 §2.3：hover 用 --bg-hover + 边框 --border-strong；selected 用
+   边框 --accent + box-shadow: 0 0 0 1px var(--accent)。 */
+
+/* ---------- 基础件：区块头 ---------- */
+
+.opt-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-7);
+  margin: var(--sp-10) 0 var(--sp-6);
+}
+
+.opt-section-head h2 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+}
+
+.opt-section-head small {
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+}
+
+/* ---------- 基础件：列表行（design.md §2.4，分隔线 60% 定案） ---------- */
+
+.opt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-7);
+  padding: var(--sp-8) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  min-width: 0;
+}
+
+.opt-row:last-child {
+  border-bottom: 0;
+}
+
+.opt-row > .opt-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.opt-row strong {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--lh-base);
+}
+
+.opt-row small {
+  display: block;
+  margin-top: var(--sp-1);
+  color: var(--fg-muted);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+}
+
+.opt-row:hover {
+  background: var(--bg-hover);
+}
+
+.opt-row.selected {
+  background: var(--tint-accent);
+}
+
+.opt-row:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: calc(-1 * var(--ring-offset));
+}
+
+.opt-row[aria-disabled='true'] {
+  color: var(--fg-faint);
+}
+
+/* ---------- 基础件：表格 ---------- */
+
+.opt-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--text-sm);
+}
+
+.opt-table th {
+  padding: var(--sp-6) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  font-weight: var(--weight-normal);
+  text-align: left;
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+}
+
+.opt-table td {
+  padding: var(--sp-8) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.opt-table td strong {
+  display: block;
+  font-weight: var(--weight-medium);
+  font-size: var(--text-sm);
+}
+
+.opt-table td small {
+  display: block;
+  margin-top: var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--text-meta);
+}
+
+.opt-table .opt-last {
+  text-align: right;
+}
+
+/* ---------- 基础件：汇总条 ---------- */
+
+.opt-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-10);
+  padding: var(--sp-7) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-9);
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+}
+
+.opt-summary b {
+  margin-right: var(--sp-3);
+  color: var(--fg);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
+}
+
+/* ---------- 基础件：双列卡片 ---------- */
+
+.opt-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-8);
+}
+
+.opt-two > .opt-card {
+  margin: 0;
+}
+
+/* ---------- 基础件：提示条 ---------- */
+
+.opt-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-5);
+  padding: var(--sp-6) var(--sp-7);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken); /* --opt-soft → surface 语义（§1.1） */
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-relaxed);
+  margin-bottom: var(--sp-8);
+}
+
+.opt-notice strong {
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+/* warning 变体：设计稿手调混合（warning 32%/5%）按 §1.1 收敛为
+   edge/tint 档，双主题由 tokens 解析 */
+.opt-notice.warning {
+  border-color: var(--edge-warning);
+  background: var(--tint-warning);
+}
+
+.opt-notice .opt-button {
+  margin-left: auto;
+  align-self: center;
+}
+
+/* ---------- 基础件：空态 ---------- */
+
+.opt-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--sp-10) var(--sp-9);
+  background: var(--surface-sunken);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  gap: var(--sp-6);
+}
+
+.opt-empty > .opt-icon {
+  width: var(--control-h-lg); /* 36-40px 图标容器 → --control-h-lg（§1.3） */
+  height: var(--control-h-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.opt-empty h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.opt-empty p {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  max-width: 44ch; /* 空态文案行长定案值（§1.3 未映射，文件头已注明待主理人记录） */
+  line-height: var(--lh-relaxed);
+}
+
+/* ---------- 基础件：输入（design.md §2.5） ---------- */
+
+.opt-field {
+  display: block;
+  margin-bottom: var(--sp-8);
+  font-size: var(--text-sm);
+  min-width: 0;
+}
+
+.opt-field > span {
+  display: block;
+  margin-bottom: var(--sp-4);
+  font-weight: var(--weight-medium);
+}
+
+.opt-input {
+  width: 100%;
+  min-height: var(--control-h-lg);
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--surface-sunken); /* 输入类底色统一沉底（§1.1） */
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+  font-family: inherit;
+}
+
+textarea.opt-input {
+  resize: none;
+  min-height: 132px; /* 多行输入高度定案值（文件头已注明） */
+}
+
+.opt-input::placeholder {
+  color: var(--fg-faint);
+}
+
+.opt-input:hover:not(:disabled):not([readonly]) {
+  border-color: var(--border-strong);
+}
+
+.opt-input:focus {
+  border-color: var(--edge-accent-hi);
+  outline: none;
+}
+
+.opt-input:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-offset);
+}
+
+.opt-input:disabled,
+.opt-input[readonly] {
+  background: var(--surface-sunken);
+  color: var(--fg-muted);
+  border-color: var(--border);
+}
+
+/* ---------- 基础件：工具栏与搜索框 ---------- */
+
+.opt-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-7);
+  padding: var(--sp-6) 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+
+.opt-search-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-width: 220px; /* 搜索框宽度定案值（文件头已注明） */
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+}
+
+.opt-search-field input {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  width: 100%;
+  font: inherit;
+}
+
+/* ---------- 基础件：标签页（design.md §2.6 两变体） ---------- */
+
+.opt-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.opt-tabs button {
+  padding: var(--sp-4) var(--sp-6);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* hover（未激活）：文字提亮；.active 规则置后以在同特异性下取后（§2.6） */
+.opt-tabs button:hover {
+  color: var(--fg);
+}
+
+.opt-tabs button:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-offset);
+}
+
+/* 胶囊变体 active：tint-accent 底 + accent 文字 + strong 字重 */
+.opt-tabs button.active {
+  background: var(--tint-accent);
+  color: var(--accent);
+  font-weight: var(--weight-strong);
+}
+
+/* line 变体：底边线 + active 0 2px accent 内嵌条（2px 例外值） */
+.opt-tabs.line {
+  border-bottom: 1px solid var(--border);
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-8);
+}
+
+.opt-tabs.line button {
+  border-radius: 0;
+  padding: var(--sp-6) 0;
+}
+
+.opt-tabs.line button.active {
+  background: none;
+  box-shadow: 0 2px var(--accent);
+}
+
+/* ---------- 基础件：键值对 / 范围条 / 文字工具 ---------- */
+
+.opt-kv {
+  display: grid;
+  grid-template-columns: 94px minmax(0, 1fr); /* 键值表列宽定案值（文件头已注明） */
+  gap: var(--sp-5);
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+  margin: var(--sp-6) 0;
+}
+
+.opt-kv dt {
+  color: var(--fg-faint);
+}
+
+.opt-kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.opt-scope {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-6) var(--sp-7);
+  margin-bottom: var(--sp-8);
+  background: var(--bg-panel);
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+}
+
+.opt-scope strong {
+  color: var(--fg);
+  font-weight: var(--weight-medium);
+}
+
+.opt-scope > .opt-button {
+  margin-left: auto;
+}
+
+.opt-muted {
+  color: var(--fg-muted);
+}
+
+.opt-faint {
+  color: var(--fg-faint);
+}
+
+.opt-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+}
+
+.opt-help {
+  margin-top: var(--sp-4);
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+  color: var(--fg-muted);
+  max-width: var(--measure); /* 78ch → --measure(74ch) 就近近似档（§1.3） */
+}
+
+/* ---------- 叠层公共件：抽屉（供 ui/Drawer 挂 opt-drawer 类） ---------- */
+
+.opt-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim); /* 遮罩一律走 scrim 令牌（§1.1） */
+  backdrop-filter: blur(2px);       /* 遮罩模糊定案值（文件头已注明） */
+  z-index: var(--z-overlay);
+}
+
+.opt-drawer {
+  position: fixed;
+  top: var(--sp-6);
+  bottom: var(--sp-6);
+  right: var(--sp-6);
+  width: 510px; /* 叠层容器宽度定案值（与搜索 modal 650px 同性质，文件头已注明） */
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover); /* drawer/modal 层级取 popover（§1.1） */
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+/* 抽屉头定案高 77px（文件头已注明）；opt-panel-head 基础样式归 opt-room.css（T04），
+   此处只做抽屉上下文的尺寸覆盖（特异性 0,2,0 稳定压过基础 0,1,0） */
+.opt-drawer .opt-panel-head {
+  height: 77px;
+  min-height: 77px;
+  padding: 0 var(--sp-9);
+  background: var(--bg-panel);
+}
+
+.opt-drawer .opt-panel-head h2 {
+  font-size: var(--text-xl);
+}
+
+.opt-drawer .opt-panel-body {
+  padding: var(--sp-9);
+}
+
+.opt-drawer .opt-panel-footer {
+  padding: var(--sp-8) var(--sp-9);
+}
+
+/* ---------- 叠层公共件：居中确认框（供 ui/ConfirmDialog 挂 opt-confirm 类） ---------- */
+
+.opt-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim);
+  z-index: var(--z-overlay);
+}
+
+.opt-confirm {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 460px; /* 叠层容器宽度定案值（文件头已注明） */
+  padding: var(--sp-10);
+  z-index: var(--z-modal);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.opt-confirm h2 {
+  margin: 0 0 var(--sp-6);
+  font-size: var(--text-xl); /* 20px → 就近取 --text-xl（§1.3） */
+  font-weight: var(--weight-strong);
+}
+
+.opt-confirm p {
+  font-size: var(--text-sm);
+  line-height: var(--lh-relaxed);
+  color: var(--fg-muted);
+}
+
+.opt-confirm .opt-actions {
+  justify-content: flex-end;
+  margin-top: var(--sp-9);
+}

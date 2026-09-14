@@ -203,8 +203,8 @@ export function McpPanel() {
       {snapshot?.settings_error && <div className="mcp-banner error" role="alert"><strong>MCP 配置文件不可用</strong><span>{snapshot.settings_error}</span></div>}
 
       <section className="mcp-section" id="mcp-panel-block">
-        <div className="mcp-section-head">
-          <div><h3>内置工具</h3><p>无需 MCP、不启动外部服务的本机能力，对所有模型生效。</p></div>
+        <div className="opt-mcp-section-head">
+          <div><h2>内置工具</h2><p>无需 MCP、不启动外部服务的本机能力，对所有模型生效。</p></div>
         </div>
         <div className="mcp-builtin-list">
           <div className="mcp-builtin-row">
@@ -219,13 +219,13 @@ export function McpPanel() {
       </section>
 
       <section className="mcp-section">
-        <div className="mcp-section-head">
-          <div><h3>MCP 服务</h3><p>已安装服务只在模型实际调用时启动；关闭会立即阻止后续调用并安全结束连接。</p></div>
-          <div className="mcp-section-actions">
+        <div className="opt-mcp-section-head">
+          <div><h2>MCP 服务</h2><p>已安装服务只在模型实际调用时启动；关闭会立即阻止后续调用并安全结束连接。</p></div>
+          <div className="opt-mcp-actions mcp-section-actions">
             <button className="iconbtn" aria-label="刷新 MCP 状态" title="刷新" disabled={busyKeys.has("reload")} onClick={() => void run("reload", reload)}>
               <IconRefresh width={15} height={15} />
             </button>
-            <button className="btn" onClick={() => setEditing("new")}><IconPlus width={13} height={13} />自定义</button>
+            <button className="opt-button" onClick={() => setEditing("new")}><IconPlus width={13} height={13} />自定义</button>
           </div>
         </div>
         {!snapshot && !error && <div className="knowledge-state">正在读取本机 MCP 配置…</div>}
@@ -289,14 +289,14 @@ export function McpPanel() {
             <div className="mcp-market-warning"><IconShield width={14} height={14} /><span>Registry 仍处于预览阶段，条目未经 R-Code 或官方安全审核。安装前必须核对发布者、仓库和精确启动方案。</span></div>
             <form className="mcp-market-search" onSubmit={(event) => { event.preventDefault(); void searchMarket(); }}>
               <IconSearch width={14} height={14} />
-              <input className="input" value={marketQuery} onChange={(event) => setMarketQuery(event.target.value)} placeholder="搜索服务、包名或能力" />
-              <button className="btn" disabled={busyKeys.has("market")}>{busyKeys.has("market") ? "搜索中…" : "搜索"}</button>
+              <input className="opt-input" value={marketQuery} onChange={(event) => setMarketQuery(event.target.value)} placeholder="搜索服务、包名或能力" />
+              <button className="opt-button" disabled={busyKeys.has("market")}>{busyKeys.has("market") ? "搜索中…" : "搜索"}</button>
             </form>
             {market?.stale && <div className="mcp-market-stale">网络不可用，当前显示最近一次本机缓存。</div>}
             <div className="mcp-market-results">
               {market?.servers.map((server) => <MarketRow key={`${server.name}@${server.version}`} server={server} busyKeys={busyKeys} onInstall={prepareInstall} />)}
             </div>
-            {market?.next_cursor && <button className="btn ghost" disabled={busyKeys.has("market")} onClick={() => void searchMarket(market.next_cursor ?? null)}>加载更多</button>}
+            {market?.next_cursor && <button className="opt-button quiet" disabled={busyKeys.has("market")} onClick={() => void searchMarket(market.next_cursor ?? null)}>加载更多</button>}
             {market && market.servers.length === 0 && <div className="mcp-empty">没有找到可安装的启动方案。</div>}
           </div>
         )}
@@ -350,10 +350,10 @@ function ServerRow({ server, busyKeys, removeArmed, onToggle, onTest, onEdit, on
       </div>
       <div className="mcp-server-actions">
         <span className={`mcp-state is-${server.state}`}><i />{stateLabel(server.state, server.enabled)}</span>
-        {credentialNames.length > 0 && <button className="btn ghost" onClick={onCredentials}>凭据</button>}
-        {!server.builtin && <button className="btn ghost" onClick={onEdit}>编辑</button>}
-        <button className="btn ghost" disabled={!server.enabled || rowBusy} onClick={onTest}>{busyKeys.has(`test:${server.id}`) ? "连接中…" : "测试"}</button>
-        {!server.builtin && <button className={`btn ghost mcp-remove${removeArmed ? " armed" : ""}`} aria-label={`${removeArmed ? "确认移除" : "移除"} ${server.display_name}`} title={removeArmed ? "再次点击确认移除" : "移除"} disabled={rowBusy} onClick={onRemove}>{removeArmed ? "确认移除" : <IconTrash width={14} height={14} />}</button>}
+        {credentialNames.length > 0 && <button className="opt-button quiet" onClick={onCredentials}>凭据</button>}
+        {!server.builtin && <button className="opt-button quiet" onClick={onEdit}>编辑</button>}
+        <button className="opt-button quiet" disabled={!server.enabled || rowBusy} onClick={onTest}>{busyKeys.has(`test:${server.id}`) ? "连接中…" : "测试"}</button>
+        {!server.builtin && <button className={`opt-button quiet mcp-remove${removeArmed ? " armed" : ""}`} aria-label={`${removeArmed ? "确认移除" : "移除"} ${server.display_name}`} title={removeArmed ? "再次点击确认移除" : "移除"} disabled={rowBusy} onClick={onRemove}>{removeArmed ? "确认移除" : <IconTrash width={14} height={14} />}</button>}
         <button
           type="button"
           className={`mcp-switch${server.enabled ? " on" : ""}`}
@@ -397,22 +397,22 @@ function CustomMcpForm({ server, busy, onCancel, onSave }: {
   };
   return (
     <form className="mcp-editor" onSubmit={submit}>
-      <div className="mcp-editor-head"><div><strong>{server ? "编辑 MCP" : "添加自定义 MCP"}</strong><span>命令和参数原样执行，不经过 shell。</span></div><button type="button" className="btn ghost" onClick={onCancel}>取消</button></div>
+      <div className="mcp-editor-head"><div><strong>{server ? "编辑 MCP" : "添加自定义 MCP"}</strong><span>命令和参数原样执行，不经过 shell。</span></div><button type="button" className="opt-button quiet" onClick={onCancel}>取消</button></div>
       <div className="mcp-editor-grid">
-        <label>ID<input className="input" required pattern="[a-z][a-z0-9_-]{0,63}" disabled={Boolean(server) || busy} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 github-tools" /></label>
-        <label>显示名称<input className="input" required disabled={busy} value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
-        <label className="wide">说明<input className="input" disabled={busy} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-        <label>传输<select className="input" disabled={busy} value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as typeof draft.transport })}><option value="stdio">本机 stdio</option><option value="streamable_http">HTTP / HTTPS</option></select></label>
+        <label>ID<input className="opt-input" required pattern="[a-z][a-z0-9_-]{0,63}" disabled={Boolean(server) || busy} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 github-tools" /></label>
+        <label>显示名称<input className="opt-input" required disabled={busy} value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
+        <label className="wide">说明<input className="opt-input" disabled={busy} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+        <label>传输<select className="opt-input" disabled={busy} value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as typeof draft.transport })}><option value="stdio">本机 stdio</option><option value="streamable_http">HTTP / HTTPS</option></select></label>
         {draft.transport === "stdio" ? <>
-          <label>可执行文件<input className="input" required disabled={busy} value={draft.executable} onChange={(event) => setDraft({ ...draft, executable: event.target.value })} placeholder="npx / uvx / 绝对路径" /></label>
-          <label className="wide">参数（每行一个）<textarea className="input" rows={4} disabled={busy} value={draft.args} onChange={(event) => setDraft({ ...draft, args: event.target.value })} /></label>
-          <label className="wide">环境变量名（每行一个）<textarea className="input" rows={3} disabled={busy} value={draft.names} onChange={(event) => setDraft({ ...draft, names: event.target.value })} placeholder="API_TOKEN" /></label>
+          <label>可执行文件<input className="opt-input" required disabled={busy} value={draft.executable} onChange={(event) => setDraft({ ...draft, executable: event.target.value })} placeholder="npx / uvx / 绝对路径" /></label>
+          <label className="wide">参数（每行一个）<textarea className="opt-input" rows={4} disabled={busy} value={draft.args} onChange={(event) => setDraft({ ...draft, args: event.target.value })} /></label>
+          <label className="wide">环境变量名（每行一个）<textarea className="opt-input" rows={3} disabled={busy} value={draft.names} onChange={(event) => setDraft({ ...draft, names: event.target.value })} placeholder="API_TOKEN" /></label>
         </> : <>
-          <label className="wide">服务地址<input className="input" type="url" required disabled={busy} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp 或 http://127.0.0.1:27200/mcp" /><small className="mcp-field-hint">远程服务必须使用 HTTPS；HTTP 仅允许 localhost、127.0.0.1 或 [::1] 本机回环地址。</small></label>
-          <label className="wide">请求头名（每行一个）<textarea className="input" rows={3} disabled={busy} value={draft.names} onChange={(event) => setDraft({ ...draft, names: event.target.value })} placeholder="Authorization" /></label>
+          <label className="wide">服务地址<input className="opt-input" type="url" required disabled={busy} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp 或 http://127.0.0.1:27200/mcp" /><small className="mcp-field-hint">远程服务必须使用 HTTPS；HTTP 仅允许 localhost、127.0.0.1 或 [::1] 本机回环地址。</small></label>
+          <label className="wide">请求头名（每行一个）<textarea className="opt-input" rows={3} disabled={busy} value={draft.names} onChange={(event) => setDraft({ ...draft, names: event.target.value })} placeholder="Authorization" /></label>
         </>}
       </div>
-      <div className="mcp-editor-actions"><span>保存不会启动服务；凭据稍后单独保存到当前设备的安全凭据存储。</span><button className="btn primary" disabled={busy}>{busy ? "保存中…" : "保存配置"}</button></div>
+      <div className="mcp-editor-actions"><span>保存不会启动服务；凭据稍后单独保存到当前设备的安全凭据存储。</span><button className="opt-button primary" disabled={busy}>{busy ? "保存中…" : "保存配置"}</button></div>
     </form>
   );
 }
@@ -447,11 +447,11 @@ function CredentialEditor({ server, onClose }: { server: McpServerView; onClose:
   };
   return (
     <div className="mcp-credentials">
-      <div className="mcp-editor-head"><div><strong>{server.display_name} 的凭据</strong><span>凭据只保存在当前设备的安全凭据存储中；R-Code 永不回显已保存内容。</span></div><button className="btn ghost" onClick={onClose}>关闭</button></div>
+      <div className="mcp-editor-head"><div><strong>{server.display_name} 的凭据</strong><span>凭据只保存在当前设备的安全凭据存储中；R-Code 永不回显已保存内容。</span></div><button className="opt-button quiet" onClick={onClose}>关闭</button></div>
       {error && <div className="mcp-banner error">{error}</div>}
-      {statuses?.map((item) => <label key={item.name}><span><code>{item.name}</code><small>{item.configured ? "已配置" : "未配置"}</small></span><input className="input" type="password" autoComplete="off" value={values[item.name] ?? ""} onChange={(event) => setValues({ ...values, [item.name]: event.target.value })} placeholder={item.configured ? "输入新值以替换" : "输入凭据"} />{item.configured && <button className="btn ghost" disabled={busy} onClick={() => void clear(item.name)}>清除</button>}</label>)}
+      {statuses?.map((item) => <label key={item.name}><span><code>{item.name}</code><small>{item.configured ? "已配置" : "未配置"}</small></span><input className="opt-input" type="password" autoComplete="off" value={values[item.name] ?? ""} onChange={(event) => setValues({ ...values, [item.name]: event.target.value })} placeholder={item.configured ? "输入新值以替换" : "输入凭据"} />{item.configured && <button className="opt-button quiet" disabled={busy} onClick={() => void clear(item.name)}>清除</button>}</label>)}
       {statuses?.length === 0 && <div className="mcp-empty">该服务没有声明凭据字段。</div>}
-      <div className="mcp-editor-actions"><span /><button className="btn primary" disabled={busy || !Object.values(values).some(Boolean)} onClick={() => void save()}>{busy ? "保存中…" : "保存凭据"}</button></div>
+      <div className="mcp-editor-actions"><span /><button className="opt-button primary" disabled={busy || !Object.values(values).some(Boolean)} onClick={() => void save()}>{busy ? "保存中…" : "保存凭据"}</button></div>
     </div>
   );
 }
@@ -461,7 +461,7 @@ function MarketRow({ server, busyKeys, onInstall }: { server: McpMarketServer; b
   return (
     <article className="mcp-market-row">
       <div><div className="mcp-server-title"><strong>{server.title}</strong><code>{server.version}</code></div><p>{server.description || server.name}</p><small>{server.repository_url ?? server.name}</small></div>
-      <div className="mcp-market-install"><input className="input" aria-label={`${server.title} 的本机 ID`} value={serverId} onChange={(event) => setServerId(event.target.value)} />{server.install_options.map((option) => <button key={option.id} className="btn" disabled={!serverId.trim() || busyKeys.has(`prepare:${server.name}:${option.id}`)} onClick={() => onInstall(server, option.id, serverId)}>{busyKeys.has(`prepare:${server.name}:${option.id}`) ? "准备中…" : option.label}</button>)}</div>
+      <div className="mcp-market-install"><input className="opt-input" aria-label={`${server.title} 的本机 ID`} value={serverId} onChange={(event) => setServerId(event.target.value)} />{server.install_options.map((option) => <button key={option.id} className="opt-button" disabled={!serverId.trim() || busyKeys.has(`prepare:${server.name}:${option.id}`)} onClick={() => onInstall(server, option.id, serverId)}>{busyKeys.has(`prepare:${server.name}:${option.id}`) ? "准备中…" : option.label}</button>)}</div>
     </article>
   );
 }
@@ -472,7 +472,7 @@ function ApprovalPanel({ approval, busy, onCancel, onConfirm }: { approval: Appr
     <div className="mcp-approval" role="alertdialog" aria-label="确认 MCP 启动方案">
       <div><span>EXACT LAUNCH PLAN</span><h3>{approval.kind === "enable" ? "确认启用这个 MCP？" : "确认添加这个 MCP？"}</h3><p>请核对完整启动形态。令牌五分钟内有效且只能使用一次；配置发生变化后会自动失效。</p></div>
       <pre>{description}</pre>
-      <div className="mcp-approval-actions"><button className="btn" disabled={busy} onClick={onCancel}>取消</button><button className="btn primary" disabled={busy} onClick={onConfirm}>{busy ? "正在处理…" : approval.kind === "enable" ? "确认并启用" : "确认添加"}</button></div>
+      <div className="mcp-approval-actions"><button className="opt-button" disabled={busy} onClick={onCancel}>取消</button><button className="opt-button primary" disabled={busy} onClick={onConfirm}>{busy ? "正在处理…" : approval.kind === "enable" ? "确认并启用" : "确认添加"}</button></div>
     </div>
   );
 }

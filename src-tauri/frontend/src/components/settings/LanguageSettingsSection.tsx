@@ -6,18 +6,18 @@ export function LanguageSettingsSection() {
   const locale = getAppLocale();
 
   return (
-    <section className="preference-section" id="language-block" aria-labelledby="language-heading">
-      <div className="preference-section-heading">
+    <section className="opt-card preference-section" id="language-block" aria-labelledby="language-heading">
+      <div className="opt-card-head preference-section-heading">
         <div>
           <h3 id="language-heading">{t("settings.language.heading")}</h3>
           <p>{t("settings.language.description")}</p>
         </div>
       </div>
-      <div className="field">
+      <div className="opt-field">
         <label htmlFor="set-interface-language">{t("settings.language.label")}</label>
         <select
           id="set-interface-language"
-          className="input"
+          className="opt-input"
           value={locale}
           aria-label={t("settings.language.selectAria")}
           onChange={(event) => void setAppLocale(event.target.value as AppLocale)}

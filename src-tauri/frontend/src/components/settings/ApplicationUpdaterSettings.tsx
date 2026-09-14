@@ -206,12 +206,12 @@ export function ApplicationUpdaterSettings() {
   ) : null;
 
   const checkButton = canCheck ? (
-    <button type="button" className="btn" disabled={disabled} onClick={() => void checkNow()}>
+    <button type="button" className="opt-button" disabled={disabled} onClick={() => void checkNow()}>
       {checkActionLabel}
     </button>
   ) : null;
   const downloadButton = canDownload ? (
-    <button type="button" className="btn primary" disabled={disabled} onClick={() => void download()}>
+    <button type="button" className="opt-button primary" disabled={disabled} onClick={() => void download()}>
       {downloadActionLabel}
     </button>
   ) : null;
@@ -219,23 +219,23 @@ export function ApplicationUpdaterSettings() {
     <>
       <button
         type="button"
-        className="btn primary"
+        className="opt-button primary"
         disabled={disabled}
         onClick={() => void installAndRestart()}
       >
         {installActionLabel}
       </button>
-      <button type="button" className="btn" disabled={disabled} onClick={() => void installForLater()}>
+      <button type="button" className="opt-button" disabled={disabled} onClick={() => void installForLater()}>
         {t("settings.updater.actions.installForLater")}
       </button>
     </>
   ) : null;
   const restartButtons = restartPending ? (
     <>
-      <button type="button" className="btn primary" disabled={disabled} onClick={() => void restartNow()}>
+      <button type="button" className="opt-button primary" disabled={disabled} onClick={() => void restartNow()}>
         {restartActionLabel}
       </button>
-      <button type="button" className="btn" disabled={disabled} onClick={() => setRestartDeferred(true)}>
+      <button type="button" className="opt-button" disabled={disabled} onClick={() => setRestartDeferred(true)}>
         {t("settings.updater.actions.restartLater")}
       </button>
     </>
@@ -253,11 +253,11 @@ export function ApplicationUpdaterSettings() {
 
   return (
     <section
-      className="preference-section application-updater"
+      className="opt-card preference-section application-updater"
       id="application-updater-block"
       aria-labelledby="application-updater-heading"
     >
-      <div className="preference-section-heading">
+      <div className="opt-card-head preference-section-heading">
         <div>
           <h3 id="application-updater-heading">{t("settings.updater.heading")}</h3>
           <p>{t("settings.updater.description")}</p>

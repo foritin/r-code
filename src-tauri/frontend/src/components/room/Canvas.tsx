@@ -513,30 +513,37 @@ export function Canvas({
         <div ref={workbenchBodyRef} className="canvas-body workbench-body" id="workbench-panel" tabIndex={-1}>
         {launcherOpen ? (
           <section className="workbench-launcher" role="dialog" aria-label="工作台工具启动器" onKeyDown={onLauncherKeyDown}>
-            <div className="workbench-launcher-intro">
+            <div className="workbench-launcher-intro opt-tool-intro">
               <span>任务工作台</span>
               <strong>在同一个位置打开任务工具</strong>
               <p>工具按任务保存状态。隐藏工作台不会停止终端或丢失当前上下文。</p>
             </div>
-            <ul className="workbench-launcher-list" aria-label="可用工具">
+            <ul className="workbench-launcher-list opt-tool-menu" aria-label="可用工具">
               {TABS.map((tool, index) => (
                 <li key={tool.id}>
                   <button
                     ref={(node) => { launcherButtonsRef.current[index] = node; }}
                     type="button"
-                    className="workbench-launcher-row"
+                    className="workbench-launcher-row opt-tool-line"
                     onFocus={() => setLauncherIndex(index)}
                     onClick={() => activateTool(tool.openTab)}
                   >
-                    <span className="workbench-launcher-glyph"><ToolIcon tab={tool.id} width={17} height={17} /></span>
-                    <span><strong>{tool.label}</strong><small>{tool.description}</small></span>
-                    {tool.id === "review" && <em>{displayedReviewChangeCount}</em>}
-                    {tool.id === "plan" && planController.view && <em>{planController.view.items.length}</em>}
+                    <span className="workbench-launcher-glyph opt-icon"><ToolIcon tab={tool.id} width={17} height={17} /></span>
+                    <span className="opt-tool-copy">
+                      <strong>
+                        {tool.label}
+                        {tool.id === "review" && <em>{displayedReviewChangeCount}</em>}
+                        {tool.id === "plan" && planController.view && <em>{planController.view.items.length}</em>}
+                      </strong>
+                      <small>{tool.description}</small>
+                    </span>
                     {tool.shortcut && <kbd>{tool.shortcut}</kbd>}
+                    <span className="opt-icon" aria-hidden="true"><IconChevronRight width={16} height={16} /></span>
                   </button>
                 </li>
               ))}
             </ul>
+            <div className="opt-tool-footnote">工具状态随任务保留。收起面板后，任务继续运行。</div>
           </section>
         ) : tab === "summary" ? (
           <SummaryPanel
@@ -570,7 +577,7 @@ export function Canvas({
         ) : (
           <div className="workbench-review-tool">
             <div
-              className="workbench-review-switch"
+              className="workbench-review-switch opt-tabs line"
               role="tablist"
               aria-label="审核视图"
               onKeyDown={(event) => {
@@ -581,8 +588,8 @@ export function Canvas({
                 requestAnimationFrame(() => document.getElementById(`review-view-${next}`)?.focus());
               }}
             >
-              <button id="review-view-changes" type="button" role="tab" aria-selected={tab === "changes"} tabIndex={tab === "changes" ? 0 : -1} onClick={() => setTab("changes")}>变更 <span>{displayedReviewChangeCount}</span></button>
-              <button id="review-view-review" type="button" role="tab" aria-selected={tab === "review"} tabIndex={tab === "review" ? 0 : -1} onClick={() => setTab("review")}>验证与决策</button>
+              <button id="review-view-changes" type="button" role="tab" className={tab === "changes" ? "active" : ""} aria-selected={tab === "changes"} tabIndex={tab === "changes" ? 0 : -1} onClick={() => setTab("changes")}>变更 <span>{displayedReviewChangeCount}</span></button>
+              <button id="review-view-review" type="button" role="tab" className={tab === "review" ? "active" : ""} aria-selected={tab === "review"} tabIndex={tab === "review" ? 0 : -1} onClick={() => setTab("review")}>验证与决策</button>
             </div>
             <div className="workbench-review-panel" role="tabpanel">
               {tab === "changes"
@@ -2187,8 +2194,8 @@ function FilesPanel({
   }
 
   return (
-    <div className="files-wrap">
-      <div className="files-tree" aria-label="工作区文件">
+    <div className="files-wrap opt-file-layout">
+      <div className="files-tree opt-file-tree" aria-label="工作区文件">
         <div className="files-tree-head">
           <IconProjects width={13} height={13} />
           <span>文件</span>
@@ -2206,11 +2213,11 @@ function FilesPanel({
         </div>
         {renderDirectory("", 0)}
       </div>
-      <div className="files-editor">
+      <div className="files-editor opt-editor-code">
         {selectedPath ? (
           <>
             <div className="files-editor-head">
-              <span className="files-path" title={selectedPath}>{selectedPath}</span>
+              <span className="files-path opt-mono" title={selectedPath}>{selectedPath}</span>
               {file && (
                 <span className="files-meta">
                   {file.total_lines} 行{file.truncated ? " · 已截断" : ""}{file.is_editable ? "" : " · 只读"}
@@ -2218,19 +2225,19 @@ function FilesPanel({
               )}
               {selectedIsImage && <span className="files-meta">图片预览</span>}
               {file?.is_editable && (
-                <button className="btn ghost sm" onClick={() => setEditing((value) => !value)}>
+                <button className="btn ghost sm opt-button quiet" onClick={() => setEditing((value) => !value)}>
                   {editing ? "取消编辑" : "编辑"}
                 </button>
               )}
               <button
-                className={"btn ghost sm" + (reloadGuard.armed ? " confirm" : "")}
+                className={"btn ghost sm opt-button quiet" + (reloadGuard.armed ? " confirm" : "")}
                 disabled={(!file && !selectedIsImage) || saving}
                 onClick={reloadFile}
               >
                 {reloadGuard.armed ? "确认放弃修改?" : "重新加载"}
               </button>
               <button
-                className="btn accent sm"
+                className="btn accent sm opt-button primary"
                 disabled={!editing || !file?.is_editable || !dirty || saving}
                 onClick={() => void saveFile()}
               >
@@ -2243,7 +2250,7 @@ function FilesPanel({
                   当前文件有未保存修改。再次点击 <strong>{pendingPath}</strong> 将放弃修改并打开它。
                 </span>
                 <button
-                  className="btn ghost sm"
+                  className="btn ghost sm opt-button quiet"
                   onClick={() => {
                     switchGuard.disarm();
                     setPendingPath(null);
@@ -2253,7 +2260,7 @@ function FilesPanel({
                 </button>
               </div>
             )}
-            {running && <div className="files-running">智能体正在运行；保存时会检测磁盘是否已被改动。</div>}
+            {running && <div className="files-running opt-inline-state">智能体正在运行；保存时会检测磁盘是否已被改动。</div>}
             {fileError && <div className="panel-error">{fileError}</div>}
             {saveError && <div className="panel-error">{saveError}</div>}
             {!file && !fileError && !selectedIsImage && <div className="empty">读取文件…</div>}
@@ -2305,7 +2312,7 @@ function FilesPanel({
             )}
           </>
         ) : (
-          <div className="files-empty">
+          <div className="files-empty opt-file-blank">
             <IconEditor width={20} height={20} />
             <strong>选择一个文件</strong>
             <span>从左侧目录树打开文本文件后，可直接编辑并显式保存。</span>
@@ -2839,12 +2846,12 @@ function TerminalPanel({
 
   return (
     <div
-      className={`term-wrap${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
+      className={`term-wrap opt-terminal${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
       data-terminal-sidebar={sidebarCollapsed ? "collapsed" : "expanded"}
     >
       <div className="term-side" id={sidebarId} aria-hidden={sidebarCollapsed || undefined}>
         <div className="term-new-wrap">
-          <button className="btn sm term-new" disabled={creating || !workspacePath || !workspaceAttached} onClick={() => void create()}>
+          <button className="btn sm term-new opt-button" disabled={creating || !workspacePath || !workspaceAttached} onClick={() => void create()}>
             <IconPlus width={11} height={11} /> 新建终端
           </button>
           <Menu
@@ -2855,7 +2862,7 @@ function TerminalPanel({
             menuClassName="term-launcher"
             disabled={creating || !workspacePath || !workspaceAttached}
             trigger={
-              <button className="btn sm term-new-more" aria-label="选择终端类型">
+              <button className="btn sm term-new-more opt-button" aria-label="选择终端类型">
                 <IconChevronDown width={11} height={11} />
               </button>
             }
@@ -2915,7 +2922,7 @@ function TerminalPanel({
             ))}
           </div>
         )}
-        {terms.length === 0 && <div className="term-hint">无终端</div>}
+        {terms.length === 0 && <div className="term-hint opt-faint">无终端</div>}
       </div>
       <button
         type="button"

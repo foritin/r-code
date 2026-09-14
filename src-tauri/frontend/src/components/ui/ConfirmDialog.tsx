@@ -11,6 +11,8 @@ interface Props {
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** 追加到对话框根元素的设计系统类（T05b 特批透传，默认为空不影响既有样式）。 */
+  className?: string;
 }
 
 /** 破坏性操作确认层：默认焦点落在取消，Esc / 点击背板均可安全退出。 */
@@ -23,6 +25,7 @@ export function ConfirmDialog({
   busy = false,
   onConfirm,
   onCancel,
+  className,
 }: Props) {
   const titleId = useId();
   const descriptionId = useId();
@@ -61,7 +64,7 @@ export function ConfirmDialog({
     >
       <div
         ref={dialogRef}
-        className="confirm-dialog"
+        className={`confirm-dialog${className ? ` ${className}` : ""}`}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}

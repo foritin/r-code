@@ -232,16 +232,16 @@ export function InboxScene() {
 
   return (
     <div className={`scene scene-inbox${selected ? " has-inspector" : ""}${inspectorCollapsed ? " inspector-collapsed" : ""}`}>
-      <div className="inbox-main">
-        <div className="inbox-scroll">
-          <header className="inbox-header">
+      <div className="opt-inbox">
+        <div className="opt-inbox-list">
+          <header className="opt-page-head">
             <div>
               <h1>待处理</h1>
               <p>跨项目同步权限请求与审核变更，处理结果会实时回流。</p>
             </div>
-            <div className="inbox-header-actions">
-              <span className="inbox-live"><i />实时同步</span>
-              <span className="inbox-count">{items.length} 项</span>
+            <div className="opt-actions">
+              <span className="opt-inline-state ready">实时同步</span>
+              <span className="opt-faint">{items.length} 项</span>
               <button className={`inbox-refresh${manualRefreshing ? " refreshing" : ""}`} onClick={() => void manualRefresh()} disabled={manualRefreshing} aria-label="刷新待处理" title="立即刷新">
                 <IconRefresh width={15} height={15} />
               </button>
@@ -249,35 +249,31 @@ export function InboxScene() {
           </header>
 
           {items.length > 0 && (
-            <div className="inbox-overview" aria-label="待处理概览">
-              <span><strong>{groups.length}</strong> 个项目</span>
-              <span><strong>{permissionCount}</strong> 项授权</span>
-              <span><strong>{reviewCount}</strong> 项审核</span>
-              <span><strong>{pendingFileCount}</strong> 个文件待处理</span>
+            <div className="opt-summary" aria-label="待处理概览">
+              <span><b>{groups.length}</b>个项目</span>
+              <span><b>{permissionCount}</b>项授权</span>
+              <span><b>{reviewCount}</b>项审核</span>
+              <span><b>{pendingFileCount}</b>个文件待处理</span>
             </div>
           )}
           {error && <div className="inbox-error" role="alert">{error}</div>}
 
           {!hydrated && items.length === 0 ? (
-            <div className="inbox-empty inbox-loading"><IconRefresh width={24} height={24} /><h2>正在同步待处理事项</h2><p>正在读取各项目的权限与审核状态。</p></div>
+            <div className="opt-empty"><span className="opt-icon"><IconRefresh width={20} height={20} /></span><h3>正在同步待处理事项</h3><p>正在读取各项目的权限与审核状态。</p></div>
           ) : items.length === 0 ? (
-            <div className="inbox-empty"><IconCheck width={24} height={24} /><h2>暂时没有待处理事项</h2><p>权限请求和待审核变更会在出现时显示在这里。</p></div>
+            <div className="opt-empty"><span className="opt-icon"><IconCheck width={20} height={20} /></span><h3>暂时没有待处理事项</h3><p>权限请求和待审核变更会在出现时显示在这里。</p></div>
           ) : (
             <div className="inbox-projects" aria-label="按项目分组的待处理事项">
               {groups.map((group, index) => (
                 <section className="inbox-project-group" key={group.key} data-project-path={group.path ?? ""} aria-labelledby={`inbox-project-${index}`}>
-                  <header className="inbox-project-head">
-                    <span className="inbox-project-mark"><IconFolderOpen width={17} height={17} /></span>
-                    <div>
-                      <h2 id={`inbox-project-${index}`}>{group.name}</h2>
-                      <p>{group.path ?? "未归属本地项目"}</p>
-                    </div>
-                    <span className="inbox-project-summary">
-                      {group.permissionCount > 0 && <b>{group.permissionCount} 授权</b>}
-                      {group.reviewCount > 0 && <b>{group.reviewCount} 审核</b>}
-                      {group.pendingFileCount > 0 && <b>{group.pendingFileCount} 文件</b>}
-                    </span>
+                  <header className="opt-inbox-project">
+                    <span className="opt-icon"><IconFolderOpen width={16} height={16} /></span>
+                    <strong id={`inbox-project-${index}`}>{group.name}</strong>
+                    <span>{group.path ?? "未归属本地项目"}</span>
                   </header>
+                  <div className="opt-inbox-columns" aria-hidden="true">
+                    <span>事项</span><span>类型</span><span>等待</span><span />
+                  </div>
                   <div className="inbox-list">
                     {group.items.map((item) => (
                       <InboxRow
@@ -295,27 +291,27 @@ export function InboxScene() {
             </div>
           )}
         </div>
-      </div>
 
-      {selected && (
-        <aside className="inbox-inspector" aria-label={kind === "permission" ? "权限详情" : "审核摘要"}>
-          {inspectorCollapsed ? (
-            <button className="inspector-rail-button" onClick={() => setInspectorCollapsed(false)} title={`展开${kind === "permission" ? "权限详情" : "审核摘要"}`}>
-              <span>{kind === "permission" ? "权限详情" : "审核摘要"}</span><IconChevronLeft width={16} height={16} />
-            </button>
-          ) : kind === "permission" ? (
-            <PermissionInspector item={selected} onError={setError} onCollapse={() => setInspectorCollapsed(true)} />
-          ) : (
-            <ReviewInspector
-              item={selected}
-              reviewEntry={reviewStatuses[selected.task.id]}
-              onRefreshStatus={refreshReviewStatus}
-              onError={setError}
-              onCollapse={() => setInspectorCollapsed(true)}
-            />
+        {selected && (
+            <aside className="inbox-inspector opt-inbox-detail" aria-label={kind === "permission" ? "权限详情" : "审核摘要"}>
+              {inspectorCollapsed ? (
+                <button className="inspector-rail-button" onClick={() => setInspectorCollapsed(false)} title={`展开${kind === "permission" ? "权限详情" : "审核摘要"}`}>
+                  <span>{kind === "permission" ? "权限详情" : "审核摘要"}</span><IconChevronLeft width={16} height={16} />
+                </button>
+              ) : kind === "permission" ? (
+                <PermissionInspector item={selected} onError={setError} onCollapse={() => setInspectorCollapsed(true)} />
+              ) : (
+                <ReviewInspector
+                  item={selected}
+                  reviewEntry={reviewStatuses[selected.task.id]}
+                  onRefreshStatus={refreshReviewStatus}
+                  onError={setError}
+                  onCollapse={() => setInspectorCollapsed(true)}
+                />
+              )}
+            </aside>
           )}
-        </aside>
-      )}
+      </div>
     </div>
   );
 }
@@ -333,7 +329,6 @@ function InboxRow({
   reviewEntry?: ReviewStatusEntry;
   onSelect: () => void;
 }) {
-  const label = item.kind === "permission" ? "权限请求" : "等待审核";
   let description = item.kind === "permission" ? item.permission!.tool_name : `${detailChanges} 个文件变更`;
   if (item.kind === "review_ready") {
     if (reviewEntry?.status) {
@@ -347,19 +342,19 @@ function InboxRow({
     }
   }
   return (
-    <button className={`inbox-row${selected ? " selected" : ""}`} data-task-id={item.task.id} onClick={onSelect}>
-      <span className={`inbox-row-icon ${item.kind}`}>{item.kind === "permission" ? <IconShield width={17} height={17} /> : <IconFile width={17} height={17} />}</span>
-      <span className="inbox-row-copy"><small>{label}</small><strong>{taskTitle(item.task)}</strong><em>{description}</em></span>
-      <span className={`inbox-row-state ${item.kind}`}>{item.kind === "permission" ? "待授权" : reviewEntry?.status?.remaining_count === 0 ? "待完成" : "待审核"}</span>
-      <time>等待 {elapsedSince(item.since)}</time>
-      <IconArrowRight className="inbox-row-arrow" width={16} height={16} />
+    <button className={`opt-inbox-line${selected ? " selected" : ""}`} data-task-id={item.task.id} onClick={onSelect}>
+      <span className="opt-icon">{item.kind === "permission" ? <IconShield width={16} height={16} /> : <IconFile width={16} height={16} />}</span>
+      <span className="opt-inbox-subject"><strong>{taskTitle(item.task)}</strong><small>{description}</small></span>
+      <span className={`opt-inline-state ${item.kind === "permission" ? "approval" : "review"}`}>{item.kind === "permission" ? "待授权" : reviewEntry?.status?.remaining_count === 0 ? "待完成" : "待审核"}</span>
+      <time>{elapsedSince(item.since)}</time>
+      <IconArrowRight width={16} height={16} />
     </button>
   );
 }
 
 function InspectorHead({ title, subtitle, onCollapse }: { title: string; subtitle: string; onCollapse: () => void }) {
   return (
-    <header className="inspector-head"><div><p className="section-kicker">DECISION DETAIL</p><h2>{title}</h2><span>{subtitle}</span></div><button className="inspector-close" onClick={onCollapse} aria-label={`收起${title}`} title={`收起${title}`}><IconClose width={13} height={13} /></button></header>
+    <header className="inspector-head opt-panel-head"><h2>{title}</h2><span className="opt-faint">{subtitle}</span><button className="inspector-close" onClick={onCollapse} aria-label={`收起${title}`} title={`收起${title}`}><IconClose width={13} height={13} /></button></header>
   );
 }
 
@@ -398,18 +393,20 @@ function PermissionInspector({ item, onError, onCollapse }: { item: NeedsYouItem
   return (
     <div className="inspector-card">
       <InspectorHead title="权限详情" subtitle={taskTitle(item.task)} onCollapse={onCollapse} />
-      <div className="inspector-body">
+      <div className="inspector-body opt-panel-body">
         <div className="inspector-callout permission"><IconShield width={19} height={19} /><div><strong>{permission.tool_name}</strong><span>{permission.risk_level} · {permissionRiskLabel(permission.risk_level)}</span></div></div>
         <DetailLine label="发起者" value={attribution.label} />
         <DetailLine label="等待时间" value={elapsedSince(item.since)} />
         <div className="inspector-summary"><small>请求说明</small><p>{permission.input_summary || "没有补充说明。"}</p></div>
         <div className="inspector-summary"><small>{t("approvals.scopeLabel")}</small><p>{scope}</p></div>
       </div>
-      <footer className="inspector-actions">
-        <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void decide("allow")}>{t("approvals.allowOnce")}</button>
-        {canPersist && <button className="rc-button rc-button-quiet" disabled={busy} onClick={() => void decide("allow_always")}>{t("approvals.allowAlways")}</button>}
-        <button className="rc-button" disabled={busy} onClick={() => void decide("deny")}>{t("approvals.deny")}</button>
-        <button className="text-link inspector-open-task" onClick={() => openRoom(item.task.id)}>打开任务 <IconArrowRight width={14} height={14} /></button>
+      <footer className="inspector-actions opt-panel-footer">
+        <div className="opt-actions">
+          <button className="opt-button primary" disabled={busy} onClick={() => void decide("allow")}>{t("approvals.allowOnce")}</button>
+          {canPersist && <button className="opt-button quiet" disabled={busy} onClick={() => void decide("allow_always")}>{t("approvals.allowAlways")}</button>}
+          <button className="opt-button" disabled={busy} onClick={() => void decide("deny")}>{t("approvals.deny")}</button>
+          <button className="text-link inspector-open-task" onClick={() => openRoom(item.task.id)}>打开任务 <IconArrowRight width={14} height={14} /></button>
+        </div>
       </footer>
     </div>
   );
@@ -532,8 +529,8 @@ function ReviewInspector({
   return (
     <div className="inspector-card">
       <InspectorHead title="审核摘要" subtitle={taskTitle(item.task)} onCollapse={onCollapse} />
-      <div className="inspector-body">
-        <div className="inspector-callout review"><IconFile width={19} height={19} /><div><strong>{fileSummary}</strong><span>{verify ? `${verify.command} · ${verify.status === "passed" ? "验证通过" : verify.status}` : "尚未记录验证"}</span></div></div>
+      <div className="inspector-body opt-panel-body">
+        <div className="opt-validation-line"><span className="opt-icon"><IconFile width={16} height={16} /></span><strong>{fileSummary}</strong><span>{verify ? `${verify.command} · ${verify.status === "passed" ? "验证通过" : verify.status}` : "尚未记录验证"}</span></div>
         {reviewEntry?.error && <div className="inspector-sync-warning" role="status">状态同步暂时失败，仍显示最近一次结果。<button className="text-link" disabled={busy} onClick={() => void onRefreshStatus(item.task.id).catch(() => undefined)}>重试</button></div>}
         <div className="inspector-file-list" aria-label="待处理文件">
           {!reviewEntry ? (
@@ -544,20 +541,20 @@ function ReviewInspector({
             pendingPaths.map((pathStatus) => {
               const change = changeByPath.get(pathStatus.path);
               return (
-                <div className={`inspector-review-file${pathStatus.conflict ? " conflict" : ""}`} key={pathStatus.path}>
-                  <IconFile width={14} height={14} />
+                <div className={`opt-inbox-file${pathStatus.conflict ? " conflict" : ""}`} key={pathStatus.path}>
+                  <span className="opt-icon"><IconFile width={16} height={16} /></span>
                   <span><strong>{pathStatus.path}</strong><small>{pathStatus.conflict ? pathStatus.blocker ?? "存在冲突" : change?.change_type ?? "变更"}</small></span>
-                  <button className="rc-button rc-button-quiet" disabled={busy || pendingFiles.has(pathStatus.path) || !pathStatus.safe_to_accept} onClick={() => void acceptFile(pathStatus.path)} aria-label={`接受文件 ${pathStatus.path}`}>{pendingFiles.has(pathStatus.path) ? "接受中…" : "接受"}</button>
+                  <button className="opt-button quiet" disabled={busy || pendingFiles.has(pathStatus.path) || !pathStatus.safe_to_accept} onClick={() => void acceptFile(pathStatus.path)} aria-label={`接受文件 ${pathStatus.path}`}>{pendingFiles.has(pathStatus.path) ? "接受中…" : "接受"}</button>
                 </div>
               );
             })
           ) : changes.length === 0 ? (
             <p>变更明细读取中，或当前没有可展示的文件。</p>
           ) : (
-            changes.map((change) => <div className="inspector-review-file readonly" key={change.id}><IconFile width={14} height={14} /><span><strong>{change.path}</strong><small>{change.change_type}</small></span></div>)
+            changes.map((change) => <div className="opt-inbox-file readonly" key={change.id}><span className="opt-icon"><IconFile width={16} height={16} /></span><span><strong>{change.path}</strong><small>{change.change_type}</small></span></div>)
           )}
         </div>
-        {status && (status.accepted_count > 0 || status.rejected_count > 0) && <p className="review-accepted-note">已接受 {status.accepted_count} 个文件，已拒绝 {status.rejected_count} 个文件；列表仅显示仍待处理的文件。</p>}
+        {status && (status.accepted_count > 0 || status.rejected_count > 0) && <p className="opt-inbox-detail-note">已接受 {status.accepted_count} 个文件，已拒绝 {status.rejected_count} 个文件；列表仅显示仍待处理的文件。</p>}
         {requestingChanges && (
           <div className="review-request-form">
             <label htmlFor={`change-request-${item.task.id}`}>修改说明</label>
@@ -566,13 +563,15 @@ function ReviewInspector({
           </div>
         )}
       </div>
-      <footer className="inspector-actions review-actions">
-        <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void finishReview()}>{busyAction === "finish" ? "正在完成…" : "完成审核"}</button>
-        {status && status.remaining_count > 0 && <button className="rc-button" disabled={busy || !status.can_accept_all} onClick={() => void acceptAllFiles()}>{busyAction === "all-files" ? "接受中…" : "接受全部文件"}</button>}
-        <button className="rc-button" onClick={() => open("review")}>完整审核</button>
-        <button className="rc-button" disabled={busy} onClick={() => setRequestingChanges((open) => !open)}>{requestingChanges ? "收起修改说明" : "请求修改"}</button>
-        <button className="rc-button rc-button-quiet" disabled={busy} onClick={() => void rollback()}>{busyAction === "rollback" ? "回滚中…" : "回滚"}</button>
-        <button className="text-link inspector-open-task" onClick={() => open("changes")}>打开任务变更 <IconArrowRight width={14} height={14} /></button>
+      <footer className="inspector-actions review-actions opt-panel-footer">
+        <div className="opt-actions">
+          <button className="opt-button primary" disabled={busy} onClick={() => void finishReview()}>{busyAction === "finish" ? "正在完成…" : "完成审核"}</button>
+          {status && status.remaining_count > 0 && <button className="opt-button" disabled={busy || !status.can_accept_all} onClick={() => void acceptAllFiles()}>{busyAction === "all-files" ? "接受中…" : "接受全部文件"}</button>}
+          <button className="opt-button" onClick={() => open("review")}>完整审核</button>
+          <button className="opt-button" disabled={busy} onClick={() => setRequestingChanges((open) => !open)}>{requestingChanges ? "收起修改说明" : "请求修改"}</button>
+          <button className="opt-button quiet" disabled={busy} onClick={() => void rollback()}>{busyAction === "rollback" ? "回滚中…" : "回滚"}</button>
+          <button className="text-link inspector-open-task" onClick={() => open("changes")}>打开任务变更 <IconArrowRight width={14} height={14} /></button>
+        </div>
       </footer>
     </div>
   );

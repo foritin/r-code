@@ -108,7 +108,7 @@ export function KnowledgeSettingsPane() {
         </aside>
 
         <div className="knowledge-content">
-          <nav className="knowledge-tabs" role="tablist" aria-label="知识类型">
+          <nav className="opt-tabs line knowledge-tabs" role="tablist" aria-label="知识类型">
             {TABS.map((item) => (
               <button
                 key={item.id}
@@ -208,7 +208,7 @@ function AgentPromptsSection({ workspacePath, workspaceName }: { workspacePath: 
   if (loading && !snapshot) return <div className="knowledge-state" role="status">正在读取协作 Prompt…</div>;
 
   return (
-    <section className="knowledge-flat-section knowledge-prompt-settings">
+    <section className="opt-settings-prompts knowledge-flat-section knowledge-prompt-settings">
       <header className="knowledge-section-head">
         <div>
           <span>{workspacePath ? "项目作用域" : "公共作用域"}</span>
@@ -232,21 +232,21 @@ function AgentPromptsSection({ workspacePath, workspaceName }: { workspacePath: 
       {error && <div className="errbar" role="alert">保存协作 Prompt 失败：{error}</div>}
       {notice && <div className="notebar" role="status"><IconCheck width={14} height={14} />{notice}</div>}
       <div className="knowledge-form-grid">
-        <div className="field agent-prompt-field">
+        <div className="opt-field agent-prompt-field">
           <label htmlFor="knowledge-main-agent-prompt">主 Agent</label>
-          <textarea id="knowledge-main-agent-prompt" className="input" rows={7} value={draft.main_agent} disabled={busy} placeholder={workspacePath ? "输入仅针对当前项目的主 Agent 规则" : undefined} onChange={(event) => setDraft((current) => ({ ...current, main_agent: event.target.value }))} />
+          <textarea id="knowledge-main-agent-prompt" className="opt-input" rows={7} value={draft.main_agent} disabled={busy} placeholder={workspacePath ? "输入仅针对当前项目的主 Agent 规则" : undefined} onChange={(event) => setDraft((current) => ({ ...current, main_agent: event.target.value }))} />
           <span className="hint">说明委派边界、汇总方式与最终责任。</span>
         </div>
-        <div className="field agent-prompt-field">
+        <div className="opt-field agent-prompt-field">
           <label htmlFor="knowledge-subagent-prompt">子代理</label>
-          <textarea id="knowledge-subagent-prompt" className="input" rows={7} value={draft.subagent} disabled={busy} placeholder={workspacePath ? "输入仅针对当前项目的子代理规则" : undefined} onChange={(event) => setDraft((current) => ({ ...current, subagent: event.target.value }))} />
+          <textarea id="knowledge-subagent-prompt" className="opt-input" rows={7} value={draft.subagent} disabled={busy} placeholder={workspacePath ? "输入仅针对当前项目的子代理规则" : undefined} onChange={(event) => setDraft((current) => ({ ...current, subagent: event.target.value }))} />
           <span className="hint">约束任务范围、输出形式与验证责任。</span>
         </div>
       </div>
-      <div className="footbar knowledge-actions">
+      <div className="opt-footer footbar knowledge-actions">
         <span className="spacer" />
-        <button className="btn" type="button" disabled={busy} onClick={() => void reset()}>{workspacePath ? "移除项目规则" : "恢复内置 Prompt"}</button>
-        <button className="btn accent" type="button" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存并应用"}</button>
+        <button className="opt-button" type="button" disabled={busy} onClick={() => void reset()}>{workspacePath ? "移除项目规则" : "恢复内置 Prompt"}</button>
+        <button className="opt-button primary" type="button" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存并应用"}</button>
       </div>
     </section>
   );
@@ -413,7 +413,7 @@ function WorkflowSkillsSection({ workspacePath, workspaceName }: { workspacePath
           <h3>{workspacePath ? `${workspaceName} 的 Skills` : "全局 Skills"}</h3>
           <p>{workspacePath ? "全局 Skills 已自动继承；项目专属 Skill 可在成熟后同步为全局能力。" : "全局 Skills 在每个项目中可用，调用名在有效作用域内保持唯一。"}</p>
         </div>
-        <button className="btn accent" type="button" disabled={busy} onClick={startCustom}>{workspacePath ? "新建项目 Skill" : "新建全局 Skill"}</button>
+        <button className="opt-button primary" type="button" disabled={busy} onClick={startCustom}>{workspacePath ? "新建项目 Skill" : "新建全局 Skill"}</button>
       </header>
       {error && <div className="errbar" role="alert">{error}</div>}
       {notice && <div className="notebar" role="status"><IconCheck width={14} height={14} />{notice}</div>}
@@ -425,8 +425,8 @@ function WorkflowSkillsSection({ workspacePath, workspaceName }: { workspacePath
         ))}
       </div>
       {loading ? <div className="knowledge-state" role="status">正在读取 Skills…</div> : (
-        <div className="workflow-skills-manager">
-          <nav className="workflow-skills-list" aria-label={views.find((item) => item.id === view)?.label ?? "Skills"}>
+        <div className="opt-skill-layout workflow-skills-manager">
+          <nav className="opt-skill-list workflow-skills-list" aria-label={views.find((item) => item.id === view)?.label ?? "Skills"}>
             {visible.length === 0 && <p>{view === "project" ? "还没有项目专属 Skill。" : "这个分类暂时没有 Skill。"}</p>}
             {visible.map((skill) => (
               <button type="button" key={`${skill.scope}:${skill.id}`} className={selectedId === skill.id ? "selected" : ""} onClick={() => select(skill)}>
@@ -436,18 +436,18 @@ function WorkflowSkillsSection({ workspacePath, workspaceName }: { workspacePath
               </button>
             ))}
           </nav>
-          <div className="workflow-skill-editor">
+          <div className="opt-skill-detail workflow-skill-editor">
             {!draft ? <div className="empty">选择一个 Skill，或新建自定义 Skill。</div> : <>
               {inherited && <div className="workflow-inherited-note"><IconCheck width={14} height={14} /><span>这项能力来自全局。如需修改，请切换到“全局”作用域。</span></div>}
-              <div className="field"><label htmlFor="workflow-skill-name">调用名</label><input id="workflow-skill-name" className="input" value={draft.name} disabled={busy || inherited || draft.source === "builtin"} placeholder="例如 release-check" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><span className="hint">小写字母、数字与单连字符；全局与当前项目不能重名。</span></div>
-              <div className="field"><label htmlFor="workflow-skill-description">简介</label><textarea id="workflow-skill-description" className="input" rows={3} value={draft.description} disabled={busy || inherited} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
-              <div className="field agent-prompt-field"><label htmlFor="workflow-skill-instructions">Skill 指令</label><textarea id="workflow-skill-instructions" className="input" rows={10} value={draft.instructions} disabled={busy || inherited} onChange={(event) => setDraft({ ...draft, instructions: event.target.value })} /></div>
+              <div className="opt-field"><label htmlFor="workflow-skill-name">调用名</label><input id="workflow-skill-name" className="opt-input" value={draft.name} disabled={busy || inherited || draft.source === "builtin"} placeholder="例如 release-check" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><span className="hint">小写字母、数字与单连字符；全局与当前项目不能重名。</span></div>
+              <div className="opt-field"><label htmlFor="workflow-skill-description">简介</label><textarea id="workflow-skill-description" className="opt-input" rows={3} value={draft.description} disabled={busy || inherited} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
+              <div className="opt-field agent-prompt-field"><label htmlFor="workflow-skill-instructions">Skill 指令</label><textarea id="workflow-skill-instructions" className="opt-input" rows={10} value={draft.instructions} disabled={busy || inherited} onChange={(event) => setDraft({ ...draft, instructions: event.target.value })} /></div>
               <label className="workflow-skill-enabled"><input type="checkbox" checked={draft.enabled} disabled={busy || inherited} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />在 / 补全中启用</label>
-              {!inherited && <div className="footbar workflow-skill-actions">
-                {draft.scope === "project" && draft.id && <button className="btn" type="button" disabled={busy} onClick={() => void syncToGlobal()}>同步到全局</button>}
+              {!inherited && <div className="opt-footer footbar workflow-skill-actions">
+                {draft.scope === "project" && draft.id && <button className="opt-button" type="button" disabled={busy} onClick={() => void syncToGlobal()}>同步到全局</button>}
                 <span className="spacer" />
-                {draft.source === "builtin" ? <button className="btn" type="button" disabled={busy || !draft.id} onClick={() => void reset()}>恢复默认</button> : draft.id ? <button className={`btn danger${confirmDelete ? " confirm" : ""}`} type="button" disabled={busy} onClick={() => void remove()}>{confirmDelete ? "再次点击确认删除" : "删除"}</button> : null}
-                <button className="btn accent" type="button" disabled={busy || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()} onClick={() => void save()}>{busy ? "保存中…" : "保存 Skill"}</button>
+                {draft.source === "builtin" ? <button className="opt-button" type="button" disabled={busy || !draft.id} onClick={() => void reset()}>恢复默认</button> : draft.id ? <button className={`opt-button danger${confirmDelete ? " confirm" : ""}`} type="button" disabled={busy} onClick={() => void remove()}>{confirmDelete ? "再次点击确认删除" : "删除"}</button> : null}
+                <button className="opt-button primary" type="button" disabled={busy || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()} onClick={() => void save()}>{busy ? "保存中…" : "保存 Skill"}</button>
               </div>}
             </>}
           </div>

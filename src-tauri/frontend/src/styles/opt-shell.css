@@ -1,0 +1,201 @@
+/* ============================================================================
+   opt-shell.css —— Shell 外壳增量层（T01 创建 → T02 接管 · W1 工位 A）
+   ----------------------------------------------------------------------------
+   【作用域】
+   - 34 页共享 chrome 的 R2 对齐增量（含 keep 页外壳）：menubar 高度 42px、
+     rail 宽 264px / ≤1049px → 232px、sidebar-* 家族尺寸/间距/圆角/五态、
+     .main 20px 圆角下的装饰层裁剪。
+   - 类名体系不变（sidebar-brand-row / sidebar-nav-item / sidebar-task /
+     sidebar-project-head / sidebar-section-head 等），只做样式对齐。
+   - 覆盖策略：与 signature.css 皮肤规则同特异性对垒（#app.r-code-signature
+     前缀，1,2,0），依赖 import 顺序（本文件在 main.tsx 样式序列末尾）取后；
+     与 shell.css 骨架规则（1,0,0）同理。不改 signature.css / shell.css。
+   【令牌依据】
+   - tokens.css（T01 已按 design.md §1.2 改值：--menubar-h 42 / --rail-w 264 /
+     --rail-w-narrow 232）+ design.md §2.1 侧栏导航项五态矩阵。零字面色；
+     裸 px 例外仅：28px brand mark（design.md §2.1 定案的图标内容尺寸例外）、
+     任务指示列 6px、inset 2px 选中条、1px 线宽。
+   【断点】
+   - ≤1049px：rail 收窄 232px（design.md §3 定案；直接覆盖 #app 的
+     grid-template-columns，不遮蔽 --rail-w 令牌本身——workbench-page.css
+     仍按 :root 原值消费，避免泄漏）。
+   【骨架】
+   - #app = menubar 行（var(--menubar-h)）+ rail 列（--rail-current-w 优先，
+     回落 var(--rail-w)）+ .main（signature 皮肤已提供 20px 左上圆角与
+     --bg-app 背景，本层仅裁剪 ::before/::after 装饰层，proposal.css:33-34）。
+   ============================================================================ */
+
+/* ---------- 全局骨架：menubar 42px 与 rail 264/232 ---------- */
+
+/* shell.css 写死 34px 行高；R2 顶栏定案 42px（proposal.css:18 --rc-topbar-h），
+   改走令牌，collapsed/窗口控制等子元素随行高自适应 */
+#app {
+  grid-template-rows: var(--menubar-h) minmax(0, 1fr);
+}
+
+@media (max-width: 1049px) {
+  #app {
+    grid-template-columns: var(--rail-current-w, var(--rail-w-narrow)) minmax(0, 1fr);
+  }
+}
+
+/* ---------- .main：装饰层裁剪（design.md §3 / proposal.css:33-34 定案） ---------- */
+
+#app.r-code-signature .main::before,
+#app.r-code-signature .main::after {
+  content: none;
+}
+
+/* ---------- 侧栏容器 ---------- */
+
+/* proposal.css:19：padding 0 12px 12px */
+#app.r-code-signature .app-sidebar {
+  padding: 0 12px 12px;
+}
+
+/* ---------- brand 行（proposal.css:20-22） ---------- */
+
+/* min-height 64px = 2 × --sp-10 组合（design.md §2.1 定案 64px） */
+#app.r-code-signature .sidebar-brand-row {
+  min-height: calc(var(--sp-10) * 2);
+  padding: 0 var(--sp-5);
+}
+
+#app.r-code-signature .sidebar-brand {
+  font-size: var(--text-base);
+}
+
+/* 28px 为 design.md §2.1 定案的图标内容尺寸例外；R2 去掉品牌块光晕 */
+#app.r-code-signature .sidebar-brand-mark {
+  width: 28px;
+  height: 28px;
+  box-shadow: none;
+}
+
+/* ---------- 小控件：新对话 / 搜索 / 折叠 / 添加 ---------- */
+
+#app.r-code-signature .sidebar-new {
+  min-height: var(--control-h-lg);
+  padding: 0 var(--sp-5);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+#app.r-code-signature .sidebar-search,
+#app.r-code-signature .sidebar-collapse,
+#app.r-code-signature .sidebar-project-manage {
+  border-radius: var(--radius-sm);
+}
+
+/* ---------- 全局导航（design.md §2.1 五态矩阵） ---------- */
+
+#app.r-code-signature .sidebar-nav {
+  gap: var(--sp-2);
+  padding: var(--sp-6) 0 var(--sp-7);
+}
+
+#app.r-code-signature .sidebar-nav-item,
+#app.r-code-signature .sidebar-footer-action {
+  min-height: var(--control-h-lg);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+/* hover：背景 --bg-hover，文字 --fg */
+#app.r-code-signature .sidebar-nav-item:hover,
+#app.r-code-signature .sidebar-footer-action:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* active（当前项）：tint-accent 底 + inset 2px accent 条 + 文字 --fg */
+#app.r-code-signature .sidebar-nav-item.active,
+#app.r-code-signature .sidebar-footer-action.active {
+  background: var(--tint-accent);
+  box-shadow: inset 2px 0 var(--accent);
+  color: var(--fg);
+}
+
+/* focus-visible：统一焦点环配方 */
+#app.r-code-signature .sidebar-nav-item:focus-visible,
+#app.r-code-signature .sidebar-footer-action:focus-visible,
+#app.r-code-signature .sidebar-task:focus-visible,
+#app.r-code-signature .sidebar-project-head:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-offset);
+}
+
+/* disabled：文字 --fg-faint，无背景响应 */
+#app.r-code-signature .sidebar-nav-item:disabled,
+#app.r-code-signature .sidebar-footer-action:disabled {
+  background: transparent;
+  color: var(--fg-faint);
+}
+
+/* ---------- 节标题（design.md §2.1：meta 字号 + 0.03em 字距 + fg-faint） ---------- */
+
+#app.r-code-signature .sidebar-section-head {
+  padding: var(--sp-8) var(--sp-5) var(--sp-5);
+  font-size: var(--text-meta);
+  letter-spacing: 0.03em;
+}
+
+/* ---------- 项目头（proposal.css:27） ---------- */
+
+#app.r-code-signature .sidebar-project-head {
+  min-height: var(--control-h-lg);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+/* 行级 hover/选中统一 --bg-hover（§2.1 hover 配方） */
+#app.r-code-signature .sidebar-project-row:hover,
+#app.r-code-signature .sidebar-project.selected .sidebar-project-row {
+  background: var(--bg-hover);
+}
+
+/* ---------- 任务行（proposal.css:28-31：指示列网格 + active 内嵌条） ---------- */
+
+/* 6px 指示列 + 文本双列网格；dot/label 显式落位，无 dot 的已完成任务
+   文本同样落在第 2 列，保证对齐一致 */
+#app.r-code-signature .sidebar-task {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: center;
+  min-height: var(--control-h-lg);
+  padding: var(--sp-4) var(--sp-9) var(--sp-4) var(--sp-6);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+#app.r-code-signature .sidebar-task > .task-state-dot {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#app.r-code-signature .sidebar-task > .rail-label {
+  grid-column: 2;
+  grid-row: 1;
+  max-width: none;
+  line-height: var(--lh-tight);
+}
+
+/* 侧栏时间戳隐藏（proposal.css:30 定案） */
+#app.r-code-signature .sidebar-task time {
+  display: none;
+}
+
+/* hover：背景 --bg-hover，文字 --fg */
+#app.r-code-signature .sidebar-task:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* active（当前任务）：tint-accent 底 + inset 2px accent 条（§2.1 定案，
+   覆盖 signature.css 的 bg-active + shadow:none） */
+#app.r-code-signature .sidebar-task.active {
+  background: var(--tint-accent);
+  box-shadow: inset 2px 0 var(--accent);
+  color: var(--fg);
+}

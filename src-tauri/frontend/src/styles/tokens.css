@@ -36,6 +36,7 @@
   --text-lg: 16px;     /* 卡片标题、首页输入框 */
   --text-xl: 19px;     /* 区块大标题 */
   --text-2xl: 22px;    /* 页面标题 */
+  --text-hero: 32px;   /* home 主标题（设计稿 34px，契约收敛到 32，design.md §1.2） */
 
   --lh-tight: 1.35;
   --lh-base: 1.5;
@@ -67,9 +68,10 @@
   --hit-min: 24px;
 
   /* ---------- 布局 ---------- */
-  --menubar-h: 34px;
-  --rail-w: 252px;
-  --rail-w-narrow: 208px;
+  /* 布局共享 chrome 改值：design.md §1.2 定案（R2 设计稿落地） */
+  --menubar-h: 42px;      /* 34px → 42px，依据 renders/proposal.css:18 --rc-topbar-h:42px */
+  --rail-w: 264px;        /* 252px → 264px，依据 proposal.css:18 --rc-current-rail:264px */
+  --rail-w-narrow: 232px; /* 208px → 232px，依据 proposal.css:160 断点 ≤1050 → 232px */
   --rail-w-collapsed: 48px;
   --measure: 74ch;          /* 正文可读行长上限 */
   --scrollbar-w: 9px;
@@ -119,6 +121,8 @@
   --warning: #e5a15b;
   --success: #69c798;
   --danger: #df6b62;
+  --agent-name: #75ccea;  /* 子代理名文字色（design.md §1.2，来源 revision-2.css:2） */
+  --agent-shine: #ebfbff; /* 子代理名 sheen 动画高光（design.md §1.2，来源 revision-2.css:2） */
   --on-solid: #17100b;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 28px rgba(0, 0, 0, 0.17);
   --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.34), 0 24px 70px rgba(0, 0, 0, 0.46);
@@ -158,6 +162,8 @@
   --warning: #c56d13;
   --success: #178552;
   --danger: #c94235;
+  --agent-name: #126c8b;  /* 子代理名文字色 · 亮色（design.md §1.2，来源 revision-2.css:3） */
+  --agent-shine: #379abc; /* 子代理名 sheen 动画高光 · 亮色（design.md §1.2，来源 revision-2.css:3） */
   --on-solid: #ffffff;
 
   --shadow-card: none;
