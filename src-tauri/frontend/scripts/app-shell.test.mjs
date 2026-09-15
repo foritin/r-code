@@ -1086,6 +1086,14 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
   await page.locator("#main-content > .scene-conversations").waitFor({ state: "visible" });
   await page.locator(".opt-table tbody tr").filter({ hasText: "修复任务队列并发问题" }).waitFor({ state: "visible" });
+  const conversationTableLayout = await page.locator(".opt-table tbody tr").first().evaluate((row) => ({
+    rowDisplay: getComputedStyle(row).display,
+    cellDisplays: [...row.children].map((cell) => getComputedStyle(cell).display),
+  }));
+  assert.equal(conversationTableLayout.rowDisplay, "table-row",
+    "legacy conversation-row grid styles must not break semantic table layout");
+  assert.ok(conversationTableLayout.cellDisplays.every((display) => display === "table-cell"),
+    "conversation cells must remain in the table formatting context");
   const conversationColors = await page.evaluate(() => {
     const statusFor = (title) => {
       const rows = [...document.querySelectorAll(".opt-table tbody tr")];
@@ -1101,6 +1109,136 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
   });
   assert.equal(conversationColors.running, colors.warning);
   assert.equal(conversationColors.finished, colors.warning);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileConversationLayout = await page.locator(".opt-table tbody tr").first().evaluate((row) => {
+    const cells = [...row.children];
+    return {
+      rowHeight: row.getBoundingClientRect().height,
+      firstWidth: cells[0].getBoundingClientRect().width,
+      displays: cells.map((cell) => getComputedStyle(cell).display),
+      pageScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  assert.equal(mobileConversationLayout.displays[1], "none");
+  assert.equal(mobileConversationLayout.displays[3], "none");
+  assert.ok(mobileConversationLayout.firstWidth >= 120,
+    `mobile conversation titles need a readable column, got ${mobileConversationLayout.firstWidth}px`);
+  assert.ok(mobileConversationLayout.rowHeight < 120,
+    `mobile conversation rows must not turn into vertical text, got ${mobileConversationLayout.rowHeight}px`);
+  assert.ok(mobileConversationLayout.pageScrollWidth <= 390);
+  await page.close();
+});
+
+test("settings R2 shell fills the workspace and anchors search results", async () => {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setSettingsPane("providers");
+    useAppStore.getState().setScene("settings");
+  });
+
+  const settings = page.locator(".scene-scroll.opt-settings");
+  await settings.waitFor({ state: "visible" });
+  const layout = await page.evaluate(() => {
+    const main = document.querySelector("#main-content");
+    const shell = document.querySelector(".scene-scroll.opt-settings");
+    const content = document.querySelector(".opt-settings-main .opt-content");
+    const heading = document.querySelector(".opt-settings-main .opt-page-head h1");
+    const description = document.querySelector(".opt-settings-main .opt-page-head p");
+    if (![main, shell, content, heading, description].every((item) => item instanceof HTMLElement)) {
+      throw new Error("missing settings layout elements");
+    }
+    const mainRect = main.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    const headingRect = heading.getBoundingClientRect();
+    const descriptionRect = description.getBoundingClientRect();
+    return {
+      mainWidth: mainRect.width,
+      shellWidth: shellRect.width,
+      contentWidth: contentRect.width,
+      headingBottom: headingRect.bottom,
+      descriptionTop: descriptionRect.top,
+    };
+  });
+  assert.ok(Math.abs(layout.mainWidth - layout.shellWidth) < 2,
+    "settings shell must not inherit the legacy 1120px page cap");
+  assert.ok(layout.contentWidth >= 1000,
+    `settings content should reach its 1040px contract width, got ${layout.contentWidth}px`);
+  assert.ok(layout.descriptionTop >= layout.headingBottom,
+    "settings description must sit below its heading");
+  assert.equal(await settings.locator(".group-label").count(), 3);
+
+  const search = settings.locator(".settings-search");
+  await search.getByRole("searchbox", { name: "搜索设置项" }).fill("OCR");
+  const results = search.getByRole("listbox", { name: "搜索结果" });
+  await results.waitFor({ state: "visible" });
+  const anchored = await Promise.all([search.boundingBox(), results.boundingBox()]);
+  assert.ok(anchored[0] && anchored[1]);
+  assert.ok(Math.abs(anchored[0].x - anchored[1].x) < 2,
+    "settings search results must stay anchored to the search field");
+  assert.ok(anchored[1].y >= anchored[0].y + anchored[0].height,
+    "settings search results must open below the search field");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileSettings = await page.evaluate(() => {
+    const shell = document.querySelector(".scene-scroll.opt-settings");
+    const nav = document.querySelector(".opt-settings-nav");
+    const main = document.querySelector(".opt-settings-main");
+    const search = document.querySelector(".settings-search");
+    if (!(shell instanceof HTMLElement) || !(nav instanceof HTMLElement)
+      || !(main instanceof HTMLElement) || !(search instanceof HTMLElement)) {
+      throw new Error("missing mobile settings layout");
+    }
+    return {
+      columns: getComputedStyle(shell).gridTemplateColumns,
+      shellWidth: shell.getBoundingClientRect().width,
+      navWidth: nav.getBoundingClientRect().width,
+      mainWidth: main.getBoundingClientRect().width,
+      searchDisplay: getComputedStyle(search).display,
+      pageScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  assert.ok(Math.abs(mobileSettings.shellWidth - mobileSettings.navWidth) < 2,
+    "mobile settings navigation must span the workspace instead of consuming a side column");
+  assert.ok(mobileSettings.mainWidth >= mobileSettings.shellWidth - 2,
+    "mobile settings content must use the full row");
+  assert.equal(mobileSettings.searchDisplay, "none");
+  assert.ok(mobileSettings.pageScrollWidth <= 390);
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().goHome();
+  });
+  const home = page.locator(".opt-home");
+  await home.waitFor({ state: "visible" });
+  const mobileHome = await home.evaluate((root) => {
+    const main = document.querySelector("#main-content");
+    const suggestions = [...root.querySelectorAll(".opt-suggestion")];
+    if (!(main instanceof HTMLElement) || suggestions.length < 2) {
+      throw new Error("missing mobile home layout");
+    }
+    const first = suggestions[0].getBoundingClientRect();
+    const second = suggestions[1].getBoundingClientRect();
+    return {
+      homeWidth: root.getBoundingClientRect().width,
+      mainWidth: main.getBoundingClientRect().width,
+      firstLeft: first.left,
+      secondLeft: second.left,
+      firstTop: first.top,
+      secondTop: second.top,
+      pageScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  assert.ok(mobileHome.homeWidth >= mobileHome.mainWidth - 64,
+    "mobile home must not retain the desktop 100px inset");
+  assert.ok(Math.abs(mobileHome.firstLeft - mobileHome.secondLeft) < 6
+    && mobileHome.secondTop > mobileHome.firstTop,
+    "mobile task suggestions must stack in one readable column");
+  assert.ok(mobileHome.pageScrollWidth <= 390);
+
   await page.close();
 });
 
@@ -2192,6 +2330,21 @@ test("project file preview highlights common syntax and both modes own their scr
 
   try {
     await openProjectFiles(page);
+    const rootFileLayout = await page.locator(".opt-file-tree .file-tree-items").evaluate((items) => {
+      const children = [...items.children];
+      const first = children[0]?.getBoundingClientRect();
+      const second = children[1]?.getBoundingClientRect();
+      return {
+        firstTop: first?.top ?? 0,
+        secondTop: second?.top ?? 0,
+        scrollWidth: items.scrollWidth,
+        clientWidth: items.clientWidth,
+      };
+    });
+    assert.ok(rootFileLayout.secondTop > rootFileLayout.firstTop,
+      "project file nodes must stack vertically");
+    assert.ok(rootFileLayout.scrollWidth <= rootFileLayout.clientWidth + 1,
+      "project file tree must not introduce horizontal scrolling at its root");
     await page.locator(".opt-file-tree button").filter({ hasText: "README.md" }).click();
     await page.locator(".file-code .tok-kw").filter({ hasText: "# R-Code" }).waitFor({ state: "visible" });
     await page.locator(".opt-file-tree .file-tree-folder > button").filter({ hasText: "src" }).click();
@@ -5212,6 +5365,26 @@ test("bulk review actions disappear after accepting every task path", async () =
     (root) => root.querySelectorAll(".chg-row").length === 2,
     await workbench.elementHandle(),
   );
+  const dockedReviewLayout = await workbench.evaluate((root) => {
+    const wrap = root.querySelector(".changes-wrap");
+    const list = root.querySelector(".changes-list");
+    const firstPath = root.querySelector(".chg-path");
+    if (!(wrap instanceof HTMLElement) || !(list instanceof HTMLElement) || !(firstPath instanceof HTMLElement)) {
+      throw new Error("missing docked review layout");
+    }
+    return {
+      direction: getComputedStyle(wrap).flexDirection,
+      rootWidth: root.getBoundingClientRect().width,
+      listWidth: list.getBoundingClientRect().width,
+      pathWidth: firstPath.getBoundingClientRect().width,
+    };
+  });
+  assert.equal(dockedReviewLayout.direction, "column",
+    "the 520px review canvas must stack the file picker above the diff");
+  assert.ok(dockedReviewLayout.listWidth >= dockedReviewLayout.rootWidth - 2,
+    "the docked review file picker must use the full canvas width");
+  assert.ok(dockedReviewLayout.pathWidth >= 80,
+    `review paths must remain readable, got ${dockedReviewLayout.pathWidth}px`);
   await workbench.getByRole("button", { name: "接受本轮全部", exact: true }).click();
   await page.waitForFunction(
     (root) => root.querySelectorAll(".chg-row .chg-accepted").length === 2,
@@ -5270,6 +5443,21 @@ test("Needs You groups projects and synchronizes granular review acceptance live
   await inbox.locator('[data-task-id="mock-task-review"]').click();
   const acceptFile = inbox.getByRole("button", { name: "接受文件 src/error.rs", exact: true });
   await acceptFile.waitFor({ state: "visible" });
+  const inboxInspectorLayout = await inbox.getByLabel("审核摘要", { exact: true }).evaluate((inspector) => {
+    const body = inspector.querySelector(".opt-panel-body");
+    const file = inspector.querySelector(".opt-inbox-file");
+    if (!(body instanceof HTMLElement) || !(file instanceof HTMLElement)) {
+      throw new Error("missing inbox review layout");
+    }
+    return {
+      bodyAlignContent: getComputedStyle(body).alignContent,
+      fileHeight: file.getBoundingClientRect().height,
+    };
+  });
+  assert.equal(inboxInspectorLayout.bodyAlignContent, "start",
+    "review content must stay grouped at the top instead of stretching across the panel");
+  assert.ok(inboxInspectorLayout.fileHeight < 80,
+    `review file rows must remain compact, got ${inboxInspectorLayout.fileHeight}px`);
   await acceptFile.click();
   const reviewInspector = inbox.getByLabel("审核摘要", { exact: true });
   await reviewInspector.getByText("1 个文件待处理", { exact: true }).waitFor({ state: "visible" });

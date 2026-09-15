@@ -165,3 +165,62 @@
   margin-left: auto;
   color: var(--fg-faint);
 }
+
+/* ---------- Host 关闭确认：沿用 R2 叠层材质并补齐独立三按钮布局 ---------- */
+
+.close-prompt-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: var(--sp-9);
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(var(--fx-blur));
+}
+
+.close-prompt {
+  width: min(420px, calc(100vw - var(--sp-10)));
+  max-height: calc(100dvh - var(--sp-9) - var(--sp-9));
+  padding: var(--sp-8);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  outline: none;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.close-prompt h2 {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-strong);
+}
+
+.close-prompt-desc {
+  margin-top: var(--sp-4);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+}
+
+.close-prompt-remember {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-6);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.close-prompt-remember input {
+  accent-color: var(--accent);
+}
+
+.close-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  margin-top: var(--sp-7);
+}

@@ -107,14 +107,14 @@
   padding: var(--sp-6) var(--sp-9) var(--sp-9); /* 12px 22px 22px → sp-6 / sp-9（§1.3） */
 }
 
-.scene-room .comp-box {
+#app.r-code-signature.scene-room .scene-room .comp-box {
   border-radius: var(--radius-lg); /* 13px → lg（§1.3） */
   border-color: var(--border-strong);
   background: var(--bg-panel);
   box-shadow: var(--shadow-card); /* --opt-shadow 按层级取 card（design.md §1.1） */
 }
 
-.scene-room .comp-box textarea {
+#app.r-code-signature.scene-room .scene-room .comp-box textarea {
   font-size: var(--text-sm); /* 14px → sm（§1.3） */
   line-height: var(--lh-relaxed); /* 1.7 → relaxed（§1.3） */
 }
@@ -662,16 +662,6 @@
   margin: 0;
 }
 
-.opt-file-tree div {
-  display: flex;
-  gap: var(--sp-4); /* 8px → sp-4（§1.3） */
-  align-items: center;
-  padding: var(--sp-4); /* 8px → sp-4（§1.3） */
-  border-radius: var(--radius-sm); /* 6px → sm（§1.3） */
-  font-size: var(--text-meta); /* 12px → meta（§1.3） */
-  color: var(--fg-muted);
-}
-
 .opt-file-tree div.selected {
   background: var(--tint-accent);
   color: var(--accent);
@@ -844,6 +834,41 @@
   display: block;
   background: var(--tint-danger);
   color: var(--danger);
+}
+
+/* 520px docked 画布内，普通审核改为上方文件选择 + 下方全宽 diff。 */
+@container canvas (max-width: 560px) {
+  .workbench-review-tool .changes-wrap {
+    flex-direction: column;
+  }
+
+  .workbench-review-tool .changes-list {
+    width: 100%;
+    max-height: calc(4 * var(--control-h-lg));
+    flex-shrink: 0;
+    padding: var(--sp-3);
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .workbench-review-tool .chg-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--sp-2);
+  }
+
+  .workbench-review-tool .chg-row {
+    min-width: 0;
+  }
+
+  .workbench-review-tool .canvas-head {
+    flex-wrap: wrap;
+  }
+
+  .workbench-review-tool .review-accept-actions {
+    flex: 1 0 100%;
+  }
 }
 
 /* ---------- 运行时行（定义点在本文件；设置页消费归 T05） ---------- */

@@ -43,6 +43,15 @@
   grid-template-columns: 188px minmax(0, 1fr); /* 左导航定案宽 */
 }
 
+/* 旧设置壳会把 scene-scroll 限到 1120px 并居中；R2 骨架需要占满主区。 */
+#app.scene-settings .scene-scroll.opt-settings {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 .opt-settings-nav {
   padding: var(--sp-10) var(--sp-7);
   border-right: 1px solid var(--border);
@@ -105,8 +114,8 @@
   margin-bottom: var(--sp-10);
 }
 
-/* 设置页主区标题走 h2（外层 page-head 已用 h1），排版对齐 opt-page-head h1 */
-.opt-settings-main .opt-page-head h2 {
+/* 设置页主区标题是页面 h1；兼容旧 h2 消费点并保持同一排版。 */
+.opt-settings-main .opt-page-head :is(h1, h2) {
   margin: 0 0 var(--sp-5);
   font-size: var(--text-2xl);
   line-height: var(--lh-tight);
@@ -116,6 +125,11 @@
 
 .opt-settings-main .opt-content {
   max-width: 1040px; /* 内容宽度定案值 */
+}
+
+.opt-settings-main > * {
+  width: 100%;
+  max-width: 1040px;
 }
 
 .opt-settings-topline {
@@ -731,7 +745,7 @@
     grid-template-columns: 1fr;
   }
 
-  .opt-settings-topline.opt-search-field {
+  .opt-settings-topline .opt-search-field {
     display: none;
   }
 
@@ -741,6 +755,44 @@
 
   .opt-theme-window {
     height: 78px;
+  }
+}
+
+@media (max-width: 759px) {
+  #app.scene-settings .scene-scroll.opt-settings {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .opt-settings-nav {
+    display: flex;
+    gap: var(--sp-2);
+    padding: var(--sp-4);
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: thin;
+  }
+
+  .opt-settings-nav h2,
+  .opt-settings-nav .group-label {
+    display: none;
+  }
+
+  .opt-settings-nav button {
+    width: auto;
+    flex: none;
+    padding: var(--sp-4) var(--sp-5);
+    white-space: nowrap;
+  }
+
+  .opt-settings-main {
+    padding: var(--sp-7);
+  }
+
+  .opt-settings-main > * {
+    max-width: none;
   }
 }
 

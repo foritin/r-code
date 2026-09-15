@@ -719,90 +719,105 @@ export function SettingsScene() {
     setActivePane(entry.pane);
   }, [activePane, focusSettingsBlock, setActivePane]);
 
+  const settingsNavigation = settingsPanes.map((item, index) => {
+    const groupLabel = item.key === "providers"
+      ? t("settings.groups.models")
+      : item.key === "knowledge"
+        ? t("settings.groups.project")
+        : item.key === "appearance"
+          ? t("settings.groups.application")
+          : null;
+    return (
+      <Fragment key={item.key}>
+        {groupLabel && <span className="group-label">{groupLabel}</span>}
+        <button
+          id={`settings-tab-${item.key}`}
+          type="button"
+          role="tab"
+          className={activePane === item.key ? "active" : ""}
+          aria-selected={activePane === item.key}
+          aria-controls={`settings-panel-${item.key}`}
+          tabIndex={activePane === item.key ? 0 : -1}
+          onClick={() => setActivePane(item.key)}
+          onKeyDown={(event) => handleSettingsTabKeyDown(event, index)}
+        >
+          {item.label}
+        </button>
+      </Fragment>
+    );
+  });
+
   return (
     <div className="scene">
-      <div className="scene-scroll">
-        <div className="opt-page-head">
-          <h1>{t("settings.pageTitle")}</h1>
-          <div className="opt-settings-topline opt-search-field">
-            <IconSearch width={16} height={16} aria-hidden="true" />
-            <input
-              className="settings-search-input"
-              type="search"
-              value={searchQuery}
-              placeholder="搜索设置项（如：默认服务、OCR、子代理）"
-              aria-label="搜索设置项"
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                className="quiet-link"
-                aria-label="清空搜索"
-                onClick={() => setSearchQuery("")}
-              >
-                清空
-              </button>
-            )}
-            {searchResults.length > 0 && (
-              <ul className="settings-search-results" role="listbox" aria-label="搜索结果">
-                {searchResults.map((entry) => (
-                  <li key={`${entry.pane}:${entry.blockId}`}>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={false}
-                      onClick={() => jumpToBlock(entry)}
-                    >
-                      <span className="settings-search-title">{entry.title}</span>
-                      <span className="settings-search-pane">
-                        {settingsPanes.find((item) => item.key === entry.pane)?.label ?? entry.pane}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {searchQuery.trim() && searchResults.length === 0 && (
-              <p className="settings-search-empty" role="status">没有匹配的设置项；可换个关键词试试。</p>
-            )}
+      <div className="scene-scroll opt-settings">
+        <nav className="opt-settings-nav" role="tablist" aria-label={t("settings.categoriesLabel")}>
+          <h2>{t("settings.pageTitle")}</h2>
+          {settingsNavigation}
+        </nav>
+
+        <div
+          className={`opt-settings-main${activePane === "agents" ? " settings-agent-detail" : ""}`}
+          id={`settings-panel-${pane.key}`}
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${pane.key}`}
+          tabIndex={0}
+        >
+          <div className="opt-settings-topline">
+            <span>{t("settings.pageTitle")} / {pane.label}</span>
+            <div className="settings-search opt-search-field">
+              <IconSearch width={16} height={16} aria-hidden="true" />
+              <input
+                className="settings-search-input"
+                type="search"
+                value={searchQuery}
+                placeholder="搜索设置项（如：默认服务、OCR、子代理）"
+                aria-label="搜索设置项"
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="quiet-link"
+                  aria-label="清空搜索"
+                  onClick={() => setSearchQuery("")}
+                >
+                  清空
+                </button>
+              )}
+              {searchResults.length > 0 && (
+                <ul className="settings-search-results" role="listbox" aria-label="搜索结果">
+                  {searchResults.map((entry) => (
+                    <li key={`${entry.pane}:${entry.blockId}`}>
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={false}
+                        onClick={() => jumpToBlock(entry)}
+                      >
+                        <span className="settings-search-title">{entry.title}</span>
+                        <span className="settings-search-pane">
+                          {settingsPanes.find((item) => item.key === entry.pane)?.label ?? entry.pane}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {searchQuery.trim() && searchResults.length === 0 && (
+                <p className="settings-search-empty" role="status">没有匹配的设置项；可换个关键词试试。</p>
+              )}
+            </div>
           </div>
-        </div>
 
-        <div className="opt-settings">
-          <nav className="opt-settings-nav" role="tablist" aria-label={t("settings.categoriesLabel")}>
-            {settingsPanes.map((item, index) => (
-              <button
-                key={item.key}
-                id={`settings-tab-${item.key}`}
-                type="button"
-                role="tab"
-                className={activePane === item.key ? "active" : ""}
-                aria-selected={activePane === item.key}
-                aria-controls={`settings-panel-${item.key}`}
-                tabIndex={activePane === item.key ? 0 : -1}
-                onClick={() => setActivePane(item.key)}
-                onKeyDown={(event) => handleSettingsTabKeyDown(event, index)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-
-          <div
-            className={`opt-settings-main${activePane === "agents" ? " settings-agent-detail" : ""}`}
-            id={`settings-panel-${pane.key}`}
-            role="tabpanel"
-            aria-labelledby={`settings-tab-${pane.key}`}
-            tabIndex={0}
-          >
-            <header className="opt-page-head">
+          <header className="opt-page-head">
+            <div>
               {activePane === "agents" && <span className="opt-eyebrow">AGENT</span>}
-              <h2>{pane.label}</h2>
+              <h1>{pane.label}</h1>
               <p>{pane.description}</p>
-            </header>
+            </div>
+          </header>
 
-            {configErr && (activePane === "providers" || activePane === "agents" || activePane === "diagnostics" || activePane === "subagents") && (
+          {configErr && (activePane === "providers" || activePane === "agents" || activePane === "diagnostics" || activePane === "subagents") && (
               <div className="errbar" role="alert">
                 读取配置失败：{configErr}
                 <span className="spacer" />
@@ -902,7 +917,6 @@ export function SettingsScene() {
                 />
               </div>
             )}
-          </div>
         </div>
       </div>
       <GuideSheet

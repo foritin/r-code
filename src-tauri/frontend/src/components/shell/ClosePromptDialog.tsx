@@ -8,6 +8,7 @@ import {
   CLOSE_PROMPT_REQUEST_EVENT,
   closePromptDecision,
 } from "../../lib/ipc";
+import { useFocusTrap } from "../../lib/hooks";
 
 interface PromptPayload {
   epoch: number;
@@ -18,6 +19,9 @@ export default function ClosePromptDialog() {
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(dialogRef, epoch !== null);
 
   useEffect(() => {
     // 纯浏览器（无 Tauri internals）没有事件桥：浏览器 mock 下不会有关闭 prompt。
@@ -28,12 +32,24 @@ export default function ClosePromptDialog() {
       setEpoch(event.payload.epoch);
       setRemember(false);
       setBusy(false);
-      setTimeout(() => dialogRef.current?.focus(), 30);
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
   }, []);
+
+  useEffect(() => {
+    if (epoch === null) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusTimer = window.setTimeout(() => cancelRef.current?.focus(), 30);
+    return () => {
+      window.clearTimeout(focusTimer);
+      const target = returnFocusRef.current;
+      if (target && document.contains(target)) target.focus({ preventScroll: true });
+    };
+  }, [epoch]);
 
   if (epoch === null) return null;
 
@@ -51,9 +67,8 @@ export default function ClosePromptDialog() {
 
   return (
     <div
-      className="settings-modal-scrim"
-      role="presentation"
-      onClick={(event) => {
+      className="close-prompt-backdrop"
+      onPointerDown={(event) => {
         if (event.target === event.currentTarget) decide("cancel");
       }}
     >
@@ -62,17 +77,18 @@ export default function ClosePromptDialog() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="close-prompt-title"
+        aria-describedby="close-prompt-desc"
         tabIndex={-1}
-        className="settings-modal"
+        className="close-prompt"
         onKeyDown={(event) => {
           if (event.key === "Escape") decide("cancel");
         }}
       >
         <h2 id="close-prompt-title">要关闭 R-Code 吗？</h2>
-        <p className="settings-modal-body">
+        <p className="close-prompt-desc" id="close-prompt-desc">
           可以最小化到后台继续运行任务，或完全退出应用。运行中的任务在退出前会收到统一收尾。
         </p>
-        <label className="settings-control-row">
+        <label className="close-prompt-remember">
           <input
             type="checkbox"
             checked={remember}
@@ -80,8 +96,8 @@ export default function ClosePromptDialog() {
           />
           记住我的选择，下次不再询问
         </label>
-        <div className="settings-modal-actions">
-          <button type="button" className="btn" disabled={busy} onClick={() => decide("cancel")}>
+        <div className="close-prompt-actions">
+          <button ref={cancelRef} type="button" className="btn" disabled={busy} onClick={() => decide("cancel")}>
             取消
           </button>
           <button type="button" className="btn" disabled={busy} onClick={() => decide("hide")}>

@@ -51,6 +51,11 @@
   "settings": {
     "pageTitle": "Settings",
     "categoriesLabel": "Settings categories",
+    "groups": {
+      "models": "Models & capabilities",
+      "project": "Project & security",
+      "application": "Application"
+    },
     "preferences": {
       "label": "Appearance & companion",
       "description": "Choose the interface language and theme, and manage desktop companion feedback."

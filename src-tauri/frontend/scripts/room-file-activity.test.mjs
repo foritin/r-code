@@ -147,11 +147,13 @@ test("composer floats as a centered card instead of a full-width strip", async (
 
   const contract = await page.locator(".scene-room .comp-box").evaluate((element) => {
     const style = getComputedStyle(element);
+    const rootStyle = getComputedStyle(document.documentElement);
     const rect = element.getBoundingClientRect();
     const host = element.parentElement?.getBoundingClientRect();
     return {
       maxWidth: style.maxWidth,
       radius: style.borderRadius,
+      expectedRadius: rootStyle.getPropertyValue("--radius-lg").trim(),
       shadow: style.boxShadow,
       // 居中相对 composer 容器测量：会话列两侧还有侧栏/工作台时，
       // 相对窗口的左右边距天然不相等。
@@ -160,7 +162,7 @@ test("composer floats as a centered card instead of a full-width strip", async (
     };
   });
   assert.equal(contract.maxWidth, "min(760px, 100%)");
-  assert.equal(contract.radius, "16px");
+  assert.equal(contract.radius, contract.expectedRadius);
   assert.notEqual(contract.shadow, "none", "浮层卡必须有投影");
   assert.ok(
     Math.abs(contract.insetLeft - contract.insetRight) < 2,

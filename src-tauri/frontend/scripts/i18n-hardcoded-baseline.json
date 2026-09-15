@@ -224,8 +224,8 @@
     "sha256": "4203729cd9351e58468445a7c7b2b660b0ce3d13f67e0792ff6846f2c29da074"
   },
   "src/components/scenes/SettingsScene.tsx": {
-    "count": 523,
-    "sha256": "7105267d0824f52e4ec12ea760bc406cfc89b4753b6d2c4bcba9d819e4df6bd1"
+    "count": 521,
+    "sha256": "b608c41ae0fe47de510b547c90eb83e64fa9dcd34eb7e97b68c42606f01eed7f"
   },
   "src/components/scenes/SubagentProvidersPanel.tsx": {
     "count": 94,
