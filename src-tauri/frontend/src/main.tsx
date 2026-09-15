@@ -22,6 +22,12 @@ import "./styles/workbench.css";
 import "./styles/signature.css";
 import "./styles/onboarding.css";
 import "./styles/companion.css";
+import "./styles/opt.css";
+import "./styles/opt-shell.css";
+import "./styles/opt-scenes-workspace.css";
+import "./styles/opt-room.css";
+import "./styles/opt-settings.css";
+import "./styles/opt-overlays.css";
 
 const isCompanionWindow = new URLSearchParams(window.location.search).get("window") === "companion";
 if (isCompanionWindow) prepareNativeCompanionWindow();

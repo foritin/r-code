@@ -149,11 +149,11 @@ export function EditorScene() {
   if (!workspacePath) {
     return (
       <div className="scene scene-editor">
-        <section className="file-project-empty standalone">
-          <IconProjects width={25} height={25} />
-          <h2>先打开一个项目</h2>
+        <section className="opt-empty">
+          <span className="opt-icon"><IconProjects width={20} height={20} /></span>
+          <h3>先打开一个项目</h3>
           <p>项目文件属于具体项目，请从左侧项目列表进入项目后再打开。</p>
-          <button type="button" className="rc-button rc-button-primary" onClick={() => setScene("projects")}>添加或打开项目</button>
+          <button type="button" className="opt-button primary" onClick={() => setScene("projects")}>添加或打开项目</button>
         </section>
       </div>
     );
@@ -161,13 +161,11 @@ export function EditorScene() {
 
   return (
     <div className="scene scene-editor">
-      <div className="file-page">
-        <header className="file-page-header">
-          <div className="file-page-project">
-            <button type="button" className="file-project-back" aria-label="返回项目" title="返回项目" onClick={leaveProjectFiles}><IconChevronLeft width={16} height={16} /></button>
-            <div><p className="page-kicker">PROJECT FILES</p><h1>项目文件</h1><p><IconProjects width={14} height={14} /> {workspace?.display_name ?? displayPath(workspacePath)}</p></div>
-          </div>
-          <label className="file-search" ref={searchRef}><IconSearch width={16} height={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="快速打开文件…" /><kbd>{keyLabel("search")}</kbd></label>
+      <div className="opt-editor">
+        <header className="opt-panel-head">
+          <button type="button" className="file-project-back" aria-label="返回项目" title="返回项目" onClick={leaveProjectFiles}><IconChevronLeft width={16} height={16} /></button>
+          <h2><IconProjects width={16} height={16} /> {workspace?.display_name ?? displayPath(workspacePath)}</h2>
+          <label className="opt-search-field" ref={searchRef}><IconSearch width={16} height={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="快速打开文件…" /><kbd>{keyLabel("search")}</kbd></label>
           {query && (
             <AnchoredSurface
               anchorRef={searchRef}
@@ -186,10 +184,10 @@ export function EditorScene() {
           )}
         </header>
         {error && <div className="file-error" role="alert">{error}</div>}
-        <div className="file-workspace">
-          <aside className="file-tree" aria-label="文件树">
+        <div className="opt-file-layout">
+          <aside className="opt-file-tree" aria-label="文件树">
             <div className="file-tree-head">
-              <span>文件</span>
+              <h3>文件</h3>
               <span className="file-tree-head-actions">
                 {loadingDirs.has(ROOT) && <small>读取中…</small>}
                 <button type="button" className="file-tree-refresh" aria-label="刷新文件树" title="刷新文件树" aria-busy={refreshingTree} disabled={refreshingTree} onClick={() => void refreshTree()}><IconRefresh width={14} height={14} /></button>
@@ -197,14 +195,30 @@ export function EditorScene() {
             </div>
             <div className="file-tree-items"><FileTree entries={entriesByDir[ROOT] ?? []} entriesByDir={entriesByDir} expanded={expanded} loadingDirs={loadingDirs} selected={file} depth={0} onFile={selectFile} onFolder={toggleDirectory} onFileContextMenu={openFileContextMenu} onFolderContextMenu={suppressFolderContextMenu} /></div>
           </aside>
-          <section className="file-preview">
-            {!file ? <div className="file-preview-empty"><IconEditor width={25} height={25} /><h2>选择一个文件</h2><p>从左侧文件树选择，或用上方快速打开定位文件。</p></div> : !content ? <div className="file-preview-empty">正在读取 {file}…</div> : <>
-              <header className="file-preview-head"><div className="file-breadcrumb"><IconFile width={16} height={16} />{pathParts.map((part, index) => <span key={`${part}-${index}`}>{index > 0 && <b>/</b>}{part}</span>)}</div><div className="file-preview-actions">{content.is_editable && <button className="rc-button rc-button-quiet" onClick={() => setEditing((value) => !value)}>{editing ? "取消编辑" : "编辑"}</button>}{editing && <button className="rc-button rc-button-primary" disabled={saving || draft === content.content} onClick={() => void save()}>{saving ? "保存中…" : "保存"}</button>}</div></header>
-              <div className="file-preview-meta"><span>{content.total_lines} 行{content.truncated ? " · 内容已截断" : ""}</span><span>{editing ? "编辑模式" : "只读预览"}</span></div>
-              {editing
-                ? <textarea className="file-code-editor" aria-label={`${file} 编辑器`} value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} />
-                : <FileCodePreview path={file} content={content.content} ariaLabel={`${file} 只读预览`} />}
-            </>}
+          <section className="opt-editor-code">
+            {!file ? (
+              <div className="opt-file-blank"><span className="opt-icon"><IconEditor width={20} height={20} /></span><h3>选择一个文件</h3><p>从左侧文件树选择，或用上方快速打开定位文件。</p></div>
+            ) : !content ? (
+              <div className="opt-file-blank"><p>正在读取 {file}…</p></div>
+            ) : (
+              <>
+                <div className="opt-file-tab">
+                  <span className="file-breadcrumb"><IconFile width={16} height={16} />{pathParts.map((part, index) => <span key={`${part}-${index}`}>{index > 0 && <b>/</b>}{part}</span>)}</span>
+                  <span className="opt-pill">{editing ? "编辑模式" : "只读预览"}</span>
+                  <div className="opt-actions">
+                    {content.is_editable && <button className="opt-button quiet" onClick={() => setEditing((value) => !value)}>{editing ? "取消编辑" : "编辑"}</button>}
+                    {editing && <button className="opt-button primary" disabled={saving || draft === content.content} onClick={() => void save()}>{saving ? "保存中…" : "保存"}</button>}
+                  </div>
+                </div>
+                {editing
+                  ? <textarea className="file-code-editor" aria-label={`${file} 编辑器`} value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} />
+                  : <FileCodePreview path={file} content={content.content} ariaLabel={`${file} 只读预览`} />}
+                <div className="opt-code-foot">
+                  <span>{content.total_lines} 行{content.truncated ? " · 内容已截断" : ""} · {file}</span>
+                  <span>{editing ? "编辑模式：保存后立即写入磁盘" : "只读预览：点击编辑后可保存"}</span>
+                </div>
+              </>
+            )}
           </section>
         </div>
       </div>
@@ -220,7 +234,7 @@ function FileTree({ entries, entriesByDir, expanded, loadingDirs, selected, dept
         if (entry.is_directory) {
           return (
             <div className="file-tree-folder" key={entry.path}>
-              <button className="file-tree-row folder" style={{ paddingLeft: 10 + depth * 15 }} onClick={() => onFolder(entry.path)} onContextMenu={onFolderContextMenu}>
+              <button style={{ paddingLeft: 10 + depth * 15 }} onClick={() => onFolder(entry.path)} onContextMenu={onFolderContextMenu}>
                 <span>{expanded.has(entry.path) ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}</span>
                 <IconFolderOpen width={15} height={15} />
                 <strong>{entry.name}</strong>
@@ -244,7 +258,7 @@ function FileTree({ entries, entriesByDir, expanded, loadingDirs, selected, dept
           );
         }
         return (
-          <button className={`file-tree-row${selected === entry.path ? " selected" : ""}`} key={entry.path} style={{ paddingLeft: 28 + depth * 15 }} onClick={() => onFile(entry.path)} onContextMenu={(event) => onFileContextMenu(entry.path, event)}>
+          <button className={selected === entry.path ? "selected" : ""} key={entry.path} style={{ paddingLeft: 28 + depth * 15 }} onClick={() => onFile(entry.path)} onContextMenu={(event) => onFileContextMenu(entry.path, event)}>
             <IconFile width={14} height={14} />
             <span>{entry.name}</span>
           </button>

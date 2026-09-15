@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { permissionApprove, taskDelete, taskRestore } from "../../lib/ipc";
 import { elapsedMinutes, elapsedSince, permissionRiskLabel } from "../../lib/format";
-import { taskDisplayStateLabel, taskTitle, visualTaskDisplayState } from "../../lib/presentation";
+import { taskDisplayStateLabel, taskTitle, visualTaskDisplayState, workspaceName } from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
@@ -60,14 +60,14 @@ export function DashboardScene() {
 
   if (!workspacePath || !workspace) {
     return (
-      <div className="scene scene-dashboard dashboard-empty-scene">
-        <div className="dashboard-empty">
-          <span className="dashboard-empty-icon"><IconProjects width={26} height={26} /></span>
+      <div className="scene scene-dashboard">
+        <div className="opt-empty">
+          <span className="opt-icon"><IconProjects width={20} height={20} /></span>
           <div>
-            <h1>先选择一个项目。</h1>
+            <h3>先选择一个项目。</h3>
             <p>每个项目都有自己的任务概览、待处理事项和项目动态。</p>
           </div>
-          <button className="rc-button rc-button-primary" onClick={() => setScene("projects")}>管理项目</button>
+          <button className="opt-button primary" onClick={() => setScene("projects")}>管理项目</button>
         </div>
       </div>
     );
@@ -79,21 +79,20 @@ export function DashboardScene() {
   const archived = dashboard?.archived ?? [];
 
   return (
-    <div className="scene scene-dashboard">
+    <div className="scene scene-dashboard opt-dashboard">
       <div className="dashboard-main">
         <div className="dashboard-scroll">
-          <header className="dashboard-header">
-            <div className="dashboard-project-mark"><IconProjects width={20} height={20} /></div>
+          <header className="opt-page-head">
             <div>
-              <span className="dashboard-context-label">项目概览</span>
+              <span className="opt-eyebrow">项目概览</span>
               <h1>{workspace.display_name}</h1>
               <p>查看正在推进的任务、需要处理的事项与归档记录。</p>
             </div>
-            <div className="dashboard-header-actions">
-              <button className="rc-button rc-button-quiet" onClick={() => openKnowledge("memory")}><IconText width={15} height={15} />项目记忆</button>
-              <button className="rc-button rc-button-quiet" onClick={() => setScene("editor")}><IconEditor width={15} height={15} />项目文件</button>
+            <div className="opt-actions">
+              <button className="opt-button quiet" onClick={() => openKnowledge("memory")}><IconText width={15} height={15} />项目记忆</button>
+              <button className="opt-button quiet" onClick={() => setScene("editor")}><IconEditor width={15} height={15} />项目文件</button>
               <button
-                className="rc-button rc-button-primary"
+                className="opt-button primary"
                 onClick={() => void createConversation(workspacePath)}
                 disabled={isCreating(workspacePath)}
                 aria-busy={isCreating(workspacePath)}
@@ -104,9 +103,9 @@ export function DashboardScene() {
             </div>
           </header>
 
-          <section className="dashboard-metrics" aria-label="项目摘要">
-            <Metric label="待处理" value={(metrics?.pending_permission_count ?? 0) + (metrics?.review_ready_count ?? 0)} tone={(metrics?.pending_permission_count ?? 0) + (metrics?.review_ready_count ?? 0) > 0 ? "warm" : undefined} />
-            <Metric label="运行中" value={metrics?.running_task_count ?? 0} tone="success" />
+          <section className="opt-summary" aria-label="项目摘要">
+            <Metric label="待处理" value={(metrics?.pending_permission_count ?? 0) + (metrics?.review_ready_count ?? 0)} />
+            <Metric label="运行中" value={metrics?.running_task_count ?? 0} />
             <Metric label="子代理" value={metrics?.active_subagent_count ?? 0} />
             <Metric label="已归档" value={metrics?.archived_task_count ?? 0} />
           </section>
@@ -115,7 +114,7 @@ export function DashboardScene() {
 
           {attention.length > 0 && (
             <section className="dashboard-section dashboard-attention-section">
-              <div className="dashboard-section-title">
+              <div className="opt-section-head">
                 <div><h2>需要你处理</h2><p>这些任务在等待你的决定。</p></div>
                 <button className="text-link" onClick={() => setScene("inbox")}>查看全部 <IconArrowRight width={14} height={14} /></button>
               </div>
@@ -139,19 +138,26 @@ export function DashboardScene() {
                 {archived.length > 0 ? "当前没有未归档任务。你可以从下方还原对话，或新建一个任务。" : "这个项目还没有任务。创建一个任务，仪表盘会在这里开始积累进度。"}
               </div>
             ) : (
-              <div className="dashboard-task-table" role="table" aria-label="项目任务">
-                <div className="dashboard-task-head" role="row">
-                  <span>任务</span><span>当前活动</span><span>负责人</span><span>变更</span><span>更新时间</span>
-                </div>
-                {taskSummaries.slice(0, 12).map((summary) => (
-                  <TaskRow key={summary.task.id} summary={summary} onOpen={() => openRoom(summary.task.id)} />
-                ))}
-              </div>
+              <table className="opt-table" aria-label="项目任务">
+                <thead>
+                  <tr><th>任务</th><th>项目</th><th>状态</th><th className="opt-last">最近更新</th></tr>
+                </thead>
+                <tbody>
+                  {taskSummaries.slice(0, 12).map((summary) => (
+                    <TaskRow
+                      key={summary.task.id}
+                      summary={summary}
+                      workspaceLabel={workspaceName(summary.task.workspace_path, workspaces)}
+                      onOpen={() => openRoom(summary.task.id)}
+                    />
+                  ))}
+                </tbody>
+              </table>
             )}
           </section>
 
           <section className="dashboard-section dashboard-archived-section">
-            <div className="dashboard-section-title">
+            <div className="opt-section-head">
               <div><h2>已归档</h2><p>归档对话不会出现在项目任务与项目动态中。</p></div>
               <span className="section-meta">{metrics?.archived_task_count ?? archived.length} 个归档</span>
             </div>
@@ -174,8 +180,8 @@ export function DashboardScene() {
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: number; tone?: "warm" | "success" }) {
-  return <div className={`dashboard-metric${tone ? ` ${tone}` : ""}`}><span>{label}</span><strong>{value}</strong></div>;
+function Metric({ label, value }: { label: string; value: number }) {
+  return <span><b>{value}</b>{label}</span>;
 }
 
 function summaryVisual(summary: DashboardTaskSummary): "running" | "attention" | "review" | "done" | "stopped" | "idle" {
@@ -186,16 +192,22 @@ function summaryStateLabel(summary: DashboardTaskSummary): string {
   return taskDisplayStateLabel(summary.status.display_state, summary.status.persisted_state);
 }
 
-function TaskRow({ summary, onOpen }: { summary: DashboardTaskSummary; onOpen: () => void }) {
-  const stat = summary.change_summary;
+function taskStatePillTone(visual: ReturnType<typeof summaryVisual>): string {
+  if (visual === "running") return " success";
+  if (visual === "attention" || visual === "review") return " warning";
+  if (visual === "stopped") return " danger";
+  return "";
+}
+
+function TaskRow({ summary, workspaceLabel, onOpen }: { summary: DashboardTaskSummary; workspaceLabel: string; onOpen: () => void }) {
+  const visual = summaryVisual(summary);
   return (
-    <button className="dashboard-task-row" onClick={onOpen} role="row">
-      <span className="dashboard-task-name"><i className={`task-state-dot ${summaryVisual(summary)}`} /><strong>{taskTitle(summary.task)}</strong><small>{summaryStateLabel(summary)}</small></span>
-      <span className="dashboard-task-activity">{summary.activity}</span>
-      <span className="dashboard-task-agent">{summary.agent_label}</span>
-      <span className="dashboard-task-diff">{stat.files ? <><b>+{stat.created + stat.modified}</b><em>−{stat.removed}</em></> : "—"}</span>
-      <time>{elapsedMinutes(summary.task.updated_at)}</time>
-    </button>
+    <tr onClick={onOpen}>
+      <td><strong>{taskTitle(summary.task)}</strong><small>{summaryStateLabel(summary)} · {summary.activity}</small></td>
+      <td>{workspaceLabel}</td>
+      <td><span className={`opt-pill${taskStatePillTone(visual)}`}>{summaryStateLabel(summary)}</span></td>
+      <td className="opt-last"><time>{elapsedMinutes(summary.task.updated_at)}</time></td>
+    </tr>
   );
 }
 
@@ -315,17 +327,17 @@ function ProjectPermission({ item, workspacePath, onError }: { item: DashboardAt
     }
   };
   return (
-    <article className="attention-item permission-item">
-      <span className="attention-icon"><IconShield width={18} height={18} /></span>
-      <div className="attention-copy">
+    <article className="opt-decision-row">
+      <span className="opt-icon"><IconShield width={18} height={18} /></span>
+      <div className="opt-grow">
         <p><span className="attention-label">权限请求</span><span className="risk-badge">{permission.risk_level} · {permissionRiskLabel(permission.risk_level)}</span></p>
         <h3>{permission.tool_name}</h3>
         <small>{permission.input_summary || taskTitle(item.task)} · 等待 {elapsedSince(item.since)}</small>
       </div>
-      <div className="attention-actions">
-        <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void decide("allow")}>允许一次</button>
-        <button className="rc-button" disabled={busy} onClick={() => void decide("deny")}>拒绝</button>
-        <button className="rc-button rc-button-quiet" onClick={() => openRoom(item.task.id)}>查看</button>
+      <div className="opt-actions">
+        <button className="opt-button primary" disabled={busy} onClick={() => void decide("allow")}>允许一次</button>
+        <button className="opt-button" disabled={busy} onClick={() => void decide("deny")}>拒绝</button>
+        <button className="opt-button quiet" onClick={() => openRoom(item.task.id)}>查看</button>
       </div>
     </article>
   );
@@ -334,25 +346,18 @@ function ProjectPermission({ item, workspacePath, onError }: { item: DashboardAt
 function ProjectReview({ item, summary }: { item: DashboardAttentionItem; summary?: DashboardTaskSummary }) {
   const openRoom = useAppStore((s) => s.openRoom);
   return (
-    <article className="attention-item review-item">
-      <span className="attention-icon"><IconFile width={18} height={18} /></span>
-      <div className="attention-copy">
+    <article className="opt-decision-row">
+      <span className="opt-icon"><IconFile width={18} height={18} /></span>
+      <div className="opt-grow">
         <p><span className="attention-label">等待审核</span></p>
         <h3>{taskTitle(item.task)}</h3>
         <small>{summary?.change_summary.files ?? 0} 个文件变更 · 等待 {elapsedSince(item.since)}</small>
       </div>
-      <div className="attention-actions">
-        <button className="rc-button rc-button-primary" onClick={() => openRoom(item.task.id, "review")}>查看审核</button>
+      <div className="opt-actions">
+        <button className="opt-button primary" onClick={() => openRoom(item.task.id, "review")}>查看审核</button>
       </div>
     </article>
   );
-}
-
-function activityTone(item: ProjectActivityItem): "running" | "attention" | "review" | "done" {
-  if (item.kind === "permission_requested") return "attention";
-  if (item.kind === "change_requested") return "review";
-  if (item.kind === "run_ended" || item.kind === "verification_run") return "done";
-  return "running";
 }
 
 function ProjectActivityRail({ items }: { items: ProjectActivityItem[] }) {
@@ -368,13 +373,13 @@ function ProjectActivityRail({ items }: { items: ProjectActivityItem[] }) {
     if (visibleItems.length === 5) break;
   }
   return (
-    <aside className="project-activity-rail" aria-label="项目动态">
-      <div className="project-activity-head"><div><h2>项目动态</h2><p>每个对话的最新关键节点</p></div></div>
+    <aside className="opt-dashboard-aside" aria-label="项目动态">
+      <h2>项目动态</h2>
       <div className="project-activity-list">
         {visibleItems.length === 0 ? <p className="project-activity-empty">还没有可显示的关键动态。</p> : visibleItems.map((item) => (
-          <button className="project-activity-item" key={item.id} onClick={() => openRoom(item.task_id)}>
-            <i className={`task-state-dot ${activityTone(item)}`} />
-            <span><strong>{item.summary}</strong><small>{item.task_title}{item.actor ? ` · ${item.actor}` : ""}</small></span>
+          <button className="opt-feed-item" key={item.id} onClick={() => openRoom(item.task_id)}>
+            <strong>{item.summary}</strong>
+            <small>{item.task_title}{item.actor ? ` · ${item.actor}` : ""}</small>
             <time>{elapsedMinutes(item.at)}</time>
           </button>
         ))}

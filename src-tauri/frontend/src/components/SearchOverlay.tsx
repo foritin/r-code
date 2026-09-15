@@ -3,7 +3,8 @@ import { useAppStore } from "../store/app";
 import { useFocusTrap } from "../lib/hooks";
 import { useTasksStore } from "../store/tasks";
 import { globalSearch, quickOpen } from "../lib/ipc";
-import { errText } from "../lib/format";
+import { displayPath, errText } from "../lib/format";
+import { workspaceName } from "../lib/presentation";
 import type { SearchMatch } from "../lib/types";
 import { IconAlert, IconFile, IconSearch, IconText } from "./icons";
 
@@ -20,7 +21,9 @@ export function SearchOverlay() {
   const setEditorFile = useAppStore((s) => s.setEditorFile);
   const setProjects = useAppStore((s) => s.setScene);
   const workspacePath = useTasksStore((s) => s.currentProjectId);
+  const workspaces = useTasksStore((s) => s.workspaces);
   const searchable = Boolean(workspacePath);
+  const scopeName = workspacePath ? workspaceName(workspacePath, workspaces) : "未附加文件夹";
 
   const [query, setQuery] = useState("");
   const [files, setFiles] = useState<string[]>([]);
@@ -106,7 +109,7 @@ export function SearchOverlay() {
   // 选中项保持可见
   useEffect(() => {
     listRef.current
-      ?.querySelector(".ovl-item.sel")
+      ?.querySelector(".opt-search-result.selected")
       ?.scrollIntoView({ block: "nearest" });
   }, [selSafe, items.length]);
 
@@ -131,20 +134,24 @@ export function SearchOverlay() {
   };
 
   return (
-    <div className="ovl-backdrop" onClick={() => setSearchOpen(false)}>
+    <div className="opt-search-backdrop" onClick={() => setSearchOpen(false)}>
       <div
-        className="ovl pane pane-lit"
+        className="opt-search-modal"
         role="dialog"
         aria-modal="true"
         aria-label="搜索"
         ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="ovl-input-row">
-          <IconSearch width={15} height={15} />
+        <div className="opt-search-scope">
+          <span>当前搜索范围 <strong>{scopeName}</strong></span>
+          <span>{workspacePath ? displayPath(workspacePath) : "仅当前附加文件夹"}</span>
+        </div>
+
+        <div className="opt-search-input">
+          <IconSearch width={16} height={16} />
           <input
             ref={inputRef}
-            className="ovl-input"
             role="combobox"
             aria-expanded={items.length > 0}
             aria-controls="ovl-results"
@@ -152,10 +159,15 @@ export function SearchOverlay() {
             aria-autocomplete="list"
             aria-label="搜索文件与内容"
             value={query}
-            placeholder={searchable ? "搜文件，也搜内容…" : "附加文件夹后可搜索本地文件"}
+            placeholder={searchable ? "搜索文件名、路径或内容…" : "附加文件夹后可搜索本地文件"}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onInputKey}
           />
+          {query && (
+            <button className="opt-search-clear" onClick={() => setQuery("")} aria-label="清空搜索" title="清空搜索">
+              <span aria-hidden="true">✕</span>
+            </button>
+          )}
           <span className="kact">esc</span>
         </div>
 
@@ -169,21 +181,29 @@ export function SearchOverlay() {
           </div>
         )}
 
-        <div className="ovl-results" id="ovl-results" role="listbox" aria-label="搜索结果" ref={listRef}>
+        <div className="opt-search-results" id="ovl-results" role="listbox" aria-label="搜索结果" ref={listRef}>
           {!searchable ? (
-            <div className="empty">
-              搜索只会访问当前附加的文件夹。<br />
-              <button className="linkbtn" onClick={() => { setSearchOpen(false); setProjects("projects"); }}>
+            <div className="opt-empty">
+              <h3>仅可搜索附加的文件夹</h3>
+              <p>搜索只会访问当前附加的文件夹。</p>
+              <button className="opt-button" onClick={() => { setSearchOpen(false); setProjects("projects"); }}>
                 去附加文件夹
               </button>
             </div>
-          ) : query.trim() === "" && <div className="empty">输入关键字，搜文件，也搜内容。</div>}
-          {searchable && query.trim() !== "" && !searching && items.length === 0 && !error && (
-            <div className="empty">没有匹配的结果。</div>
-          )}
+          ) : query.trim() === "" ? (
+            <div className="opt-empty">
+              <p>输入关键字，搜文件，也搜内容。</p>
+            </div>
+          ) : !searching && items.length === 0 && !error ? (
+            <div className="opt-empty">
+              <h3>未找到匹配内容</h3>
+              <p>试试文件名、路径或文件中的关键词。</p>
+              <button className="opt-button primary" onClick={() => setQuery("")}>清空搜索</button>
+            </div>
+          ) : null}
 
           {files.length > 0 && (
-            <div className="ovl-sec">文件 · {files.length}</div>
+            <h3>文件 · {files.length}</h3>
           )}
           {files.map((path, i) => (
             <button
@@ -191,19 +211,19 @@ export function SearchOverlay() {
               id={`ovl-option-${i}`}
               role="option"
               aria-selected={selSafe === i}
-              className={`ovl-item${selSafe === i ? " sel" : ""}`}
+              className={`opt-search-result${selSafe === i ? " selected" : ""}`}
               onMouseEnter={() => setSel(i)}
               onClick={() => openItem({ kind: "file", path })}
             >
-              <span className="ic">
-                <IconFile width={13} height={13} />
+              <span className="opt-icon">
+                <IconFile width={16} height={16} />
               </span>
-              <span className="t mono">{path}</span>
+              <span className="opt-mono">{path}</span>
             </button>
           ))}
 
           {hits.length > 0 && (
-            <div className="ovl-sec">内容命中 · {hits.length}</div>
+            <h3>内容命中 · {hits.length}</h3>
           )}
           {hits.map((m, j) => {
             const idx = files.length + j;
@@ -213,34 +233,33 @@ export function SearchOverlay() {
                 id={`ovl-option-${idx}`}
                 role="option"
                 aria-selected={selSafe === idx}
-                className={`ovl-item${selSafe === idx ? " sel" : ""}`}
+                className={`opt-search-result${selSafe === idx ? " selected" : ""}`}
                 onMouseEnter={() => setSel(idx)}
                 onClick={() => openItem({ kind: "hit", match: m })}
               >
-                <span className="ic">
-                  <IconText width={13} height={13} />
+                <span className="opt-icon">
+                  <IconText width={16} height={16} />
                 </span>
-                <span className="t mono">{m.line_text.trim()}</span>
-                <span className="loc">
+                <span className="opt-mono">{m.line_text.trim()}</span>
+                <small>
                   {m.path}:{m.line}
-                </span>
+                </small>
               </button>
             );
           })}
         </div>
 
-        <div className="ovl-foot">
+        <div className="opt-search-footer">
           <span>
             <span className="kact">↑↓</span> 选择
           </span>
           <span>
-            <span className="kact">⏎</span> 打开
+            <span className="kact">Enter</span> 打开
           </span>
           <span>
-            <span className="kact">esc</span> 关闭
+            <span className="kact">Esc</span> 关闭
           </span>
-          <span className="spacer" />
-          {searching && <span>搜索中…</span>}
+          <span>{searching ? "搜索中…" : "仅当前附加文件夹"}</span>
         </div>
       </div>
     </div>

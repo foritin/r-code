@@ -6,7 +6,7 @@ import { usePoll } from "../../lib/poll";
 import { selectNeedsYouTaskIds, useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
 import type { Task } from "../../lib/types";
-import { IconHistory, IconPlus, IconProjects, IconSearch } from "../icons";
+import { IconHistory, IconPlus, IconSearch } from "../icons";
 import { TaskActionsMenu } from "../TaskActionsMenu";
 
 type Filter = "all" | "running" | "attention" | "review" | "completed" | "archived";
@@ -77,18 +77,18 @@ export function ConversationsScene() {
 
   return (
     <div className="scene scene-conversations">
-      <div className="conversation-list-page">
-        <header className="list-page-header">
+      <div className="opt-page">
+        <header className="opt-page-head">
           <div>
             <h1>所有对话</h1>
             <p>跨项目查看任务状态，在需要时回到具体任务继续处理。</p>
           </div>
-          <button className="rc-button rc-button-primary" onClick={() => openNewConversation(null)}><IconPlus width={16} height={16} />新对话</button>
+          <button className="opt-button primary" onClick={() => openNewConversation(null)}><IconPlus width={16} height={16} />新对话</button>
         </header>
 
-        <div className="conversation-toolbar">
-          <label className="conversation-search"><IconSearch width={16} height={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选任务或项目…" /></label>
-          <div className="conversation-filters" role="tablist" aria-label="任务筛选">
+        <div className="opt-toolbar">
+          <label className="opt-search-field"><IconSearch width={16} height={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选任务或项目…" /></label>
+          <div className="opt-tabs" role="tablist" aria-label="任务筛选">
             {([
               ["all", "全部"], ["running", "运行中"], ["attention", "待处理"], ["review", "待审核"], ["completed", "已完成"], ["archived", "已归档"],
             ] as [Filter, string][]).map(([value, label]) => (
@@ -97,19 +97,34 @@ export function ConversationsScene() {
           </div>
         </div>
 
-        <section className="conversation-list" aria-label="任务列表">
-          {archivedLoading ? (
-            <div className="conversation-empty"><IconHistory width={24} height={24} /><h2>正在读取归档…</h2></div>
-          ) : filtered.length === 0 ? (
-            <div className="conversation-empty"><IconHistory width={24} height={24} /><h2>没有匹配的对话</h2><p>换一个筛选条件，或从新对话开始。</p></div>
-          ) : filtered.map((task) => (
-            <ConversationRow
-              key={task.id}
-              task={task}
-              needsAttention={needsIds.has(task.id)}
-              onChanged={filter === "archived" ? () => setArchivedRevision((value) => value + 1) : undefined}
-            />
-          ))}
+        <section aria-label="任务列表">
+          {archivedLoading || filtered.length === 0 ? (
+            <div className="opt-empty">
+              <span className="opt-icon"><IconHistory width={20} height={20} /></span>
+              <h3>{archivedLoading ? "正在读取归档…" : "没有匹配的对话"}</h3>
+              {!archivedLoading && <p>换一个筛选条件，或从新对话开始。</p>}
+            </div>
+          ) : (
+            <table className="opt-table" aria-label="任务列表">
+              <thead>
+                <tr><th>任务</th><th>项目</th><th>状态</th><th>最近更新</th><th className="opt-last"><span className="sr-only">操作</span></th></tr>
+              </thead>
+              <tbody>
+                {filtered.map((task) => (
+                  <ConversationRow
+                    key={task.id}
+                    task={task}
+                    needsAttention={needsIds.has(task.id)}
+                    onChanged={filter === "archived" ? () => setArchivedRevision((value) => value + 1) : undefined}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div className="opt-home-foot">
+            <span>{filtered.length} 个对话 · 最近活动排列</span>
+            <span>选中任务可继续对话或查看详情</span>
+          </div>
         </section>
       </div>
     </div>
@@ -123,15 +138,15 @@ function ConversationRow({ task, needsAttention, onChanged }: { task: Task; need
   const visual = visualTaskState(task, detail);
   const highlighted = needsAttention || visual === "attention";
   return (
-    <article className="conversation-row">
-      <span className={`conversation-status ${visual}`}><i /></span>
-      <button className="conversation-main" onClick={() => openRoom(task.id)}><strong>{taskTitle(task)}</strong><small>{taskActivity(task, detail)}</small></button>
-      <span className="conversation-project"><IconProjects width={15} height={15} />{workspaceName(task.workspace_path, workspaces)}</span>
-      <span className={`conversation-state ${highlighted ? "needs" : ""}`}>{taskStateLabel(task, detail)}</span>
-      <time>{elapsedMinutes(task.updated_at)}</time>
-      <span className="conversation-row-actions">
-        <TaskActionsMenu task={task} detail={detail} onChanged={onChanged} />
-      </span>
-    </article>
+    <tr className="conversation-row">
+      <td>
+        <button className="text-link conversation-main" onClick={() => openRoom(task.id)}><strong>{taskTitle(task)}</strong></button>
+        <small>{taskActivity(task, detail)}</small>
+      </td>
+      <td>{workspaceName(task.workspace_path, workspaces)}</td>
+      <td><span className={`conversation-status ${visual}`}><i /></span><span className={`conversation-state${highlighted ? " needs" : ""}`}>{taskStateLabel(task, detail)}</span></td>
+      <td><time>{elapsedMinutes(task.updated_at)}</time></td>
+      <td className="opt-last"><TaskActionsMenu task={task} detail={detail} onChanged={onChanged} /></td>
+    </tr>
   );
 }

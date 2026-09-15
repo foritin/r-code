@@ -89,10 +89,10 @@ export function MenuBar() {
       <nav className="desktop-navigation" aria-label="桌面导航" data-tauri-drag-region>
         <div className="desktop-history-actions" aria-label="浏览历史" data-tauri-drag-region>
           <button className="desktop-nav-button desktop-history-button" type="button" onClick={goBack} disabled={!canGoBack} aria-label="后退" title="后退">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
           </button>
           <button className="desktop-nav-button desktop-history-button" type="button" onClick={goForward} disabled={!canGoForward} aria-label="前进" title="前进">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
           </button>
         </div>
         <div className="desktop-app-menus" data-tauri-drag-region>

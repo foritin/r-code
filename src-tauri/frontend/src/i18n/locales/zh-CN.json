@@ -51,6 +51,11 @@
   "settings": {
     "pageTitle": "设置",
     "categoriesLabel": "设置分类",
+    "groups": {
+      "models": "模型与能力",
+      "project": "项目与安全",
+      "application": "应用"
+    },
     "preferences": {
       "label": "外观与小助手",
       "description": "选择界面语言与主题，并管理桌面小助手的反馈方式。"

@@ -598,19 +598,19 @@ export function PlanPanel({
   };
 
   if (!loaded && !view) {
-    return <div className="plan-panel plan-panel-loading" role="status">正在读取当前对话的计划…</div>;
+    return <div className="plan-panel plan-panel-loading opt-inline-state" role="status">正在读取当前对话的计划…</div>;
   }
 
   if (!view) {
     return (
-      <section className="plan-panel plan-panel-empty" aria-label="当前计划" data-task-id={task.id}>
+      <section className="plan-panel plan-panel-empty opt-empty" aria-label="当前计划" data-task-id={task.id}>
         <span className="plan-empty-icon"><IconHelp width={18} height={18} /></span>
         <div>
           <strong>当前对话没有计划</strong>
           <p>进入计划模式后，步骤和需要你确认的问题会显示在这里。</p>
         </div>
         {task.mode === "plan" && (
-          <button className="btn" type="button" disabled={busy === "create"} onClick={() => void initialize()}>
+          <button className="btn opt-button" type="button" disabled={busy === "create"} onClick={() => void initialize()}>
             {busy === "create" ? "初始化中…" : "初始化计划"}
           </button>
         )}
@@ -646,10 +646,10 @@ export function PlanPanel({
             <small>{PLAN_STATE_LABEL[view.plan.state]} · 修订 {view.plan.revision}</small>
           </span>
           {progress.total > 0 && (
-            <span className="plan-summary-progress">{progress.completed}/{progress.total} · {progressPercent}%</span>
+            <span className="plan-summary-progress opt-mono">{progress.completed}/{progress.total} · {progressPercent}%</span>
           )}
         </button>
-        {running && <span className="plan-runtime-state">Agent 运行中</span>}
+        {running && <span className="plan-runtime-state opt-inline-state">Agent 运行中</span>}
         <button type="button" className="iconbtn" aria-label="刷新计划" title="刷新计划" onClick={() => void refresh()}>
           <IconRefresh width={13} height={13} />
         </button>
@@ -657,10 +657,10 @@ export function PlanPanel({
 
       <div className="plan-panel-body" id={panelBodyId} hidden={planCollapsed}>
           <div className="plan-metadata">
-            <span title={view.plan.projection_path ?? "计划文档尚未生成"}>
+            <span className="opt-mono" title={view.plan.projection_path ?? "计划文档尚未生成"}>
               文档 · {view.plan.projection_path ?? "准备中"}
             </span>
-            <span>同步修订 · {view.plan.projection_revision ?? "—"}</span>
+            <span className="opt-mono">同步修订 · {view.plan.projection_revision ?? "—"}</span>
           </div>
 
           <p className="plan-goal">
@@ -770,7 +770,7 @@ export function PlanPanel({
                 <button type="button" className="quiet-link" disabled={busy != null} onClick={() => void answerSet(questionSet, true)}>
                   {busy === "skip" ? "跳过中…" : "跳过整组"}
                 </button>
-                <button type="button" className="btn accent" disabled={busy != null} onClick={() => void answerSet(questionSet, false)}>
+                <button type="button" className="btn accent opt-button primary" disabled={busy != null} onClick={() => void answerSet(questionSet, false)}>
                   {busy === "answer" ? "提交中…" : "提交回答"}
                 </button>
               </footer>
@@ -818,7 +818,7 @@ export function PlanPanel({
           )}
 
           {retryQuestionSetId && continuationSet?.continuation_state !== "failed" && (
-            <button className="plan-retry" type="button" disabled={busy != null} onClick={() => void retryContinuation(retryQuestionSetId)}>
+            <button className="plan-retry opt-button" type="button" disabled={busy != null} onClick={() => void retryContinuation(retryQuestionSetId)}>
               <IconRefresh width={13} height={13} />
               {busy === "retry" ? "正在重试续接…" : "重试计划续接"}
             </button>
@@ -933,7 +933,7 @@ export function PlanPanel({
               <span className="plan-decision-actions">
                 {cancellable && (
                   <button
-                    className="btn plan-cancel-action"
+                    className="btn plan-cancel-action opt-button"
                     type="button"
                     disabled={busy != null || running}
                     aria-busy={busy === "cancel" && !cancelArmed}
@@ -953,7 +953,7 @@ export function PlanPanel({
                 )}
                 {(implementationReady || cancelArmed) && (
                   <button
-                    className={`btn ${cancelArmed ? "danger" : "accent"}`}
+                    className={`btn opt-button ${cancelArmed ? "danger" : "accent primary"}`}
                     type="button"
                     disabled={busy != null || running}
                     aria-busy={busy === "approve" || (busy === "cancel" && cancelArmed)}

@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 import {
   agentResend,
@@ -29,7 +30,7 @@ import type {
   SessionAttachmentMeta,
 } from "../../lib/types";
 import { useTasksStore } from "../../store/tasks";
-import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
+import { IconAttach, IconCheck, IconChevronDown, IconChevronRight, IconSubagent } from "../icons";
 import { ImageLightbox } from "../ImageLightbox";
 import { CodexQuestionCard } from "./CodexQuestionCard";
 import { codexSubmitUserInput } from "../../lib/ipc";
@@ -49,13 +50,15 @@ import {
 import { Markdown } from "./Markdown";
 import {
   TimelineContextEvent,
-  TimelineSubagentGroup,
   TimelineToolGroup,
 } from "./TimelineActivity";
+import { SubagentAvatar } from "./SubagentIdentity";
 import {
   TimelinePresentationCache,
   type TimelineDisplayItem,
   type TimelineRunItem,
+  type TimelineSubagentEntry,
+  type TimelineSubagentGroupItem,
   type TimelineUserItem,
 } from "./timeline-presentation";
 import { TimelineRunChangeSummary } from "./TimelineRunChangeSummary";
@@ -1087,7 +1090,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         return <TimelineToolGroup key={it.id} item={it} dim={dim(it.t)} />;
       case "subagent_group":
         return (
-          <TimelineSubagentGroup
+          <TimelineSubagentTrace
             key={it.id}
             item={it}
             selectedSubagentId={selectedSubagentId}
@@ -1280,3 +1283,140 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     </div>
   );
 });
+
+/* ==========================================================================
+   子代理轨迹（revision-2 · 命名子代理文字行）
+   DOM 契约（docs/design.md §5）：opt-subagent-lines > opt-subagent-line >
+   opt-icon + opt-agent-kind + opt-agent-name[data-name] + opt-agent-separator +
+   opt-agent-description；运行态 .is-running / 完成态 .is-complete 由本处置类，
+   样式与 sheen 动画在 opt-room.css；sheen 交错延迟走 --agent-delay 内联变量。
+   保留了原芯片的检查入口：可检查的行以 role="button" 打开工作台详情。
+   ========================================================================== */
+
+const SUBAGENT_STATUS_TEXT: Record<TimelineSubagentEntry["status"], string> = {
+  queued: "等待执行",
+  running: "运行中",
+  waiting_permission: "等待权限",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已停止",
+};
+
+function isRunningSubagent(status: TimelineSubagentEntry["status"]): boolean {
+  return status === "queued" || status === "running" || status === "waiting_permission";
+}
+
+function subagentTraceDescription(agent: TimelineSubagentEntry): string {
+  return agent.goal ?? agent.summary ?? SUBAGENT_STATUS_TEXT[agent.status];
+}
+
+const TimelineSubagentTrace = memo(function TimelineSubagentTrace({
+  item,
+  selectedSubagentId,
+  onInspectSubagent,
+  dim = "",
+}: {
+  item: TimelineSubagentGroupItem;
+  selectedSubagentId?: string | null;
+  onInspectSubagent?: (runId: string) => void;
+  dim?: string;
+}) {
+  return (
+    <div className={`timeline-subagent-event${dim}`} data-t={item.t} aria-label="子代理运行">
+      <div className="opt-subagent-lines" aria-label="子代理执行明细">
+        {item.agents.map((agent, index) => (
+          <SubagentTraceLine
+            key={agent.id}
+            agent={agent}
+            index={index}
+            selected={Boolean(agent.runId && selectedSubagentId === agent.runId)}
+            onInspectSubagent={onInspectSubagent}
+          />
+        ))}
+      </div>
+      {/* R2 定稿保留检查芯片（design/renders/conversation.html 仍含 timeline-subagent-chip；
+          e2e 以芯片为检查入口）：轨迹行之下原位恢复芯片行，样式沿用既有 keep 层。 */}
+      <div className="timeline-subagent-details">
+        <div className="timeline-subagent-chips">
+          {item.agents.map((agent, index) => {
+            const inspectable = Boolean(agent.runId && onInspectSubagent);
+            const selected = Boolean(agent.runId && selectedSubagentId === agent.runId);
+            return (
+              <button
+                key={`chip-${agent.id}`}
+                type="button"
+                className={`timeline-subagent-chip status-${agent.status}${selected ? " selected" : ""}`}
+                disabled={!inspectable}
+                aria-pressed={inspectable ? selected : undefined}
+                aria-label={`${agent.label}，${SUBAGENT_STATUS_TEXT[agent.status]}`}
+                title={[agent.goal, agent.summary, agent.model].filter(Boolean).join(" · ") || undefined}
+                onClick={() => agent.runId && onInspectSubagent?.(agent.runId)}
+              >
+                <SubagentAvatar
+                  index={index}
+                  identity={agent.id}
+                  runtimeKind={agent.runtimeKind}
+                  size="xs"
+                  className="timeline-subagent-avatar"
+                />
+                <span>{agent.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+function SubagentTraceLine({
+  agent,
+  index,
+  selected,
+  onInspectSubagent,
+}: {
+  agent: TimelineSubagentEntry;
+  index: number;
+  selected: boolean;
+  onInspectSubagent?: (runId: string) => void;
+}) {
+  const running = isRunningSubagent(agent.status);
+  const description = subagentTraceDescription(agent);
+  const inspectable = Boolean(agent.runId && onInspectSubagent);
+  const runId = agent.runId;
+  const title = [agent.goal, agent.summary, agent.model].filter(Boolean).join(" · ") || undefined;
+  const delayStyle = { "--agent-delay": `${index * -0.8}s` } as CSSProperties;
+  return (
+    <div
+      className={`opt-subagent-line${selected ? " selected" : ""}`}
+      style={delayStyle}
+      role={inspectable ? "button" : undefined}
+      tabIndex={inspectable ? 0 : undefined}
+      aria-pressed={inspectable ? selected : undefined}
+      title={title}
+      onClick={inspectable && runId ? () => onInspectSubagent?.(runId) : undefined}
+      onKeyDown={
+        inspectable && runId
+          ? (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onInspectSubagent?.(runId);
+            }
+          : undefined
+      }
+    >
+      <span className="opt-icon" aria-hidden="true">
+        {running ? <IconSubagent width={16} height={16} /> : <IconCheck width={16} height={16} />}
+      </span>
+      <span className="opt-agent-kind">子智能体</span>
+      <span
+        className={`opt-agent-name ${running ? "is-running" : "is-complete"}`}
+        data-name={agent.label}
+      >
+        {agent.label}
+      </span>
+      <span className="opt-agent-separator" aria-hidden="true">·</span>
+      <span className="opt-agent-description">{description}</span>
+    </div>
+  );
+}

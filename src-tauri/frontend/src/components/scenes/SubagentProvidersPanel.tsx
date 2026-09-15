@@ -479,7 +479,7 @@ export function SubagentProvidersPanel({
   }, [slots.length, weightTotal]);
 
   return (
-    <section className="settings-block subagent-providers-panel" id="subagent-pool-block" aria-labelledby="subagent-providers-title">
+    <section className="opt-card subagent-providers-panel" id="subagent-pool-block" aria-labelledby="subagent-providers-title">
       <header className="subagent-providers-heading">
         <div>
           <h3 id="subagent-providers-title">候选来源与路由池</h3>
@@ -496,10 +496,10 @@ export function SubagentProvidersPanel({
               指引手册 <span aria-hidden="true">→</span>
             </button>
           )}
-          <button className="btn sm" disabled={loading || globalBusy || anyTestBusy || catalog.length === 0} onClick={() => void testAll()}>
+          <button className="opt-button" disabled={loading || globalBusy || anyTestBusy || catalog.length === 0} onClick={() => void testAll()}>
             {isBusy("batch") ? "正在批量测试…" : "全部测试"}
           </button>
-          <button className="btn sm ghost" disabled={loading || globalBusy || anyTestBusy} onClick={() => void load(true)}>重新加载</button>
+          <button className="opt-button quiet" disabled={loading || globalBusy || anyTestBusy} onClick={() => void load(true)}>重新加载</button>
         </div>
       </header>
 
@@ -542,7 +542,7 @@ export function SubagentProvidersPanel({
                   </div>
                   <span className={`subagent-status is-${current.health.state}`}>{healthLabel(current.health.state)}</span>
                   <button
-                    className="btn sm"
+                    className="opt-button"
                     disabled={globalBusy || isBusy(`test:${key}`) || !current.ready || !current.model}
                     onClick={() => void testOne({ source: current.source, model: current.model })}
                   >
@@ -562,7 +562,7 @@ export function SubagentProvidersPanel({
               <span className={slots.length > 0 && weightTotal !== 100 ? "invalid" : ""}>权重 {weightTotal}%</span>
               <span>{slots.length}/{MAX_SLOTS} 槽</span>
               <button
-                className="btn sm"
+                className="opt-button"
                 data-testid="subagent-add-slot"
                 disabled={globalBusy || slots.length >= MAX_SLOTS || !catalog.some((entry) => entry.selectable)}
                 onClick={addSlot}
@@ -583,7 +583,7 @@ export function SubagentProvidersPanel({
                 <p className="subagent-pool-empty-hint">尚未启用候选池；新的自动委派继续使用现有路由策略。</p>
               </div>
               <button
-                className="btn sm"
+                className="opt-button"
                 disabled={globalBusy || !catalog.some((entry) => entry.selectable)}
                 onClick={addSlot}
               >
@@ -622,7 +622,7 @@ export function SubagentProvidersPanel({
                     <label>
                       <span>来源</span>
                       <select
-                        className="input"
+                        className="opt-input"
                         aria-label={`槽位 ${index + 1} 来源`}
                         value={sourceKey(slot.source)}
                         disabled={isBusy("save")}
@@ -643,7 +643,7 @@ export function SubagentProvidersPanel({
                     <label>
                       <span>模型</span>
                       <input
-                        className="input"
+                        className="opt-input"
                         aria-label={`槽位 ${index + 1} 模型`}
                         value={slot.model}
                         maxLength={320}
@@ -667,7 +667,7 @@ export function SubagentProvidersPanel({
                           −
                         </button>
                         <input
-                          className="input"
+                          className="opt-input"
                           type="number"
                           min={1}
                           max={100}
@@ -697,7 +697,7 @@ export function SubagentProvidersPanel({
                   <label className="subagent-template-field">
                     <span>Prompt 模板</span>
                     <select
-                      className="input"
+                      className="opt-input"
                       aria-label={`槽位 ${index + 1} Prompt 模板`}
                       value={slot.prompt_template_id ?? "custom"}
                       disabled={isBusy("save")}
@@ -718,7 +718,7 @@ export function SubagentProvidersPanel({
                   <label className="subagent-prompt-field">
                     <span>最终 Prompt <small>{[...slot.prompt].length}/{MAX_PROMPT_CHARS}</small></span>
                     <textarea
-                      className="input"
+                      className="opt-input"
                       aria-label={`槽位 ${index + 1} 最终 Prompt`}
                       rows={4}
                       maxLength={MAX_PROMPT_CHARS}
@@ -749,13 +749,13 @@ export function SubagentProvidersPanel({
           )}
 
           <footer className="subagent-pool-footer">
-            <div className="subagent-validation" aria-live="polite">
+            <div className="opt-validation-line subagent-validation" aria-live="polite">
               {validation.length > 0
                 ? <ul>{validation.map((issue) => <li key={issue}>{issue}</li>)}</ul>
                 : <span>{slots.length > 0 ? "候选池可保存；Host 会再次校验健康 receipt。" : "空候选池会保留原有委派路由。"}</span>}
             </div>
             <button
-              className="btn primary"
+              className="opt-button primary"
               data-testid="subagent-save-pool"
               disabled={isBusy("save") || validation.length > 0 || !dirty}
               onClick={() => void save()}

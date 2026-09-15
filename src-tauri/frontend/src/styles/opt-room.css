@@ -1,0 +1,937 @@
+/* ============================================================================
+   opt-room.css —— 会话与工具画布增量层（T01 创建 → T04 接管）
+   ----------------------------------------------------------------------------
+   【作用域】
+   - revision-2 主体（docs/design.md §3 会话页骨架 + §5 会话与工具面板类名族）：
+     .scene-room 双栏骨架（minmax(0,1fr) + 面板 520px 定案宽，.room-splitter
+     隐藏，proposal.css:110-114 定案）、timeline / you 气泡与 comp-box 输入区
+     增量、opt-subagent-lines 全家（opt-subagent-line / opt-agent-kind /
+     opt-agent-name / opt-agent-separator / opt-agent-description /
+     opt-subagent-tail / .in-panel 变体）、opt-tool-menu / opt-tool-intro /
+     opt-tool-line / opt-tool-copy / opt-tool-footnote、opt-panel-head/body/
+     footer、opt-live / opt-tool-list / opt-tool-tile / opt-mini-stats、
+     opt-terminal*、opt-file-layout / opt-file-tree / opt-file-blank /
+     opt-file-tab、opt-editor / opt-editor-code / opt-line-no / opt-code-*、
+     opt-check-steps、opt-review-* / opt-diff-*、opt-agents-list、
+     opt-inline-state、opt-runtime-*（定义点在本文件；设置页运行时行由 T05
+     的 opt-settings.css 消费）。
+   - 骨架覆盖选择器沿用 workbench.css 的 #app.scene-room 作用域写法（不修改
+     既有文件，靠后置 import 与同特异性取后取胜）；页面内元素增量一律走
+     .scene-room 后代作用域，禁止 body[data-proposal] 机制（design.md 禁忌 9）。
+   【令牌依据】
+   - 子代理名颜色走 tokens.css 的 --agent-name / --agent-shine（T01 已落）；
+     sheen 动画（opt-agent-name.is-running::after + @keyframes opt-agent-sheen）
+     按 revision-2.css:22-24 落地，必须带 prefers-reduced-motion: reduce
+     关停分支（design.md §1.4）；proposal 的 data-motion 全局关动画是静态稿
+     手段，不落地（§1.4）。零字面色，几何走 design.md §1.3 刻度映射。
+   【断点】
+   - 本文件场景以画布双栏为主，无新增页面密度断点。
+   【骨架】
+   - 子代理轨迹 DOM 契约：opt-subagent-line > opt-icon + opt-agent-kind +
+     opt-agent-name[data-name] + opt-agent-separator + opt-agent-description；
+     运行态 .is-running / 完成态 .is-complete / 面板内 .in-panel 由 TSX 置类。
+   【容器/尺寸定案值（design.md §1.3 例外清单之外，此处集中登记）】
+     * .scene-room 面板列宽 520px（--opt-panel-width，design.md §3 定案）
+     * .opt-panel-head / .room-conversation-head 高 58px（面板头定案高）
+     * .opt-tool-line min-height 67px（工具行定案高）
+     * .in-panel .opt-subagent-line 名称列 58px（面板内子代理名列宽定案值）
+     * .opt-file-layout 目录列 156px / .opt-editor 目录列 210px（树列定案宽）
+     * .opt-line-no min-width 32px（行号列定案宽，走 --sp-10 刻度）
+   ============================================================================ */
+
+/* ---------- 会话页骨架：双栏画布（design.md §3 定案） ---------- */
+
+/* docked 双栏：对话 minmax(0,1fr) + 画布 520px 定案宽；分隔条隐藏（proposal.css:110-113） */
+#app.scene-room .scene-room.workbench-docked {
+  grid-template-columns: minmax(0, 1fr) var(--opt-panel-width, 520px);
+  grid-template-areas: "convo canvas";
+}
+
+#app.scene-room .scene-room.workbench-docked .convo {
+  border: 0;
+  border-radius: 0;
+}
+
+/* canvas 面板：沉底色 + 左边线（design.md §3：--surface-sunken + 左边线 --border） */
+#app.scene-room .scene-room.workbench-docked .canvas.workbench {
+  background: var(--surface-sunken);
+  border-left: 1px solid var(--border);
+}
+
+#app.scene-room .scene-room .room-splitter {
+  display: none;
+}
+
+/* ---------- 会话列：头部 / 时间线 / 气泡 / 输入区 增量 ---------- */
+
+.scene-room .room-conversation-head {
+  min-height: 58px; /* 面板头定案高（文件头已登记） */
+  padding: var(--sp-6) var(--sp-9); /* 13px 22px → sp-6 / sp-9（§1.3） */
+}
+
+.scene-room .room-conversation-title strong {
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  font-weight: var(--weight-medium); /* 570 → medium（§1.3） */
+}
+
+.scene-room .timeline {
+  padding: var(--sp-8) var(--sp-9); /* 22px 26px → sp-8 / sp-9（§1.3） */
+}
+
+.scene-room .timeline .agent {
+  font-size: var(--text-base); /* 15px → base（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.8 → relaxed（§1.3） */
+}
+
+/* you 气泡：chip 底 + 12px 圆角（proposal.css:119 定案） */
+.scene-room .timeline .you {
+  padding: var(--sp-6) var(--sp-7); /* 11px 15px → sp-6 / sp-7（§1.3） */
+  background: var(--bg-chip);
+  border: 0;
+  border-radius: var(--radius-lg); /* 12px → lg（§1.3） */
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  line-height: var(--lh-relaxed);
+}
+
+/* 子代理事件壳在 R2 中去边框化：只留文字轨迹（revision-2.css:4 定案） */
+.scene-room .timeline .timeline-subagent-event {
+  margin: var(--sp-8) 0 var(--sp-9); /* 18px 0 22px → sp-8 / sp-9（§1.3） */
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.scene-room .room-composer-region {
+  padding: var(--sp-6) var(--sp-9) var(--sp-9); /* 12px 22px 22px → sp-6 / sp-9（§1.3） */
+}
+
+#app.r-code-signature.scene-room .scene-room .comp-box {
+  border-radius: var(--radius-lg); /* 13px → lg（§1.3） */
+  border-color: var(--border-strong);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card); /* --opt-shadow 按层级取 card（design.md §1.1） */
+}
+
+#app.r-code-signature.scene-room .scene-room .comp-box textarea {
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.7 → relaxed（§1.3） */
+}
+
+/* ---------- 子代理轨迹（revision-2.css 核心：命名子代理文字行） ---------- */
+
+.opt-subagent-lines {
+  display: grid;
+  gap: var(--sp-1); /* 3px → sp-1/sp-2 档取下（§1.3） */
+  padding: var(--sp-1) 0;
+  min-width: 0;
+}
+
+.opt-subagent-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4); /* 8px → sp-4（§1.3） */
+  min-height: var(--control-h); /* 28px → 27-30 档 control-h（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.7 → relaxed（§1.3） */
+  font-size: var(--text-sm); /* 13px → sm（§1.3） */
+  min-width: 0;
+}
+
+/* 可点击行（保留子代理检查入口）的状态：hover 提亮 + 统一焦点环 */
+.opt-subagent-line[role='button'] {
+  cursor: pointer;
+}
+
+.opt-subagent-line[role='button']:hover {
+  background: var(--bg-hover);
+}
+
+.opt-subagent-line[role='button']:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: calc(-1 * var(--ring-offset));
+}
+
+.opt-subagent-line > .opt-icon {
+  width: 16px; /* 图标视口例外：行内 16（15px 收敛，§1.3） */
+  height: 16px;
+  align-self: center;
+  color: var(--fg-faint);
+  opacity: 0.8;
+}
+
+.opt-subagent-line > .opt-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.opt-agent-kind,
+.opt-agent-separator {
+  color: var(--fg-faint);
+  flex: none;
+  font-weight: var(--weight-normal);
+}
+
+.opt-agent-name {
+  position: relative;
+  color: var(--agent-name); /* 子代理名令牌（design.md §1.2） */
+  font-family: var(--font-mono);
+  font-size: var(--text-meta); /* 12.5px → meta（§1.3） */
+  font-weight: var(--weight-medium); /* 550 → medium（§1.3） */
+  line-height: var(--lh-relaxed);
+  flex: none;
+  white-space: nowrap;
+}
+
+/* sheen 高光层：透明文字 + 渐变 background-clip:text（revision-2.css:11） */
+.opt-agent-name::after {
+  content: attr(data-name);
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  background: linear-gradient(
+    110deg,
+    transparent 38%,
+    var(--agent-shine) 49%,
+    transparent 61%
+  );
+  background-size: 280% 100%;
+  background-position: 100% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.opt-agent-description {
+  min-width: 0;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm); /* 13px → sm（§1.3） */
+}
+
+.opt-subagent-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8); /* 18px → sp-8（§1.3） */
+  margin: var(--sp-3) 0 0 var(--sp-9); /* 5px 0 0 23px → sp-3 / sp-9（§1.3） */
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  line-height: var(--lh-relaxed);
+  color: var(--fg-faint);
+}
+
+.opt-subagent-tail span:last-child {
+  color: var(--fg-muted);
+}
+
+/* ---------- 面板内变体（.in-panel）：网格化两行布局（revision-2.css:15-20） ---------- */
+
+.opt-subagent-lines.in-panel {
+  gap: var(--sp-4); /* 8px → sp-4（§1.3） */
+}
+
+.in-panel .opt-subagent-line {
+  display: grid;
+  grid-template-columns: 16px 58px minmax(0, 1fr); /* 名称列 58px 定案值（文件头已登记） */
+  gap: 0 var(--sp-4); /* 7px → sp-4（§1.3） */
+  padding: var(--sp-3) 0; /* 6px → sp-3（§1.3） */
+  border: 0;
+}
+
+.in-panel .opt-agent-name {
+  justify-self: start;
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+}
+
+.in-panel .opt-agent-description {
+  grid-column: 2 / 4;
+  white-space: normal;
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+  line-height: var(--lh-base); /* 1.55 → base（§1.3） */
+  margin-top: var(--sp-1);
+}
+
+.in-panel .opt-agent-separator {
+  display: none;
+}
+
+.in-panel .is-child {
+  padding-left: var(--sp-8); /* 20px → sp-8（§1.3） */
+}
+
+/* 面板内行内停止按钮（保留既有停止能力，追加子元素，回传已登记） */
+.in-panel .opt-subagent-line > .opt-agent-stop {
+  grid-column: 1 / -1;
+  justify-self: end;
+  margin-top: var(--sp-1);
+}
+
+.opt-agent-name.is-complete {
+  color: var(--fg-muted); /* 完成态回落 muted（revision-2.css:21） */
+}
+
+/* sheen 运行态：无限循环高光扫过，--agent-delay 供 TSX 交错错峰 */
+.opt-agent-name.is-running::after {
+  opacity: 1;
+  animation: opt-agent-sheen 3.4s ease-in-out infinite;
+  animation-delay: var(--agent-delay, 0s);
+}
+
+@keyframes opt-agent-sheen {
+  0%,
+  15% {
+    background-position: 100% 0;
+    opacity: 0;
+  }
+
+  30% {
+    opacity: 0.95;
+  }
+
+  75% {
+    background-position: -20% 0;
+    opacity: 0.95;
+  }
+
+  90%,
+  100% {
+    background-position: -20% 0;
+    opacity: 0;
+  }
+}
+
+/* 无障碍关停分支（design.md §1.4 强制） */
+@media (prefers-reduced-motion: reduce) {
+  .opt-agent-name.is-running::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ---------- 任务工具启动器（tool-launcher，revision-2.css:25-36） ---------- */
+
+.opt-tool-intro {
+  padding: var(--sp-1) var(--sp-1) var(--sp-8); /* 3px 2px 20px → sp-1 / sp-8（§1.3） */
+}
+
+.opt-tool-intro > span {
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  color: var(--fg-faint);
+}
+
+.opt-tool-intro > strong {
+  display: block;
+  margin: var(--sp-3) 0 0; /* 5px → sp-3（§1.3） */
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  font-weight: var(--weight-medium);
+  line-height: var(--lh-base);
+  color: var(--fg);
+}
+
+.opt-tool-intro p {
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  line-height: var(--lh-base); /* 1.5 → base（§1.3） */
+  color: var(--fg);
+  margin: var(--sp-3) 0 0; /* 5px → sp-3（§1.3） */
+}
+
+.opt-tool-menu {
+  display: grid;
+  border-top: 1px solid var(--border);
+}
+
+.opt-tool-line {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto 16px; /* 图标 20px 视口例外（§1.3） */
+  gap: var(--sp-6); /* 12px → sp-6（§1.3） */
+  align-items: center;
+  width: 100%;
+  min-height: 67px; /* 工具行定案高（文件头已登记） */
+  padding: var(--sp-6) var(--sp-1); /* 13px 2px → sp-6 / sp-1（§1.3） */
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); /* 65% 收敛 60%（design.md §2.4） */
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.opt-tool-line > .opt-icon {
+  width: 20px; /* 图标视口例外：工具格 20（§1.3） */
+  height: 20px;
+  color: var(--accent);
+}
+
+.opt-tool-line > .opt-icon:last-child {
+  width: 16px; /* 13px 尾随箭头收敛行内 16（§1.3） */
+  height: 16px;
+  color: var(--fg-faint);
+  opacity: 0.45;
+}
+
+.opt-tool-copy strong {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5); /* 9px → sp-5（§1.3） */
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  font-weight: var(--weight-medium); /* 550 → medium（§1.3） */
+  line-height: var(--lh-base);
+}
+
+.opt-tool-copy small {
+  display: block;
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+  line-height: var(--lh-base);
+  color: var(--fg-muted);
+  margin-top: var(--sp-1); /* 3px → sp-1（§1.3） */
+}
+
+.opt-tool-copy em {
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  font-style: normal;
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.opt-tool-line kbd {
+  font-size: var(--text-meta); /* 10px → meta（§1.3） */
+  color: var(--fg-faint);
+}
+
+.opt-tool-footnote {
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.7 → relaxed（§1.3） */
+  color: var(--fg-faint);
+  padding-top: var(--sp-8); /* 20px → sp-8（§1.3） */
+}
+
+/* 启动器页画布体加宽内边距（proposal.css:37 定案，按禁忌 9 并入本区块作用域） */
+.scene-room .canvas .workbench-launcher {
+  padding: var(--sp-8) var(--sp-9); /* 22px 24px → sp-8 / sp-9（§1.3） */
+}
+
+/* ---------- 面板头 / 体 / 脚（proposal.css:125-127,145 定义点） ---------- */
+
+.opt-panel-head {
+  height: 58px; /* 面板头定案高（文件头已登记） */
+  min-height: 58px;
+  padding: 0 var(--sp-7); /* 18px → sp-7（§1.3） */
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5); /* 10px → sp-5（§1.3） */
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
+}
+
+.opt-panel-head h2 {
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  font-weight: var(--weight-medium); /* 570 → medium（§1.3） */
+  margin: 0;
+  flex: 1;
+}
+
+.opt-panel-head .opt-button {
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  min-height: var(--control-h); /* 27px → 27-30 档 control-h（§1.3） */
+  padding: var(--sp-2) var(--sp-4); /* 4px 7px → sp-2 / sp-4（§1.3） */
+}
+
+.opt-panel-body {
+  padding: var(--sp-8); /* 20px → sp-8（§1.3） */
+  overflow: auto;
+  flex: 1;
+  min-height: 0; /* flex 列内滚动体的标准收口（flex:1 + min-height:0）；编辑器断链的真正落点在 .opt-editor-code */
+}
+
+.opt-panel-body .opt-card {
+  padding: var(--sp-7); /* 17px → sp-7（§1.3） */
+}
+
+.opt-panel-body .opt-card-head h2 {
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+}
+
+.opt-panel-footer {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-7) var(--sp-8); /* 15px 20px → sp-7 / sp-8（§1.3） */
+  background: var(--bg-panel);
+}
+
+.opt-panel-footer > .opt-actions {
+  justify-content: flex-end;
+}
+
+.opt-panel-footer > .opt-help {
+  margin: var(--sp-5) 0 0; /* 10px → sp-5（§1.3） */
+}
+
+/* ---------- 运行面板小件（runs 页：live / 工具格 / 代理列表 / 迷你统计） ---------- */
+
+.opt-live {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4); /* 7px → sp-4（§1.3） */
+  color: var(--success); /* --opt-success → success（design.md §1.1） */
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+}
+
+.opt-live::before {
+  content: "";
+  width: var(--sp-2); /* 5px 圆点收敛 sp-2 档（§1.3） */
+  height: var(--sp-2);
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.opt-tool-list {
+  display: grid;
+  gap: var(--sp-5); /* 10px → sp-5（§1.3） */
+}
+
+.opt-tool-tile {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-7); /* 14px → sp-7（§1.3） */
+  padding: var(--sp-8) var(--sp-7); /* 17px 15px → sp-8 / sp-7（§1.3） */
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg); /* 9px → lg（§1.3） */
+  text-align: left;
+}
+
+.opt-tool-tile > .opt-icon {
+  width: var(--control-h-lg); /* 36px 图标容器 → control-h-lg（§1.3） */
+  height: var(--control-h-lg);
+  border-radius: var(--radius-md); /* 8px → md（§1.3） */
+  background: var(--tint-accent);
+  color: var(--accent);
+}
+
+.opt-tool-tile strong {
+  font-size: var(--text-sm); /* 14px → sm（§1.3） */
+  font-weight: var(--weight-medium); /* 560 → medium（§1.3） */
+  display: block;
+}
+
+.opt-tool-tile small {
+  display: block;
+  color: var(--fg-muted);
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+  line-height: var(--lh-base);
+  margin-top: var(--sp-1);
+}
+
+.opt-tool-tile kbd {
+  margin-left: auto;
+  align-self: flex-start;
+  font-size: var(--text-meta); /* 10px → meta（§1.3） */
+  white-space: nowrap;
+}
+
+.opt-agents-list .opt-row {
+  padding: var(--sp-6) 0; /* 13px → sp-6（§1.3） */
+  align-items: flex-start;
+}
+
+.opt-agents-list .opt-row.child {
+  padding-left: var(--sp-9); /* 26px → sp-9（§1.3） */
+}
+
+.opt-agents-list .opt-row strong {
+  font-size: var(--text-sm); /* 13px → sm（§1.3） */
+}
+
+.opt-agents-list .opt-row .opt-pill {
+  align-self: center;
+}
+
+.opt-mini-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-6); /* 12px → sp-6（§1.3） */
+  margin: var(--sp-7) 0; /* 16px → sp-7（§1.3） */
+}
+
+.opt-mini-stats strong {
+  display: block;
+  font-size: var(--text-xl); /* 20px → xl（§1.3） */
+  font-weight: var(--weight-medium); /* 550 → medium（§1.3） */
+}
+
+.opt-mini-stats span {
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  color: var(--fg-muted);
+}
+
+/* 行内状态点（review / approval / ready 三语义，revision-2.css:38-40） */
+.opt-inline-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3); /* 6px → sp-3（§1.3） */
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  line-height: var(--lh-base);
+  white-space: nowrap;
+}
+
+.opt-inline-state::before {
+  content: "";
+  width: var(--sp-2); /* 4px 圆点 → sp-2（§1.3） */
+  height: var(--sp-2);
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.8;
+}
+
+.opt-inline-state.review {
+  color: var(--accent);
+}
+
+.opt-inline-state.approval {
+  color: var(--warning); /* --opt-warning → warning（design.md §1.1） */
+}
+
+.opt-inline-state.ready {
+  color: var(--success);
+}
+
+/* ---------- 终端面板（proposal.css:133-135 定义点） ---------- */
+
+.opt-terminal {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.opt-terminal-tabs {
+  display: flex;
+  gap: var(--sp-2); /* 4px → sp-2（§1.3） */
+  align-items: center;
+  padding: var(--sp-4) var(--sp-6); /* 8px 12px → sp-4 / sp-6（§1.3） */
+  border-bottom: 1px solid var(--border);
+}
+
+.opt-terminal-tabs .opt-button.active {
+  border-color: var(--border-strong);
+  background: var(--bg-panel);
+}
+
+.opt-terminal-path {
+  padding: var(--sp-5) var(--sp-7); /* 10px 16px → sp-5 / sp-7（§1.3） */
+  font-family: var(--font-mono);
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  color: var(--fg-faint);
+  border-bottom: 1px solid var(--border);
+}
+
+.opt-terminal pre {
+  margin: 0;
+  padding: var(--sp-8) var(--sp-7); /* 21px 18px → sp-8 / sp-7（§1.3） */
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm); /* 13px → sm（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.85 → relaxed（§1.3） */
+  color: var(--fg);
+  background: var(--surface-sunken); /* 输入/终端底色统一沉底（design.md §1.1） */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 文件面板（proposal.css:136-141 定义点） ---------- */
+
+.opt-file-layout {
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr); /* 目录列 156px 定案值（文件头已登记） */
+  min-height: 0; /* 作为 .opt-editor flex 列的滚动体收口；grid 内部断链在 .opt-editor-code */
+  flex: 1;
+}
+
+.opt-file-tree {
+  border-right: 1px solid var(--border);
+  padding: var(--sp-7) var(--sp-4); /* 14px 8px → sp-7 / sp-4（§1.3） */
+  background: var(--surface-sunken);
+}
+
+.opt-file-tree h3 {
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  font-weight: var(--weight-normal); /* 450 → normal（§1.3） */
+  color: var(--fg-faint);
+  padding: 0 var(--sp-4) var(--sp-5); /* 0 8px 10px → sp-4 / sp-5（§1.3） */
+  margin: 0;
+}
+
+.opt-file-tree div.selected {
+  background: var(--tint-accent);
+  color: var(--accent);
+}
+
+.opt-file-tree .opt-icon {
+  width: 16px; /* 14px 图标收敛行内 16（§1.3） */
+  height: 16px;
+}
+
+.opt-file-tree .opt-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.opt-file-blank {
+  align-self: center;
+  text-align: center;
+  padding: var(--sp-9); /* 25px → sp-9（§1.3） */
+}
+
+.opt-file-blank h3 {
+  font-size: var(--text-base); /* 15px → base（§1.3） */
+  margin: var(--sp-7) 0 var(--sp-4); /* 15px 0 8px → sp-7 / sp-4（§1.3） */
+}
+
+.opt-file-blank p {
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.7 → relaxed（§1.3） */
+  color: var(--fg-muted);
+  margin-bottom: var(--sp-7); /* 16px → sp-7（§1.3） */
+}
+
+.opt-editor {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.opt-editor > .opt-panel-head {
+  padding: 0 var(--sp-8); /* 22px → sp-8（§1.3） */
+}
+
+.opt-editor > .opt-file-layout {
+  grid-template-columns: 210px minmax(0, 1fr); /* 目录列 210px 定案值（文件头已登记） */
+}
+
+.opt-editor-code {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-sunken); /* 代码底色统一沉底（design.md §1.1） */
+  min-width: 0;
+  min-height: 0; /* grid item 默认可撑高，不收口则内部 pre(flex:1) 拿到全高、局部滚动失效（T-QA04 定位） */
+}
+
+.opt-file-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4); /* 8px → sp-4（§1.3） */
+  padding: var(--sp-6) var(--sp-8); /* 13px 19px → sp-6 / sp-8（§1.3） */
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+}
+
+.opt-file-tab > .opt-pill {
+  margin-left: auto;
+}
+
+.opt-editor-code pre {
+  padding: var(--sp-8); /* 22px → sp-8（§1.3） */
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm); /* 13px → sm（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.9 → relaxed（§1.3） */
+  white-space: pre-wrap;
+  flex: 1;
+}
+
+.opt-line-no {
+  display: inline-block;
+  min-width: var(--sp-10); /* 32px → sp-10（§1.3） */
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+.opt-code-key {
+  color: var(--accent);
+}
+
+.opt-code-value {
+  color: var(--success); /* --opt-success → success（design.md §1.1） */
+}
+
+.opt-code-foot {
+  display: flex;
+  gap: var(--sp-8); /* 20px → sp-8（§1.3） */
+  justify-content: space-between;
+  padding: var(--sp-5) var(--sp-7); /* 9px 18px → sp-5 / sp-7（§1.3） */
+  border-top: 1px solid var(--border);
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  color: var(--fg-faint);
+}
+
+/* ---------- 审核面板（proposal.css:142-144 定义点） ---------- */
+
+.opt-check-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6); /* 12px → sp-6（§1.3） */
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  color: var(--fg-faint);
+  padding: var(--sp-5) 0; /* 10px → sp-5（§1.3） */
+  margin-bottom: var(--sp-6); /* 12px → sp-6（§1.3） */
+}
+
+.opt-check-steps strong {
+  font-weight: var(--weight-medium); /* 550 → medium（§1.3） */
+  color: var(--accent);
+}
+
+.opt-check-steps i {
+  height: 1px; /* 线宽例外（design.md §4） */
+  flex: 1;
+  background: var(--border);
+}
+
+.opt-review-files {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg); /* 9px → lg（§1.3） */
+  overflow: hidden;
+}
+
+.opt-review-file {
+  display: flex;
+  align-items: center;
+  padding: var(--sp-6) var(--sp-7); /* 12px 14px → sp-6 / sp-7（§1.3） */
+  border-bottom: 1px solid var(--border);
+  gap: var(--sp-5); /* 10px → sp-5（§1.3） */
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+}
+
+.opt-review-file.selected {
+  background: var(--tint-accent);
+}
+
+.opt-review-file small {
+  margin-left: auto;
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  color: var(--success);
+}
+
+.opt-diff {
+  margin: 0;
+  padding: var(--sp-7) var(--sp-6); /* 16px 12px → sp-7 / sp-6（§1.3） */
+  font-family: var(--font-mono);
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  line-height: var(--lh-relaxed); /* 1.8 → relaxed（§1.3） */
+  background: var(--surface-sunken); /* 差异底色统一沉底（design.md §1.1） */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.opt-diff-add {
+  display: block;
+  background: var(--tint-success); /* 10% 混合档收敛（design.md §1.1） */
+  color: var(--success);
+}
+
+.opt-diff-del {
+  display: block;
+  background: var(--tint-danger);
+  color: var(--danger);
+}
+
+/* 520px docked 画布内，普通审核改为上方文件选择 + 下方全宽 diff。 */
+@container canvas (max-width: 560px) {
+  .workbench-review-tool .changes-wrap {
+    flex-direction: column;
+  }
+
+  .workbench-review-tool .changes-list {
+    width: 100%;
+    max-height: calc(4 * var(--control-h-lg));
+    flex-shrink: 0;
+    padding: var(--sp-3);
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .workbench-review-tool .chg-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--sp-2);
+  }
+
+  .workbench-review-tool .chg-row {
+    min-width: 0;
+  }
+
+  .workbench-review-tool .canvas-head {
+    flex-wrap: wrap;
+  }
+
+  .workbench-review-tool .review-accept-actions {
+    flex: 1 0 100%;
+  }
+}
+
+/* ---------- 运行时行（定义点在本文件；设置页消费归 T05） ---------- */
+
+.opt-runtime-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6); /* 12px → sp-6（§1.3） */
+  padding: var(--sp-5) 0 var(--sp-6); /* 9px 0 12px → sp-5 / sp-6（§1.3） */
+}
+
+.opt-runtime-row > .opt-icon {
+  align-self: flex-start;
+  margin-top: var(--sp-1); /* 3px → sp-1（§1.3） */
+  width: 20px; /* 图标视口例外：工具格 20（§1.3） */
+  color: var(--fg-faint);
+}
+
+.opt-runtime-copy {
+  flex: 1;
+}
+
+.opt-runtime-copy strong {
+  font-size: var(--text-sm); /* 13px → sm（§1.3） */
+  font-weight: var(--weight-medium); /* 550 → medium（§1.3） */
+}
+
+.opt-runtime-copy p {
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+  color: var(--fg-muted);
+  margin: var(--sp-1) 0 var(--sp-5); /* 3px 0 10px → sp-1 / sp-5（§1.3） */
+}
+
+.opt-runtime-row > .opt-button {
+  font-size: var(--text-meta); /* 12px → meta（§1.3） */
+  min-height: var(--control-h); /* 33px → 33-38 档 control-h（§1.3 取下） */
+  padding: var(--sp-3) var(--sp-5); /* 6px 11px → sp-3 / sp-5（§1.3） */
+}
+
+.opt-runtime-steps {
+  display: flex;
+  gap: var(--sp-7); /* 14px → sp-7（§1.3） */
+  align-items: center;
+  font-size: var(--text-meta); /* 10px → meta（§1.3） */
+  color: var(--fg-faint);
+}
+
+.opt-runtime-steps b {
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.opt-runtime-steps > span:nth-child(even) {
+  opacity: 0.5;
+}
+
+.opt-runtime-detail {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--sp-5); /* 10px → sp-5（§1.3） */
+  padding-top: var(--sp-5); /* 10px → sp-5（§1.3） */
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); /* 50% 收敛 60%（design.md §2.4） */
+  font-size: var(--text-meta); /* 11px → meta（§1.3） */
+  color: var(--fg-faint);
+}

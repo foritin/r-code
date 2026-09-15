@@ -192,7 +192,7 @@ export function FileContextMenu({ target, tasks, onDismiss, onTaskSelected }: Pr
     >
       {panel === "root" ? (
         <>
-          <span className="file-context-menu-path">{target.path}</span>
+          <span className="file-context-menu-path opt-mono">{target.path}</span>
           <button
             type="button"
             role="menuitem"

@@ -15,6 +15,8 @@ interface Props {
   /** 保存/测试进行中时锁定关闭入口（Esc、背板、按钮一并禁用）。 */
   closeDisabled?: boolean;
   footer?: ReactNode;
+  /** 追加到面板根元素的设计系统类（T05b 特批透传，默认为空不影响既有样式）。 */
+  className?: string;
   children: ReactNode;
 }
 
@@ -31,6 +33,7 @@ export function Drawer({
   onClose,
   closeDisabled = false,
   footer,
+  className,
   children,
 }: Props) {
   const titleId = useId();
@@ -62,20 +65,20 @@ export function Drawer({
   return createPortal(
     <>
       <div
-        className="drawer-backdrop"
+        className="drawer-backdrop opt-drawer-backdrop"
         onPointerDown={(event) => {
           if (!closeDisabled && event.target === event.currentTarget) onClose();
         }}
       />
       <div
         ref={panelRef}
-        className="drawer-panel"
+        className={`drawer-panel${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
       >
-        <header className="drawer-head">
+        <header className="drawer-head opt-panel-head">
           {icon && <div className="drawer-icon">{icon}</div>}
           <div className="drawer-titles">
             <h2 id={titleId}>{title}</h2>
@@ -91,8 +94,8 @@ export function Drawer({
             <IconClose width={14} height={14} />
           </button>
         </header>
-        <div className="drawer-body">{children}</div>
-        {footer && <footer className="drawer-foot">{footer}</footer>}
+        <div className="drawer-body opt-panel-body">{children}</div>
+        {footer && <footer className="drawer-foot opt-panel-footer">{footer}</footer>}
       </div>
     </>,
     document.body,

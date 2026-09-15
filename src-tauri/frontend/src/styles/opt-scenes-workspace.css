@@ -1,0 +1,828 @@
+/* ============================================================================
+   opt-scenes-workspace.css —— 工作区场景增量层（T01 创建 → T03 接管）
+   ----------------------------------------------------------------------------
+   【作用域】
+   - 工作区场景（home / dashboard / conversations / inbox / projects / editor）
+     的页面级 opt-* 增量。conversations（P03）无页面私有类，只消费 opt.css
+     公共件（opt-page / opt-toolbar / opt-search-field / opt-tabs / opt-row）。
+   - 基础件五态定义唯一点在 opt.css；本文件只做页面级几何/布局增量，不重复
+     定义任何 opt.css 已有类。opt-panel-head/body/footer 基础定义在
+     opt-room.css（T04），本文件仅做 inbox/editor 页内上下文的 padding 覆盖。
+   - home-composer 加宽浮起样式（proposal.css:101-104）作用域限定 .scene-home。
+   【令牌依据】
+   - 颜色零字面值，一律 tokens.css 主题变量；列表行分隔线统一
+     color-mix(in srgb, var(--border) 60%, transparent)（design.md §2.4 定案）。
+   - 几何按 design.md §1.3 刻度映射；裸 px 例外仅 1px 线宽、2px 选中内嵌条、
+     图标视口 16/20，以及下列容器/尺寸定案值（设计稿定案，记录待主理人追认）：
+       * .opt-home 宽 min(780px, calc(100% - 100px))
+       * .scene-home .home-composer textarea 高 124px
+       * .opt-dashboard 栅格列 236px（≤1279 收窄 196px）
+       * .opt-project-line / .opt-list-caption 列宽 94/136/115px
+         （≤1279 收窄 70/106/92px）；.opt-project-line min-height 80px
+       * .opt-inbox 栅格列 354px（≤1279 收窄 330px）
+       * .opt-inbox-columns / .opt-inbox-line 列宽 74/54/12px；
+         .opt-inbox-line min-height 64px、圆角 3px；.opt-inbox-file min-height 44px
+       * .opt-line-no min-width 32px
+       * 小箭头 chevron 图标视口 12/13px（设计稿定案，随行记录）
+   - R1c 归属裁定：.opt-editor / .opt-editor-code / .opt-file-layout /
+     .opt-panel-head 唯一定义点 = opt-room.css（T04，级联生效侧）；本文件
+     已去重不再重复定义（docs/design.md §5 已标注）。
+   - .opt-home 不复制设计稿的 absolute 居中定位：.scene-home 既有 flex 居中
+     即「居中浮动骨架」，宽度定案值保留（增量等价实现，回传已记录）。
+   【断点】
+   - ≤1279px：dashboard 侧栏 196px、inbox 详情 330px、project-line 列宽收窄
+     （revision-2.css:137，断点按 design.md §3 收敛到 1279）。
+   - ≤1049px：dashboard/inbox 侧栏隐藏、dashboard 转单列（design.md §3）。
+   【骨架】
+   - .opt-home 居中浮动骨架 + .opt-suggestions 三列 + .opt-home-foot；
+     .opt-dashboard 双列 minmax(0,1fr) + aside；.opt-inbox 双列列表/详情；
+     .opt-projects-page 列表骨架 + .opt-open-section 分节；
+     .opt-editor 面板骨架（panel-head 消费 opt-room.css 基础定义）。
+   ============================================================================ */
+
+/* ---------- P01 home（.opt-home / .opt-suggestions / .opt-home-foot） ---------- */
+
+.opt-home {
+  width: min(780px, calc(100% - 100px)); /* 容器宽度定案值（文件头已注明） */
+  min-width: 0;
+}
+
+.opt-home h1 {
+  margin: 0 0 var(--sp-6);
+  font-size: var(--text-hero); /* 设计稿 34px → --text-hero 32（design.md §1.2） */
+  line-height: var(--lh-tight);
+  letter-spacing: -0.035em;
+  font-weight: var(--weight-strong);
+}
+
+.opt-home > p {
+  margin: 0 0 var(--sp-10);
+  font-size: var(--text-base); /* 页面说明段走 base（§1.3） */
+  line-height: var(--lh-relaxed);
+  color: var(--fg-muted);
+}
+
+/* home-composer 加宽浮起（proposal.css:101-104，作用域限定 .scene-home） */
+#app.r-code-signature .scene-home .home-composer {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); /* 14px → 9-14 → radius-lg */
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card); /* --opt-shadow → 卡片层级（§1.1） */
+}
+
+#app.r-code-signature .scene-home .home-composer textarea {
+  font-size: var(--text-lg); /* 16px → text-lg（§1.3） */
+  min-height: 124px; /* 高度定案值（文件头已注明） */
+  padding: var(--sp-8);
+}
+
+#app.r-code-signature .scene-home .home-composer .chat-composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+}
+
+#app.r-code-signature .scene-home .home-composer :is(.scope-pill, .provider-pill, .comp-permission-pill, .permission-config-trigger) {
+  font-size: var(--text-meta);
+  min-height: var(--control-h); /* 30px → control-h（§1.3） */
+  padding: var(--sp-3) var(--sp-4);
+  background: transparent;
+}
+
+.opt-suggestions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-5);
+  margin-top: var(--sp-8);
+}
+
+.opt-suggestion {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--fg-muted);
+  font-size: var(--text-meta);
+  text-align: left;
+}
+
+.opt-home-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  margin-top: var(--sp-7);
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+}
+
+/* ---------- P02 dashboard（.opt-dashboard / aside / feed / decision-row） ---------- */
+
+.opt-dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 236px; /* aside 宽定案值（文件头已注明） */
+  gap: var(--sp-10);
+}
+
+.opt-dashboard-aside {
+  border-left: 1px solid var(--border);
+  padding-left: var(--sp-10); /* 25px → 25-32 → sp-10（§1.3） */
+}
+
+.opt-dashboard-aside h2 {
+  margin: 0 0 var(--sp-8);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+}
+
+.opt-feed-item {
+  padding: var(--sp-7) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+}
+
+.opt-feed-item strong {
+  display: block;
+  font-weight: var(--weight-medium);
+}
+
+.opt-feed-item small {
+  color: var(--fg-muted);
+}
+
+.opt-feed-item time {
+  display: block;
+  margin-top: var(--sp-3);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-decision-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-7);
+  padding: var(--sp-8);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--sp-5);
+}
+
+.opt-decision-row .opt-grow {
+  flex: 1;
+}
+
+.opt-decision-row h3 {
+  margin: var(--sp-3) 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.opt-decision-row p {
+  margin: 0;
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+}
+
+/* ---------- P03 conversations（语义 table 与旧列表样式兼容） ---------- */
+
+/*
+ * ConversationsScene 已迁移到语义 table，但旧版 r-code-ui.css 仍把
+ * .conversation-row 定义成 grid。tr 一旦被 blockify，浏览器会把 td 一并
+ * 变成 block，最终整行只占左侧几百像素，中文标题被挤成逐字换行。
+ * 在本增量层恢复 table formatting context；列宽继续由 .opt-table 接管。
+ */
+.scene-conversations .opt-table .conversation-row {
+  display: table-row;
+}
+
+/* ---------- P12 inbox（.opt-inbox 列表/详情全家） ---------- */
+
+.opt-inbox {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 354px; /* 详情宽定案值（文件头已注明） */
+  height: 100%;
+}
+
+.opt-inbox-list {
+  min-width: 0;
+  overflow: auto;
+  padding: var(--sp-10); /* 35px 34px → 页边距类 sp-10（§1.3） */
+}
+
+.opt-inbox-list .opt-page-head {
+  margin-bottom: var(--sp-9); /* 22px → 21-24 → sp-9 */
+}
+
+/* inbox 工具栏细线 tabs 变体（design.md §2.6 line 变体特例） */
+.opt-inbox-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 var(--sp-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.opt-inbox-toolbar .opt-tabs {
+  gap: var(--sp-8);
+}
+
+.opt-inbox-toolbar .opt-tabs button {
+  padding: var(--sp-2) 0;
+  border-radius: 0;
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+}
+
+.opt-inbox-toolbar .opt-tabs button.active {
+  background: none;
+  color: var(--fg);
+  box-shadow: 0 13px 0 -11px var(--accent); /* 细线变体定案偏移（design.md §2.6） */
+}
+
+.opt-inbox-toolbar > span {
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-project {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-9) 0 var(--sp-7);
+}
+
+.opt-inbox-project > .opt-icon {
+  width: 16px; /* 图标视口例外：行内 16 */
+  height: 16px;
+}
+
+.opt-inbox-project strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.opt-inbox-project > span:last-child {
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+}
+
+.opt-inbox-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px 54px 12px; /* 列宽定案值（文件头已注明） */
+  gap: var(--sp-7);
+  padding: 0 var(--sp-5) var(--sp-5) var(--sp-10);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-line {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 74px 54px 12px; /* 图标列 18→16 收敛；余列定案值 */
+  gap: var(--sp-7);
+  align-items: center;
+  width: 100%;
+  min-height: 64px; /* 行高定案值（文件头已注明） */
+  padding: var(--sp-5);
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 3px; /* 行圆角定案值（文件头已注明） */
+  background: transparent;
+  text-align: left;
+}
+
+/* 选中态：in渐变 + 内嵌条（design.md §2.4 inbox-line 专用配方） */
+.opt-inbox-line.selected {
+  background: linear-gradient(90deg, var(--tint-accent), transparent 96%);
+  box-shadow: inset 2px 0 var(--accent); /* 2px 选中内嵌条例外 */
+}
+
+.opt-inbox-line > .opt-icon {
+  width: 16px; /* 18px → 图标视口收敛 16（§1.3） */
+  height: 16px;
+  color: var(--fg-faint);
+}
+
+.opt-inbox-line > .opt-icon:last-child {
+  width: 12px; /* 小箭头视口定案值（文件头已注明） */
+  height: 12px;
+  opacity: 0.5;
+}
+
+.opt-inbox-subject {
+  min-width: 0;
+}
+
+.opt-inbox-subject strong {
+  display: block;
+  font-size: var(--text-sm);
+  line-height: var(--lh-tight);
+  font-weight: var(--weight-medium);
+}
+
+.opt-inbox-subject small {
+  display: block;
+  margin-top: var(--sp-2);
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+  line-height: var(--lh-base);
+}
+
+.opt-inbox-line time {
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-list-foot {
+  margin: var(--sp-8) 0 0 var(--sp-5);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.opt-inbox-detail .opt-panel-body {
+  padding: var(--sp-9); /* 26px 23px → sp-9（§1.3） */
+  align-content: start;
+}
+
+.opt-inbox-detail-title > span {
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-detail-title h2 {
+  margin: var(--sp-4) 0;
+  font-size: var(--text-xl); /* 18px → text-xl（§1.3） */
+  font-weight: var(--weight-strong);
+  line-height: var(--lh-base);
+}
+
+.opt-inbox-detail-title p {
+  margin: 0;
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+  line-height: var(--lh-base);
+}
+
+.opt-validation-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-9) 0 var(--sp-8);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-meta);
+}
+
+.opt-validation-line > .opt-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--success);
+}
+
+.opt-validation-line strong {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
+}
+
+.opt-validation-line > span:last-child {
+  margin-left: auto;
+  font-size: var(--text-meta);
+  color: var(--success);
+}
+
+.opt-file-list-caption {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--sp-8) 0 var(--sp-4);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-file {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  min-height: 44px; /* 行高定案值（文件头已注明） */
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  text-align: left;
+  font-size: var(--text-meta);
+}
+
+.opt-inbox-file > span:not(.opt-icon) {
+  display: grid;
+  flex: 1;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.opt-inbox-file > span:not(.opt-icon) strong {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opt-inbox-file > .opt-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--fg-faint);
+}
+
+.opt-inbox-file > .opt-icon:last-child {
+  width: 13px; /* 小箭头视口定案值（文件头已注明） */
+  height: 13px;
+  opacity: 0.65;
+}
+
+.opt-inbox-file small {
+  margin-left: 0;
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-inbox-detail-note {
+  margin-top: var(--sp-7);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+  line-height: var(--lh-relaxed);
+}
+
+.opt-inbox-detail .opt-panel-footer {
+  padding: var(--sp-7) var(--sp-8);
+}
+
+.opt-inbox-detail .opt-panel-footer .opt-actions {
+  justify-content: space-between;
+}
+
+/* ---------- P15 projects（.opt-projects-page 列表全家） ---------- */
+
+.opt-projects-page {
+  max-width: 1230px; /* 页面容器宽度定案值（文件头已注明） */
+}
+
+.opt-projects-page .opt-page-head {
+  margin-bottom: var(--sp-10); /* 32px → sp-10（§1.3） */
+}
+
+.opt-projects-list {
+  border-top: 1px solid var(--border);
+}
+
+.opt-list-caption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 94px 136px 115px; /* 列宽定案值（文件头已注明） */
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-7) var(--sp-5) var(--sp-6) var(--sp-10);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-list-caption b {
+  margin-left: var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-normal);
+  color: var(--fg-muted);
+}
+
+.opt-project-line {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 94px 136px 115px; /* 图标列 23→20 收敛；余列定案值 */
+  gap: var(--sp-8);
+  align-items: center;
+  min-height: 80px; /* 行高定案值（文件头已注明） */
+  padding: var(--sp-7) var(--sp-5) var(--sp-7) 1px; /* 1px 对齐例外（§4） */
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.opt-project-line > .opt-icon {
+  width: 20px; /* 22px → 图标视口收敛 20（§1.3） */
+  height: 20px;
+  color: var(--fg-faint);
+}
+
+.opt-project-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-6);
+  min-width: 0;
+}
+
+.opt-project-title strong {
+  font-size: var(--text-lg); /* 16px → text-lg（§1.3） */
+  line-height: var(--lh-base);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.01em;
+}
+
+.opt-project-title small {
+  width: 100%;
+  margin-top: var(--sp-1);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+  line-height: var(--lh-base);
+}
+
+.opt-current-label {
+  color: var(--accent);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
+}
+
+.opt-project-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+.opt-project-count small {
+  margin-left: var(--sp-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-project-policy {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  color: var(--fg-muted);
+  font-size: var(--text-meta);
+}
+
+.opt-project-policy > .opt-icon {
+  width: 16px; /* 13px → 图标视口收敛 16（§1.3） */
+  height: 16px;
+}
+
+.opt-project-line .opt-button {
+  padding: var(--sp-3) var(--sp-3);
+  font-size: var(--text-meta);
+  min-height: var(--control-h); /* 30px → control-h（§1.3） */
+}
+
+.opt-projects-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-9);
+  margin-top: var(--sp-8);
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+}
+
+.opt-open-section {
+  padding: var(--sp-8) 0;
+  border-top: 1px solid var(--border);
+}
+
+.opt-open-section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-7);
+}
+
+.opt-open-section > header h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--lh-base);
+}
+
+.opt-open-section > header > span {
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+.opt-open-section > header .approval {
+  color: var(--warning);
+}
+
+/* ---------- P16 editor（file 树与代码页级件；R1c 裁定：.opt-editor /
+   .opt-editor-code / .opt-file-layout / .opt-panel-head 唯一定义点 =
+   opt-room.css（T04，级联生效侧），本文件不再重复定义） ---------- */
+
+.opt-file-tree {
+  padding: var(--sp-7) var(--sp-4);
+  border-right: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.opt-file-tree h3 {
+  margin: 0;
+  padding: 0 var(--sp-4) var(--sp-5);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-normal);
+  color: var(--fg-faint);
+}
+
+.opt-file-tree button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  padding: var(--sp-4);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--text-meta);
+  font-family: inherit;
+  color: var(--fg-muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.opt-file-tree button.selected {
+  background: var(--tint-accent);
+  color: var(--accent);
+}
+
+.opt-file-tree button.file-tree-refresh {
+  width: auto;
+  padding: var(--sp-2);
+}
+
+.opt-file-tree .opt-icon {
+  width: 16px; /* 14px → 图标视口收敛 16（§1.3） */
+  height: 16px;
+}
+
+.opt-file-tree .opt-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.opt-file-blank {
+  align-self: center;
+  padding: var(--sp-10); /* 25px → 25-32 → sp-10（§1.3） */
+  text-align: center;
+}
+
+.opt-file-blank h3 {
+  margin: var(--sp-7) 0 var(--sp-4);
+  font-size: var(--text-base); /* 15px → text-base（§1.3） */
+}
+
+.opt-file-blank p {
+  margin-bottom: var(--sp-7);
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+  color: var(--fg-muted);
+}
+
+.opt-file-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-8); /* 13px 19px → sp-6 / sp-8（§1.3） */
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-meta);
+}
+
+.opt-file-tab > .opt-pill {
+  margin-left: auto;
+}
+
+.opt-line-no {
+  display: inline-block;
+  min-width: 32px; /* 行号列宽定案值（文件头已注明） */
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+.opt-code-key {
+  color: var(--accent);
+}
+
+.opt-code-value {
+  color: var(--success);
+}
+
+.opt-code-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  padding: var(--sp-5) var(--sp-8);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-meta);
+  color: var(--fg-faint);
+}
+
+/* ---------- 断点（design.md §3：1279 / 1049 收敛定案） ---------- */
+
+@media (max-width: 1279px) {
+  .opt-dashboard {
+    grid-template-columns: minmax(0, 1fr) 196px; /* 侧栏收窄定案值（文件头已注明） */
+    gap: var(--sp-9); /* 22px → 21-24 → sp-9 */
+  }
+
+  .opt-inbox {
+    grid-template-columns: minmax(0, 1fr) 330px; /* 详情收窄定案值（design.md §3） */
+  }
+
+  .opt-project-line {
+    grid-template-columns: 20px minmax(0, 1fr) 70px 106px 92px; /* 列宽收窄定案值（revision-2.css:137） */
+    gap: var(--sp-6);
+  }
+
+  .opt-list-caption {
+    grid-template-columns: minmax(0, 1fr) 70px 106px 92px;
+    gap: var(--sp-6);
+  }
+}
+
+@media (max-width: 1049px) {
+  .opt-dashboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .opt-dashboard-aside {
+    display: none;
+  }
+
+  .opt-inbox {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .opt-inbox-detail {
+    display: none;
+  }
+}
+
+@media (max-width: 759px) {
+  .opt-home {
+    width: 100%;
+  }
+
+  .opt-suggestions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .opt-home-foot {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+
+  #app.r-code-signature .scene-home .home-composer textarea {
+    min-height: calc(var(--sp-10) * 3);
+  }
+}
+
+@media (max-width: 600px) {
+  .scene-conversations .opt-page {
+    padding: var(--sp-7);
+  }
+
+  .scene-conversations .opt-table :is(th, td):nth-child(2),
+  .scene-conversations .opt-table :is(th, td):nth-child(4) {
+    display: none;
+  }
+
+  .scene-conversations .opt-table :is(th, td) {
+    padding-inline: var(--sp-2);
+  }
+
+  .scene-conversations .opt-table :is(th, td):first-child {
+    width: 52%;
+  }
+
+  .scene-conversations .opt-table :is(th, td):nth-child(3) {
+    width: 34%;
+  }
+
+  .scene-conversations .opt-table :is(th, td):nth-child(5) {
+    width: 14%;
+  }
+}

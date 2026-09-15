@@ -63,10 +63,10 @@ export function ExecutionEnvCard() {
     state.status === "ready" ? (DIALECT_LABELS[state.probe.dialect] ?? state.probe.dialect) : null;
 
   return (
-    <section className="settings-block" id="execution-env-block" data-testid="execution-env-card">
-      <div className="section-heading">
+    <section className="opt-card" id="execution-env-block" data-testid="execution-env-card">
+      <div className="opt-card-head">
         <h3>执行环境（Windows Shell）</h3>
-        <button type="button" className="btn sm ghost" onClick={() => void refresh()} title="重新探测">
+        <button type="button" className="opt-button" onClick={() => void refresh()} title="重新探测">
           <IconRefresh width={14} height={14} />
         </button>
       </div>
@@ -97,11 +97,11 @@ export function ExecutionEnvCard() {
           探测失败：{state.message}
         </div>
       )}
-      <div className="field">
+      <div className="opt-field">
         <label htmlFor="execution-bash-path">bash 路径覆盖（绝对路径或空）</label>
         <input
           id="execution-bash-path"
-          className="input"
+          className="opt-input"
           data-testid="execution-bash-path-input"
           value={bashPath}
           placeholder="C:\\Program Files\\Git\\bin\\bash.exe"
@@ -109,7 +109,7 @@ export function ExecutionEnvCard() {
         />
         <button
           type="button"
-          className="btn sm accent"
+          className="opt-button primary"
           onClick={() => void savePath()}
           disabled={saving}
         >

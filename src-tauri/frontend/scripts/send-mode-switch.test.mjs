@@ -104,9 +104,13 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
   await stop.waitFor({ state: "visible" });
   assert.match(await stop.getAttribute("class"), /composer-primary-button/, "Stop should replace the primary Send button while the draft is empty");
   const stopButtonBox = await stop.boundingBox();
-  assert.ok(stopButtonBox && stopButtonBox.width >= 60 && stopButtonBox.height >= 28, "中断是带文字的胶囊按钮（原型 C），保持可点尺寸");
+  assert.ok(stopButtonBox && stopButtonBox.width >= 36 && stopButtonBox.height >= 36,
+    "R2 中断按钮应保持可点击的圆形命中区");
+  assert.ok(Math.abs(stopButtonBox.width - stopButtonBox.height) < 2,
+    "R2 中断按钮应保持圆形，而不是旧版文字胶囊");
   assert.equal(await stop.locator("svg").count(), 1, "running controls should expose a square Stop icon");
-  assert.equal(await stop.locator(".send-label").innerText(), "中断", "Stop 显示可见文字「中断」而不是纯图标");
+  assert.equal(await stop.locator(".send-label").evaluate((label) => getComputedStyle(label).display), "none",
+    "R2 使用图标按钮，停止含义由 aria-label 提供");
 
   await composer.fill("准备补充当前运行");
   await send.waitFor({ state: "visible" });

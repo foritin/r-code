@@ -78,7 +78,7 @@ async function openProjectFiles(page, workspacePath = "D:/project/rust/r-code") 
     useAppStore.setState({ editorFile: null });
     useAppStore.getState().setScene("editor");
   }, workspacePath);
-  await page.locator(".file-workspace").waitFor({ state: "visible" });
+  await page.locator(".opt-editor").waitFor({ state: "visible" });
 }
 
 async function openKnowledgeSettings(page, tab = "memory") {
@@ -1085,10 +1085,18 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
 
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
   await page.locator("#main-content > .scene-conversations").waitFor({ state: "visible" });
-  await page.locator(".conversation-row").filter({ hasText: "修复任务队列并发问题" }).waitFor({ state: "visible" });
+  await page.locator(".opt-table tbody tr").filter({ hasText: "修复任务队列并发问题" }).waitFor({ state: "visible" });
+  const conversationTableLayout = await page.locator(".opt-table tbody tr").first().evaluate((row) => ({
+    rowDisplay: getComputedStyle(row).display,
+    cellDisplays: [...row.children].map((cell) => getComputedStyle(cell).display),
+  }));
+  assert.equal(conversationTableLayout.rowDisplay, "table-row",
+    "legacy conversation-row grid styles must not break semantic table layout");
+  assert.ok(conversationTableLayout.cellDisplays.every((display) => display === "table-cell"),
+    "conversation cells must remain in the table formatting context");
   const conversationColors = await page.evaluate(() => {
     const statusFor = (title) => {
-      const rows = [...document.querySelectorAll(".conversation-row")];
+      const rows = [...document.querySelectorAll(".opt-table tbody tr")];
       const row = rows.find((candidate) => candidate.textContent?.includes(title));
       const status = row?.querySelector(".conversation-status i");
       if (!(status instanceof HTMLElement)) throw new Error(`missing conversation status: ${title}`);
@@ -1101,6 +1109,136 @@ test("sidebar status uses a loading spinner while live, orange while waiting, an
   });
   assert.equal(conversationColors.running, colors.warning);
   assert.equal(conversationColors.finished, colors.warning);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileConversationLayout = await page.locator(".opt-table tbody tr").first().evaluate((row) => {
+    const cells = [...row.children];
+    return {
+      rowHeight: row.getBoundingClientRect().height,
+      firstWidth: cells[0].getBoundingClientRect().width,
+      displays: cells.map((cell) => getComputedStyle(cell).display),
+      pageScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  assert.equal(mobileConversationLayout.displays[1], "none");
+  assert.equal(mobileConversationLayout.displays[3], "none");
+  assert.ok(mobileConversationLayout.firstWidth >= 120,
+    `mobile conversation titles need a readable column, got ${mobileConversationLayout.firstWidth}px`);
+  assert.ok(mobileConversationLayout.rowHeight < 120,
+    `mobile conversation rows must not turn into vertical text, got ${mobileConversationLayout.rowHeight}px`);
+  assert.ok(mobileConversationLayout.pageScrollWidth <= 390);
+  await page.close();
+});
+
+test("settings R2 shell fills the workspace and anchors search results", async () => {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setSettingsPane("providers");
+    useAppStore.getState().setScene("settings");
+  });
+
+  const settings = page.locator(".scene-scroll.opt-settings");
+  await settings.waitFor({ state: "visible" });
+  const layout = await page.evaluate(() => {
+    const main = document.querySelector("#main-content");
+    const shell = document.querySelector(".scene-scroll.opt-settings");
+    const content = document.querySelector(".opt-settings-main .opt-content");
+    const heading = document.querySelector(".opt-settings-main .opt-page-head h1");
+    const description = document.querySelector(".opt-settings-main .opt-page-head p");
+    if (![main, shell, content, heading, description].every((item) => item instanceof HTMLElement)) {
+      throw new Error("missing settings layout elements");
+    }
+    const mainRect = main.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    const headingRect = heading.getBoundingClientRect();
+    const descriptionRect = description.getBoundingClientRect();
+    return {
+      mainWidth: mainRect.width,
+      shellWidth: shellRect.width,
+      contentWidth: contentRect.width,
+      headingBottom: headingRect.bottom,
+      descriptionTop: descriptionRect.top,
+    };
+  });
+  assert.ok(Math.abs(layout.mainWidth - layout.shellWidth) < 2,
+    "settings shell must not inherit the legacy 1120px page cap");
+  assert.ok(layout.contentWidth >= 1000,
+    `settings content should reach its 1040px contract width, got ${layout.contentWidth}px`);
+  assert.ok(layout.descriptionTop >= layout.headingBottom,
+    "settings description must sit below its heading");
+  assert.equal(await settings.locator(".group-label").count(), 3);
+
+  const search = settings.locator(".settings-search");
+  await search.getByRole("searchbox", { name: "搜索设置项" }).fill("OCR");
+  const results = search.getByRole("listbox", { name: "搜索结果" });
+  await results.waitFor({ state: "visible" });
+  const anchored = await Promise.all([search.boundingBox(), results.boundingBox()]);
+  assert.ok(anchored[0] && anchored[1]);
+  assert.ok(Math.abs(anchored[0].x - anchored[1].x) < 2,
+    "settings search results must stay anchored to the search field");
+  assert.ok(anchored[1].y >= anchored[0].y + anchored[0].height,
+    "settings search results must open below the search field");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileSettings = await page.evaluate(() => {
+    const shell = document.querySelector(".scene-scroll.opt-settings");
+    const nav = document.querySelector(".opt-settings-nav");
+    const main = document.querySelector(".opt-settings-main");
+    const search = document.querySelector(".settings-search");
+    if (!(shell instanceof HTMLElement) || !(nav instanceof HTMLElement)
+      || !(main instanceof HTMLElement) || !(search instanceof HTMLElement)) {
+      throw new Error("missing mobile settings layout");
+    }
+    return {
+      columns: getComputedStyle(shell).gridTemplateColumns,
+      shellWidth: shell.getBoundingClientRect().width,
+      navWidth: nav.getBoundingClientRect().width,
+      mainWidth: main.getBoundingClientRect().width,
+      searchDisplay: getComputedStyle(search).display,
+      pageScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  assert.ok(Math.abs(mobileSettings.shellWidth - mobileSettings.navWidth) < 2,
+    "mobile settings navigation must span the workspace instead of consuming a side column");
+  assert.ok(mobileSettings.mainWidth >= mobileSettings.shellWidth - 2,
+    "mobile settings content must use the full row");
+  assert.equal(mobileSettings.searchDisplay, "none");
+  assert.ok(mobileSettings.pageScrollWidth <= 390);
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().goHome();
+  });
+  const home = page.locator(".opt-home");
+  await home.waitFor({ state: "visible" });
+  const mobileHome = await home.evaluate((root) => {
+    const main = document.querySelector("#main-content");
+    const suggestions = [...root.querySelectorAll(".opt-suggestion")];
+    if (!(main instanceof HTMLElement) || suggestions.length < 2) {
+      throw new Error("missing mobile home layout");
+    }
+    const first = suggestions[0].getBoundingClientRect();
+    const second = suggestions[1].getBoundingClientRect();
+    return {
+      homeWidth: root.getBoundingClientRect().width,
+      mainWidth: main.getBoundingClientRect().width,
+      firstLeft: first.left,
+      secondLeft: second.left,
+      firstTop: first.top,
+      secondTop: second.top,
+      pageScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  assert.ok(mobileHome.homeWidth >= mobileHome.mainWidth - 64,
+    "mobile home must not retain the desktop 100px inset");
+  assert.ok(Math.abs(mobileHome.firstLeft - mobileHome.secondLeft) < 6
+    && mobileHome.secondTop > mobileHome.firstTop,
+    "mobile task suggestions must stack in one readable column");
+  assert.ok(mobileHome.pageScrollWidth <= 390);
+
   await page.close();
 });
 
@@ -2166,7 +2304,7 @@ test("project navigation opens its dashboard and project files without another c
   await page.locator("#main-content > .scene-dashboard").waitFor({ state: "visible" });
   await page.getByRole("heading", { name: "r-code", exact: true }).waitFor({ state: "visible" });
   await page.getByRole("button", { name: "项目文件", exact: true }).click();
-  await page.locator(".file-workspace").waitFor({ state: "visible" });
+  await page.locator(".opt-editor").waitFor({ state: "visible" });
   assert.equal(await page.getByRole("region", { name: "选择项目" }).count(), 0);
 
   await page.close();
@@ -2192,10 +2330,25 @@ test("project file preview highlights common syntax and both modes own their scr
 
   try {
     await openProjectFiles(page);
-    await page.locator(".file-tree-row").filter({ hasText: "README.md" }).click();
+    const rootFileLayout = await page.locator(".opt-file-tree .file-tree-items").evaluate((items) => {
+      const children = [...items.children];
+      const first = children[0]?.getBoundingClientRect();
+      const second = children[1]?.getBoundingClientRect();
+      return {
+        firstTop: first?.top ?? 0,
+        secondTop: second?.top ?? 0,
+        scrollWidth: items.scrollWidth,
+        clientWidth: items.clientWidth,
+      };
+    });
+    assert.ok(rootFileLayout.secondTop > rootFileLayout.firstTop,
+      "project file nodes must stack vertically");
+    assert.ok(rootFileLayout.scrollWidth <= rootFileLayout.clientWidth + 1,
+      "project file tree must not introduce horizontal scrolling at its root");
+    await page.locator(".opt-file-tree button").filter({ hasText: "README.md" }).click();
     await page.locator(".file-code .tok-kw").filter({ hasText: "# R-Code" }).waitFor({ state: "visible" });
-    await page.locator(".file-tree-row.folder").filter({ hasText: "src" }).click();
-    await page.locator(".file-tree-row").filter({ hasText: "main.rs" }).click();
+    await page.locator(".opt-file-tree .file-tree-folder > button").filter({ hasText: "src" }).click();
+    await page.locator(".opt-file-tree button").filter({ hasText: "main.rs" }).click();
 
     const preview = page.locator(".file-code");
     await preview.waitFor({ state: "visible" });
@@ -2250,9 +2403,9 @@ test("standalone Project Files refreshes the root and expanded folders in place"
 
   try {
     await openProjectFiles(page);
-    const sourceFolder = page.locator(".file-tree-row.folder").filter({ hasText: "src" });
+    const sourceFolder = page.locator(".opt-file-tree .file-tree-folder > button").filter({ hasText: "src" });
     await sourceFolder.click();
-    const sourceFile = page.locator(".file-tree-row").filter({ hasText: "main.rs" });
+    const sourceFile = page.locator(".opt-file-tree button").filter({ hasText: "main.rs" });
     await sourceFile.click();
     await page.locator(".file-code-preview .tok-kw").filter({ hasText: "fn" }).waitFor({ state: "visible" });
 
@@ -2290,9 +2443,9 @@ test("standalone Project Files exposes file-only actions and consumes task refer
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
   await openProjectFiles(page);
-  const sourceFolder = page.locator(".file-tree-row.folder").filter({ hasText: "src" });
+  const sourceFolder = page.locator(".opt-file-tree .file-tree-folder > button").filter({ hasText: "src" });
   await sourceFolder.click();
-  const sourceFile = page.locator(".file-tree-row").filter({ hasText: "main.rs" });
+  const sourceFile = page.locator(".opt-file-tree button").filter({ hasText: "main.rs" });
 
   await sourceFile.click({ button: "right" });
   let menu = page.getByRole("menu", { name: "文件操作" });
@@ -2597,7 +2750,7 @@ for (const viewport of [{ width: 800, height: 600 }, { width: 1200, height: 800 
     await page.goto(baseUrl, { waitUntil: "networkidle" });
     if (viewport.width < 1120) {
       await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
-      await page.locator(".conversation-main").first().click();
+      await page.locator(".opt-table tbody tr").first().locator("button.text-link").click();
     } else {
       await page.locator(".sidebar-task:visible").first().click();
     }
@@ -2727,15 +2880,15 @@ test("archived conversations remain available as read-only history", async () =>
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
 
-  const conversation = page.locator(".conversation-row").filter({ hasText: "更新依赖并修复告警" });
+  const conversation = page.locator(".opt-table tbody tr").filter({ hasText: "更新依赖并修复告警" });
   await conversation.locator(".task-actions-trigger").click();
   await page.getByRole("menuitem", { name: /归档对话/ }).click();
   await page.getByText("对话已归档", { exact: true }).waitFor({ state: "visible" });
 
   await page.getByRole("tab", { name: "已归档" }).click();
-  const archived = page.locator(".conversation-row").filter({ hasText: "更新依赖并修复告警" });
+  const archived = page.locator(".opt-table tbody tr").filter({ hasText: "更新依赖并修复告警" });
   await archived.waitFor({ state: "visible" });
-  await archived.locator(".conversation-main").click();
+  await archived.locator("button.text-link").click();
   await page.getByText("此对话已归档，只能查看历史。可在项目概览中还原，或通过右上角对话选项永久删除。").waitFor({ state: "visible" });
   assert.equal(await page.locator(".composer").count(), 0);
   await page.close();
@@ -2754,17 +2907,17 @@ test("project dashboard restores or permanently deletes archived conversations w
   const archived = page.locator(".dashboard-archived-row").filter({ hasText: "更新依赖并修复告警" });
   await archived.waitFor({ state: "visible" });
   assert.equal(
-    await page.locator(".project-activity-item").filter({ hasText: "更新依赖并修复告警" }).count(),
+    await page.locator(".opt-feed-item").filter({ hasText: "更新依赖并修复告警" }).count(),
     0,
     "archived conversation events must not remain in project activity",
   );
-  const activityLabels = await page.locator(".project-activity-item small").allTextContents();
+  const activityLabels = await page.locator(".opt-feed-item small").allTextContents();
   assert.ok(activityLabels.length <= 5, "project activity should stay intentionally short");
   assert.equal(new Set(activityLabels.map((label) => label.split(" · ")[0])).size, activityLabels.length, "each conversation should contribute only its latest key event");
 
   await archived.getByRole("button", { name: "还原", exact: true }).click();
   await page.getByText("对话已还原", { exact: true }).waitFor({ state: "visible" });
-  await page.locator(".dashboard-task-row").filter({ hasText: "更新依赖并修复告警" }).waitFor({ state: "visible" });
+  await page.locator(".opt-table tbody tr").filter({ hasText: "更新依赖并修复告警" }).waitFor({ state: "visible" });
   assert.equal(await archived.count(), 0);
 
   await page.evaluate(async () => {
@@ -2793,7 +2946,7 @@ test("desktop back and forward restore the actual visited page and project", asy
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   const back = page.getByRole("button", { name: "后退" });
   const forward = page.getByRole("button", { name: "前进" });
-  const heading = page.locator("#main-content .dashboard-header h1");
+  const heading = page.locator("#main-content .opt-page-head h1");
 
   assert.equal(await back.isDisabled(), true);
   await page.locator(".sidebar-project-head").filter({ hasText: "r-code" }).click();
@@ -3112,7 +3265,7 @@ test("clearing a project removes app records without implying disk deletion", as
   assert.equal(await page.locator(".sidebar-project").filter({ hasText: "api-server" }).count(), 0);
 
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
-  assert.equal(await page.locator(".conversation-row").filter({ hasText: "添加请求限流中间件" }).count(), 0);
+  assert.equal(await page.locator(".opt-table tbody tr").filter({ hasText: "添加请求限流中间件" }).count(), 0);
   await page.close();
 });
 
@@ -3143,7 +3296,7 @@ test("unsent Composer drafts survive scene and task switches without leaking bet
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().setScene("settings");
     });
-    await page.locator("#main-content .settings-layout").waitFor({ state: "visible" });
+    await page.locator("#main-content .opt-settings").waitFor({ state: "visible" });
     await page.evaluate(async (taskId) => {
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().openRoom(taskId);
@@ -3332,7 +3485,7 @@ test("Enter uses the selected run send mode and clears the accepted draft before
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().setScene("settings");
     });
-    await page.locator("#main-content .settings-layout").waitFor({ state: "visible" });
+    await page.locator("#main-content .opt-settings").waitFor({ state: "visible" });
     await page.evaluate(async (id) => {
       const { useAppStore } = await import("/src/store/app.ts");
       useAppStore.getState().openRoom(id);
@@ -4032,7 +4185,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
       "a configured deepseek provider must enable the customer switch without any evidence manifest");
     assert.match(
       await page
-        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator("#planning-suggestion-block .opt-field", { has: page.locator("#set-planning-suggest") })
         .locator(".hint")
         .textContent(),
       /开 = 复杂任务先询问/);
@@ -4084,7 +4237,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
       "temporarily unavailable routes must not disguise the saved preference as off");
     assert.match(
       await page
-        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator("#planning-suggestion-block .opt-field", { has: page.locator("#set-planning-suggest") })
         .locator(".hint")
         .textContent(),
       /尚未配置可用的 DeepSeek 服务/);
@@ -4106,7 +4259,7 @@ test("planning suggestion switch is gated by deepseek availability and emergency
     });
     assert.match(
       await page
-        .locator("#planning-suggestion-block .field", { has: page.locator("#set-planning-suggest") })
+        .locator("#planning-suggestion-block .opt-field", { has: page.locator("#set-planning-suggest") })
         .locator(".hint")
         .textContent(),
       /功能当前已暂停/);
@@ -5212,6 +5365,26 @@ test("bulk review actions disappear after accepting every task path", async () =
     (root) => root.querySelectorAll(".chg-row").length === 2,
     await workbench.elementHandle(),
   );
+  const dockedReviewLayout = await workbench.evaluate((root) => {
+    const wrap = root.querySelector(".changes-wrap");
+    const list = root.querySelector(".changes-list");
+    const firstPath = root.querySelector(".chg-path");
+    if (!(wrap instanceof HTMLElement) || !(list instanceof HTMLElement) || !(firstPath instanceof HTMLElement)) {
+      throw new Error("missing docked review layout");
+    }
+    return {
+      direction: getComputedStyle(wrap).flexDirection,
+      rootWidth: root.getBoundingClientRect().width,
+      listWidth: list.getBoundingClientRect().width,
+      pathWidth: firstPath.getBoundingClientRect().width,
+    };
+  });
+  assert.equal(dockedReviewLayout.direction, "column",
+    "the 520px review canvas must stack the file picker above the diff");
+  assert.ok(dockedReviewLayout.listWidth >= dockedReviewLayout.rootWidth - 2,
+    "the docked review file picker must use the full canvas width");
+  assert.ok(dockedReviewLayout.pathWidth >= 80,
+    `review paths must remain readable, got ${dockedReviewLayout.pathWidth}px`);
   await workbench.getByRole("button", { name: "接受本轮全部", exact: true }).click();
   await page.waitForFunction(
     (root) => root.querySelectorAll(".chg-row .chg-accepted").length === 2,
@@ -5270,6 +5443,21 @@ test("Needs You groups projects and synchronizes granular review acceptance live
   await inbox.locator('[data-task-id="mock-task-review"]').click();
   const acceptFile = inbox.getByRole("button", { name: "接受文件 src/error.rs", exact: true });
   await acceptFile.waitFor({ state: "visible" });
+  const inboxInspectorLayout = await inbox.getByLabel("审核摘要", { exact: true }).evaluate((inspector) => {
+    const body = inspector.querySelector(".opt-panel-body");
+    const file = inspector.querySelector(".opt-inbox-file");
+    if (!(body instanceof HTMLElement) || !(file instanceof HTMLElement)) {
+      throw new Error("missing inbox review layout");
+    }
+    return {
+      bodyAlignContent: getComputedStyle(body).alignContent,
+      fileHeight: file.getBoundingClientRect().height,
+    };
+  });
+  assert.equal(inboxInspectorLayout.bodyAlignContent, "start",
+    "review content must stay grouped at the top instead of stretching across the panel");
+  assert.ok(inboxInspectorLayout.fileHeight < 80,
+    `review file rows must remain compact, got ${inboxInspectorLayout.fileHeight}px`);
   await acceptFile.click();
   const reviewInspector = inbox.getByLabel("审核摘要", { exact: true });
   await reviewInspector.getByText("1 个文件待处理", { exact: true }).waitFor({ state: "visible" });

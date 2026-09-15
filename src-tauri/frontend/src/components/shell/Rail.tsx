@@ -137,11 +137,11 @@ export function Rail() {
           aria-busy={creatingConversation}
           disabled={creatingConversation}
         >
-          <IconPlus width={17} height={17} />
+          <IconPlus width={16} height={16} />
           <span className="rail-label">{t("shell.newConversation")}</span>
         </button>
         <button type="button" className="sidebar-collapse" onClick={toggleRail} aria-label={collapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")} title={collapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")}>
-          <IconSidebar width={17} height={17} />
+          <IconSidebar width={16} height={16} />
         </button>
       </div>
 
@@ -196,14 +196,14 @@ export function Rail() {
             aria-label={t("shell.addProject")}
             title={t("shell.addLocalProject")}
           >
-            <IconPlus width={13} height={13} />
+            <IconPlus width={16} height={16} />
             <span className="rail-label">{t("shell.add")}</span>
           </button>
         </div>
         <div className="sidebar-project-list">
           {projects.length === 0 ? (
             <button className="sidebar-empty-project" onClick={() => setScene("projects")}>
-              <IconPlus width={15} height={15} />
+              <IconPlus width={16} height={16} />
               <span className="rail-label">{t("shell.attachFirstProject")}</span>
             </button>
           ) : projects.map(({ workspace, tasks: projectTasks }) => {
@@ -213,7 +213,7 @@ export function Rail() {
               <section className={`sidebar-project${current ? " selected" : ""}${isCollapsed ? " is-collapsed" : ""}`} key={workspace.canonical_path}>
                 <div className="sidebar-project-row">
                   <button type="button" className="sidebar-project-toggle" onClick={() => toggleProject(workspace.canonical_path)} aria-expanded={!isCollapsed} aria-label={t(isCollapsed ? "shell.expandProjectTasks" : "shell.collapseProjectTasks", { project: workspace.display_name })} title={isCollapsed ? t("shell.expandTasks") : t("shell.collapseTasks")}>
-                    {isCollapsed ? <IconChevronRight width={14} height={14} /> : <IconChevronDown width={14} height={14} />}
+                    {isCollapsed ? <IconChevronRight width={16} height={16} /> : <IconChevronDown width={16} height={16} />}
                   </button>
                   <button className="sidebar-project-head" onClick={() => openProject(workspace.canonical_path)} title={t("shell.openProjectOverview", { project: workspace.display_name })}>
                     <IconFolderOpen width={16} height={16} />

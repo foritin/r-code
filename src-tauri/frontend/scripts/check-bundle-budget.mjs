@@ -8,9 +8,9 @@ const frontendDir = path.resolve(scriptsDir, "..");
 export const DEFAULT_BUDGETS = Object.freeze({
   totalBytes: 3_250_000,
   totalJavaScriptBytes: 1_700_000,
-  totalCssBytes: 540_000,
+  totalCssBytes: 560_000,
   maxJavaScriptBytes: 475_000,
-  maxCssBytes: 525_000,
+  maxCssBytes: 545_000,
   maxAssetBytes: 1_000_000,
 });
 

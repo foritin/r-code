@@ -240,7 +240,7 @@ function WbMenuLabel({ children }: { children: React.ReactNode }) {
 }
 
 function WbToneText({ tone, children }: { tone: Tone; children: React.ReactNode }) {
-  return <span className={`wbpage-tone wbpage-tone--${tone}`}>{children}</span>;
+  return <span className={`wbpage-tone wbpage-tone--${tone}${tone === "muted" ? "" : ` opt-pill ${tone}`}`}>{children}</span>;
 }
 
 /* ==========================================================================
@@ -382,7 +382,7 @@ function PageHeader({
   return (
     <div className="wbpage-header">
       <h1 className="wbpage-header__title">工作台</h1>
-      <span className="wbpage-live">
+      <span className="wbpage-live opt-live">
         <span className="wbpage-dot wbpage-dot--success" />
         运行中
       </span>
@@ -390,10 +390,10 @@ function PageHeader({
         支付模块重构 · {stats[0]?.value ?? "0"} 个文件变更 · 更新于 2 分钟前
       </span>
       <span className="wbpage-header__spacer" />
-      <button type="button" className="wbpage-btn" onClick={onOpenTerminal}>
+      <button type="button" className="wbpage-btn opt-button" onClick={onOpenTerminal}>
         打开终端
       </button>
-      <button type="button" className="wbpage-btn wbpage-btn--danger" onClick={onInterrupt}>
+      <button type="button" className="wbpage-btn wbpage-btn--danger opt-button danger" onClick={onInterrupt}>
         中断
       </button>
     </div>
@@ -434,7 +434,7 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <section className={"wbpage-card" + (className ? ` ${className}` : "")}>
+    <section className={"wbpage-card opt-card" + (className ? ` ${className}` : "")}>
       <header className="wbpage-card__head">
         {icon}
         <h2 className="wbpage-card__title">{title}</h2>
@@ -515,10 +515,10 @@ function FileChangesCard({
       <div className="wbpage-actions">
         <span className="wbpage-actions__hint">Diff 视图中查看完整变更</span>
         <span className="wbpage-actions__group">
-          <button type="button" className="wbpage-btn wbpage-btn--primary" onClick={() => onOpenDiff?.(selected)}>
+          <button type="button" className="wbpage-btn wbpage-btn--primary opt-button primary" onClick={() => onOpenDiff?.(selected)}>
             打开 Diff
           </button>
-          <button type="button" className="wbpage-btn" onClick={onRollbackAll}>
+          <button type="button" className="wbpage-btn opt-button" onClick={onRollbackAll}>
             全部回滚
           </button>
         </span>
@@ -598,10 +598,10 @@ function TerminalCard() {
       <div className="wbpage-actions">
         <span className="wbpage-actions__hint">上次运行 12 分钟前 · 退出码 0</span>
         <span className="wbpage-actions__group">
-          <button type="button" className="wbpage-btn" disabled={!running}>
+          <button type="button" className="wbpage-btn opt-button" disabled={!running}>
             停止
           </button>
-          <button type="button" className="wbpage-btn">
+          <button type="button" className="wbpage-btn opt-button">
             清屏
           </button>
         </span>
@@ -620,7 +620,7 @@ function ReviewQueueCard() {
       <div className="wbpage-reviewlist">
         {DEMO_REVIEW_FILES.map((f) => (
           <div key={f.path} className="wbpage-keyrow">
-            <span className="wbpage-keyrow__key wbpage-mono">{f.path}</span>
+            <span className="wbpage-keyrow__key wbpage-mono opt-mono">{f.path}</span>
             <WbToneText tone={f.tone}>{f.state}</WbToneText>
           </div>
         ))}
@@ -629,7 +629,7 @@ function ReviewQueueCard() {
       <div className="wbpage-reviewlist">
         {DEMO_CHECKS.map((c) => (
           <div key={c.name} className="wbpage-keyrow">
-            <span className="wbpage-keyrow__key wbpage-mono">{c.name}</span>
+            <span className="wbpage-keyrow__key wbpage-mono opt-mono">{c.name}</span>
             <WbToneText tone={c.tone}>{c.result}</WbToneText>
           </div>
         ))}
@@ -673,7 +673,7 @@ function SubagentsCard({ agents }: { agents: SubagentRow[] }) {
       </div>
       <div className="wbpage-agentdetail">
         <span>gpt-5 · 只读 + 网络白名单</span>
-        <span className="wbpage-mono">8.4k tokens</span>
+        <span className="wbpage-mono opt-mono">8.4k tokens</span>
       </div>
     </Card>
   );
@@ -691,7 +691,7 @@ function DecisionsCard() {
         <div key={p.id} className={"wbpage-perm wbpage-perm--" + (p.actions.includes("persist") ? "r2" : "r3")}>
           <div className="wbpage-perm__head">
             <span className="wbpage-chip">{p.risk}</span>
-            <span className={"wbpage-perm__tool" + (p.command ? " wbpage-perm__tool--title" : " wbpage-mono")}>
+            <span className={"wbpage-perm__tool" + (p.command ? " wbpage-perm__tool--title" : " wbpage-mono opt-mono")}>
               {p.tool}
             </span>
           </div>
@@ -702,11 +702,11 @@ function DecisionsCard() {
             </div>
           )}
           <div className="wbpage-perm__btns">
-            <button type="button" className="wbpage-btn wbpage-btn--primary">允许一次</button>
+            <button type="button" className="wbpage-btn wbpage-btn--primary opt-button primary">允许一次</button>
             {p.actions.includes("persist") && (
-              <button type="button" className="wbpage-btn">本任务始终允许</button>
+              <button type="button" className="wbpage-btn opt-button">本任务始终允许</button>
             )}
-            <button type="button" className="wbpage-btn wbpage-btn--danger">拒绝</button>
+            <button type="button" className="wbpage-btn wbpage-btn--danger opt-button danger">拒绝</button>
           </div>
         </div>
       ))}
@@ -731,7 +731,7 @@ function DecisionsCard() {
           <span className="wbpage-option__dot" />
           本地容器
         </button>
-        <button type="button" className="wbpage-btn wbpage-btn--primary">提交回答</button>
+        <button type="button" className="wbpage-btn wbpage-btn--primary opt-button primary">提交回答</button>
       </div>
     </Card>
   );

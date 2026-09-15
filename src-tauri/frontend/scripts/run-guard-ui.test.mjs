@@ -93,7 +93,7 @@ test("运行护栏设置按字段往返保存", async () => {
     useAppStore.getState().setScene("settings");
     useAppStore.getState().setSettingsPane("agents");
   });
-  const sheet = page.locator(".settings-sheet");
+  const sheet = page.locator(".settings-orchestration-sheet");
   await sheet.getByRole("heading", { name: "运行护栏" }).waitFor({ state: "visible" });
 
   const rounds = page.locator("#set-budget-rounds");

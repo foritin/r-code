@@ -129,8 +129,8 @@ test("desktop sidebar collapses, resizes, persists, and fits narrow viewports", 
   });
   await page.setViewportSize({ width: 860, height: 960 });
   assert.ok(
-    Math.abs((await sidebar.boundingBox()).width - 440) < 3,
-    "a narrow window should temporarily preserve at least 420px for the workspace",
+    Math.abs((await sidebar.boundingBox()).width - 232) < 3,
+    "the R2 intermediate breakpoint should use the 232px narrow rail",
   );
   assert.equal(
     await page.evaluate(() => localStorage.getItem("r-code.rail.width")),
@@ -190,9 +190,11 @@ test("project conversation keeps every control while using a flat workspace hier
       throw new Error("room visual contract elements are missing");
     }
     const boxStyle = getComputedStyle(box);
+    const rootStyle = getComputedStyle(document.documentElement);
     return {
       boxBorder: [boxStyle.borderTopWidth, boxStyle.borderRightWidth, boxStyle.borderBottomWidth, boxStyle.borderLeftWidth],
       boxRadius: boxStyle.borderRadius,
+      expectedBoxRadius: rootStyle.getPropertyValue("--radius-lg").trim(),
       boxShadow: boxStyle.boxShadow,
       composerBackground: getComputedStyle(composer).backgroundColor,
       activityPresent: activity instanceof HTMLElement,
@@ -201,9 +203,9 @@ test("project conversation keeps every control while using a flat workspace hier
     };
   });
 
-  // 居中悬浮对话框：限定宽度的浮层卡（1px 描边 + 16px 圆角 + 投影），不再通栏贴底。
+  // 居中悬浮对话框：限定宽度的浮层卡（1px 描边 + R2 radius-lg + 投影），不再通栏贴底。
   assert.deepEqual(visualContract.boxBorder, ["1px", "1px", "1px", "1px"]);
-  assert.equal(visualContract.boxRadius, "16px");
+  assert.equal(visualContract.boxRadius, visualContract.expectedBoxRadius);
   assert.notEqual(visualContract.boxShadow, "none", "the floating composer card must cast a shadow");
   assert.equal(visualContract.activityPresent, false, "the composer should not repeat tool activity above the input");
   assert.equal(visualContract.userShadow, "none");

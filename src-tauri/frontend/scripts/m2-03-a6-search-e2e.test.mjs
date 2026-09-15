@@ -85,7 +85,7 @@ test("搜索命中跨页 block 并深链定位", async () => {
   if (await firstResult.count()) {
     await firstResult.click();
     await page.waitForTimeout(300);
-    assert.ok(await page.locator(".settings-detail").count() > 0, "深链后应停留在 Settings 场景");
+    assert.ok(await page.locator(".opt-settings-main").count() > 0, "深链后应停留在 Settings 场景");
   }
   await page.close();
 });
