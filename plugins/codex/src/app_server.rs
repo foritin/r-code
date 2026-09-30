@@ -6,9 +6,16 @@
 //! into typed interactions. Recorded fixtures drive tests; no raw provider
 //! reasoning ever crosses the boundary.
 
+use r_code_harness_protocol::{
+    ProcessOutputFrame, ProcessOutputStream, ProcessReadRequest, PROCESS_READ_MAX_WAIT_MS,
+};
 use r_code_harness_sdk::{SdkError, SdkHandle};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::time::Duration;
+
+const APP_SERVER_READ_MAX_BYTES: u32 = 64 * 1024;
+const APP_SERVER_MAX_PARTIAL_LINE_BYTES: usize = 1024 * 1024;
 
 /// Typed App Server events the plugin understands.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -26,6 +33,9 @@ pub enum AppServerEvent {
 pub struct AppServerClient {
     handle_id: String,
     next_request_id: u64,
+    read_cursor: u64,
+    stdout_buffer: Vec<u8>,
+    pending_events: VecDeque<Value>,
 }
 
 impl AppServerClient {
@@ -50,6 +60,9 @@ impl AppServerClient {
         Ok(Self {
             handle_id,
             next_request_id: 1,
+            read_cursor: 0,
+            stdout_buffer: Vec::new(),
+            pending_events: VecDeque::new(),
         })
     }
 
@@ -121,22 +134,99 @@ impl AppServerClient {
         Ok(())
     }
 
-    /// Read the next folded event (notifications routed through the host's
-    /// stream bridge arrive as `stream.event` payloads; this first cut
-    /// polls the process stream via a host-provided cursor call).
+    /// Read the next folded event from the non-destructive process log. The
+    /// cursor advances only after a validated page, so a lost response can be
+    /// retried and frame sequence provides at-least-once deduplication.
     pub async fn next_event(&mut self, handle: &SdkHandle) -> Result<AppServerEvent, SdkError> {
-        let value = handle
-            .host_call(
-                "codex.event.next",
-                serde_json::json!({"handle": self.handle_id}),
-                Duration::from_secs(120),
-            )
-            .await
-            .map_err(|error| SdkError::Rpc {
-                code: -32000,
-                message: format!("app-server event stream: {error}"),
-            })?;
-        Ok(parse_event(&value))
+        if let Some(value) = self.pending_events.pop_front() {
+            return Ok(parse_event(&value));
+        }
+        loop {
+            let page = handle
+                .process_read(ProcessReadRequest {
+                    handle: self.handle_id.clone(),
+                    cursor: self.read_cursor,
+                    max_bytes: APP_SERVER_READ_MAX_BYTES,
+                    wait_ms: Some(PROCESS_READ_MAX_WAIT_MS),
+                })
+                .await?;
+            let mut saw_exit = false;
+            for frame in &page.frames {
+                match frame {
+                    ProcessOutputFrame::Data {
+                        stream: ProcessOutputStream::Stdout,
+                        data_base64,
+                        ..
+                    } => {
+                        use base64::Engine as _;
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(data_base64)
+                            .map_err(|_| SdkError::Fault("invalid App Server stdout".into()))?;
+                        self.push_stdout(&bytes)?;
+                    }
+                    ProcessOutputFrame::Data {
+                        stream: ProcessOutputStream::Stderr,
+                        ..
+                    }
+                    | ProcessOutputFrame::Eof {
+                        stream: ProcessOutputStream::Stderr,
+                        ..
+                    } => {}
+                    ProcessOutputFrame::Eof {
+                        stream: ProcessOutputStream::Stdout,
+                        ..
+                    } => self.flush_stdout_eof()?,
+                    ProcessOutputFrame::Exit { .. } => saw_exit = true,
+                }
+            }
+            self.read_cursor = page.next_cursor;
+            if let Some(value) = self.pending_events.pop_front() {
+                return Ok(parse_event(&value));
+            }
+            if saw_exit || (page.terminal && page.frames.is_empty()) {
+                return Err(SdkError::Closed(match page.exit_code {
+                    Some(code) => format!("App Server exited with code {code}"),
+                    None => "App Server exited without an exit code".into(),
+                }));
+            }
+        }
+    }
+
+    fn push_stdout(&mut self, bytes: &[u8]) -> Result<(), SdkError> {
+        for byte in bytes {
+            if *byte == b'\n' {
+                self.queue_stdout_line()?;
+            } else {
+                if self.stdout_buffer.len() == APP_SERVER_MAX_PARTIAL_LINE_BYTES {
+                    return Err(SdkError::Fault(
+                        "App Server stdout line exceeds the bounded buffer".into(),
+                    ));
+                }
+                self.stdout_buffer.push(*byte);
+            }
+        }
+        Ok(())
+    }
+
+    fn queue_stdout_line(&mut self) -> Result<(), SdkError> {
+        if self.stdout_buffer.last() == Some(&b'\r') {
+            self.stdout_buffer.pop();
+        }
+        if !self.stdout_buffer.is_empty() {
+            let line = std::mem::take(&mut self.stdout_buffer);
+            self.pending_events.push_back(
+                serde_json::from_slice(&line)
+                    .map_err(|error| SdkError::Fault(error.to_string()))?,
+            );
+        }
+        Ok(())
+    }
+
+    fn flush_stdout_eof(&mut self) -> Result<(), SdkError> {
+        if !self.stdout_buffer.is_empty() {
+            self.queue_stdout_line()?;
+        }
+        Ok(())
     }
 
     /// Close the App Server process.

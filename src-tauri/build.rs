@@ -16,12 +16,16 @@ mod build_support;
 /// （cargo build / cargo test）不先构建 CLI 时，这里放一个占位文件满足
 /// tauri-build 的存在性检查。打包入口必须设置 `R_CODE_TAURI_PACKAGING=1`；
 /// 该模式拒绝占位文件，并校验真实产物的大小与目标平台魔数。
-/// Harness v2 sidecars shipped beside the app (T38): the shared daemon and
-/// the two built-in harness plugin executables.
+/// Harness v1 sidecars shipped beside the app (T38): the shared daemon and
+/// the two built-in harness plugin executables. P24H adds the guardian and
+/// safety-probe helpers — build.rs stays validation-only: it never launches
+/// cargo, it only refuses to package a placeholder or wrong-platform file.
 const HARNESS_SIDECARS: &[&str] = &[
     "r-code-service",
     "r-code-harness-native",
     "r-code-harness-codex",
+    "r-code-process-guardian",
+    "r-code-safety-probe",
 ];
 
 fn prepare_external_bin_placeholder() {

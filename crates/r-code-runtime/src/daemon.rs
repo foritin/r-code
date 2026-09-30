@@ -1,6 +1,6 @@
 //! The single-owner r-code-service daemon core.
 //!
-//! Ownership is an OS-level exclusive handle on `<harness-v2>/owner.lock`
+//! Ownership is an OS-level exclusive handle on `<harness-v1>/owner.lock`
 //! (zero-byte mutex file): the handle dies with the process, so a crashed
 //! owner releases automatically and a successor takes over. Identity
 //! metadata (pid, boot-ish nonce, random token, endpoint) lives beside it in
@@ -98,13 +98,13 @@ impl ProfileLock {
 
     /// Acquire profile ownership. Fails with [`DaemonError::AlreadyOwned`]
     /// while a live daemon holds the lock.
-    pub fn acquire(harness_v2_root: &Path, profile_id: &str) -> Result<Self, DaemonError> {
-        std::fs::create_dir_all(harness_v2_root)
+    pub fn acquire(harness_v1_root: &Path, profile_id: &str) -> Result<Self, DaemonError> {
+        std::fs::create_dir_all(harness_v1_root)
             .map_err(|e| DaemonError::Io(format!("create root: {e}")))?;
-        let lock_path = harness_v2_root.join("owner.lock");
+        let lock_path = harness_v1_root.join("owner.lock");
         let handle = Self::open_exclusive(&lock_path).map_err(|error| {
             DaemonError::AlreadyOwned {
-                pid: read_owner_pid(harness_v2_root).unwrap_or(0),
+                pid: read_owner_pid(harness_v1_root).unwrap_or(0),
             }
             .tap_error(&error)
         })?;
@@ -125,15 +125,15 @@ impl ProfileLock {
             started_unix_ms: now_ms(),
         };
         std::fs::write(
-            harness_v2_root.join("owner.json"),
+            harness_v1_root.join("owner.json"),
             serde_json::to_string_pretty(&identity).map_err(|e| DaemonError::Io(e.to_string()))?,
         )
         .map_err(|e| DaemonError::Io(e.to_string()))?;
         Ok(lock)
     }
 
-    pub fn identity(&self, harness_v2_root: &Path) -> Result<OwnerIdentity, DaemonError> {
-        read_owner(harness_v2_root).ok_or_else(|| DaemonError::Io("owner.json unreadable".into()))
+    pub fn identity(&self, harness_v1_root: &Path) -> Result<OwnerIdentity, DaemonError> {
+        read_owner(harness_v1_root).ok_or_else(|| DaemonError::Io("owner.json unreadable".into()))
     }
 
     pub fn lock_path(&self) -> &Path {
@@ -152,18 +152,18 @@ impl TapError for DaemonError {
     }
 }
 
-fn read_owner_pid(harness_v2_root: &Path) -> Option<u32> {
-    read_owner(harness_v2_root).map(|owner| owner.pid)
+fn read_owner_pid(harness_v1_root: &Path) -> Option<u32> {
+    read_owner(harness_v1_root).map(|owner| owner.pid)
 }
 
-fn read_owner(harness_v2_root: &Path) -> Option<OwnerIdentity> {
-    let text = std::fs::read_to_string(harness_v2_root.join("owner.json")).ok()?;
+fn read_owner(harness_v1_root: &Path) -> Option<OwnerIdentity> {
+    let text = std::fs::read_to_string(harness_v1_root.join("owner.json")).ok()?;
     serde_json::from_str(&text).ok()
 }
 
 /// Read the owner identity (clients use this to find the token/endpoint).
-pub fn owner_identity_of(harness_v2_root: &Path) -> Option<OwnerIdentity> {
-    read_owner(harness_v2_root)
+pub fn owner_identity_of(harness_v1_root: &Path) -> Option<OwnerIdentity> {
+    read_owner(harness_v1_root)
 }
 
 /// The application surface the daemon serves.

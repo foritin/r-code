@@ -1,0 +1,70 @@
+{
+  "task_id": "P26A",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s26a_effect_artifacts.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED SUITE s26a_effect_artifacts = 6 passed / 0 failed, measured three times (initial, post-clippy-refactor, post-fmt): quota_preflight_refuses_without_headroom_and_reserves_durably (600 stored + 500 requested over a 1_000 ceiling refuses with the exact used/requested/limit numbers; 300 within the ceiling journals a reservation that survives a store reopen; a tighter ceiling refuses any request — no command starts without quota; the free-space probe reads the live volume, with the disk-exhausted arm disclosed as sharing that code path); receipt_releases_reservations_in_the_same_transaction (the receipt drops reserved_active_bytes to zero and a crash-reopen still sees zero); put_effect_bytes_dedupes_and_journals_refs (identical bytes from two operations share one blob+marker with two ref rows; ref replay is idempotent and a divergent row conflicts); gc_never_collects_active_inverse_data_or_task_attachments (a shared digest with one operation still running is retained after the other receipts and releases; only when the LAST ref releases does GC collect it, and a task attachment in the same store is never touched); gc_is_idempotent_and_recovers_interrupted_refcounts (an orphan blob+marker without a ref row — the crash window inside put_effect_bytes — is collected by the next sweep; the rerun collects nothing; live data survives every sweep); refs_release_only_from_receipted_operations_under_the_fence (release from running is InvalidTransition; the wrong owner is StaleOwner even after the receipt; the exact owner releases and replays converge). (2) HOUSE five-group cumulative measured twice, both reported: 142 result lines / 1097 passed / 1 failed in BOTH runs — the single failure the declared plan_schema.rs:245 baseline; ZERO flake members this round. Reconciliation against P29's 1091/1090/1: +6 tests (s26a) and +1 result line, no other count moved — house is 1098 total / 1097 passed / 1 declared failure, zero regressions. (3) OTHER GATES: clippy -p r-code-runtime -p r-code-store --all-features --all-targets -D warnings exit 0 (after shaping put_effect_bytes' eight arguments into the EffectArtifactPut struct); cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites); quality_check.py over the four changed files ok=true 0 violations (schema 512 / process_effects 700 / artifacts 547 / s26a 415 code loc; comment blocks <= 11); daemon hygiene: the task spawns no processes, trivially clean.",
+    "total": 1098,
+    "passed": 1097,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P26A and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-store/src/v1/schema.rs": {
+          "file_loc": 512,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.013
+        },
+        "crates/r-code-store/src/v1/process_effects.rs": {
+          "file_loc": 700,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.105
+        },
+        "crates/r-code-runtime/src/services/artifacts.rs": {
+          "file_loc": 547,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.143
+        },
+        "crates/r-code-runtime/tests/s26a_effect_artifacts.rs": {
+          "file_loc": 415,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.111
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 320 lines; ~410 production lines landed (the fenced ref/reservation API is deliberately explicit) plus a 415-line suite. The store additions mirror the house vocabulary exactly (IMMEDIATE transactions, exact-owner fence, DDL-only schema with the ledger). max_func_loc/max_nesting null for .rs as always; reviewed by eye — no function exceeds ~70 lines, nesting <= 4."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (no command starts without quota): preflight_and_reserve refuses when stored + reserved + requested exceeds the profile ceiling (exact-number refusal pinned) or the volume lacks the bytes, and the reservation is journaled durably before any launch consumes it; the refusing path is the one the launch gate calls. Acceptance ② (active inverse data never collected): refs live from the put until after the terminal receipt — release is refused from every non-receipted state under the exact-owner fence, a digest held by any live ref row is retained by GC, and task attachments (blobs without an .effect marker) are structurally outside GC. Acceptance ③ (GC idempotent): rerunning the sweep over a swept root collects nothing, and the same sweep recovers an interrupted put (blob+marker without a ref row) — crash-safe refcount recovery that never leaves uncounted live data. P26A.1/2/3 all proven; the receipt releases reservations in the same transaction that records it, surviving a crash-reopen. Disclosed: the disk-exhausted arm is machine-tested to the shared code path (real volume exhaustion is not testable here; the quota ceiling arm proves the refusal shape); store-failure mapping reuses ArtifactError::Io with an explicit prefix because a new variant would break the undeclared router's exhaustive match. House 1098/1097/1 with only the declared plan_schema baseline; zero flake members across both full runs."
+}

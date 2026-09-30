@@ -113,9 +113,12 @@ impl ApplicationHandler for DaemonMirror {
                 .map_err(|e| e.to_string()),
             "task.setPreferences" => {
                 let preferences = r_code_kernel::task::TaskPreferences {
+                    model_route: None,
                     model: None,
                     inference: None,
                     mode: None,
+                    system_prompt: None,
+                    workspace_path: None,
                     require_desktop_confirm: params["requireDesktopConfirm"]
                         .as_bool()
                         .unwrap_or(false),
@@ -165,7 +168,7 @@ impl ApplicationHandler for DaemonMirror {
 
 struct Fixture {
     service: Arc<ApplicationService>,
-    store: Arc<r_code_store::v2::V2Store>,
+    store: Arc<r_code_store::v1::V1Store>,
     endpoint_decider: RemoteEndpoint,
     endpoint_reader: RemoteEndpoint,
 }
@@ -187,7 +190,7 @@ async fn fixture(tag: &str) -> Fixture {
     service
         .install_package_from_directory(&stage_approval_fixture(dir.path()))
         .expect("install fixture");
-    let store = Arc::new(r_code_store::v2::V2Store::open(&profile.database_path()).expect("store"));
+    let store = Arc::new(r_code_store::v1::V1Store::open(&profile.database_path()).expect("store"));
     let seed = TaskState::new(TaskContract {
         task_id: "t1".into(),
         kind: TaskKind::Conversation,
@@ -201,7 +204,7 @@ async fn fixture(tag: &str) -> Fixture {
         .await
         .expect("seed");
 
-    let root = profile.harness_v2_root();
+    let root = profile.harness_v1_root();
     let registry = Arc::new(DeviceRegistry::open(&root).expect("registry"));
     registry
         .set_listener(ListenerConfig {
@@ -269,7 +272,7 @@ async fn fixture(tag: &str) -> Fixture {
 }
 
 async fn wait_until(
-    store: &r_code_store::v2::V2Store,
+    store: &r_code_store::v1::V1Store,
     predicate: impl Fn(&[r_code_kernel::ports::JournalEvent]) -> bool,
     what: &str,
 ) -> Vec<r_code_kernel::ports::JournalEvent> {
@@ -413,9 +416,12 @@ async fn r12_desktop_confirm_flag_blocks_remote_and_yields_to_local() {
         .set_task_preferences(
             "t1",
             r_code_kernel::task::TaskPreferences {
+                model_route: None,
                 model: None,
                 inference: None,
                 mode: None,
+                system_prompt: None,
+                workspace_path: None,
                 require_desktop_confirm: true,
             },
         )

@@ -9,7 +9,7 @@ use r_code_client::ws::{RemoteClient, RemoteEndpoint};
 use r_code_client::DaemonClient;
 use r_code_runtime::{LaunchOptions, ProfileFlavor, RuntimeProfile};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
@@ -17,6 +17,16 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 const SERVICE: &str = env!("CARGO_BIN_EXE_r-code-service");
+static R08_TEST_LOCK: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+async fn serialize_real_daemons() -> tokio::sync::OwnedSemaphorePermit {
+    R08_TEST_LOCK
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("r08 test lock")
+}
 
 struct DaemonGuard(Child, std::path::PathBuf);
 
@@ -98,7 +108,7 @@ fn spawn_daemon(profile: &RuntimeProfile, builtin_dir: &std::path::Path) -> Chil
 
 fn wait_for_owner(profile: &RuntimeProfile) -> r_code_client::DaemonInfo {
     for _ in 0..100 {
-        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v2_root()) {
+        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v1_root()) {
             return info;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -167,12 +177,38 @@ async fn connect_with_retry(
 
 #[tokio::test]
 async fn r08_a1_manual_pairing_read_only_loop() {
+    let _serial = serialize_real_daemons().await;
     let temp = tempfile::tempdir().expect("tempdir");
     let profile = profile_for("r08a1", temp.path());
     let builtin = stage_serve_fixture(temp.path());
+    let provider_env = format!("R_CODE_R08_PROVIDER_KEY_{}", std::process::id());
+    std::env::set_var(&provider_env, "r08-test-provider-key");
     let _guard = DaemonGuard(spawn_daemon(&profile, &builtin), temp.path().to_path_buf());
     let owner = wait_for_owner(&profile);
     let mut local = connect_with_retry(&profile, &owner).await;
+
+    // The real daemon is strict even under the development profile. This
+    // fixture never calls host.model.stream, but a run still freezes a valid
+    // Provider route before publishing run.started.
+    let initial_settings = local
+        .call("settings.get", serde_json::json!({}))
+        .await
+        .expect("read initial settings");
+    assert_eq!(initial_settings["revision"], 0);
+    local
+        .call(
+            "settings.apply",
+            serde_json::json!({
+                "expectedRevision": 0,
+                "selection": "deepseek",
+                "model": "deepseek-v4-flash",
+                "baseUrl": "http://127.0.0.1:1/r08-unused",
+                "protocol": "openai_chat",
+                "envVar": provider_env,
+            }),
+        )
+        .await
+        .expect("configure strict-daemon test provider");
 
     // 1) The local console starts pairing: code + listener + fingerprint.
     let started = local
@@ -294,6 +330,7 @@ async fn r08_a1_manual_pairing_read_only_loop() {
 
 #[tokio::test]
 async fn r08_a2_unauthenticated_connections_get_nothing() {
+    let _serial = serialize_real_daemons().await;
     let temp = tempfile::tempdir().expect("tempdir");
     let profile = profile_for("r08a2", temp.path());
     let builtin = stage_serve_fixture(temp.path());
@@ -345,4 +382,88 @@ async fn r08_a2_unauthenticated_connections_get_nothing() {
         }
         other => panic!("unexpected frame: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn development_service_binary_is_strict_when_provider_settings_are_empty() {
+    let _serial = serialize_real_daemons().await;
+    let temp = tempfile::tempdir().expect("tempdir");
+    let profile = profile_for("r08-dev-strict", temp.path());
+    let builtin = stage_serve_fixture(temp.path());
+    let _guard = DaemonGuard(spawn_daemon(&profile, &builtin), temp.path().to_path_buf());
+    let owner = wait_for_owner(&profile);
+    let mut local = connect_with_retry(&profile, &owner).await;
+    assert_eq!(
+        local
+            .call("settings.get", serde_json::json!({}))
+            .await
+            .expect("settings.get")["revision"],
+        0
+    );
+    local
+        .call(
+            "task.create",
+            serde_json::json!({"taskId": "strict-empty", "objective": "must fail closed"}),
+        )
+        .await
+        .expect("create task");
+    local
+        .call(
+            "task.selectHarness",
+            serde_json::json!({"taskId": "strict-empty", "harnessId": "fixture.serve"}),
+        )
+        .await
+        .expect("select fixture");
+    local
+        .call(
+            "task.sendMessage",
+            serde_json::json!({"taskId": "strict-empty", "text": "hello"}),
+        )
+        .await
+        .expect("enqueue strict run");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let events = loop {
+        let events = local.events_after(0).await.expect("read events");
+        if events.iter().any(|event| {
+            event.task_id == "strict-empty"
+                && event.payload.get("journalKind") == Some(&serde_json::json!("run.failed"))
+        }) {
+            break events;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "strict daemon run never failed: {events:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        !events.iter().any(|event| {
+            event.task_id == "strict-empty"
+                && event.payload.get("journalKind") == Some(&serde_json::json!("run.started"))
+        }),
+        "the real development daemon must not publish run.started without a Provider"
+    );
+    assert!(
+        !events.iter().any(|event| {
+            event.task_id == "strict-empty"
+                && event.payload.get("journalKind") == Some(&serde_json::json!("harness.progress"))
+        }),
+        "the selected fixture must not be spawned on a pre-dispatch Provider failure"
+    );
+
+    let connection =
+        rusqlite::Connection::open(profile.database_path()).expect("open daemon database");
+    let snapshot_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM run_snapshots WHERE task_id = ?1",
+            ["strict-empty"],
+            |row| row.get(0),
+        )
+        .expect("count pre-dispatch snapshots");
+    assert_eq!(snapshot_count, 0, "strict failure persisted a snapshot");
+    let checkpoint_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM checkpoints", [], |row| row.get(0))
+        .expect("count pre-dispatch checkpoints");
+    assert_eq!(checkpoint_count, 0, "strict failure spawned a harness");
 }

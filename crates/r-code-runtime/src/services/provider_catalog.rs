@@ -233,6 +233,7 @@ impl Preset {
 // 两种口时，那是两条 `Endpoint`（或两条预设），不是一条 native 里塞两个。
 const P_A: &[Protocol] = &[Protocol::AnthropicMessages];
 const P_C: &[Protocol] = &[Protocol::OpenAiChat];
+const P_R: &[Protocol] = &[Protocol::OpenAiResponses];
 const P_CR: &[Protocol] = &[Protocol::OpenAiChat, Protocol::OpenAiResponses];
 
 /// 全部预设。顺序即设置页展示顺序。
@@ -465,7 +466,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         id: "kimi_coding",
-        label: "Kimi For Coding（订阅）",
+        label: "Kimi Code Plan（订阅）",
         protocol: Protocol::AnthropicMessages,
         native: P_A,
         auth: AuthStyle::XApiKey,
@@ -479,8 +480,8 @@ pub const PRESETS: &[Preset] = &[
             PresetModel { id: "kimi-for-coding-highspeed", vision: false },
         ],
         category: Category::CnOfficial,
-        website_url: "https://www.kimi.com/code/",
-        api_key_url: None,
+        website_url: "https://www.kimi.com/code/docs/",
+        api_key_url: Some("https://www.kimi.com/code/console"),
         // OpenAI 口在 https://api.kimi.com/coding/v1
         endpoint_candidates: &[Endpoint {
             url: "https://api.kimi.com/coding/v1",
@@ -533,20 +534,37 @@ pub const PRESETS: &[Preset] = &[
         // 注意是 /v4 不是 /v1
         base_url: "https://open.bigmodel.cn/api/coding/paas/v4",
         reasoning_replay: false,
-        model: "glm-5.2",
+        model: "glm-5.3",
         models: &[
+            PresetModel { id: "glm-5.3", vision: false },
+            PresetModel { id: "glm-5.3-flash", vision: true },
             PresetModel { id: "glm-5.2", vision: false },
             PresetModel { id: "glm-5.1", vision: false },
         ],
         category: Category::CnOfficial,
         website_url: "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
-        api_key_url: None,
-        endpoint_candidates: &[],
+        api_key_url: Some("https://bigmodel.cn/coding-plan/personal/overview"),
+        endpoint_candidates: &[
+            Endpoint {
+                url: "https://open.bigmodel.cn/api/anthropic",
+                protocol: Protocol::AnthropicMessages,
+                native: P_A,
+                label: "Anthropic Messages",
+            },
+            Endpoint {
+                url: "https://open.bigmodel.cn/api/v1",
+                protocol: Protocol::OpenAiResponses,
+                native: P_R,
+                label: "OpenAI Responses",
+            },
+        ],
         template_vars: &[],
         max_output_tokens: Some(131_072),
         recommended_output_tokens: None,
         context_window: Some(200_000),
-        note: Some("路径以 /v4 结尾，OpenAiProvider 的补 /v1 逻辑会拼错，需按原样透传"),
+        note: Some(
+            "国内 Coding Plan：Chat 使用 /api/coding/paas/v4，Anthropic 使用 /api/anthropic，Responses 使用 /api/v1；协议与地址必须成对切换",
+        ),
     },
     Preset {
         id: "zai",
@@ -1845,7 +1863,7 @@ mod tests {
                 "kimi-for-coding-highspeed"
             ]
         );
-        // Kimi For Coding 的全部候选都是纯文本代码模型。
+        // Kimi Code Plan 的全部候选都是纯文本代码模型。
         assert!(preset.models.iter().all(|model| !model.vision));
         assert_eq!(preset.context_window, Some(262_144));
     }
@@ -1853,7 +1871,7 @@ mod tests {
     #[test]
     fn base_url_has_no_trailing_slash_except_documented() {
         for preset in PRESETS {
-            // Kimi For Coding 的官方写法就带结尾斜杠，保留原样
+            // Kimi Code Plan 的官方写法就带结尾斜杠，保留原样
             if preset.id == "kimi_coding" {
                 continue;
             }
@@ -2124,6 +2142,31 @@ mod tests {
             resolve_protocol("deepseek_anthropic", "https://api.deepseek.com/anthropic"),
             Protocol::AnthropicMessages
         );
+    }
+
+    #[test]
+    fn zhipu_coding_exposes_all_three_domestic_protocol_routes() {
+        let preset = find("zhipu_coding").unwrap();
+        assert_eq!(preset.model, "glm-5.3");
+        assert_eq!(
+            allowed_protocols(
+                "zhipu_coding",
+                "https://open.bigmodel.cn/api/coding/paas/v4"
+            ),
+            Some(vec![Protocol::OpenAiChat])
+        );
+        assert_eq!(
+            allowed_protocols("zhipu_coding", "https://open.bigmodel.cn/api/anthropic"),
+            Some(vec![Protocol::AnthropicMessages])
+        );
+        assert_eq!(
+            allowed_protocols("zhipu_coding", "https://open.bigmodel.cn/api/v1"),
+            Some(vec![Protocol::OpenAiResponses])
+        );
+        assert!(preset
+            .models
+            .iter()
+            .any(|model| model.id == "glm-5.3-flash" && model.vision));
     }
 
     #[test]

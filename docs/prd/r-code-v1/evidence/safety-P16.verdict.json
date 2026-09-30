@@ -1,0 +1,60 @@
+{
+  "task_id": "P16",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s16_linux_bwrap.rs"
+  ],
+  "tests": {
+    "command": "PLATFORM DISCIPLINE (task contract: Windows dev host + native Linux CI; no WSL, no cross-target): linux.rs is #![cfg(target_os = \"linux\")] and s16 likewise — Windows gates prove cfg discipline and parse only; s16 (7 authored tests, real bwrap, no mocks) and the three linux.rs in-source unit tests EXECUTE ONLY in native Linux CI and are never counted as run locally. ITERATION 1 full Windows gates (raw unfiltered test-result sums, single-threaded, --no-fail-fast): focused runtime neighbours s00+s02+s03+s04+s05+s06+s07+s11(empty)+s12+s13+s14+s15 90/90 and store neighbours s01_process_ownership 11/11 + s12_safety_reports 5/5; full Runtime --tests 415/415 across 79 suites (78 prior + s16 empty, incl. s15 5/5); Kernel 75/75; Store 416 passed / 1 failed with the ONLY failure the declared pre-existing plan_schema baseline (migration-count assertion expects 18, schema now at 35; P16 changed no store code); harness-protocol+harness-sdk 33/33; harness-codex 13/13; workspace --no-run green, workspace all-features check green, workspace all-feature all-target Clippy -D warnings green, cargo fmt --all -- --check green; total 953/952/1. ITERATION 2 re-verification (Engineer diff confined to the #[cfg(test)] helper/test region of a Linux-only file Windows never compiles; production region byte-identical in structure to the iteration-1 reading): rtk cargo check -p r-code-runtime --lib green; rtk cargo clippy -p r-code-runtime --lib -- -D warnings green (no issues); rtk cargo fmt --all -- --check green; rtk proxy cargo test -p r-code-runtime --all-features --lib --no-fail-fast -- --test-threads=1 -> test result: ok. 78 passed; 0 failed; 0 ignored; rtk cargo check -p r-code-runtime --tests green (s16 parses as an empty suite on Windows); quality_check.py ok=true / 0 violations on the two P16 sources.",
+    "total": 953,
+    "passed": 952,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing plan_schema baseline: migration-count assertion expects 18, schema now at 35; P16 changed no store code (carried unchanged from iteration 1)"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/sandbox/linux.rs": {
+          "file_loc": 439,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.203,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/sandbox.rs": {
+          "file_loc": 538,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.254,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "summary": "PASS — iteration 2 lands P16 whole: the pinned-binary verifier (root:root + clean mode + real --version with the 0.8.0 floor), the one-namespace bwrap launch plan (exactly one --unshare-pid, whitelist mount table hiding .git by construction, Offline unshare-net / Public share-net plan material / HostNetwork refused), the NamespaceIdentityHandoff both-halves-required contract for P09, and a permanently-Err LinuxBwrapPlanBackend that cannot activate anything (P13 gate untouched). The iteration-1 CI defect is fixed: verified_bwrap_for_tests() prefers the REAL /usr/bin/bwrap when it verifies, otherwise chowns a stub 0:0 via passwordless sudo, and panics honestly when neither exists (no silent skip); the .git-refusal test now runs an unprivileged stub because the refusal fires before binary verification (build order re-read and confirmed). Every Windows gate re-verified green at the 953/952/1 declared baseline; s16 and the linux.rs unit tests execute only in native Linux CI."
+}

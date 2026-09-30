@@ -62,6 +62,7 @@ pub async fn discover_deepseek_balance(
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(6))
         .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("R-Code/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| "无法初始化余额查询请求".to_string())?;
@@ -160,6 +161,9 @@ pub async fn discover_models(
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(6))
         .timeout(Duration::from_secs(15))
+        // 模型目录请求携带长期密钥。禁止跟随重定向，避免兼容网关把鉴权头
+        // 带到另一个主机；需要重定向的服务应在目录中声明最终地址。
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("R-Code/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| "无法初始化模型目录请求".to_string())?;
@@ -213,6 +217,11 @@ pub async fn discover_models(
             }
             Err(_) => return Err("模型目录返回了无法识别的数据；仍可手动填写模型".to_string()),
         };
+        // 少数国内网关（包括智谱的部分兼容入口）会用 HTTP 200 包装鉴权错误。
+        // 先识别错误信封，否则会把无效密钥误报成“空模型列表”。
+        if let Some(error) = embedded_api_error(&value) {
+            return Err(error);
+        }
         let models = parse_model_ids(&value);
         if !models.is_empty() {
             return Ok(ProviderModelsResponse { models });
@@ -328,6 +337,43 @@ fn parse_model_ids(value: &Value) -> Vec<String> {
         .collect()
 }
 
+/// 识别 HTTP 2xx 中的应用层错误信封。只返回本地固定文案，不把服务端正文或
+/// 可能含内部诊断的 message 带回 WebView。
+fn embedded_api_error(value: &Value) -> Option<String> {
+    let error = value.get("error").filter(|entry| !entry.is_null());
+    let explicitly_failed = value.get("success").and_then(Value::as_bool) == Some(false);
+    if error.is_none() && !explicitly_failed {
+        return None;
+    }
+
+    let mut markers = Vec::new();
+    for entry in [
+        value.get("code"),
+        error.and_then(|entry| entry.get("code")),
+        error.and_then(|entry| entry.get("type")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(text) = entry.as_str() {
+            markers.push(text.to_ascii_lowercase());
+        } else if let Some(number) = entry.as_i64() {
+            markers.push(number.to_string());
+        }
+    }
+    let marker = markers.join(" ");
+    if ["401", "403", "1001", "auth", "token", "permission"]
+        .iter()
+        .any(|needle| marker.contains(needle))
+    {
+        return Some("模型服务鉴权失败，请检查访问密钥".to_string());
+    }
+    if marker.contains("429") || marker.contains("rate") {
+        return Some("模型服务请求过于频繁，请稍后重试".to_string());
+    }
+    Some("模型服务返回错误；请检查套餐、接口地址或协议".to_string())
+}
+
 fn sanitize_network_error(error: reqwest::Error) -> String {
     if error.is_timeout() {
         "获取模型列表超时，请检查接口地址或网络".to_string()
@@ -369,6 +415,44 @@ mod tests {
         let deepseek = model_list_urls("https://api.deepseek.com", Protocol::OpenAiChat).unwrap();
         assert_eq!(deepseek[0].as_str(), "https://api.deepseek.com/models");
         assert_eq!(deepseek[1].as_str(), "https://api.deepseek.com/v1/models");
+
+        let glm_chat = model_list_urls(
+            "https://open.bigmodel.cn/api/coding/paas/v4",
+            Protocol::OpenAiChat,
+        )
+        .unwrap();
+        assert_eq!(
+            glm_chat[0].as_str(),
+            "https://open.bigmodel.cn/api/coding/paas/v4/models"
+        );
+        let glm_anthropic = model_list_urls(
+            "https://open.bigmodel.cn/api/anthropic",
+            Protocol::AnthropicMessages,
+        )
+        .unwrap();
+        assert_eq!(
+            glm_anthropic[0].as_str(),
+            "https://open.bigmodel.cn/api/anthropic/v1/models"
+        );
+        let glm_responses =
+            model_list_urls("https://open.bigmodel.cn/api/v1", Protocol::OpenAiResponses).unwrap();
+        assert_eq!(
+            glm_responses[0].as_str(),
+            "https://open.bigmodel.cn/api/v1/models"
+        );
+
+        let kimi_anthropic =
+            model_list_urls("https://api.kimi.com/coding/", Protocol::AnthropicMessages).unwrap();
+        let kimi_chat =
+            model_list_urls("https://api.kimi.com/coding/v1", Protocol::OpenAiChat).unwrap();
+        assert_eq!(
+            kimi_anthropic[0].as_str(),
+            "https://api.kimi.com/coding/v1/models"
+        );
+        assert_eq!(
+            kimi_chat[0].as_str(),
+            "https://api.kimi.com/coding/v1/models"
+        );
     }
 
     #[test]
@@ -395,6 +479,28 @@ mod tests {
                 ]
             })),
             vec!["active-model", "legacy-model"]
+        );
+    }
+
+    #[test]
+    fn embedded_success_status_auth_errors_are_not_reported_as_empty_catalogs() {
+        assert_eq!(
+            embedded_api_error(&json!({
+                "code": 1001,
+                "msg": "missing authorization",
+                "success": false
+            })),
+            Some("模型服务鉴权失败，请检查访问密钥".to_string())
+        );
+        assert_eq!(
+            embedded_api_error(&json!({
+                "error": {"code": "invalid_authentication_error"}
+            })),
+            Some("模型服务鉴权失败，请检查访问密钥".to_string())
+        );
+        assert_eq!(
+            embedded_api_error(&json!({"data": [{"id": "glm-5.3"}]})),
+            None
         );
     }
 

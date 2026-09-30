@@ -189,7 +189,7 @@ pub fn shutdown_daemon(env: &DaemonEnv) {
         std::thread::spawn(move || {
             tokio::runtime::Runtime::new().map(|runtime| {
                 runtime.block_on(async {
-                    let Some(info) = r_code_client::read_owner_token(&profile.harness_v2_root())
+                    let Some(info) = r_code_client::read_owner_token(&profile.harness_v1_root())
                     else {
                         return false;
                     };
@@ -220,7 +220,7 @@ pub fn shutdown_daemon(env: &DaemonEnv) {
         return;
     }
     // 硬杀兜底。
-    let pid = std::fs::read_to_string(profile.harness_v2_root().join("owner.json"))
+    let pid = std::fs::read_to_string(profile.harness_v1_root().join("owner.json"))
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
         .and_then(|owner| owner["pid"].as_u64());

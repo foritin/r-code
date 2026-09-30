@@ -7,8 +7,9 @@
 | 文档 | 用途 |
 | --- | --- |
 | [远程控制（草案）](./prd/remote-control/plan.md) | `draft`：扫码配对、局域网 PWA 控制、设备能力分档、可选公网中继 |
-| [可插拔 Harness 重构计划](./prd/pluggable-harness/plan.md) | 当前实施方案、架构边界、插件协议、验收和恢复；v2 已落地（见下方实施合同） |
-| [重构前架构基线](./support/archive/architecture-before-harness-v2.md) | 已归档的现有实现说明，用于代码取证与迁移对照 |
+| [R-Code v1 统一架构与实施 PRD](./prd/r-code-v1/index.md) | 当前执行入口、真实进度、Provider/Plan/执行/验证/安全边界与恢复协议 |
+| [Harness v1 参考](./prd/pluggable-harness/architecture.md) | 已落地的插件架构、[协议](./prd/pluggable-harness/protocol-v1.md)与[开发指南](./prd/pluggable-harness/plugin-author-guide.md)；原 PRD 已归档 |
+| [重构前架构基线](./support/archive/architecture-before-pluggable-harness.md) | 已归档的现有实现说明，用于代码取证与迁移对照 |
 | [联网工具与 MCP](./support/guides/mcp.md) | 原生联网、MCP 管理、Registry、安全确认、跨平台启动和故障恢复 |
 | [演进记忆](./support/guides/memory.md) | 全局/项目作用域、自动触发、Reviewer、审批、注入、持久化与隐私边界 |
 | [Plan 模式与增强审核](./support/guides/plan-mode.md) · [English](./support/guides/plan-mode.en.md) | 目标、结构化人工确认、Plan 投影、功能待办、增强审核、并发与崩溃恢复 |
@@ -25,18 +26,18 @@
 
 | 文档 | 状态 |
 | --- | --- |
-| [可插拔 Harness 重构](./prd/pluggable-harness/plan.md) | **已实施**（T00–T42 全闭环，2026-09-09）：Native/Codex/第三方插件同协议安装运行，GUI/TUI/MCP 共享 r-code-service；[协议 v1](./prd/pluggable-harness/protocol-v1.md) · [插件开发指南](./prd/pluggable-harness/plugin-author-guide.md) · [架构说明](./prd/pluggable-harness/architecture.md)；统一验收 `node scripts/verify-harness-v2.mjs --profile full` |
+| [R-Code v1 统一架构与实施](./prd/r-code-v1/index.md) | **进行中**：P-GATE 9/9、M-GATE 4/4、Safety 5/39 KEEP；当前 P05 为未验收 WIP。Harness v1 的历史 T00–T42 已实施证据见[归档进度](./support/archive/pluggable-harness-prd/progress.md) |
 
 ## 旧链路退役（T42）
 
-旧的 `r-code-agent-worker` 执行引擎、`src-tauri` 内的 extensions/work_card 骨架与 GUI 内嵌聊天调度已退役：聊天生产链路统一为 前端 → r-code-client → r-code-service 守护进程 → Harness 插件。历史架构文档（[重构前架构基线](./support/archive/architecture-before-harness-v2.md)）仅作取证对照，不代表当前实现。
+旧的 `r-code-agent-worker` 执行引擎、`src-tauri` 内的 extensions/work_card 骨架与 GUI 内嵌聊天调度已退役：聊天生产链路统一为 前端 → r-code-client → r-code-service 守护进程 → Harness 插件。历史架构文档（[重构前架构基线](./support/archive/architecture-before-pluggable-harness.md)）仅作取证对照，不代表当前实现。
 
 ## 历史实施合同
 
 | 文档 | 状态 |
 | --- | --- |
 | [Pi 对齐 + TUI 方案](./support/archive/pi-alignment/pi-alignment-and-tui-prd.md) | 已归档，原有状态属于历史 revision，不作为当前待办入口 |
-| [TUI v2 / R-Code CLI 方案](./support/archive/tui-v2/r-code-cli-prd.md) | 连同调研、原型与 freeze 整目录归档；规范摘要与历史证据保留 |
+| [TUI v1 / R-Code CLI 方案](./support/archive/tui-v1/r-code-cli-prd.md) | 连同调研、原型与 freeze 整目录归档；规范摘要与历史证据保留 |
 | [Codex 主代理丰富交互历史合同](./support/contracts/codex-rich-interaction-prd.md) | 特定 2026-08-25 revision 的 `38/38` 历史证据已通过；当前 dirty `dev` 仍需新清单 M0-02 回归 |
 | [Windows 命令可靠性历史合同](./support/contracts/windows-command-reliability-prd.md) | 已完成 revision 的冻结合同；当前位置仅作维护与追溯，不是新的待办状态源 |
 

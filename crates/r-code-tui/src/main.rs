@@ -1,16 +1,16 @@
-//! r-code-tui 入口（pi-alignment PRD §4.1 R-TUI-01 / M8-01；T35 v2 化）。
+//! r-code-tui 入口（pi-alignment PRD §4.1 R-TUI-01 / M8-01；T35 v1 化）。
 //!
-//! 会话引擎全部经共享 r-code-service 守护进程（v2 Harness 协议，
-//! [`r_code_tui::engine::V2ChatClient`]）——不依赖 r-code-host/Tauri，也不
+//! 会话引擎全部经共享 r-code-service 守护进程（v1 Harness 协议，
+//! [`r_code_tui::engine::V1ChatClient`]）——不依赖 r-code-host/Tauri，也不
 //! 再在进程内装配 agent runtime。默认 `--mode tui`（交互终端）；
 //! `--mode print`（单轮后退出）与 `--mode json`（事件 JSONL 到 stdout）供
-//! 脚本/管道消费。`--data-dir` 是 v2 数据根（与桌面 GUI 共享同一 profile
+//! 脚本/管道消费。`--data-dir` 是 v1 数据根（与桌面 GUI 共享同一 profile
 //! 的任务库，GUI 可 resume TUI 会话）。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use r_code_tui::engine::{project_events, transcript_events_of, V2ChatClient};
+use r_code_tui::engine::{project_events, transcript_events_of, V1ChatClient};
 use r_code_tui::TuiState;
 
 struct TerminalSession {
@@ -64,7 +64,7 @@ fn ensure_utf8_console() {}
 fn usage() -> &'static str {
     "usage: r-code-tui [--mode tui|print|json] [--data-dir <path>] [--ipc-name <name>] [--message <text>] [--mock]\n\
        r-code-tui auth check [--data-dir <path>]\n\
-     --data-dir 指定 v2 数据根（默认使用该 profile 的平台数据目录）\n\
+     --data-dir 指定 v1 数据根（默认使用该 profile 的平台数据目录）\n\
      --ipc-name 守护进程端点名覆盖（默认随 profile；并行多实例/测试隔离用）\n\
      --mode print/json 单轮执行（经共享 r-code-service；无配置时输出引导并以 exit 2 退出）\n\
      --mock 仅限 --mode print|json：本地确定性回显（评估/演示线路，不连 daemon）\n\
@@ -72,7 +72,7 @@ fn usage() -> &'static str {
 }
 
 /// `auth check` 报告（G4，pi `pi auth check` 对齐；脚本/CI 消费）。
-/// 口径与 /model 选择器同源：v2 SettingsStore 的 availability()
+/// 口径与 /model 选择器同源：v1 SettingsStore 的 availability()
 ///（settings.json + 平台凭据感知，本地读取，无需 daemon）。
 fn auth_check_report(profile_root: &std::path::Path) -> i32 {
     use r_code_runtime::services::settings_store::SettingsStore;
@@ -144,7 +144,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                 index += 1;
                 message = Some(args.get(index).ok_or("--message 缺值")?.clone());
             }
-            // 显式 v2 Profile（development|production；绝不从环境推断）。
+            // 显式 v1 Profile（development|production；绝不从环境推断）。
             "--profile" => {
                 index += 1;
                 let value = args.get(index).ok_or("--profile 缺值")?.clone();
@@ -171,7 +171,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     Ok((mode, data_dir, message, mock, profile, ipc_name))
 }
 
-/// v2 数据根：显式 --data-dir 优先；缺省回落 profile 平台数据目录
+/// v1 数据根：显式 --data-dir 优先；缺省回落 profile 平台数据目录
 ///（与桌面 GUI 同根，任务库互通）。
 fn resolve_data_root(data_dir: Option<&std::path::Path>) -> Result<PathBuf, String> {
     if let Some(root) = data_dir {
@@ -183,8 +183,8 @@ fn resolve_data_root(data_dir: Option<&std::path::Path>) -> Result<PathBuf, Stri
 }
 
 /// footer 投影刷新：任务绑定优先，回落全局默认（启动 / resume / 分支切换
-/// 共用）。v2 口径：task.detail 的 model/推理/模式。
-async fn refresh_projection(engine: &V2ChatClient, tui: &Arc<Mutex<TuiState>>, task_id: &str) {
+/// 共用）。v1 口径：task.detail 的 model/推理/模式。
+async fn refresh_projection(engine: &V1ChatClient, tui: &Arc<Mutex<TuiState>>, task_id: &str) {
     let Ok(detail) = engine.task_detail(task_id).await else {
         return;
     };
@@ -209,7 +209,7 @@ async fn refresh_projection(engine: &V2ChatClient, tui: &Arc<Mutex<TuiState>>, t
 /// 切 current_task 句柄 + journal 事件重放重建 transcript + 刷新 footer
 /// 投影。事件重放会把共享游标推进到最新（实时泵不会重投旧事件）。
 async fn adopt_task(
-    engine: &V2ChatClient,
+    engine: &V1ChatClient,
     tui: &Arc<Mutex<TuiState>>,
     current_task: &Arc<Mutex<String>>,
     task_id: &str,
@@ -233,7 +233,7 @@ async fn adopt_task(
 /// 交互 TUI：进入 raw + bracketed paste；发送（运行中 = 排队）、Ctrl-C
 /// 中止、Esc 退出。会话 = 守护进程上的一个 conversation 任务。
 async fn run_interactive_tui(
-    engine: V2ChatClient,
+    engine: V1ChatClient,
     tui_state: Arc<Mutex<TuiState>>,
     harness_profile: r_code_runtime::ProfileFlavor,
     harness_data_root: Option<std::path::PathBuf>,
@@ -241,7 +241,7 @@ async fn run_interactive_tui(
 ) -> Result<(), String> {
     use r_code_tui::app::{run_interactive, RunController};
 
-    let profile_root = engine.profile().harness_v2_root();
+    let profile_root = engine.profile().harness_v1_root();
 
     // M1-04：无配置首屏引导（本地 settings.json 快读；已配置时首屏不出现）。
     for line in r_code_tui::onboarding_lines(&profile_root) {
@@ -546,7 +546,7 @@ async fn run_interactive_tui(
     });
 
     // G9：/session 会话统计卡装配（TuiState 消息计数 + task.detail 会话维度 +
-    // v2 数据库路径——无 JSONL 会话文件）。
+    // v1 数据库路径——无 JSONL 会话文件）。
     let session_card_engine = engine.clone();
     let session_card_current = current_task.clone();
     let session_card_tui = tui_state.clone();
@@ -576,7 +576,7 @@ async fn run_interactive_tui(
             cache_write_tokens: 0,
             runs: detail.runs.len(),
         };
-        // 无 JSONL 会话文件：runs 为 0 显示"未落盘"，否则显示 v2 数据库路径。
+        // 无 JSONL 会话文件：runs 为 0 显示"未落盘"，否则显示 v1 数据库路径。
         let session_file = (!detail.runs.is_empty()).then(|| {
             session_card_engine
                 .profile()
@@ -744,7 +744,7 @@ async fn run_interactive_tui(
             });
         });
 
-    // G5：/compact [prompt] —— v2 首版诚实降级（压缩能力未上，提示不报错）。
+    // G5：/compact [prompt] —— v1 首版诚实降级（压缩能力未上，提示不报错）。
     let compact_context: Arc<dyn Fn(Option<String>) -> Result<String, String> + Send + Sync> =
         Arc::new(move |_focus| Ok(r_code_tui::session_ops::compact_unavailable_note().to_string()));
 
@@ -829,7 +829,7 @@ async fn run_interactive_tui(
             }
         });
 
-    // G8：分叉重发（v2 语义 = 新分支任务 + 改写文本发进去；原任务保留）。
+    // G8：分叉重发（v1 语义 = 新分支任务 + 改写文本发进去；原任务保留）。
     let fork_send_engine = engine.clone();
     let fork_send_current = current_task.clone();
     let fork_send_tui = tui_state.clone();
@@ -989,7 +989,7 @@ async fn run_interactive_tui(
         }
     });
 
-    // G6：带图片附件发送——v2 首版不接图片，诚实降级（保留附件 UI 入口）。
+    // G6：带图片附件发送——v1 首版不接图片，诚实降级（保留附件 UI 入口）。
     let attach_tui = tui_state.clone();
     let send_attachments: Arc<
         dyn Fn(String, Vec<r_code_tui::image_attach::PendingImage>, bool) + Send + Sync,
@@ -997,12 +997,12 @@ async fn run_interactive_tui(
         let tui = attach_tui.clone();
         tokio::runtime::Handle::current().spawn(async move {
             if let Ok(mut st) = tui.lock() {
-                st.push_system(format!("已收到「{text}」——图片附件将在 v2 后续版本支持"));
+                st.push_system(format!("已收到「{text}」——图片附件将在 v1 后续版本支持"));
             }
         });
     });
 
-    // /plugins 子命令：v2 桥不可用时置 None（TUI 主体不受影响）。
+    // /plugins 子命令：v1 桥不可用时置 None（TUI 主体不受影响）。
     let harness_tui = tui_state.clone();
     let run_harness_command: Option<Arc<dyn Fn(String) + Send + Sync>> =
         r_code_tui::harness_client::HarnessTuiClient::from_args(
@@ -1070,7 +1070,7 @@ async fn run_interactive_tui(
 /// 输出（json = JSONL 行；print = 现有行渲染）。run.cancelled → 输出后
 /// exit 130；run.failed → 输出后 exit 1；超时 → exit 1。
 async fn run_print_mode(
-    engine: &V2ChatClient,
+    engine: &V1ChatClient,
     tui_state: &Arc<Mutex<TuiState>>,
     message: &str,
     json: bool,
@@ -1087,7 +1087,7 @@ async fn run_print_mode(
     if let Err(error) = engine.send(&task_id, message).await {
         eprintln!(
             "r-code-tui: 发送失败：{}",
-            r_code_tui::provider_error_guidance(&error, &engine.profile().harness_v2_root(),)
+            r_code_tui::provider_error_guidance(&error, &engine.profile().harness_v1_root(),)
         );
         std::process::exit(1);
     }
@@ -1187,8 +1187,8 @@ async fn main() {
             .or_else(|| r_code_runtime::ProfileFlavor::Development.default_data_root());
         let profile_root = data_root
             .as_ref()
-            .map(|root| root.join("harness-v2"))
-            .unwrap_or_else(|| std::path::PathBuf::from("harness-v2"));
+            .map(|root| root.join("harness-v1"))
+            .unwrap_or_else(|| std::path::PathBuf::from("harness-v1"));
         let code = auth_check_report(&profile_root);
         std::process::exit(code);
     }
@@ -1200,7 +1200,7 @@ async fn main() {
         }
     };
 
-    // 显式 v2 Profile（脚本传 --profile；缺省 development 开发工具链）。
+    // 显式 v1 Profile（脚本传 --profile；缺省 development 开发工具链）。
     let harness_flavor = match profile.as_deref() {
         Some("production") | Some("prod") => r_code_runtime::ProfileFlavor::Production,
         _ => r_code_runtime::ProfileFlavor::Development,
@@ -1243,9 +1243,9 @@ async fn main() {
         return;
     }
 
-    // v2 引擎：ensure_daemon 自举共享 r-code-service（真进程、真 ModelBroker）。
+    // v1 引擎：ensure_daemon 自举共享 r-code-service（真进程、真 ModelBroker）。
     let engine =
-        match V2ChatClient::from_args(harness_flavor, Some(data_root.clone()), ipc_name.clone()) {
+        match V1ChatClient::from_args(harness_flavor, Some(data_root.clone()), ipc_name.clone()) {
             Ok(engine) => engine,
             Err(error) => {
                 eprintln!("r-code-tui: {error}");
@@ -1279,7 +1279,7 @@ async fn main() {
 
     // R2 显式引导：无 provider 配置时报出可操作途径并 exit 2，
     // 不进入任何演示回放。
-    let profile_root = engine.profile().harness_v2_root();
+    let profile_root = engine.profile().harness_v1_root();
     if let Some(guidance) = r_code_tui::provider_config_guidance(&profile_root) {
         eprintln!("r-code-tui: {guidance}");
         std::process::exit(2);

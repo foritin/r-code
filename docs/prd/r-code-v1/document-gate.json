@@ -1,0 +1,42 @@
+{
+  "schema": "r-code-v1-prd-gate.v1",
+  "status": "passed",
+  "blocking_issues": 0,
+  "major_issues": 0,
+  "machine_worklists": {
+    "p_gate": {
+      "tasks": 9,
+      "components": 6,
+      "validator_ok": true
+    },
+    "m_gate": {
+      "tasks": 4,
+      "components": 5,
+      "validator_ok": true
+    },
+    "safety": {
+      "tasks": 39,
+      "components": 11,
+      "validator_ok": true
+    }
+  },
+  "progress": {
+    "task_count": 52,
+    "kept": 18,
+    "open": 34,
+    "current_task": "P05",
+    "current_task_verified": false
+  },
+  "checks": {
+    "unique_ids_and_acyclic_dependencies": true,
+    "checkbox_counts_match": true,
+    "local_links_resolve": true,
+    "archive_links_resolve": true,
+    "worklist_copies_match_execution_sources": true,
+    "markdown_diff_check": true,
+    "freeze_digests_match": true
+  },
+  "known_test_baseline": [
+    "r-code-store plan_schema migration-count assertion is the only declared filtered legacy failure"
+  ]
+}

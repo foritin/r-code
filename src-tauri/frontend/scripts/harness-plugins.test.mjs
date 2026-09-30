@@ -1,6 +1,6 @@
 // T34 — desktop plugin management UI flows (real backend surface).
 //
-// The UI commands (cmd_harness_v2_*) delegate to the same ApplicationService
+// The UI commands (cmd_harness_v1_*) delegate to the same ApplicationService
 // operations this test drives through r-code-harness-admin: install an
 // independent example, select it for a new branch, and reject removal of a
 // live pinned version.
@@ -110,18 +110,18 @@ test("UI plugin flows: install, select for a new branch, pinned removal rejected
     // The frontend bindings expose the same command surface.
     const ipc = readFileSync(join(repoRoot, "src-tauri/frontend/src/lib/ipc.ts"), "utf8");
     for (const command of [
-      "cmd_harness_v2_plugins_list",
-      "cmd_harness_v2_plugins_install",
-      "cmd_harness_v2_plugins_set_enabled",
-      "cmd_harness_v2_plugins_remove",
-      "cmd_harness_v2_task_select_harness",
+      "cmd_harness_v1_plugins_list",
+      "cmd_harness_v1_plugins_install",
+      "cmd_harness_v1_plugins_set_enabled",
+      "cmd_harness_v1_plugins_remove",
+      "cmd_harness_v1_task_select_harness",
     ]) {
       assert.ok(ipc.includes(command), `ipc.ts missing ${command}`);
     }
   } finally {
     // Stop this test's daemon explicitly (tests own their daemon).
     try {
-      const owner = JSON.parse(readFileSync(join(work, "harness-v2", "owner.json"), "utf8"));
+      const owner = JSON.parse(readFileSync(join(work, "harness-v1", "owner.json"), "utf8"));
       process.kill(owner.pid);
     } catch {
       /* already gone */

@@ -95,6 +95,8 @@ import {
 } from "./audit";
 import type { ActivityTraceState } from "./activity";
 import { SubagentAvatar, type SubagentAvatarStatus } from "./SubagentIdentity";
+// P19B-C：效果授权的呈现复用 Permissions 侧的那一份渲染器，不在这里重写。
+import { EffectApprovalPanel } from "./Permissions";
 import {
   mergeSubagents,
   SubagentSessionTabs,
@@ -821,6 +823,8 @@ function SummaryPanel({
           {permError && <div className="sum-perm-error" role="alert">{t("approvals.error", { error: permError })}</div>}
         </section>
       )}
+
+      <EffectApprovalPanel compact taskId={task.id} onChanged={() => refreshDetail(task.id)} />
 
       <div className="zone-head">运行简报</div>
       <div className="sum-brief">

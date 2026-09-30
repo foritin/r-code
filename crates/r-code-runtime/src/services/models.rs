@@ -8,17 +8,27 @@
 //! safe (idempotent, no observable side effects beyond billing).
 
 use agent_contract::provider::{CompletionRequest, LlmProvider, StreamEvent as ProviderEvent};
-use agent_contract::{ContentBlock, Message, Role, ToolSpec, Usage};
+use agent_contract::{ContentBlock, InferenceOptions, Message, Role, ToolSpec, Usage};
 use r_code_harness_protocol::services::{
-    ContentBlock as WireBlock, ModelStreamRequest, OutputBlock,
+    ContentBlock as WireBlock, ModelMessage, ModelRole, ModelStreamRequest, OutputBlock,
 };
 use r_code_harness_protocol::{ModelUsage, StreamEvent, StreamPayload};
 use r_code_kernel::ports::{
     GenerationToken, ModelService, ModelStreamOutcome, ServiceError, StreamSink,
 };
+use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+
+const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 8_192;
+const MAX_OUTPUT_TOKENS: u32 = 1_048_576;
+
+#[derive(serde::Serialize)]
+struct InstructionFrame<'a> {
+    role: &'static str,
+    content: Vec<&'a str>,
+}
 
 /// Resolves opaque model selections to configured providers. Host-owned;
 /// implementations hold credentials.
@@ -28,6 +38,39 @@ pub trait ProviderResolver: Send + Sync {
     fn resolve(&self, selection: &str) -> Option<(Arc<dyn LlmProvider>, String)>;
     /// The default selection when a request carries none.
     fn default_selection(&self) -> String;
+}
+
+/// Run-scoped resolver exposing exactly one already-constructed provider.
+/// Settings and credentials are never consulted after this object is built,
+/// so a daemon settings update can affect only a later run.
+pub struct FrozenProviderResolver {
+    selection: String,
+    provider: Arc<dyn LlmProvider>,
+    model: String,
+}
+
+impl FrozenProviderResolver {
+    pub fn new(
+        selection: impl Into<String>,
+        provider: Arc<dyn LlmProvider>,
+        model: impl Into<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            selection: selection.into(),
+            provider,
+            model: model.into(),
+        })
+    }
+}
+
+impl ProviderResolver for FrozenProviderResolver {
+    fn resolve(&self, selection: &str) -> Option<(Arc<dyn LlmProvider>, String)> {
+        (selection == self.selection).then(|| (self.provider.clone(), self.model.clone()))
+    }
+
+    fn default_selection(&self) -> String {
+        self.selection.clone()
+    }
 }
 
 /// One recorded usage row (host-side accounting).
@@ -53,15 +96,28 @@ impl ModelBroker {
         }
     }
 
+    /// Construct a provider-neutral broker pinned to one immutable route.
+    pub fn for_frozen_route(
+        selection: impl Into<String>,
+        provider: Arc<dyn LlmProvider>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self::new(FrozenProviderResolver::new(selection, provider, model))
+    }
+
     /// Recorded usage rows (host accounting / billing projection).
     pub async fn usage_records(&self) -> Vec<UsageRecord> {
         self.usage_log.lock().await.clone()
     }
 
-    fn project(request: &ModelStreamRequest, model: &str) -> CompletionRequest {
-        CompletionRequest {
+    fn project(
+        request: &ModelStreamRequest,
+        model: &str,
+    ) -> Result<CompletionRequest, ServiceError> {
+        let inference = request.inference.as_ref();
+        Ok(CompletionRequest {
             model: model.to_string(),
-            system: None,
+            system: project_system(&request.messages)?,
             messages: request
                 .messages
                 .iter()
@@ -81,25 +137,85 @@ impl ModelBroker {
                 })
                 .collect(),
             hosted_tools: Vec::new(),
-            max_tokens: 8192,
-            temperature: request
-                .inference
-                .as_ref()
-                .and_then(|inference| inference.get("temperature"))
-                .and_then(|value| value.as_f64())
+            max_tokens: project_max_output_tokens(inference),
+            temperature: inference_value(inference, "temperature")
+                .and_then(Value::as_f64)
+                .filter(|value| *value >= 0.0 && *value <= f32::MAX as f64)
                 .map(|value| value as f32),
             enable_caching: true,
-            inference: Default::default(),
-        }
+            inference: project_inference_options(inference),
+        })
     }
 }
 
-fn project_message(message: &r_code_harness_protocol::services::ModelMessage) -> Option<Message> {
+fn project_system(messages: &[ModelMessage]) -> Result<Option<String>, ServiceError> {
+    let mut frames = Vec::new();
+    for message in messages {
+        let role = match message.role {
+            ModelRole::System => "system",
+            ModelRole::Developer => "developer",
+            ModelRole::User | ModelRole::Assistant | ModelRole::Tool => continue,
+        };
+        let mut content = Vec::new();
+        for block in &message.content {
+            match block {
+                WireBlock::Text { text } if !text.trim().is_empty() => content.push(text.as_str()),
+                WireBlock::Text { .. } => {}
+                _ => {
+                    return Err(ServiceError::Failure(format!(
+                        "{role} instruction message contains unsupported non-text content"
+                    )));
+                }
+            }
+        }
+        if !content.is_empty() {
+            frames.push(InstructionFrame { role, content });
+        }
+    }
+    if frames.is_empty() {
+        Ok(None)
+    } else {
+        serde_json::to_string(&frames)
+            .map(Some)
+            .map_err(|error| ServiceError::Failure(format!("instruction frame: {error}")))
+    }
+}
+
+fn inference_value<'a>(inference: Option<&'a Value>, key: &str) -> Option<&'a Value> {
+    inference?.as_object()?.get(key)
+}
+
+fn inference_string(inference: Option<&Value>, key: &str) -> Option<String> {
+    inference_value(inference, key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn project_inference_options(inference: Option<&Value>) -> InferenceOptions {
+    InferenceOptions {
+        thinking: inference_string(inference, "thinking"),
+        reasoning_effort: inference_string(inference, "reasoning_effort"),
+        verbosity: inference_string(inference, "verbosity"),
+    }
+}
+
+fn project_max_output_tokens(inference: Option<&Value>) -> u32 {
+    ["max_output_tokens", "max_tokens"]
+        .into_iter()
+        .filter_map(|key| inference_value(inference, key))
+        .filter_map(Value::as_u64)
+        .find(|value| *value > 0)
+        .map(|value| value.min(u64::from(MAX_OUTPUT_TOKENS)) as u32)
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+}
+
+fn project_message(message: &ModelMessage) -> Option<Message> {
     let role = match message.role {
-        r_code_harness_protocol::services::ModelRole::System
-        | r_code_harness_protocol::services::ModelRole::User => Role::User,
-        r_code_harness_protocol::services::ModelRole::Assistant
-        | r_code_harness_protocol::services::ModelRole::Tool => Role::Assistant,
+        ModelRole::System | ModelRole::Developer => return None,
+        ModelRole::User => Role::User,
+        ModelRole::Assistant => Role::Assistant,
+        ModelRole::Tool => Role::User,
     };
     let mut content = Vec::new();
     for block in &message.content {
@@ -164,7 +280,7 @@ impl ModelService for ModelBroker {
             ServiceError::Failure(format!("unknown model selection {selection:?}"))
         })?;
 
-        let projected = Arc::new(Self::project(&request, &model));
+        let projected = Arc::new(Self::project(&request, &model)?);
         let mut events = provider
             .stream(projected)
             .await

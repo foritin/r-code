@@ -243,13 +243,13 @@ pub struct DaemonInfo {
 }
 
 /// Read the daemon's owner file for token discovery.
-pub fn read_owner_token(harness_v2_root: &std::path::Path) -> Option<DaemonInfo> {
+pub fn read_owner_token(harness_v1_root: &std::path::Path) -> Option<DaemonInfo> {
     #[derive(serde::Deserialize)]
     struct OwnerIdentity {
         token: String,
         nonce: String,
     }
-    let text = std::fs::read_to_string(harness_v2_root.join("owner.json")).ok()?;
+    let text = std::fs::read_to_string(harness_v1_root.join("owner.json")).ok()?;
     let identity: OwnerIdentity = serde_json::from_str(&text).ok()?;
     Some(DaemonInfo {
         token: identity.token,
@@ -257,21 +257,116 @@ pub fn read_owner_token(harness_v2_root: &std::path::Path) -> Option<DaemonInfo>
     })
 }
 
+const PRE_V1_PROFILE_PREFIX: &str = "harness-v2/";
+const PRE_V1_ENDPOINT_PREFIX: &str = "r-code-harness-v2-";
+const V1_ENDPOINT_PREFIX: &str = "r-code-harness-v1-";
+
+fn pre_v1_endpoint(endpoint: &IpcEndpoint) -> Option<IpcEndpoint> {
+    match endpoint {
+        IpcEndpoint::NamedPipe { name } => {
+            name.contains(V1_ENDPOINT_PREFIX)
+                .then(|| IpcEndpoint::NamedPipe {
+                    name: name.replacen(V1_ENDPOINT_PREFIX, PRE_V1_ENDPOINT_PREFIX, 1),
+                })
+        }
+        IpcEndpoint::UnixSocket { path } => {
+            let rendered = path.to_string_lossy();
+            rendered
+                .contains(V1_ENDPOINT_PREFIX)
+                .then(|| IpcEndpoint::UnixSocket {
+                    path: PathBuf::from(rendered.replacen(
+                        V1_ENDPOINT_PREFIX,
+                        PRE_V1_ENDPOINT_PREFIX,
+                        1,
+                    )),
+                })
+        }
+    }
+}
+
+/// Stop the daemon launched by development builds that used the temporary pre-v1 label. The data
+/// directory is renamed by `RuntimeProfile::ensure_layout` after this process releases SQLite and
+/// owner-lock handles.
+async fn retire_pre_v1_daemon(
+    harness_v1_root: &std::path::Path,
+    endpoint: &IpcEndpoint,
+    profile_id: &str,
+) {
+    if harness_v1_root.exists() {
+        return;
+    }
+    let Some(data_root) = harness_v1_root.parent() else {
+        return;
+    };
+    let pre_v1_root = data_root.join("harness-v2");
+    let Some(info) = read_owner_token(&pre_v1_root) else {
+        return;
+    };
+    let Some(pre_v1_endpoint) = pre_v1_endpoint(endpoint) else {
+        return;
+    };
+    let pre_v1_profile_id = profile_id.replacen("harness-v1/", PRE_V1_PROFILE_PREFIX, 1);
+    let Ok(mut client) = DaemonClient::connect(
+        &pre_v1_endpoint,
+        &pre_v1_profile_id,
+        &info.token,
+        "v1-migration",
+    )
+    .await
+    else {
+        return;
+    };
+    let _ = client.call("service.shutdown", serde_json::json!({})).await;
+    drop(client);
+
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if DaemonClient::connect(
+            &pre_v1_endpoint,
+            &pre_v1_profile_id,
+            &info.token,
+            "v1-migration-probe",
+        )
+        .await
+        .is_err()
+        {
+            break;
+        }
+    }
+}
+
 /// Ensure a daemon owns the profile: try connecting; on failure spawn the
 /// service binary (races converge — losers exit with an ownership error).
 /// The spawned daemon is fully detached (null stdio) so it never holds the
 /// caller's pipes, and receives the endpoint's ipc-name suffix so custom
-/// endpoints bind identically on both sides.
+/// endpoints bind identically on both sides. The helper directory is not
+/// overridden here, so the daemon falls back to the service binary's own
+/// directory — the packaged layout ships helpers beside it.
 pub async fn ensure_daemon(
-    harness_v2_root: &std::path::Path,
+    harness_v1_root: &std::path::Path,
     endpoint: &IpcEndpoint,
     profile_id: &str,
     service_binary: Option<&std::path::Path>,
 ) -> Result<DaemonInfo, ClientError> {
+    ensure_daemon_with_helpers(harness_v1_root, endpoint, profile_id, service_binary, None).await
+}
+
+/// [`ensure_daemon`] with an explicit helper directory (P24H): `helper_dir`
+/// overrides the default (the spawned service binary's own directory) for
+/// layouts that stage the guardian/probe helpers elsewhere. The daemon
+/// refuses helpers outside the bound directory — PATH is never searched.
+pub async fn ensure_daemon_with_helpers(
+    harness_v1_root: &std::path::Path,
+    endpoint: &IpcEndpoint,
+    profile_id: &str,
+    service_binary: Option<&std::path::Path>,
+    helper_dir: Option<&std::path::Path>,
+) -> Result<DaemonInfo, ClientError> {
+    retire_pre_v1_daemon(harness_v1_root, endpoint, profile_id).await;
     let ipc_name = endpoint_suffix(endpoint);
     let mut spawn_attempts = 0u8;
     for attempt in 0..40u32 {
-        if let Some(info) = read_owner_token(harness_v2_root) {
+        if let Some(info) = read_owner_token(harness_v1_root) {
             if let Ok(client) =
                 DaemonClient::connect(endpoint, profile_id, &info.token, "probe").await
             {
@@ -286,16 +381,27 @@ pub async fn ensure_daemon(
                 spawn_attempts += 1;
                 let mut command = std::process::Command::new(binary);
                 command
-                    .args(["--profile", profile_id.trim_start_matches("harness-v2/")])
+                    .args(["--profile", profile_id.trim_start_matches("harness-v1/")])
                     .arg("--data-root")
                     .arg(
-                        harness_v2_root
+                        harness_v1_root
                             .parent()
                             .map(PathBuf::from)
                             .unwrap_or_default(),
                     )
                     .arg("--ipc-name")
-                    .arg(&ipc_name)
+                    .arg(&ipc_name);
+                // P24H: bind the daemon's helper directory. The default is
+                // the service binary's own directory — helpers ship beside
+                // the daemon in the packaged layout and sit beside cargo's
+                // output in a dev layout, so both stay sibling-verified.
+                let default_helper_dir = helper_dir
+                    .map(PathBuf::from)
+                    .or_else(|| binary.parent().map(PathBuf::from));
+                if let Some(dir) = default_helper_dir {
+                    command.arg("--helper-dir").arg(dir);
+                }
+                command
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null());
@@ -316,20 +422,37 @@ pub async fn ensure_daemon(
 /// The ipc-name suffix a daemon must pass to bind `endpoint`. Suffixes may
 /// contain hyphens, so strip the well-known prefix instead of splitting.
 fn endpoint_suffix(endpoint: &IpcEndpoint) -> String {
-    const PREFIX: &str = "r-code-harness-v2-";
     match endpoint {
         IpcEndpoint::NamedPipe { name } => name
             .rsplit('\\')
             .next()
             .unwrap_or(name)
-            .trim_start_matches(PREFIX)
+            .trim_start_matches(V1_ENDPOINT_PREFIX)
             .to_string(),
         IpcEndpoint::UnixSocket { path } => path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| PREFIX.to_string())
+            .unwrap_or_else(|| V1_ENDPOINT_PREFIX.to_string())
             .trim_end_matches(".sock")
-            .trim_start_matches(PREFIX)
+            .trim_start_matches(V1_ENDPOINT_PREFIX)
             .to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pre_v1_endpoint_keeps_the_profile_suffix() {
+        let current = IpcEndpoint::NamedPipe {
+            name: r"\\.\pipe\r-code-harness-v1-development".into(),
+        };
+        assert_eq!(
+            pre_v1_endpoint(&current),
+            Some(IpcEndpoint::NamedPipe {
+                name: r"\\.\pipe\r-code-harness-v2-development".into(),
+            })
+        );
     }
 }

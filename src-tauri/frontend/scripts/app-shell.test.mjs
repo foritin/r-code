@@ -125,6 +125,106 @@ test("product mode labels collapse compatibility policies into Agent and Plan", 
   await page.close();
 });
 
+test("new conversation persists provider model engine and inference in one create call", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  try {
+    await page.evaluate(async () => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      useTasksStore.getState().setCurrentProject(null);
+      useAppStore.getState().setScene("home");
+      globalThis.__rCodeTaskRouteCalls = [];
+      globalThis.__rCodePerformanceIpcProbe = (command, args) => {
+        if (["cmd_task_create", "cmd_task_set_model", "cmd_task_set_inference"].includes(command)) {
+          globalThis.__rCodeTaskRouteCalls.push({ command, args: structuredClone(args) });
+        }
+      };
+    });
+
+    const composer = page.getByRole("textbox", { name: "描述新任务" });
+    await composer.fill("verify one-shot task routing");
+    const send = page.getByRole("button", { name: "发送", exact: true });
+    await send.waitFor({ state: "visible" });
+    await page.waitForFunction(() => !document.querySelector("button[aria-label='发送']")?.hasAttribute("disabled"));
+    await send.click();
+    await page.waitForFunction(() => globalThis.__rCodeTaskRouteCalls?.some((call) => call.command === "cmd_task_create"));
+
+    const calls = await page.evaluate(() => globalThis.__rCodeTaskRouteCalls);
+    const creates = calls.filter((call) => call.command === "cmd_task_create");
+    assert.equal(creates.length, 1);
+    assert.equal(creates[0].args.providerName, "openai");
+    assert.equal(creates[0].args.agentEngine, "r_code");
+    assert.equal(creates[0].args.model, "gpt-5.6-sol");
+    assert.deepEqual(creates[0].args.inference, {});
+    assert.equal(calls.some((call) => call.command === "cmd_task_set_model"), false);
+    assert.equal(calls.some((call) => call.command === "cmd_task_set_inference"), false);
+  } finally {
+    await page.evaluate(() => {
+      delete globalThis.__rCodeTaskRouteCalls;
+      delete globalThis.__rCodePerformanceIpcProbe;
+    }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("Plan conversation sends its first PRD once without explicitly creating a legacy plan", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  try {
+    await page.evaluate(async () => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      useTasksStore.getState().setCurrentProject(null);
+      useAppStore.getState().setScene("home");
+      globalThis.__rCodePlanEntryCalls = [];
+      globalThis.__rCodePerformanceIpcProbe = (command, args) => {
+        if (["cmd_task_create", "cmd_agent_send", "cmd_plan_create"].includes(command)) {
+          globalThis.__rCodePlanEntryCalls.push({ command, args: structuredClone(args) });
+        }
+      };
+    });
+
+    await page.getByRole("button", { name: "添加到任务" }).click();
+    const addMenu = page.getByRole("dialog", { name: "添加到任务" });
+    await addMenu.getByRole("button", { name: /计划模式/ }).click();
+    await page.getByRole("textbox", { name: "描述新任务" }).fill("implement this complete PRD");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await page.waitForFunction(() => globalThis.__rCodePlanEntryCalls?.some(
+      (call) => call.command === "cmd_agent_send",
+    ));
+
+    const calls = await page.evaluate(() => globalThis.__rCodePlanEntryCalls);
+    const create = calls.filter((call) => call.command === "cmd_task_create");
+    const send = calls.filter((call) => call.command === "cmd_agent_send");
+    assert.equal(create.length, 1);
+    assert.equal(create[0].args.mode, "plan");
+    assert.equal(send.length, 1, "the PRD must enter T08A through one first message");
+    assert.equal(
+      calls.some((call) => call.command === "cmd_plan_create"),
+      false,
+      "Home must not initialize the retired PlanStore before sending the PRD",
+    );
+  } finally {
+    await page.evaluate(() => {
+      delete globalThis.__rCodePlanEntryCalls;
+      delete globalThis.__rCodePerformanceIpcProbe;
+    }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("Plan launch failures are reported as message-send failures, not plan-creation failures", async () => {
+  const homeSource = fs.readFileSync(path.join(frontendDir, "src", "components", "scenes", "HomeScene.tsx"), "utf8");
+  const launch = homeSource.slice(
+    homeSource.indexOf("const launchConversation = async"),
+    homeSource.indexOf("const setGoalComposerMode"),
+  );
+  assert.equal(launch.includes("planCreate("), false);
+  assert.equal(launch.includes("创建计划"), false);
+  assert.match(launch, /stage = "发送消息";\s*await agentSend\(/);
+});
+
 test("Windows verbatim paths stay canonical internally but render without the device prefix", async () => {
   const page = await browser.newPage();
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -4428,7 +4528,7 @@ test("settings search deep-links across panes", async () => {
   await page.close();
 });
 
-test("saved providers auto-sync models on open; manual sync stays in the new-provider flow", async () => {
+test("saved providers auto-sync; domestic coding plans discover models from key and protocol", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 860 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
@@ -4463,12 +4563,45 @@ test("saved providers auto-sync models on open; manual sync stays in the new-pro
     assert.equal(await page.locator(".provider-model-refresh").count(), 0,
       "manual sync button is hidden for saved providers");
 
-    // 新建服务（草稿）：手动同步按钮保留。抽屉盖住了页头按钮，先 Esc 关闭。
+    // 新建国内 Coding Plan：协议直接映射官方地址，填入 Key 后自动同步。
+    // 抽屉盖住了页头按钮，先 Esc 关闭。
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "新建服务" }).click();
+    await page.getByRole("radio", { name: /智谱 GLM Coding Plan/ }).click();
+    const planProtocol = page.locator("#set-plan-protocol");
+    await planProtocol.waitFor({ state: "visible" });
+    assert.deepEqual(
+      await planProtocol.locator("option").evaluateAll((nodes) => nodes.map((node) => node.value)),
+      ["openai_chat", "anthropic_messages", "openai_responses"],
+    );
+    await planProtocol.selectOption("openai_responses");
+    assert.equal(await page.locator("#set-base-url").inputValue(), "https://open.bigmodel.cn/api/v1");
+    assert.equal(await page.locator("#set-base-url").getAttribute("readonly"), "");
+    assert.equal(await page.locator("#set-model").getAttribute("readonly"), "");
+    assert.equal(await page.locator(".provider-model-refresh").count(), 0,
+      "coding plans must not require a manual sync button");
+    await page.locator("#set-api-key").fill("glm-plan-test-key");
+    await page.locator(".provider-field-success").waitFor({ state: "visible" });
+    assert.match(await page.locator(".provider-field-success").textContent(), /服务返回 \d+ 个可用模型/);
+    assert.equal(await page.locator("#set-model").inputValue(), "glm-5.3");
+
+    // 切到 Kimi 时旧厂商密钥必须清空；Kimi 只列国内双协议入口并同样自动同步。
+    await page.getByRole("radio", { name: /Kimi Code Plan/ }).click();
+    await page.locator(".provider-field-success").waitFor({ state: "hidden" }).catch(() => {});
+    assert.equal(await page.locator("#set-api-key").inputValue(), "");
+    assert.deepEqual(
+      await planProtocol.locator("option").evaluateAll((nodes) => nodes.map((node) => node.value)),
+      ["anthropic_messages", "openai_chat"],
+    );
+    await planProtocol.selectOption("openai_chat");
+    assert.equal(await page.locator("#set-base-url").inputValue(), "https://api.kimi.com/coding/v1");
+    await page.locator("#set-api-key").fill("kimi-plan-test-key");
+    await page.locator(".provider-field-success").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#set-model").inputValue(), "k3-256k");
+
+    // 非 Coding Plan 的新建流程仍保留显式同步作为兼容兜底。
+    await page.getByRole("radio", { name: /自建 \/ 其它/ }).click();
     await page.locator(".provider-model-refresh").waitFor({ state: "visible" });
-    // 草稿密钥为空、地址来自预设，按钮可用。
-    assert.equal(await page.locator(".provider-model-refresh").isDisabled(), false);
   } finally {
     await page.evaluate(() => window.localStorage.removeItem("r-code.provider.synced"));
     await page.close();

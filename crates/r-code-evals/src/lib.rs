@@ -4,7 +4,7 @@
 //! 可选 fixture 工作区），产出 [`EvalRunResult`]（输出 / usage / 计时 / 事件）。
 //!
 //! T42：与宿主旧聊天执行链（Mock runtime + agent_send 脚本化）耦合的
-//! `RCodeHarness` 已退役；v2 时代的被评估系统经
+//! `RCodeHarness` 已退役；Harness v1 时代的被评估系统经
 //! `r_code_runtime::ApplicationService` 装配（见 [`harness_tasks`] /
 //! [`harness_conformance`]）。Judge（M2-02）与配对统计（M2-03）见
 //! [`judge`] / [`table`]。

@@ -298,6 +298,29 @@ impl SdkHandle {
         serde_json::from_value(value).map_err(|e| SdkError::Fault(e.to_string()))
     }
 
+    /// Idempotent, non-destructive `host.process.read`. Reuse the same cursor
+    /// after a lost response and advance only to the validated `next_cursor`.
+    /// Delivery is at-least-once; callers deduplicate by frame `sequence`.
+    pub async fn process_read(
+        &self,
+        request: ProcessReadRequest,
+    ) -> Result<ProcessReadReply, SdkError> {
+        validate_process_read_request(&request)?;
+        let timeout = Duration::from_millis(u64::from(request.wait_ms.unwrap_or(0)) + 5_000);
+        let value = self
+            .host_call(
+                "host.process.read",
+                serde_json::to_value(&request)
+                    .map_err(|error| SdkError::Fault(error.to_string()))?,
+                timeout,
+            )
+            .await?;
+        let reply: ProcessReadReply =
+            serde_json::from_value(value).map_err(|error| SdkError::Fault(error.to_string()))?;
+        validate_process_read_reply(&request, &reply)?;
+        Ok(reply)
+    }
+
     /// `host.questions.ask`.
     pub async fn ask_question(&self, text: &str, blocking: bool) -> Result<String, SdkError> {
         let value = self
@@ -315,6 +338,24 @@ impl SdkHandle {
         Ok(serde_json::from_value::<QuestionsAskReply>(value)
             .map_err(|e| SdkError::Fault(e.to_string()))?
             .question_id)
+    }
+
+    /// `host.plan.publish`. Success means the host validated and durably
+    /// selected the immutable revision; a harness must not propose a plan
+    /// draft before receiving this typed acknowledgement.
+    pub async fn plan_publish(
+        &self,
+        request: PlanPublishRequest,
+    ) -> Result<PlanPublishReply, SdkError> {
+        let value = self
+            .host_call(
+                "host.plan.publish",
+                serde_json::to_value(request)
+                    .map_err(|error| SdkError::Fault(error.to_string()))?,
+                Duration::from_secs(60),
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|error| SdkError::Fault(error.to_string()))
     }
 
     /// `host.approvals.request` citing a host-created pending operation.
@@ -442,6 +483,117 @@ impl SdkHandle {
     pub async fn harness_config(&self) -> serde_json::Value {
         self.shared.harness_config.lock().await.clone()
     }
+}
+
+fn validate_process_read_request(request: &ProcessReadRequest) -> Result<(), SdkError> {
+    if request.handle.is_empty() {
+        return Err(SdkError::Fault("process read handle is empty".into()));
+    }
+    if request.max_bytes == 0 || request.max_bytes > PROCESS_READ_MAX_BYTES {
+        return Err(SdkError::Fault(format!(
+            "process read maxBytes must be in 1..={PROCESS_READ_MAX_BYTES}"
+        )));
+    }
+    if request
+        .wait_ms
+        .is_some_and(|wait_ms| wait_ms > PROCESS_READ_MAX_WAIT_MS)
+    {
+        return Err(SdkError::Fault(format!(
+            "process read waitMs exceeds {PROCESS_READ_MAX_WAIT_MS}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_process_read_reply(
+    request: &ProcessReadRequest,
+    reply: &ProcessReadReply,
+) -> Result<(), SdkError> {
+    use base64::Engine as _;
+
+    let mut expected = request.cursor;
+    let mut decoded_bytes = 0usize;
+    let mut stdout_eof = false;
+    let mut stderr_eof = false;
+    let mut saw_exit = false;
+    for (index, frame) in reply.frames.iter().enumerate() {
+        if frame.sequence() != expected {
+            return Err(SdkError::Fault(
+                "process read frame sequence has a gap".into(),
+            ));
+        }
+        expected = expected
+            .checked_add(1)
+            .ok_or_else(|| SdkError::Fault("process read cursor overflow".into()))?;
+        match frame {
+            ProcessOutputFrame::Data {
+                stream,
+                data_base64,
+                ..
+            } => {
+                let after_eof = match stream {
+                    ProcessOutputStream::Stdout => stdout_eof,
+                    ProcessOutputStream::Stderr => stderr_eof,
+                };
+                if after_eof || saw_exit {
+                    return Err(SdkError::Fault(
+                        "process read data follows a terminal frame".into(),
+                    ));
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_base64)
+                    .map_err(|_| SdkError::Fault("process read data is not base64".into()))?;
+                if bytes.is_empty() {
+                    return Err(SdkError::Fault("process read data frame is empty".into()));
+                }
+                decoded_bytes = decoded_bytes
+                    .checked_add(bytes.len())
+                    .ok_or_else(|| SdkError::Fault("process read byte count overflow".into()))?;
+            }
+            ProcessOutputFrame::Eof { stream, .. } => {
+                let seen = match stream {
+                    ProcessOutputStream::Stdout => &mut stdout_eof,
+                    ProcessOutputStream::Stderr => &mut stderr_eof,
+                };
+                if *seen || saw_exit {
+                    return Err(SdkError::Fault(
+                        "process read contains duplicate or late EOF".into(),
+                    ));
+                }
+                *seen = true;
+            }
+            ProcessOutputFrame::Exit { exit_code, .. } => {
+                if saw_exit || index + 1 != reply.frames.len() || !reply.terminal {
+                    return Err(SdkError::Fault("process read exit frame is invalid".into()));
+                }
+                if *exit_code != reply.exit_code {
+                    return Err(SdkError::Fault(
+                        "process read exit metadata disagrees".into(),
+                    ));
+                }
+                saw_exit = true;
+            }
+        }
+    }
+    if reply.next_cursor != expected {
+        return Err(SdkError::Fault(
+            "process read nextCursor does not follow the page".into(),
+        ));
+    }
+    if reply.terminal && !reply.frames.is_empty() && !saw_exit {
+        return Err(SdkError::Fault(
+            "non-empty terminal process read lacks a final exit frame".into(),
+        ));
+    }
+    if decoded_bytes > request.max_bytes as usize {
+        return Err(SdkError::Fault("process read page exceeds maxBytes".into()));
+    }
+    if !reply.terminal && reply.exit_code.is_some() {
+        return Err(SdkError::Fault(
+            "non-terminal process read contains exit metadata".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Serve the protocol on stdin/stdout until `shutdown` or EOF.

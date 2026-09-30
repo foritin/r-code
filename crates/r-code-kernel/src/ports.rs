@@ -8,8 +8,8 @@
 use crate::task::{Attempt, OperationReceipt, TaskContract, TaskState};
 use async_trait::async_trait;
 use r_code_harness_protocol::{
-    ArtifactRef, InputMessage, ModelStreamRequest, OperationKey, StreamEvent, ToolCallReply,
-    ToolCallRequest, ToolDescriptor,
+    ArtifactRef, InputMessage, ModelStreamRequest, OperationKey, ProcessReadReply,
+    ProcessReadRequest, StreamEvent, ToolCallReply, ToolCallRequest, ToolDescriptor,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -38,6 +38,8 @@ pub enum ServiceError {
     Cancelled,
     #[error("service failure: {0}")]
     Failure(String),
+    #[error("unsupported service: {0}")]
+    Unsupported(String),
     #[error("store failure: {0}")]
     Store(String),
 }
@@ -203,6 +205,14 @@ pub trait ProcessService: Send + Sync {
         arguments: Vec<String>,
         cwd: Option<String>,
     ) -> Result<String, ServiceError>;
+    async fn read(
+        &self,
+        token: GenerationToken,
+        request: ProcessReadRequest,
+    ) -> Result<ProcessReadReply, ServiceError> {
+        let _ = (token, request);
+        Err(ServiceError::Unsupported("host.process.read".into()))
+    }
     async fn write(
         &self,
         token: GenerationToken,

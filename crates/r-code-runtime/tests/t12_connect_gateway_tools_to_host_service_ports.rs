@@ -65,6 +65,7 @@ async fn read_only_workspaces_deny_write_tools_before_the_gateway() {
             token(),
             ToolCallRequest {
                 tool: "create_file".into(),
+                operation_key: None,
                 input: serde_json::json!({"path": format!("{root}/out.txt"), "content": "x"}),
             },
         )
@@ -83,6 +84,7 @@ async fn read_only_workspaces_deny_write_tools_before_the_gateway() {
             token(),
             ToolCallRequest {
                 tool: "read_file".into(),
+                operation_key: None,
                 input: serde_json::json!({"path": format!("{root}/present.txt")}),
             },
         )
@@ -107,6 +109,7 @@ async fn denied_and_unknown_tools_fail_closed() {
             token(),
             ToolCallRequest {
                 tool: "format_disk".into(),
+                operation_key: None,
                 input: serde_json::json!({}),
             },
         )
@@ -128,6 +131,7 @@ async fn denied_and_unknown_tools_fail_closed() {
             token(),
             ToolCallRequest {
                 tool: "create_file".into(),
+                operation_key: None,
                 input: serde_json::json!({
                     "path": format!("{}/ok.txt", temp.path().to_string_lossy().replace('\\', "/")),
                     "content": "data"
@@ -169,6 +173,7 @@ async fn operation_intents_are_persisted_before_execution() {
             token(),
             ToolCallRequest {
                 tool: "create_file".into(),
+                operation_key: None,
                 input: serde_json::json!({"path": path, "content": "proof"}),
             },
         )

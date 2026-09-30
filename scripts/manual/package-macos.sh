@@ -117,7 +117,9 @@ cp "$repo_root/target/$target/release/r-code-tui" \
   "$repo_root/src-tauri/binaries/r-code-tui-$target"
 
 # T38: sidecar set = TUI + shared daemon + two built-in harness plugins.
-for spec in "r-code-runtime r-code-service"             "r-code-harness-native r-code-harness-native"             "r-code-harness-codex r-code-harness-codex"; do
+# P24H: + the guardian and safety-probe helpers (runtime-owned bins),
+# staged with target-triple names exactly like the other sidecars.
+for spec in "r-code-runtime r-code-service"             "r-code-harness-native r-code-harness-native"             "r-code-harness-codex r-code-harness-codex"             "r-code-runtime r-code-process-guardian"             "r-code-runtime r-code-safety-probe"; do
   set -- $spec
   pkg="$1"; bin="$2"
   step "Building $bin sidecar for $target"

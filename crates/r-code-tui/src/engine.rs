@@ -1,6 +1,6 @@
-//! V2ChatClient：TUI 聊天/会话引擎经共享 r-code-service 守护进程（T35）。
+//! V1ChatClient：TUI 聊天/会话引擎经共享 r-code-service 守护进程（T35）。
 //!
-//! 与桌面 GUI 同一套 v2 Harness 协议（`r_code_client::DaemonClient`）：
+//! 与桌面 GUI 同一套 v1 Harness 协议（`r_code_client::DaemonClient`）：
 //! task.create/sendMessage/cancel/list/detail/rename/setPreferences/clone/
 //! branches、models.available、settings.*、codex.*。连接方式与
 //! [`crate::harness_client::HarnessTuiClient`] 相同（ensure_daemon 自举 +
@@ -90,16 +90,16 @@ pub enum SendOutcome {
     Queued,
 }
 
-/// v2 客户端桥（TUI 进程一个；克隆共享 profile/游标）。
+/// v1 客户端桥（TUI 进程一个；克隆共享 profile/游标）。
 #[derive(Clone)]
-pub struct V2ChatClient {
+pub struct V1ChatClient {
     profile: RuntimeProfile,
     service_binary: Option<PathBuf>,
     /// task.events 轮询游标（只有事件泵推进；print 模式复用）。
     cursor: std::sync::Arc<Mutex<u64>>,
 }
 
-impl V2ChatClient {
+impl V1ChatClient {
     /// 按 TUI 的 --profile/--data-dir/--ipc-name 解析（显式 flavor，绝不推断）。
     pub fn from_args(
         flavor: ProfileFlavor,
@@ -128,7 +128,7 @@ impl V2ChatClient {
 
     async fn connect(&self) -> Result<DaemonClient, String> {
         let info = r_code_client::ensure_daemon(
-            &self.profile.harness_v2_root(),
+            &self.profile.harness_v1_root(),
             &self.profile.ipc_endpoint(),
             &self.profile.profile_id(),
             self.service_binary.as_deref(),
@@ -237,7 +237,7 @@ impl V2ChatClient {
         serde_json::from_value(value).map_err(|e| format!("task.detail 解析失败：{e}"))
     }
 
-    /// 克隆会话（v2 分支任务：契约与引擎固定继承，对话状态按新分支重开）。
+    /// 克隆会话（v1 分支任务：契约与引擎固定继承，对话状态按新分支重开）。
     pub async fn clone_task(&self, source_task_id: &str, title: &str) -> Result<String, String> {
         let new_task_id = format!("task-{}", uuid_v4_simple());
         let value = self
@@ -554,7 +554,15 @@ pub fn project_events(state: &mut crate::TuiState, events: &[EventEnvelope]) {
 
 /// run.failed 错误文案 → 用户可操作引导（无 provider 是首版最常见的失败）。
 pub fn failure_guidance(error: &str) -> String {
-    if error.contains("unknown model selection") || error.contains("registry") {
+    // The no-provider failure is now caught by the pre-run guard before the
+    // run starts ("没有已配置的默认 Provider；运行尚未启动"); the older wording
+    // came from the model broker ("unknown model selection" / "registry"). All
+    // of them are the same user problem — configure a model via /setup.
+    let no_provider = error.contains("unknown model selection")
+        || error.contains("registry")
+        || error.contains("没有已配置的默认 Provider")
+        || error.contains("未配置");
+    if no_provider {
         "未配置模型服务——输入 /setup 完成配置（Tab 可切环境变量鉴权）".to_string()
     } else {
         error.to_string()

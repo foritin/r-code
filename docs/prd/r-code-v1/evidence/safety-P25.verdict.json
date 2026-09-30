@@ -1,0 +1,70 @@
+{
+  "task_id": "P25",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-store/tests/s25_process_effect_store.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED SUITE s25_process_effect_store = 5 passed / 0 failed, measured on the final code twice: prepare_persists_before_resume_and_replays_converge (all frozen fields durable; byte-identical replay converges; divergent material conflicts; garbage JSON refused BEFORE durability with load()=None), resume_requires_durable_state_and_recovery_never_reruns_the_command (advancing an unjournaled id is OperationNotFound; running is idempotent with no extra revision; a REOPENED store's incomplete query returns the byte-identical frozen command — the only command source, never re-derived), stale_owner_cannot_advance_any_state (wrong owner or wrong epoch refused from Prepared and from Running, state unmoved after every refusal), quarantine_lasts_through_receipt (no-op/prepared/running all ineligible; receipt pins the digest, same-digest replay converges, a different digest and a late quarantine are InvalidTransition; eligible only after the receipt; quarantined operations never receipt and never lift, including the mid-flight running->quarantined path the first cut had made unreachable and the QA round forced into the code), every_state_survives_a_crash_reopen (prepared/running/receipted/quarantined each reopened from disk with the exact state, frozen command, digest and owner, and correct incomplete-membership). (2) HOUSE five-group cumulative measured twice, both reported: 140 result lines / 1085 passed / 1 failed in BOTH runs — the single failure the declared plan_schema.rs:245 baseline; the schema change touched every store suite and all of them stayed green (t05/m01/m03/s01/s12/s19a/t06 within the 140). Reconciliation against P24H's 1081/1080/1: +5 tests (s25) and +1 result line (the new suite), no other count moved — house is 1086 total / 1085 passed / 1 declared failure, zero regressions, zero flake members this round. (3) OTHER GATES: clippy -p r-code-store --all-features --all-targets -D warnings exit 0; cargo fmt --all -- --check exit 0; quality_check.py over the four changed files ok=true 0 violations (schema 486 / process_effects 504 / mod 28 / s25 382 code loc; comment blocks <= 10); packaging and the P24A launch-boundary guard unaffected (store crate spawns nothing — daemon hygiene trivially clean this round, no daemon-spawning test in scope).",
+    "total": 1086,
+    "passed": 1085,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P25 and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-store/src/v1/schema.rs": {
+          "file_loc": 486,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.013
+        },
+        "crates/r-code-store/src/v1/process_effects.rs": {
+          "file_loc": 504,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.105
+        },
+        "crates/r-code-store/src/v1/mod.rs": {
+          "file_loc": 28,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.12
+        },
+        "crates/r-code-store/tests/s25_process_effect_store.rs": {
+          "file_loc": 382,
+          "max_comment_block": 7,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.085
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 350 lines; ~530 production lines landed plus a 382-line suite — the excess over the estimate is the recovery-query surface and the shared fenced advance, not speculative structure. The repository mirrors the house vocabulary exactly (impl V1Store per module, exact-owner fence, IMMEDIATE transactions, DDL-only schema with the additive migration ledger). max_func_loc/max_nesting null for .rs as always; reviewed by eye — no function exceeds ~90 lines, nesting <= 4."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (no process resumes without durable before state): the prepare path journals the complete launch material — verbatim command, lease, before manifest + digest, scan policy, ephemeral roots — before anything can advance, refuses unparseable material before it becomes durable, and advancing an unjournaled operation is OperationNotFound. Acceptance ② (recovery never reruns the command): the frozen command_json is the only command source, byte-identical across replays and crash-reopens, served to recovery through the incomplete-process-effects query oldest-first; transitions are monotonic and idempotent so a restart reconciles rather than re-executes. Acceptance ③ (quarantine lasts through receipt): tree_quarantine_lift_eligible is false with no operation and until the terminal receipt, the receipt digest is pinned and irreplaceable, a receipted operation can never be downgraded to quarantined, and quarantined operations never gain a receipt — the coupling the sweep path will consume. Disclosed: this is the store layer only — no runtime wiring swaps the transport's in-memory supervisor journal for this repository yet (P23's disclosed follow-up, a later composition round); P26's delta scanner will read these rows. House 1086/1085/1 with only the declared plan_schema baseline; zero flake members across both full runs."
+}

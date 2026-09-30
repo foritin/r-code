@@ -81,7 +81,10 @@ async fn approvals_and_questions_map_to_common_host_services() {
         ))
         .await
         .expect_err("forged reference refused");
-    assert_eq!(error.code, r_code_harness_protocol::rpc::error_code::PROTOCOL_VIOLATION);
+    assert_eq!(
+        error.code,
+        r_code_harness_protocol::rpc::error_code::PROTOCOL_VIOLATION
+    );
 
     // Granted host decisions flow through (host registers, then decides).
     router

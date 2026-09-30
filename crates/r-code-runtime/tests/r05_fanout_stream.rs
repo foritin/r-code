@@ -20,7 +20,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-struct StoreEvents(Arc<r_code_store::v2::V2Store>);
+struct StoreEvents(Arc<r_code_store::v1::V1Store>);
 
 #[async_trait::async_trait]
 impl ApplicationHandler for StoreEvents {
@@ -43,7 +43,7 @@ impl ApplicationHandler for StoreEvents {
 
 struct Fixture {
     registry: Arc<DeviceRegistry>,
-    store: Arc<r_code_store::v2::V2Store>,
+    store: Arc<r_code_store::v1::V1Store>,
     hub: Arc<FanoutHub>,
     task: TaskState,
     addr: std::net::SocketAddr,
@@ -67,7 +67,7 @@ impl Fixture {
             })
             .expect("enable");
         let identity = ensure_identity(&root).expect("identity");
-        let store = Arc::new(r_code_store::v2::V2Store::open(&root.join("j.db")).expect("store"));
+        let store = Arc::new(r_code_store::v1::V1Store::open(&root.join("j.db")).expect("store"));
         let task = TaskState::new(TaskContract {
             task_id: "t1".into(),
             kind: TaskKind::Conversation,

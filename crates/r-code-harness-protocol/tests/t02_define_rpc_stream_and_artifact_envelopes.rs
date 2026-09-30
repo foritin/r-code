@@ -213,6 +213,40 @@ fn large_content_travels_via_versioned_artifact_refs() {
 }
 
 #[test]
+fn all_model_roles_round_trip_without_changing_the_original_wire_values() {
+    let cases = [
+        (ModelRole::System, "system"),
+        (ModelRole::Developer, "developer"),
+        (ModelRole::User, "user"),
+        (ModelRole::Assistant, "assistant"),
+        (ModelRole::Tool, "tool"),
+    ];
+
+    for (role, wire_name) in cases {
+        let encoded = serde_json::to_string(&role).expect("serialize role");
+        assert_eq!(encoded, format!("\"{wire_name}\""));
+        assert_eq!(
+            serde_json::from_str::<ModelRole>(&encoded).expect("deserialize role"),
+            role
+        );
+    }
+
+    // These four values predate the additive developer role. Their exact
+    // spelling is part of the v1 compatibility contract.
+    for old_wire_name in ["system", "user", "assistant", "tool"] {
+        let message: ModelMessage = serde_json::from_value(serde_json::json!({
+            "role": old_wire_name,
+            "content": []
+        }))
+        .expect("old v1 role remains readable");
+        assert_eq!(
+            serde_json::to_value(message).expect("old v1 role remains writable")["role"],
+            old_wire_name
+        );
+    }
+}
+
+#[test]
 fn no_secret_bearing_fields_leak_onto_the_protocol() {
     fn scan(value: &serde_json::Value, path: &str, hits: &mut Vec<String>) {
         match value {
@@ -262,6 +296,7 @@ fn no_secret_bearing_fields_leak_onto_the_protocol() {
         .unwrap(),
         serde_json::to_value(ToolCallRequest {
             tool: "bash".into(),
+            operation_key: None,
             input: serde_json::json!({"command": "ls"}),
         })
         .unwrap(),

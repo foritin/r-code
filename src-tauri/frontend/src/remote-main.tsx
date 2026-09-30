@@ -21,19 +21,26 @@ import {
   type ConnectionSnapshot,
 } from "./remote/core/connection-state.ts";
 import {
+  applyApprovalEvent,
+  effectAuthorityRows,
+  effectPendingRows,
+  emptyAggregation,
+  mergePendingList,
+  optimisticRemove,
+  projectEffectApprovals,
+  type AggregationState,
+  type EffectApprovalPending,
+  type EffectApprovalView,
+} from "./remote/core/approvals-aggregate.ts";
+import {
   approvalCardUi,
   capabilitiesFromLabels,
   composerUi,
   deviceInfoUi,
+  effectApprovalUi,
   type DeviceCapabilities,
+  type EffectApprovalUi,
 } from "./remote/core/capability-ui.ts";
-import {
-  applyApprovalEvent,
-  emptyAggregation,
-  mergePendingList,
-  optimisticRemove,
-  type AggregationState,
-} from "./remote/core/approvals-aggregate.ts";
 import {
   notificationForEvent,
   notificationSupport,
@@ -203,6 +210,135 @@ function ApprovalCard({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** 审批 tab：既有 pending 决策卡 + P19B-C 效果授权清单。 */
+function ApprovalsTab({
+  aggregate,
+  capabilities,
+  onDecide,
+}: {
+  aggregate: AggregationState;
+  capabilities: DeviceCapabilities;
+  onDecide: (opId: string, approve: boolean) => void;
+}) {
+  return (
+    <>
+      {aggregate.pending.length === 0 ? (
+        <p style={{ color: C.muted, fontSize: 14, padding: 8 }}>没有待审批的操作</p>
+      ) : (
+        aggregate.pending.map((row) => (
+          <ApprovalCard
+            key={row.opId}
+            row={row}
+            capabilities={capabilities}
+            onDecide={onDecide}
+          />
+        ))
+      )}
+      <EffectAuthorityList state={aggregate} capabilities={capabilities} />
+    </>
+  );
+}
+
+/**
+ * P19B-C：效果授权的远端呈现。行内容与桌面 `effectAuthorityRows`、TUI
+ * `effect_overlay_lines` 同序同字；请求/撤销需要独立能力 `effects-manage`，
+ * 缺失即隐藏控件（不是禁用），并给出只读徽标。
+ */
+const EFFECT_LIST_TITLE = "已授权的外部能力";
+const effectCard: React.CSSProperties = {
+  background: C.card,
+  border: `1px solid ${C.border}`,
+  borderRadius: 12,
+  padding: 14,
+  marginBottom: 10,
+};
+const effectTitle: React.CSSProperties = { color: C.fg, fontSize: 14, wordBreak: "break-word" };
+const effectLine: React.CSSProperties = { color: C.muted, fontSize: 12, margin: "2px 0 0" };
+const effectNote: React.CSSProperties = { color: C.muted, fontSize: 12 };
+
+function EffectAuthorityList({
+  state,
+  capabilities,
+}: {
+  state: AggregationState;
+  capabilities: DeviceCapabilities;
+}) {
+  if (state.effectApprovals.length === 0 && state.effectPending.length === 0) return null;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <p style={{ color: C.muted, fontSize: 12, padding: "0 8px 6px" }}>{EFFECT_LIST_TITLE}</p>
+      {state.effectApprovals.map((approval) => (
+        <EffectAuthorityCard
+          key={approval.approvalId}
+          approval={approval}
+          capabilities={capabilities}
+        />
+      ))}
+      {state.effectPending.map((row) => (
+        <EffectPendingCard
+          key={row.operationId}
+          pending={row}
+          capabilities={capabilities}
+        />
+      ))}
+    </div>
+  );
+}
+
+function EffectPendingCard({
+  pending,
+  capabilities,
+}: {
+  pending: EffectApprovalPending;
+  capabilities: DeviceCapabilities;
+}) {
+  const ui = effectApprovalUi(capabilities, false);
+  return (
+    <div style={effectCard}>
+      <p style={effectTitle}>{pending.workUnitId}</p>
+      {effectPendingRows(pending).map((line) => (
+        <p key={line.key} style={effectLine}>
+          {line.key} {line.value}
+        </p>
+      ))}
+      <EffectSemantics ui={ui} />
+    </div>
+  );
+}
+
+function EffectAuthorityCard({
+  approval,
+  capabilities,
+}: {
+  approval: EffectApprovalView;
+  capabilities: DeviceCapabilities;
+}) {
+  const ui = effectApprovalUi(capabilities, approval.state === "active");
+  return (
+    <div style={effectCard}>
+      <p style={effectTitle}>{approval.workUnitId}</p>
+      {effectAuthorityRows(approval).map((line) => (
+        <p key={line.key} style={effectLine}>
+          {line.key} {line.value}
+        </p>
+      ))}
+      <EffectSemantics ui={ui} />
+    </div>
+  );
+}
+
+/** 只读徽标 + 三条永久语义（与桌面面板逐条对应）。 */
+function EffectSemantics({ ui }: { ui: EffectApprovalUi }) {
+  return (
+    <>
+      <p style={effectNote}>{ui.readOnlyBadge ?? ""}</p>
+      <p style={effectNote}>{ui.decisionHint}</p>
+      <p style={effectNote}>{ui.revokeWarning}</p>
+      <p style={effectNote}>{ui.reauthorizeHint}</p>
+    </>
   );
 }
 
@@ -419,6 +555,11 @@ function HomeScreen({
 }) {
   const [tab, setTab] = useState<Tab>("tasks");
   const [tasks, setTasks] = useState<TaskRow[]>([]);
+  // P19B-C：refreshApprovals 在闭包里读最新任务列表而不重绑事件监听。
+  const tasksRef = useRef<TaskRow[]>([]);
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
   const [note, setNote] = useState("");
   // R07c：审批聚合 = approvals.list 快照 + 事件流合并（同一模块，测试与
   // UI 共用）；乐观移除失败时列表回滚。
@@ -442,6 +583,19 @@ function HomeScreen({
       setAggregate((state) => mergePendingList(state, answer?.pending ?? []));
     } catch {
       /* 无 events:read 时聚合为空（默认设备有） */
+    }
+    // P19B-C：效果授权是 local-only RPC，远端被未知方法能力门拒绝；调用失败
+    // 是预期结果，投影保持为空——绝不在客户端凭空造出授权行。
+    for (const task of tasksRef.current) {
+      try {
+        const effects = await conn.call<Record<string, unknown>>(
+          "approvals.effect.list",
+          { taskId: task.taskId },
+        );
+        setAggregate((state) => projectEffectApprovals(state, effects));
+      } catch {
+        /* 本机专属面：远端不可见即不可见（失败关闭） */
+      }
     }
   };
 
@@ -528,18 +682,11 @@ function HomeScreen({
             ))
           )
         ) : tab === "approvals" ? (
-          aggregate.pending.length === 0 ? (
-            <p style={{ color: C.muted, fontSize: 14, padding: 8 }}>没有待审批的操作</p>
-          ) : (
-            aggregate.pending.map((row) => (
-              <ApprovalCard
-                key={row.opId}
-                row={row}
-                capabilities={capabilities}
-                onDecide={(opId, approve) => void decide(opId, approve)}
-              />
-            ))
-          )
+          <ApprovalsTab
+            aggregate={aggregate}
+            capabilities={capabilities}
+            onDecide={(opId, approve) => void decide(opId, approve)}
+          />
         ) : (
           <div
             style={{

@@ -115,8 +115,8 @@ fn pem_parser(text: &str) -> Vec<(String, Vec<u8>)> {
 /// Load the profile's identity, generating and persisting a fresh
 /// self-signed ECDSA P-256 certificate when none exists. The certificate
 /// survives restarts — regenerating would invalidate every paired device.
-pub fn ensure_identity(harness_v2_root: &Path) -> Result<Identity, String> {
-    let path: PathBuf = harness_v2_root.join("certs").join("identity.pem");
+pub fn ensure_identity(harness_v1_root: &Path) -> Result<Identity, String> {
+    let path: PathBuf = harness_v1_root.join("certs").join("identity.pem");
     if let Some(existing) = read_identity(&path) {
         return Ok(existing);
     }

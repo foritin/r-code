@@ -1,5 +1,5 @@
 // M4-03.A3：文档一致性检查（可 grep 断言）。
-// docs/support/archive/architecture-before-harness-v2.md 与 docs/support/operations/operations.md 必须含方言策略与设置键说明，
+// docs/support/archive/architecture-before-pluggable-harness.md 与 docs/support/operations/operations.md 必须含方言策略与设置键说明，
 // 且与实现的关键标识一致（五级解析链 / Git Bash / WSL 排除 / 注册表实时 PATH /
 // execution.bash_shell_path / MSYS_NO_PATHCONV）。
 
@@ -30,6 +30,16 @@ const OPERATIONS_MARKERS = [
   "verify-windows-reliability",
 ];
 
+// P32.3：安全边界 operator runbook 必须随安全发布策略存在——前置条件、
+// SafeDisabled 姿态与 quarantine 恢复路径缺一不可（s32 套件也钉内容）。
+const SAFETY_RUNBOOK_MARKERS = [
+  "SafeDisabled",
+  "quarantine",
+  "Activated",
+  "helper",
+  "downgrade",
+];
+
 async function check(file, markers) {
   const content = await readFile(path.join(ROOT, file), "utf8");
   return markers
@@ -39,8 +49,9 @@ async function check(file, markers) {
 
 async function main() {
   const failures = [
-    ...(await check("docs/support/archive/architecture-before-harness-v2.md", ARCHITECTURE_MARKERS)),
+    ...(await check("docs/support/archive/architecture-before-pluggable-harness.md", ARCHITECTURE_MARKERS)),
     ...(await check("docs/support/operations/operations.md", OPERATIONS_MARKERS)),
+    ...(await check("docs/support/operations/safety-boundary.md", SAFETY_RUNBOOK_MARKERS)),
   ];
   if (failures.length > 0) {
     console.error(`docs-consistency-check 失败：`);
@@ -49,7 +60,7 @@ async function main() {
     }
     process.exit(1);
   }
-  console.log("docs-consistency-check OK: architecture/operations 均含方言策略与设置键说明");
+  console.log("docs-consistency-check OK: architecture/operations/safety-boundary 均含所需标记");
 }
 
 await main();

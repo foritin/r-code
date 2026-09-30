@@ -15,7 +15,7 @@
 
 ## 开发环境
 
-需要 Git、Rust stable、Node.js 20，以及 [Tauri 2 对应平台依赖](https://v2.tauri.app/start/prerequisites/)。产品构建依赖 `vendor/agent-contracts` 私有子模块；`.agents` 子模块只用于仓库协作，不参与产品构建。
+需要 Git、Rust stable、Node.js 20，以及 [Tauri 2 对应平台依赖](https://v1.tauri.app/start/prerequisites/)。产品构建依赖 `vendor/agent-contracts` 私有子模块；`.agents` 子模块只用于仓库协作，不参与产品构建。
 
 ```bash
 git clone git@github.com:foritin/r-code.git
@@ -81,7 +81,7 @@ npm run build
 
 ## 文档与用户可见变化
 
-- 架构、数据流、隐私边界或安全边界变化时，同步 `docs/prd/` 下的活跃方案及其实现说明、`PRIVACY.md` 或 `SECURITY.md`。新架构说明与对应 PRD 同目录维护；旧架构基线保留在 `docs/support/archive/architecture-before-harness-v2.md`。
+- 架构、数据流、隐私边界或安全边界变化时，同步 `docs/prd/` 下的活跃方案及其实现说明、`PRIVACY.md` 或 `SECURITY.md`。新架构说明与对应 PRD 同目录维护；旧架构基线保留在 `docs/support/archive/architecture-before-pluggable-harness.md`。
 - 记忆、MCP、Provider、Codex 或发布行为变化时，同步对应专题文档。
 - 用户可见变化写入 `CHANGELOG.md` 的 `Unreleased` 部分。
 - 截图中不得出现密钥、私有路径、私有项目名或真实对话内容。

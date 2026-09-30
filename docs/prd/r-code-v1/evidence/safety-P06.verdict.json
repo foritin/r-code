@@ -1,0 +1,62 @@
+{
+  "task_id": "P06",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s06_windows_spawn.rs",
+    "crates/r-code-runtime/src/bin/process-tree-helper.rs"
+  ],
+  "tests": {
+    "command": "focused s06 12/12; neighbours s00 13/13, s04 9/9, s05 12/12; full Runtime 376/376 across 68 suites (raw unfiltered count; includes s05+s06 and the reformatted t04); full Kernel 75/75; harness-protocol + harness-sdk 33/33; codex plugin 13/13 (includes reformatted t30); full Store 323/324 with the single failure being the declared pre-existing plan_schema migration-count baseline (expects 18, actual 35, untouched by P06); workspace all-feature check and test --no-run green; workspace all-feature all-target Clippy -D warnings green; cargo fmt --all --check green; quality_check green",
+    "total": 821,
+    "passed": 820,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline: migration-count assertion expects 18, schema now at 35; P06 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 4,
+    "comment_hygiene": 4,
+    "organization": 4,
+    "style_match": 4,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/process_guard/windows.rs": {
+          "file_loc": 696,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.24,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/Cargo.toml": {
+          "file_loc": 78,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.068,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "P06 iteration 2 passes the keep gate. The raw Windows primitive performs one direct CreateProcessW with a single STARTUPINFOEXW whose HANDLE_LIST names exactly the three child stdio pipe ends — canary handles are proven not inherited (with a child-side positive control proving the probe discriminates), the child emits nothing before resume and marks resume first, the explicit environment is exactly the provided map (parent env never leaks; fixed in this iteration by passing CREATE_UNICODE_ENVIRONMENT with a properly double-NUL-terminated UTF-16 block), resume is exactly-once, abort/Drop/terminate are fail-closed with no suspended-process leak and close-exactly-once handles, exit codes and identities track, and no console appears. The primitive is not wired into ProcessSupervisor — Job composition is P07. Note: cumulative Runtime counts use raw unfiltered cargo output; the rtk summary line truncates large suites (it under-reported 376 as 156 during P05, since corrected in the P05 evidence)."
+}

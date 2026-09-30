@@ -340,6 +340,12 @@ async fn queues_and_callbacks_never_cross_task_or_harness_identity() {
         description: "unit".into(),
         dependencies: vec![],
         acceptance: vec![],
+        read_paths: vec![],
+        write_paths: vec![],
+        repo_exclusive: false,
+        ephemeral_roots: vec![],
+        effect_class: WorkUnitEffectClass::ReadOnly,
+        network_ceiling: NetworkCeiling::Offline,
         status: WorkUnitStatus::Pending,
     }];
     journal

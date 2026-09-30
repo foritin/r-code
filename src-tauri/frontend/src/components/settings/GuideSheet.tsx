@@ -95,8 +95,9 @@ const PROVIDERS_BODY = (
       <h3><span className="idx">04</span>模型同步与多模态标注</h3>
       <p>
         <strong>已保存的服务会在点开时自动同步模型清单</strong>（五分钟内重复点开不重复
-        请求），结果保存在本机供模型选择与图片理解使用；手动「同步模型」只在
-        <strong>新建服务</strong>填完密钥后需要。候选后面的 <strong>[多模态]</strong> /
+        请求），结果保存在本机供模型选择与图片理解使用；新建 GLM Coding Plan、
+        Kimi Code Plan 时，填入密钥并选择协议后也会自动同步，其它服务仍可使用
+        「同步模型」。候选后面的 <strong>[多模态]</strong> /
         <strong>[文本]</strong> 标注来自人工核对的预设目录：多模态模型可直接接收图片，
         文本模型不支持图片输入；未标注的模型能力未确认。
       </p>

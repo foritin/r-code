@@ -1,6 +1,6 @@
 # 远程控制 — AI 实施工作清单（Execution Contract）
 
-> 状态：`frozen`（长任务化 v2：原生 App 终态 + 任务卡深度展开）
+> 状态：`frozen`（长任务化 v1：原生 App 终态 + 任务卡深度展开）
 > 转换契约：prd-to-ai-worklist v1.1.0
 > 规范输入：[plan.md](./plan.md)、[architecture.md](./architecture.md)、[relay.md](./relay.md)、[prototype.html](./prototype.html)、[tasks.json](./tasks.json)
 > 统一验收：`node scripts/verify-remote.mjs`；任务包：`artifacts/ai-tasks/`
@@ -48,7 +48,7 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
 
 **Definition of Done（implementation_verified）**：
 
-1. R0：v2 插件审批闭环（op 持久化、事件外发、daemon 决策、RunManager 真实接线、TUI 本地审批绿）；
+1. R0：v1 插件审批闭环（op 持久化、事件外发、daemon 决策、RunManager 真实接线、TUI 本地审批绿）；
 2. R1–R4：局域网配对（码→QR/mDNS）、TLS 指纹钉扎、能力强制、事件扇出、PWA 只读→写→设备管理；
 3. R5：自托管中继二进制 + E2EE + daemon 出站传输 + 桌面配置 + loopback 全流程；
 4. R6：React Native iOS+Android App（TS core 与 PWA 共享），扫码配对、会话/审批、推送（fake adapter 闭环）、release 构建与合规清单；
@@ -89,10 +89,10 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
 - **IPC 现状**：`crates/r-code-runtime/src/ipc.rs` `IpcListener`（Win named pipe `first_pipe_instance(true)` 独占；Unix `UnixListener` 0600）；accept 循环 `src/daemon.rs::serve_connection` → `CommandDedup`（`application_receipts.rs`，键 (profile,client_id,command_id)）→ `ApplicationHandler::execute`（`src/bin/r-code-service.rs`）。
 - **帧协议**：`r-code-harness-protocol::application::{ApplicationCommand{client_id,command_id,method,params},ApplicationResult,ApplicationFrame,DaemonHandshake,DaemonWelcome}`，换行分隔 NDJSON。
 - **审批缺口（R0 靶点）**：`plugins/router.rs`——`ApprovalRegistry{decisions: Mutex<HashMap<String,ApprovalDecision>>}` 仅内存 set/decide；`QuestionSink` trait + `IgnoreQuestions`（RunManager:354 实际挂它）；wire `ApprovalsRequest{pending_operation: PendingOperationRef, summary}` / `ApprovalsReply{decision}` 在 services.rs:486；请求分支 router.rs:383（已校验“只认宿主创建的 op 引用”）。
-- **journal**：V2Store `save_task_and_events`/`read_events`（crates/r-code-store/src/v2/）；事件映射单点 `run_manager.rs::envelope_of`（payload.journalKind 判别）；RunManager 已有 host_observations 抽头与事件泵模式（250ms 轮询的客户端在 TUI engine.rs）。
-- **profile/凭据**：`RuntimeProfile::{harness_v2_root,database_path,ipc_endpoint,profile_id}`；`services/settings_store.rs`（平台 SecretStore）；服务二进制旁资源 `R_CODE_SERVICE_BIN`、内置插件目录 `R_CODE_BUILTIN_PLUGINS_DIR`。
-- **前端**：src-tauri/frontend 为 React+Vite+TS；Tauri invoke 层 src/lib/ipc.ts；Rust 侧事件→DTO 投影参考 src-tauri/src/harness_v2_chat.rs（spawn_event_pump/agent-event 频道）。
-- **测试基建**：`scripts/verify-harness-v2.mjs`（execFileSync+guard+JSON 报告模式）；真实守护进程测试 helper：crates/r-code-tui/tests/daemon_common/（kill_stale_target_daemons[PowerShell -like，勿用 canonicalize 的 \\?\ 前缀]、DaemonGuard、staging native 包、独立线程跑 tokio runtime 避免嵌套）；runtime 真插件 e2e：crates/r-code-runtime/tests/conversation_engine.rs（EchoModel+stage_native）。
+- **journal**：V1Store `save_task_and_events`/`read_events`（crates/r-code-store/src/v1/）；事件映射单点 `run_manager.rs::envelope_of`（payload.journalKind 判别）；RunManager 已有 host_observations 抽头与事件泵模式（250ms 轮询的客户端在 TUI engine.rs）。
+- **profile/凭据**：`RuntimeProfile::{harness_v1_root,database_path,ipc_endpoint,profile_id}`；`services/settings_store.rs`（平台 SecretStore）；服务二进制旁资源 `R_CODE_SERVICE_BIN`、内置插件目录 `R_CODE_BUILTIN_PLUGINS_DIR`。
+- **前端**：src-tauri/frontend 为 React+Vite+TS；Tauri invoke 层 src/lib/ipc.ts；Rust 侧事件→DTO 投影参考 src-tauri/src/harness_v1_chat.rs（spawn_event_pump/agent-event 频道）。
+- **测试基建**：`scripts/verify-harness-v1.mjs`（execFileSync+guard+JSON 报告模式）；真实守护进程测试 helper：crates/r-code-tui/tests/daemon_common/（kill_stale_target_daemons[PowerShell -like，勿用 canonicalize 的 \\?\ 前缀]、DaemonGuard、staging native 包、独立线程跑 tokio runtime 避免嵌套）；runtime 真插件 e2e：crates/r-code-runtime/tests/conversation_engine.rs（EchoModel+stage_native）。
 - **移动端**：仓库当前无任何 RN/移动工程；R21 从零建 `mobile/`。
 
 ---
@@ -240,7 +240,7 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
   - 同 op 重复 request 是幂等返回等待中的同一个决策，不新建 op；
   - 迟到/重复/冲突决策：第一次有效，之后同决策重放原结果、异决策拒绝（对齐 CommandDedup 与 kernel 既有裁决门）。
 - **决策空间**：
-  - 状态存储优先“journal 事件投影 + 内存等待索引”（无新表、重启天然一致）；若 RA2 的 list 查询性能证明需要再加 v2 表，表必须有 migration 与空库/升级测试；
+  - 状态存储优先“journal 事件投影 + 内存等待索引”（无新表、重启天然一致）；若 RA2 的 list 查询性能证明需要再加 v1 表，表必须有 migration 与空库/升级测试；
   - 等待原语 tokio::sync::watch/oneshot 自选（要求支持“先注册等待者、后决策”与“决策可能早于重连等待者”两种时序，watch 更合适）；
   - 事件 payload 字段名自定但必须在本卡冻结并同步 envelope_of 与协议文档。
 - **产物**：
@@ -276,7 +276,7 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
   - 决策审计 client_id 来自 ApplicationCommand（连接握手身份），不可由 params 指定；
   - 本机 transport 与未来远程 transport 同方法，能力强制在 R04/R12 加（本任务不区分来源，但默认只允许本机——在方法上加来源检查占位，远程来源 R04 接通前直接拒）。
 - **决策空间**：store 在 ApplicationService 的持有方式（Arc clone）；list 排序（created_seq 升序默认）。
-- **产物**：r-code-service.rs 两方法分支；application.rs 暴露 approval_store；RA2 测试（runtime integration test 直连 in-proc ApplicationService + 临时 v2 库）。
+- **产物**：r-code-service.rs 两方法分支；application.rs 暴露 approval_store；RA2 测试（runtime integration test 直连 in-proc ApplicationService + 临时 v1 库）。
 - **步骤**：
   1. 预检 RA1 三断言绿。
   2. 提升 ApprovalStore 到 ApplicationService（RunManager 与新方法共享同一 Arc）。
@@ -308,7 +308,7 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
   4. runtime e2e：插件 request→事件→客户端 approvals.decide(granted)→插件继续→run.completed；denied 路径插件收到 Denied 并按其逻辑结束。
   5. TUI：engine 投影 approval.requested 为浮层状态，y/n 调 daemon decide；决策后浮层消失；超时显示“已自动拒绝”。
   6. TUI 测试：lib 单测投影纯函数；PTY 测试新增审批脚本路径（daemon_common staging 审批 fixture），断言浮层与决策事件。
-  7. 回归：全套 tui 测试 + verify-harness-v2 full。
+  7. 回归：全套 tui 测试 + verify-harness-v1 full。
   8. 注册断言、归档。
 - **验收断言**：
   - RA3.A1（e2e）真进程链路 request→decide(granted)→插件继续执行并完成，journal 事件链完整。
@@ -333,7 +333,7 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
 
 - **结果**：设备登记持久化、令牌只存哈希、能力三档可校验；远程禁用方法清单成为单一常量。
 - **依赖**：R00。
-- **前置事实**：profile.harness_v2_root() 可放 devices/；SecretStore 已在 settings_store 使用（Win keyring/macOS 加密文件/Linux keyring）——设备令牌与配对码也应走同一存储或至少文件 0600。
+- **前置事实**：profile.harness_v1_root() 可放 devices/；SecretStore 已在 settings_store 使用（Win keyring/macOS 加密文件/Linux keyring）——设备令牌与配对码也应走同一存储或至少文件 0600。
 - **固定约束**：F4/F5/F6；registry.json 任何位置不含明文令牌（测试对文件内容做子串断言）；默认能力仅 events:read。
 - **决策空间**：库选型、内部命名、目录微调等可逆选择按 §0 排序自决并记入 current.yaml；固定安全语义不变。
 - **产物**：`src/remote/{mod.rs,capabilities.rs,registry.rs}`。
@@ -409,7 +409,7 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
 - **依赖**：R06。**约束**：F11/F13；列表只用 task.list 真实字段；SW 只缓存壳（断言缓存名单）；不出现假数据。
 - **决策空间**：库选型、内部命名、目录微调等可逆选择按 §0 排序自决并记入 current.yaml；固定安全语义不变。
 - **产物**：src-tauri/frontend 独立 Vite entry（remote.html/remote-main.tsx）；daemon 静态托管（embed 或读打包资源，打包随 T38 sidecar 资源机制）；`/app` 路由与 WS 同源策略。
-- **步骤**：①Vite multi-entry 配置，remote entry 不引 tauri API（编译期条件：transport 只用 WS core）；②把 harness_v2_chat.rs 的事件投影逻辑的**形状**在 TS 侧复刻（不共享 Rust 代码：TS core 投影 EventEnvelope→会话行，这部分即 R21 抽包的前身，先放 remote/core）；③配对后连接屏（占位：手动输入 host+码，QR 在 R09）→任务列表→任务详情实时流；④manifest.webmanifest+SW（缓存 index/hashed assets，network-only 所有 /events 与数据）；⑤daemon /app 托管（未构建时 404+明确错误，不内嵌假页面）；⑥mjs 测试：构建产物存在、SW 缓存名单、TS core 投影单测；⑦视觉对照 prototype 屏①②（深色 tokens）；⑧证据。
+- **步骤**：①Vite multi-entry 配置，remote entry 不引 tauri API（编译期条件：transport 只用 WS core）；②把 harness_v1_chat.rs 的事件投影逻辑的**形状**在 TS 侧复刻（不共享 Rust 代码：TS core 投影 EventEnvelope→会话行，这部分即 R21 抽包的前身，先放 remote/core）；③配对后连接屏（占位：手动输入 host+码，QR 在 R09）→任务列表→任务详情实时流；④manifest.webmanifest+SW（缓存 index/hashed assets，network-only 所有 /events 与数据）；⑤daemon /app 托管（未构建时 404+明确错误，不内嵌假页面）；⑥mjs 测试：构建产物存在、SW 缓存名单、TS core 投影单测；⑦视觉对照 prototype 屏①②（深色 tokens）；⑧证据。
 - **验证**：`node scripts/verify-remote.mjs --task R07`（前台，日志 target/test-logs/R07.log；外部放行项另见任务卡）。
 - **断言**：R07.A1（node-test）TS 投影：给定事件序列输出正确行（assistant/tool/state）；R07.A2（integration）daemon /app 返回构建产物，未配置时诚实 404。
 - **失败处理**：先保留失败现场日志定位根因；同方案第二次失败换受约束实现；外部依赖（真机/商店/VPS）缺失时用 adapter/fixture 完成 implementation_verified，真实放行记入 production 清单不阻塞。
@@ -545,7 +545,7 @@ node scripts/verify-remote.mjs --list       # 34 任务可读
 - **固定约束**：遵守 §2 冻结决策中本任务相关条目（能力/加密/默认面）；不削弱既有验收。
 - **决策空间**：库选型、内部命名、目录微调等可逆选择按 §0 排序自决并记入 current.yaml；固定安全语义不变。
 - **产物**：实现模块、正/负向测试、回归验证；落点先以仓库搜索确认（不预设虚构路径）。
-- **步骤**：①配置模型（relay URL 存 harness-v2 profile 配置，不进插件清单）；②owner 注册码生成（一次性、短 TTL、仅显示一次）与 daemon 出站注册流程；③QR 载荷扩展中继字段（rcode://pair 增加 relay=）；④GUI 设置+TUI /remote relay 两处入口，状态（未配置/连接中/在线/退避次数）；⑤空配置零出站连接（抓包/连接日志断言）；⑥测试；⑦证据。
+- **步骤**：①配置模型（relay URL 存 harness-v1 profile 配置，不进插件清单）；②owner 注册码生成（一次性、短 TTL、仅显示一次）与 daemon 出站注册流程；③QR 载荷扩展中继字段（rcode://pair 增加 relay=）；④GUI 设置+TUI /remote relay 两处入口，状态（未配置/连接中/在线/退避次数）；⑤空配置零出站连接（抓包/连接日志断言）；⑥测试；⑦证据。
 - **验证**：`node scripts/verify-remote.mjs --task R18`（前台，日志 target/test-logs/R18.log；外部放行项另见任务卡）。
 - **断言**：R18.A1 配置持久化与状态机；空配置不发起任何外网连接。
 - **失败处理**：先保留失败现场日志定位根因；同方案第二次失败换受约束实现；外部依赖（真机/商店/VPS）缺失时用 adapter/fixture 完成 implementation_verified，真实放行记入 production 清单不阻塞。

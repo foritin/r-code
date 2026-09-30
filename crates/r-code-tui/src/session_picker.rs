@@ -1,5 +1,5 @@
 //! /resume 会话列表（M6-01 / R-SESS-01；T35 起数据源 = 守护进程
-//! `task.list`，与桌面 GUI 共享同一 v2 任务库）。
+//! `task.list`，与桌面 GUI 共享同一 v1 任务库）。
 //!
 //! codex 形态：`❯` 光标（区别于列表 `›`）、列头（Updated at / State /
 //! Conversation）、底行 hints `enter to resume   esc to start new`。

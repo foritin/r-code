@@ -161,3 +161,127 @@ test("Plan workbench stays scoped to the current project task and exposes an emp
   assert.deepEqual(runtimeErrors, []);
   await page.close();
 });
+
+test("daemon Plan projections expose exact approval without legacy cancel or retry actions", async () => {
+  const page = await browser.newPage({ viewport: { width: 1320, height: 820 } });
+  const revisionHash = `sha256:${"a".repeat(64)}`;
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const taskId = await page.evaluate(async ({ revisionHash }) => {
+    const [{ taskCreate }, { useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/lib/ipc.ts"),
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const task = await taskCreate(
+      "D:/project/rust/r-code",
+      "Daemon Plan projection",
+      "Approve the exact daemon revision",
+      "plan",
+      "openai",
+      "r_code",
+    );
+    const now = "2026-09-26T00:00:00.000Z";
+    globalThis.__rCodeBrowserMockPlanOverride = {
+      [task.id]: {
+        plan: {
+          id: revisionHash,
+          task_id: task.id,
+          revision: 1,
+          state: "ready",
+          approved_revision: null,
+          projection_path: null,
+          projection_revision: null,
+          projection_error: null,
+          created_at: now,
+          updated_at: now,
+          approved_at: null,
+          implementation_dispatch_state: "not_requested",
+          implementation_dispatch_error: null,
+          implementation_queue_message_id: null,
+          implementation_dispatched_at: null,
+        },
+        goal: {
+          task_id: task.id,
+          goal: "Approve the exact daemon revision",
+          updated_at: now,
+        },
+        items: [
+          {
+            id: "inspect",
+            plan_id: revisionHash,
+            revision: 1,
+            ordinal: 0,
+            title: "Inspect the checkout",
+            description: "Inspect the checkout",
+            section_path: [],
+            state: "proposed",
+            depends_on: [],
+            created_at: now,
+            updated_at: now,
+            started_at: null,
+            completed_at: null,
+          },
+          {
+            id: "implement",
+            plan_id: revisionHash,
+            revision: 1,
+            ordinal: 1,
+            title: "Implement the PRD",
+            description: "Implement the PRD",
+            section_path: [],
+            state: "proposed",
+            depends_on: ["inspect"],
+            created_at: now,
+            updated_at: now,
+            started_at: null,
+            completed_at: null,
+          },
+        ],
+        pending_question_set: null,
+        continuation_question_set: null,
+      },
+    };
+    await useTasksStore.getState().refreshDetail(task.id);
+    await useTasksStore.getState().refreshTasks();
+    useTasksStore.getState().setCurrentProject("D:/project/rust/r-code");
+    useAppStore.getState().openRoom(task.id, "plan");
+    return task.id;
+  }, { revisionHash });
+
+  const directPlan = await page.evaluate(async (taskId) => {
+    const { planGet } = await import("/src/lib/ipc.ts");
+    return planGet(taskId);
+  }, taskId);
+  assert.equal(directPlan.plan.id, revisionHash);
+  assert.equal(directPlan.goal.goal, "Approve the exact daemon revision");
+  await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+  const panel = page.getByRole("region", { name: "当前计划" });
+  await panel.waitFor({ state: "visible" });
+  await page.waitForTimeout(2_200);
+  assert.match(await panel.innerText(), /Approve the exact daemon revision/);
+  const confirm = panel.getByRole("button", { name: "确认", exact: true });
+  await confirm.waitFor({ state: "visible" });
+  assert.equal(
+    await panel.getByRole("button", { name: "取消", exact: true }).count(),
+    0,
+    "daemon Plan must not expose cmd_plan_cancel from the old database",
+  );
+  assert.equal(await panel.getByText("重试实施", { exact: true }).count(), 0);
+  assert.equal(await panel.getByText("继续当前功能", { exact: true }).count(), 0);
+
+  await page.evaluate((taskId) => {
+    const view = globalThis.__rCodeBrowserMockPlanOverride[taskId];
+    view.plan.state = "approved";
+    view.plan.approved_revision = view.plan.revision;
+    view.items.forEach((item) => { item.state = "pending"; });
+  }, taskId);
+  await panel.getByRole("button", { name: "刷新计划" }).click();
+  await page.waitForFunction(() => document.querySelector(".plan-panel")?.classList.contains("state-approved"));
+  assert.equal(
+    await panel.getByRole("button", { name: "取消", exact: true }).count(),
+    0,
+    "approved daemon Plan must still hide the legacy cancel path",
+  );
+  assert.equal(await panel.getByText("重试实施", { exact: true }).count(), 0);
+  await page.close();
+});

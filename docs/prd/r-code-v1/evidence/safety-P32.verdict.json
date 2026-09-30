@@ -1,0 +1,70 @@
+{
+  "task_id": "P32",
+  "iteration": 1,
+  "tests_authored": [
+    "src-tauri/tests/s32_installed_safety.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED RUST SUITE s32_installed_safety = 3 passed / 0 failed, measured three times (initial, post-path-fix, post-fmt): advertised_write_targets_require_activated_and_macos_hides_surfaces (no shipped target advertises write this wave so every platform ships SafeDisabled/Unsupported legitimately; the advertised-write arm — the policy future targets flip — accepts ONLY Activated and hides nothing; macOS SafeDisabled hides exactly o-gate/check.run/process.open/shell); missing_or_tampered_helpers_fail_policy (the resolver refuses Missing on an empty layout and Tampered on a 128KiB wrong-magic file; the packaging inspection refuses the empty layout, refuses a tampered guardian, and verifies the REAL built pair with 64-hex digests and >=64KiB sizes — both helpers built explicitly by the test after the placeholder-clobber trap was hit); operator_runbook_documents_safedisabled_and_quarantine (the five required markers pinned). (2) DOCS CHECK: docs-consistency-check.mjs green with the new safety-runbook requirement. (3) SAFETY GATE: verify-safety-v1.mjs on this host — 16/19 activated, 3 native-only honestly separated, exit 0 (twice this round). (4) HOUSE five-group cumulative measured twice, both reported: 148 result lines / 1127 passed / 1 failed in BOTH runs — the single failure the declared plan_schema.rs:245 baseline; ZERO flake members. House stays 1128 total / 1127 passed / 1 declared failure (s32 lives in r-code-host, outside the house denominator per convention, like s24h/s24b). (5) OTHER GATES: clippy -p r-code-host --all-features --all-targets -D warnings exit 0; cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites); quality_check.py over the four changed artifacts ok=true 0 violations; daemon hygiene: zero r-code-service/harness-native processes after every gate batch; the release.yml corruption (one SHA character) was caught by an immediate grep against the before snapshot and restored byte-identically.",
+    "total": 1128,
+    "passed": 1127,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P32 and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "src-tauri/src/packaging.rs": {
+          "file_loc": 536,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.086
+        },
+        "src-tauri/tests/s32_installed_safety.rs": {
+          "file_loc": 218,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.172
+        },
+        "scripts/windows-reliability/docs-consistency-check.mjs": {
+          "file_loc": 71,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.169
+        },
+        "docs/support/operations/safety-boundary.md": {
+          "file_loc": 78,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 300 lines; ~90 production lines landed (the policy struct + the inspection + the workflow steps) plus a 218-line suite and a 78-line runbook — thin because P24H had already frozen the helpers and P31 had already built the gate this task wires into release. Three zero-code deltas on declared files are recorded rather than forced. The in-round corruption (one SHA character in release.yml) and the placeholder-clobber trap (guardian at 116 bytes) were both caught by the round's own checks and fixed before KEEP."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP — the LAST Safety task: Wave 3 is now 39/39. Acceptance ① (advertised write targets prove Activated): the release-policy matrix is deterministic and pinned — no shipped target advertises write this wave (every platform ships SafeDisabled/Unsupported legitimately), and the advertised-write arm accepts ONLY Activated with zero hidden-surface debt; flipping a target to write_advertised=false→true changes exactly one field and the policy hardens automatically. Acceptance ② (macOS SafeDisabled hides O-GATE/Check/Process/Shell): pinned as exactly those four undiscoverable surfaces — hidden, not merely disabled, with the P24B readiness publishing the empty grant set. Acceptance ③ (missing/tampered helpers fail policy): BOTH layers refuse — the runtime resolver (Missing/Tampered) and the release-side final-layout inspection (missing file, sub-64KiB truncation, wrong magic), with sha256 digests recorded for audit; the release workflow stages both target-triple helpers before tauri-action under set -euo pipefail, verifies bwrap on linux, runs the source-level gate, and executes the installed-layout policy step after packaging. P32.1 (helper staging + bwrap), P32.2 (probe policy per target — SafeDisabled accepted where nothing is advertised, macOS recorded as the documented example), P32.3 (final package inspection + the operator/downgrade runbook, now a REQUIRED document the consistency check enforces) all proven. Honest disclosures: the full native matrix executes in the release workflow's per-target jobs — this host proves the policy and inspection logic deterministically and verify-safety-v1 separates the native-only targets; three declared files carry zero-code deltas recorded honestly; one self-inflicted SHA corruption was caught and restored in-round. House 1128/1127/1 with only the declared plan_schema baseline, zero flake across both runs. **With this KEEP, Wave 3 Safety closes 39/39 and the task count reaches 52/52 (100%): O-GATE is now unblocked per the PRD's ordering rule.**"
+}

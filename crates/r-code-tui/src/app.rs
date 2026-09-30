@@ -57,7 +57,7 @@ pub struct RunController {
     pub session_report: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// !command 直通执行（宿主 shell 链；输出进 Shell 行）。
     pub run_bang: Arc<dyn Fn(String) + Send + Sync>,
-    /// /plugins 子命令（共享后台服务；None = v2 桥不可用）。
+    /// /plugins 子命令（共享后台服务；None = v1 桥不可用）。
     pub run_harness_command: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// 打开 /resume 列表（无会话时 None）。
     pub open_resume: Arc<dyn Fn() -> Option<crate::session_picker::SessionPicker> + Send + Sync>,
@@ -787,7 +787,7 @@ pub async fn run_interactive(
                             None => state
                                 .lock()
                                 .unwrap()
-                                .push_system("Harness v2 后台服务不可用".to_string()),
+                                .push_system("Harness v1 后台服务不可用".to_string()),
                         }
                     } else if trimmed == "/status" || trimmed == "/usage" {
                         let (card, summary) = (controller.status_report)();

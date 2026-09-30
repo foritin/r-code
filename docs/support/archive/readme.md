@@ -9,7 +9,8 @@
 
 | 文档 | 归档原因 |
 | --- | --- |
-| [重构前架构基线](./architecture-before-harness-v2.md) | 2026-09-09 按文档整理决策归档，保留当时实际实现；后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md) |
+| [可插拔 Harness PRD](./pluggable-harness-prd/README.md) | 原计划、任务、评审、进度与 E2E 规划已完成历史职责；后续统一执行依据为 [R-Code v1 PRD](../../prd/r-code-v1/index.md) |
+| [重构前架构基线](./architecture-before-pluggable-harness.md) | 2026-09-09 按文档整理决策归档，保留当时实际实现；后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md) |
 | [DeepSeek 前缀缓存 PRD](./deepseek-prefix-cache.md) | 分阶段方案已实施并完成主要验收，保留设计与例外记录 |
 | [DeepSeek 缓存基线](./deepseek-cache-baseline.md) | 一次性真实 API 测量已完成，保留发布门槛证据 |
 | [DeepSeek Harness 可借鉴性评估](./deepseek-harness.md) | 调研与差距分析已完成，相关能力已落地 |
@@ -44,7 +45,7 @@
 
 | 旧位置 | 归档位置 | 说明 |
 | --- | --- | --- |
-| `docs/architecture.md` | [architecture-before-harness-v2.md](./architecture-before-harness-v2.md) | 旧实现参考；归档不表示新架构已经落地 |
-| `docs/tui-v2/` | [tui-v2/](./tui-v2/) | 调研、决策、PRD、freeze、原型和基准报告一并保留；原有未提交内容随文件移动 |
+| `docs/architecture.md` | [architecture-before-pluggable-harness.md](./architecture-before-pluggable-harness.md) | 旧实现参考；归档不表示新架构已经落地 |
+| `docs/tui-v1/` | [tui-v1/](./tui-v1/) | 调研、决策、PRD、freeze、原型和基准报告一并保留；原有未提交内容随文件移动 |
 
-TUI 冻结正文和历史报告不因移动而重算或覆盖。代码／旧文档中的历史路径按本表解释；活跃脚本已改为读取归档位置，新生成的 inline 基准报告写入 `artifacts/metrics/tui-v2/`。
+TUI 冻结正文和历史报告不因移动而重算或覆盖。代码／旧文档中的历史路径按本表解释；活跃脚本已改为读取归档位置，新生成的 inline 基准报告写入 `artifacts/metrics/tui-v1/`。

@@ -55,11 +55,11 @@ The normal desktop application is not three permanently separate processes. The 
 | Renderer | `src-tauri/frontend/` | React scenes, Zustand state, typed Tauri IPC |
 | Shared contracts | `vendor/agent-contracts/` | required `agent-*` contract crates Git submodule |
 
-JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See the [implementation baseline](./docs/support/archive/architecture-before-harness-v2.md) for the full model and diagrams. The [pluggable Harness refactor plan](./docs/prd/pluggable-harness/plan.md) describes the next architecture; its product changes have not been implemented yet.
+JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See the [implementation baseline](./docs/support/archive/architecture-before-pluggable-harness.md) for the full model and diagrams. The [pluggable Harness refactor plan](./docs/prd/pluggable-harness/plan.md) describes the next architecture; its product changes have not been implemented yet.
 
 ## Development
 
-Prerequisites: Git, stable Rust, Node.js 20, and the platform dependencies required by Tauri 2. Windows additionally needs Visual Studio Build Tools 2022 and WebView2 Runtime. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for macOS and Linux.
+Prerequisites: Git, stable Rust, Node.js 20, and the platform dependencies required by Tauri 2. Windows additionally needs Visual Studio Build Tools 2022 and WebView2 Runtime. See [Tauri prerequisites](https://v1.tauri.app/start/prerequisites/) for macOS and Linux.
 
 ```powershell
 # Windows: verify the Tauri CLI, agent-contracts submodule, and npm dependencies, then start
@@ -218,7 +218,7 @@ r-code/
 - [Support](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
 - [Pluggable Harness refactor plan](./docs/prd/pluggable-harness/plan.md)
-- [Implementation architecture baseline](./docs/support/archive/architecture-before-harness-v2.md)
+- [Implementation architecture baseline](./docs/support/archive/architecture-before-pluggable-harness.md)
 - [Plan mode and enhanced review](./docs/support/guides/plan-mode.en.md)
 - [Web tools and MCP](./docs/support/guides/mcp.md)
 - [Evolving memory](./docs/support/guides/memory.md)

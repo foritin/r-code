@@ -96,6 +96,41 @@ fn candidate_ids_track_content_not_timestamps() {
 }
 
 #[test]
+fn run_workspace_snapshot_uses_canonical_root_and_fresh_content_baseline() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("project");
+    std::fs::create_dir_all(&root).expect("dir");
+    std::fs::write(root.join("a.txt"), b"before").expect("write");
+    let non_canonical = root.join("nested").join("..");
+    std::fs::create_dir_all(root.join("nested")).expect("nested dir");
+
+    let binding =
+        TaskWorkspaceBinding::bind_local("task-1", &non_canonical, &[]).expect("canonical bind");
+    let first = binding.snapshot_ref().expect("first snapshot");
+    assert_eq!(
+        std::path::PathBuf::from(&first.canonical_root),
+        std::fs::canonicalize(&root).expect("canonical root")
+    );
+    assert!(first.workspace_identity.starts_with("sha256:"));
+
+    std::fs::write(root.join("a.txt"), b"after").expect("edit workspace");
+    let second = binding.snapshot_ref().expect("second snapshot");
+    assert_eq!(first.workspace_identity, second.workspace_identity);
+    assert_ne!(
+        first.baseline_sha256, second.baseline_sha256,
+        "one checkout keeps its physical identity but each run captures a fresh content baseline"
+    );
+}
+
+#[test]
+fn unbound_workspace_identity_is_explicitly_read_only() {
+    let snapshot = TaskWorkspaceBinding::unbound_read_only_snapshot();
+    assert_eq!(snapshot.canonical_root, "unbound://read-only");
+    assert_eq!(snapshot.workspace_identity, "unbound-read-only");
+    assert!(!snapshot.baseline_sha256.is_empty());
+}
+
+#[test]
 fn capture_live_consistency_detects_concurrent_edits() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("project");

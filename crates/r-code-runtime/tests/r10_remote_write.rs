@@ -15,14 +15,14 @@ use r_code_runtime::remote::listener::listen_pairing;
 use r_code_runtime::remote::pairing::PairingSessions;
 use r_code_runtime::remote::registry::{DeviceRegistry, ListenerConfig};
 use r_code_runtime::remote::tls::ensure_identity;
-use r_code_store::v2::V2Store;
+use r_code_store::v1::V1Store;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Real ApplicationService composition so sends go through the actual
 /// RunManager (queue semantics), plus the serve fixture harness.
 struct Fixture {
-    store: Arc<V2Store>,
+    store: Arc<V1Store>,
     endpoint_writer: RemoteEndpoint,
     endpoint_reader: RemoteEndpoint,
     service: Arc<r_code_runtime::application::ApplicationService>,
@@ -144,7 +144,7 @@ async fn fixture(tag: &str) -> Fixture {
         )
         .expect("compose"),
     );
-    let store = Arc::new(V2Store::open(&profile.database_path()).expect("store"));
+    let store = Arc::new(V1Store::open(&profile.database_path()).expect("store"));
     let seed = TaskState::new(TaskContract {
         task_id: "t1".into(),
         kind: TaskKind::Conversation,

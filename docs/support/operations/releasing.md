@@ -1,6 +1,6 @@
 # R-Code 发布手册
 
-本文是维护者从“准备版本”到“GitHub Release 可下载、客户端可更新”的唯一操作入口。架构背景见 [重构前实现基线](../archive/architecture-before-harness-v2.md)，后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md)，用户可见变化见根目录 [CHANGELOG.md](../../../CHANGELOG.md)。
+本文是维护者从“准备版本”到“GitHub Release 可下载、客户端可更新”的唯一操作入口。架构背景见 [重构前实现基线](../archive/architecture-before-pluggable-harness.md)，后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md)，用户可见变化见根目录 [CHANGELOG.md](../../../CHANGELOG.md)。
 
 ## 1. 发布链路
 

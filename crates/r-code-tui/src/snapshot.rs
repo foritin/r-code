@@ -1,8 +1,8 @@
-//! snapshot 权威 vs 事件瞬时（R-TUI-02 / M8-02.A2；T35 起事件源为 v2 journal）。
+//! snapshot 权威 vs 事件瞬时（R-TUI-02 / M8-02.A2；T35 起事件源为 v1 journal）。
 
 use crate::{TranscriptEvent, TranscriptRow, TuiState};
 
-/// 权威重建：从 v2 journal 投影（TranscriptEvent 序列）重建 transcript
+/// 权威重建：从 v1 journal 投影（TranscriptEvent 序列）重建 transcript
 /// （权威状态走守护进程 journal + 重建，渲染层不把事件流累积成领域状态副本）。
 pub fn rebuild_from_journal(events: &[TranscriptEvent]) -> Vec<TranscriptRow> {
     let mut state = TuiState::new();

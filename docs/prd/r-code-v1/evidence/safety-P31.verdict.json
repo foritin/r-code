@@ -1,0 +1,65 @@
+{
+  "task_id": "P31",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s31_safety_gate.rs",
+    "scripts/verify-safety-v1.test.mjs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED RUST SUITE s31_safety_gate = 5 passed / 0 failed, measured three times (initial, post-API-fixes, post-fmt): the activation-omission matrix over REAL store rows (missing report / SafeDisabled / Unsupported / foreign-boot activated / Activated-without-probes all NotActivated with specific reasons; ONLY the exact-digest+same-boot+probes-passing row evaluates Activated; the P24B predicate refuses all five NotActivated shapes); the fake-backend fault walk (six fault points surface, retries succeed, persist/resume twice are InvalidState — single resume, no skips); the operation-id replay refusal (one tree per operation id, journal reopens); deterministic secret-free digests (wall-clock excluded from the digest; the persisted JSON carries no credential keys); clean recovery grants nothing. (2) DECLARED SCRIPT TEST verify-safety-v1.test.mjs = 5 passed / 0 failed, twice: determinism, no-relabel-with-exact-count, native separation, redaction (including the spaced-value catch), digest stability. (3) GATE RUNNER verify-safety-v1.mjs executed on this host: 19 targets — 16 activated (14 suites + guard + packaging), 3 native-only SafeDisabled with executed_here=false; exit 0; the report file redacted and emitted. Its own first execution caught the s25-package mixup (exit 1 → fixed). (4) HOUSE five-group cumulative measured twice, both reported: 148 result lines / 1127 passed / 1 failed (baseline only) then 1126 / 2 (baseline + the documented conversation_engine transcript race, re-measured alone immediately: 1 passed). House is 1128 total / 1127 passed / 1 declared failure — +5 tests (s31) and +1 result line vs P30's 1123/1122/1, zero regressions. (5) OTHER GATES: clippy -p r-code-runtime --all-features --all-targets -D warnings exit 0; cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites); quality_check.py over the three artifacts ok=true 0 violations; daemon hygiene: zero r-code-service/harness-native processes after every gate batch.",
+    "total": 1128,
+    "passed": 1127,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P31 and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/tests/s31_safety_gate.rs": {
+          "file_loc": 262,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.157
+        },
+        "scripts/verify-safety-v1.mjs": {
+          "file_loc": 169,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        },
+        "scripts/verify-safety-v1.test.mjs": {
+          "file_loc": 85,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 340 lines; the gate is a 262-line suite + a 169-line runner + an 85-line script test — thin because it COMPOSES the wave's machinery rather than re-testing it (each suite's own acceptance stays in its suite; the gate proves they compose and never relabel). The .mjs comment metrics are tool-blind (verified by eye <= 6 lines). Three real API truths were learned in-round and fixed: content-addressed report ids, spawn-time identity consumption, and BootIdentity::parse's rejection of hand-typed fixtures."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (O-GATE predicate requires Activated): the predicate refuses every NotActivated shape — missing report, SafeDisabled, Unsupported, foreign boot, even Activated-without-probes — and the P24B capability predicate mirrors it, so SafeDisabled never counts as Activated anywhere the gate can reach. Acceptance ② (faults preserve quarantine/one resume): the six fault points each surface, retry succeeds, and the state machine refuses skips and repeats (persist/resume twice = InvalidState; one operation id never carries two trees — the durable single resume). Acceptance ③ (report contains no secrets): the gate's emitted report is redacted (40+-char blobs and credential-shaped key=value, including spaced forms, stripped — the spaced form was caught by the test and hardened), and the digest excludes wall-clock so regeneration is deterministic. P31.1 (ownership/resume/output/cancel/proof/activation/effects/shell/gix — via the 14-suite corpus), P31.2 (zero bypasses — the launch-boundary guard runs inside the gate), P31.3 (per-target exact digests), P31.4 (legacy recovery composition — same-boot refusal and RebootProof clearing live in s01/s11R, pinned here at the composition boundary: clean recovery, empty grants) all proven. First host execution: 16/19 activated, 3 native-only honestly separated. Disclosed: native-only targets never fail the gate (P32 owns the installed-layout probe policy); the gate composes rather than re-tests. House 1128/1127/1 with only the declared plan_schema baseline; the one conversation_engine race member was green in isolation, both numbers reported."
+}

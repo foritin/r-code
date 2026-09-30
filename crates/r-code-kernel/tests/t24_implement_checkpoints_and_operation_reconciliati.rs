@@ -188,10 +188,11 @@ fn indeterminate_effects_block_new_writes_behind_a_barrier() {
     }
 }
 
+#[allow(deprecated)]
 #[test]
-fn writer_barriers_round_trip_and_clear_only_when_proven() {
+fn writer_barriers_round_trip_and_deprecated_clear_never_bypasses_proof() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let store = r_code_store::v2::V2Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
+    let store = r_code_store::v1::V1Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
 
     store
         .save_writer_barrier("b1", "ws-1", 4242, "start-identity-9", "guardian lost")
@@ -208,16 +209,22 @@ fn writer_barriers_round_trip_and_clear_only_when_proven() {
     // Other workspaces unaffected.
     assert!(store.writer_barriers("ws-2").expect("query").is_empty());
 
-    // Clearing requires the specific barrier id (termination proven).
-    assert!(store.clear_writer_barrier("b1").expect("clear"));
-    assert!(!store.clear_writer_barrier("b1").expect("already cleared"));
-    assert_eq!(store.writer_barriers("ws-1").expect("query").len(), 1);
+    // The compatibility method carries no fenced proof, so it can never
+    // clear either an existing or unknown barrier.
+    assert!(!store.clear_writer_barrier("b1").expect("deprecated clear"));
+    assert!(!store
+        .clear_writer_barrier("missing")
+        .expect("unknown deprecated clear"));
+    let preserved = store.writer_barriers("ws-1").expect("query");
+    assert_eq!(preserved.len(), 2);
+    assert!(preserved.iter().any(|(id, ..)| id == "b1"));
+    assert!(preserved.iter().any(|(id, ..)| id == "b2"));
 }
 
 #[test]
 fn store_reconciles_attempt_receipts_and_plugin_availability() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let store = r_code_store::v2::V2Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
+    let store = r_code_store::v1::V1Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
 
     // Save receipts through the JournalStore port, read the attempt view.
     use r_code_kernel::ports::JournalStore;
@@ -260,7 +267,7 @@ fn store_reconciles_attempt_receipts_and_plugin_availability() {
         .attempt_plugin_available("example.harness", "sha-x")
         .expect("available"));
     store
-        .register_plugin(&r_code_store::v2::PluginCatalogRecord {
+        .register_plugin(&r_code_store::v1::PluginCatalogRecord {
             id: "example.harness".into(),
             version: "1.0.0".into(),
             content_digest: "sha-x".into(),

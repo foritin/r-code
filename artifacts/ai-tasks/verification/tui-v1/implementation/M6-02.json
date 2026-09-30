@@ -1,0 +1,59 @@
+{
+  "schema_version": "tui-v1-verification.v1",
+  "scope": "task",
+  "scope_id": "M6-02",
+  "profile": "implementation",
+  "generated_at": "2026-09-02T13:55:48.012Z",
+  "started_at": "2026-09-02T13:55:45.713Z",
+  "finished_at": "2026-09-02T13:55:48.012Z",
+  "duration_ms": 2299,
+  "revision": "6090c230af5cf74f4915e93cdcf2c6925f20173b",
+  "worktree_digest": "c696ce2dbbafa568cdb295fe64873bf4bf25d88af4563a29e3badaac724cea88",
+  "worktree_dirty": true,
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  },
+  "assertions": [
+    {
+      "id": "M6-02.A1",
+      "description": "/new 新建空会话（默认标题）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-02"
+    },
+    {
+      "id": "M6-02.A2",
+      "description": "/rename 持久化（task_detail 读回一致）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-02"
+    },
+    {
+      "id": "M6-02.A3",
+      "description": "/compact 支持断言（2026-09-03 G5 接线宿主 task_compact_context，显式压缩可用）",
+      "required": true,
+      "status": "passed",
+      "details": {
+        "exitCode": 0
+      },
+      "task": "M6-02"
+    }
+  ],
+  "failed_assertions": [],
+  "evidence_index": [
+    {
+      "task": "M6-02",
+      "evidence": "artifacts\\ai-tasks\\evidence\\tui-v1\\M6-02.yaml",
+      "exists": true
+    }
+  ],
+  "exit_code": 0
+}

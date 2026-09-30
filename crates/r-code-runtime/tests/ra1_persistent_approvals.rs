@@ -11,13 +11,13 @@ use r_code_kernel::task::{TaskContract, TaskKind, TaskState};
 use r_code_kernel::testing::{FakeModelService, FakeProcessService, FakeToolService};
 use r_code_runtime::plugins::approval_store::{DecideError, EVENT_DECIDED, EVENT_REQUESTED};
 use r_code_runtime::plugins::{ApprovalStore, HostRouter, IgnoreQuestions};
-use r_code_store::v2::V2Store;
+use r_code_store::v1::V1Store;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
-async fn seeded_store(dir: &TempDir, task_id: &str) -> Arc<V2Store> {
-    let store = Arc::new(V2Store::open(&dir.path().join("journal.db")).expect("open store"));
+async fn seeded_store(dir: &TempDir, task_id: &str) -> Arc<V1Store> {
+    let store = Arc::new(V1Store::open(&dir.path().join("journal.db")).expect("open store"));
     let task = TaskState::new(TaskContract {
         task_id: task_id.to_string(),
         kind: TaskKind::Conversation,
@@ -31,7 +31,7 @@ async fn seeded_store(dir: &TempDir, task_id: &str) -> Arc<V2Store> {
 }
 
 /// Router over the real journal, sharing the given approval store.
-fn approval_router(store: Arc<V2Store>, approvals: Arc<ApprovalStore>) -> Arc<HostRouter> {
+fn approval_router(store: Arc<V1Store>, approvals: Arc<ApprovalStore>) -> Arc<HostRouter> {
     Arc::new(
         HostRouter::new(
             RunIdentity {
@@ -143,7 +143,7 @@ async fn ra1_a2_pending_ops_rebuild_from_journal_after_restart() {
         // "Daemon dies" before any decision: only the journal survives.
     }
     // Fresh store + fresh ApprovalStore over the same database file.
-    let store = Arc::new(V2Store::open(&dir.path().join("journal.db")).expect("reopen"));
+    let store = Arc::new(V1Store::open(&dir.path().join("journal.db")).expect("reopen"));
     let rebuilt = ApprovalStore::new(store.clone(), Duration::from_secs(300));
     let journal = store.read_events(0, u32::MAX).await;
     rebuilt.rebuild_from_events(&journal).await;

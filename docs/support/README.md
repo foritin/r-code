@@ -21,9 +21,9 @@
 
 实现取证与历史方案：
 
-- [重构前架构基线](./archive/architecture-before-harness-v2.md)
+- [重构前架构基线](./archive/architecture-before-pluggable-harness.md)
 - [Pi 对齐 + TUI 历史方案](./archive/pi-alignment/pi-alignment-and-tui-prd.md)
-- [TUI v2 历史方案与原型](./archive/tui-v2/)
+- [TUI v1 历史方案与原型](./archive/tui-v1/)
 
 ## 旧路径迁移
 
@@ -38,10 +38,10 @@
 | `docs/windows-command-reliability-*` | `docs/support/contracts/windows-command-reliability-*` |
 | `docs/ui/**` | `docs/support/ui-reference/legacy/**` |
 | `docs/archive/**` | `docs/support/archive/**` |
-| `docs/architecture.md` | `docs/support/archive/architecture-before-harness-v2.md` |
-| `docs/tui-v2/**` | `docs/support/archive/tui-v2/**` |
+| `docs/architecture.md` | `docs/support/archive/architecture-before-pluggable-harness.md` |
+| `docs/tui-v1/**` | `docs/support/archive/tui-v1/**` |
 
-2026-09-09 的顶层整理保留了归档前的未提交内容。旧 TUI PRD 的规范／任务正文、digest、完成状态和历史 evidence 路径不改写；freeze 仅调整位置元数据。新基准运行写入 `artifacts/metrics/tui-v2/`，不覆盖归档报告。
+2026-09-09 的顶层整理保留了归档前的未提交内容。旧 TUI PRD 的规范／任务正文、digest、完成状态和历史 evidence 路径不改写；freeze 仅调整位置元数据。新基准运行写入 `artifacts/metrics/tui-v1/`，不覆盖归档报告。
 
 OCR 单测原来从 `docs/ui` 编译图片。该资产已按相同字节和 SHA-256 `10177db7cd6bb1265c95c66518385c50910d53e9d0cd94fea95ca7ed2d8723aa` 独立到 `fixtures/windows-ocr/deepseek-model-configuration-dark.png`，文档整理不再决定测试能否编译。
 

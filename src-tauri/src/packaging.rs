@@ -459,3 +459,71 @@ mod tests {
         assert!(entries.iter().any(|e| e.name == "r-code-core"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// P32 — installed helper smoke/digest. The release policy inspects the
+// FINAL package layout: the two safety sidecars must be present beside the
+// daemon with native magic, and their digests are recorded so a tampered
+// or substituted helper fails the policy instead of shipping.
+// ---------------------------------------------------------------------------
+
+/// One verified installed helper.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InstalledHelper {
+    pub name: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// The safety helpers an installed layout must carry.
+pub const INSTALLED_SAFETY_HELPERS: &[&str] = &["r-code-process-guardian", "r-code-safety-probe"];
+
+/// Verify the installed safety helpers in one layout directory: every
+/// helper present as a regular file with native executable magic, and its
+/// sha256 recorded. Missing or tampered entries are refusals — the release
+/// policy treats an `Err` as a hard failure.
+pub fn verify_installed_helpers(
+    dir: &std::path::Path,
+) -> Result<Vec<InstalledHelper>, ProductError> {
+    use sha2::Digest as _;
+    let mut verified = Vec::new();
+    for name in INSTALLED_SAFETY_HELPERS {
+        let file = dir.join(format!("{name}{}", if cfg!(windows) { ".exe" } else { "" }));
+        let bytes = std::fs::read(&file).map_err(|error| {
+            ProductError::Other(format!(
+                "installed helper {name} is missing from {}: {error}",
+                dir.display()
+            ))
+        })?;
+        if bytes.len() < 64 * 1024 {
+            return Err(ProductError::Other(format!(
+                "installed helper {name} is only {} bytes — tampered or truncated",
+                bytes.len()
+            )));
+        }
+        let native = if cfg!(windows) {
+            bytes.starts_with(b"MZ")
+        } else if cfg!(target_os = "linux") {
+            bytes[..5] == [0x7f, b'E', b'L', b'F']
+        } else {
+            true // macOS: Mach-O variants — the packaging pipeline signs; magic check stays permissive
+        };
+        if !native {
+            return Err(ProductError::Other(format!(
+                "installed helper {name} does not carry native executable magic"
+            )));
+        }
+        let digest = sha2::Sha256::digest(&bytes);
+        let mut sha256 = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(sha256, "{byte:02x}");
+        }
+        verified.push(InstalledHelper {
+            name: (*name).to_string(),
+            bytes: bytes.len() as u64,
+            sha256,
+        });
+    }
+    Ok(verified)
+}

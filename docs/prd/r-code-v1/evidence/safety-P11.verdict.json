@@ -1,0 +1,62 @@
+{
+  "task_id": "P11",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s11_macos_tree_proof.rs",
+    "crates/r-code-runtime/tests/s05_supervisor_faults.rs"
+  ],
+  "tests": {
+    "command": "PLATFORM DISCIPLINE (task contract: Windows dev host + native macOS CI; no WSL, no cross-target): s11 is #![cfg(target_os = \"macos\")] with 13 authored tests (real adversarial fixtures through the REAL spawn path, no mocks: double-fork escapee re-parented to launchd classifies Escaped with its exact pid, never SnapshotReachable-as-contained; live strict descendants enumerate identity-checked and classify SnapshotReachable as diagnostics-only; best-effort sweep signals exactly the live strict descendants and spares the root; stale-snapshot sweep after full death+reaping signals NOTHING — PID-reuse fence; recycled root start-tuple classifies Unverifiable; None-enumeration classifies Unverifiable and snapshot excludes pid 0/1; supervisor surface: WriteCapable on macOS refused Err(SafeDisabled(\"macos-no-kernel-tree-containment\")) before any spawn with recover() handing back terminal SafeDisabled rev 2 and never a TerminationProofRecord; SafeDisabled unquarantinable and CAS-immutable; NoWorkspaceDiagnostics delegates to Running; static-classifier and verdict-enum source pins) — parse-verified on Windows via cargo check --tests, EXECUTES ONLY in native macOS CI, never claimed as run locally; the macos.rs unit tests (4 from P10 + 5 new in P11) are likewise macOS-CI-only and uncounted. Iteration 1 locally executed the FULL cumulative gates green at the kept baseline (raw test-result sums, single-threaded): focused s00-s07 67/67; full Runtime --tests 386/386 (lib 72/72; s08/s10/s11 empty on Windows); Kernel 75/75; Store 323/324 with the single failure being the declared pre-existing plan_schema migration-count baseline (expects 18, schema at 35, P11 touched no store code); harness-protocol+harness-sdk 33/33; codex plugin 13/13; workspace --no-run/check/clippy -D warnings/fmt --check; quality_check ok. Iteration 2 was a comment-only diff inside the cfg(target_os = \"macos\") file Windows never compiles (the macos.rs:193-200 enumeration doc comment reworded to drop the pinned token; grep-verified ZERO occurrences of KERN_PROC_ALL, libc::sysctl, libc::kinfo_proc and /proc/ in macos.rs, with both s10 positive pins intact: libc::proc_pidinfo :112, libc::PROC_PIDTBSDINFO :114), so per the P10 iteration-2 precedent only the relevant subset re-ran: lib 72/72; s05_supervisor_faults 12/12 (the QA mechanical write_disabled: None fix holds) with s10_macos_spawn compiled empty on Windows (0 tests, parse gate only); clippy -p r-code-runtime --all-targets -D warnings green; cargo fmt --all -- --check green; quality_check ok on macos.rs + process_supervisor.rs.",
+    "total": 831,
+    "passed": 830,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline: migration-count assertion expects 18, schema now at 35; P11 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/process_guard/macos.rs": {
+          "file_loc": 1282,
+          "max_comment_block": 12,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.302,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/process_supervisor.rs": {
+          "file_loc": 2001,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.052,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "P11 iteration 2 passes the keep gate under the platform verification discipline (Windows dev host + native macOS CI; no WSL, no cross-target). P11 delivers macOS descendant DIAGNOSTICS, never a tree-death proof: enumeration via proc_listallpids into a plain pid array with per-pid PROC_PIDTBSDINFO identity (zero hand-computed struct offsets — kinfo_proc is absent from the libc 0.2.189 apple bindings, verified against vendored source), a pure MacosContainmentVerdict state machine (SnapshotReachable diagnostics-only / Escaped / Unverifiable), best-effort termination with a live re-probe PID-reuse fence before every signal and the root never signalled, and the supervisor-side write-SafeDisabled surface (cfg!-static ExecutionWriteProfile classifier; start_with_write_profile durably refuses WriteCapable on macOS before any spawn; terminal SupervisorPhase::SafeDisabled with an immutable write_disabled record and no TerminationProofRecord ever issued). The single iteration-1 defect — the literal token KERN_PROC_ALL in the enumeration doc comment tripping s10's strengthen-only source pin in native macOS CI — is resolved by the Engineer's comment-only reword (\"the sysctl all-procs table walk\"; grep confirms all four pinned tokens absent and both positive pins present); iteration 1 content, tests and the 830/831 kept baseline (declared plan_schema migration-count failure only) are unchanged, with s11 (13 tests) and the macos.rs unit tests executing only in native macOS CI and never counted as locally run."
+}

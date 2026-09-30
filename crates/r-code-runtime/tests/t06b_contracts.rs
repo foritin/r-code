@@ -50,7 +50,7 @@ fn spawn_daemon(profile: &RuntimeProfile) -> Child {
 
 fn wait_for_owner(profile: &RuntimeProfile) -> r_code_client::DaemonInfo {
     for _ in 0..80 {
-        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v2_root()) {
+        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v1_root()) {
             return info;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -66,6 +66,31 @@ fn run<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
+async fn connect_ready(
+    profile: &RuntimeProfile,
+    token: &str,
+    client_id: &str,
+) -> Result<DaemonClient, r_code_client::ClientError> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match DaemonClient::connect(
+            &profile.ipc_endpoint(),
+            &profile.profile_id(),
+            token,
+            client_id,
+        )
+        .await
+        {
+            Err(r_code_client::ClientError::Unreachable(_))
+                if tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 #[test]
 fn effects_occur_once_across_lost_replies_and_reconnects() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -74,7 +99,7 @@ fn effects_occur_once_across_lost_replies_and_reconnects() {
     let info = wait_for_owner(&profile);
 
     // The outbox records the command BEFORE the first transmission.
-    let mut outbox = Outbox::open(&profile.harness_v2_root(), "client-a").expect("outbox");
+    let mut outbox = Outbox::open(&profile.harness_v1_root(), "client-a").expect("outbox");
     outbox
         .prepare("bump-1", "counter.bump", serde_json::json!({}))
         .expect("prepare");
@@ -82,14 +107,9 @@ fn effects_occur_once_across_lost_replies_and_reconnects() {
 
     // First transmission: the effect runs and the reply arrives.
     run(async {
-        let mut client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-a",
-        )
-        .await
-        .expect("connect");
+        let mut client = connect_ready(&profile, &info.token, "client-a")
+            .await
+            .expect("connect");
         let result = client
             .call_with_id("counter.bump", serde_json::json!({}), "bump-1")
             .await
@@ -107,14 +127,9 @@ fn effects_occur_once_across_lost_replies_and_reconnects() {
     // Reconnect and replay the same command id (as a client would after a
     // lost reply): the stored result replays, the counter does not move.
     run(async {
-        let mut client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-a",
-        )
-        .await
-        .expect("reconnect");
+        let mut client = connect_ready(&profile, &info.token, "client-a")
+            .await
+            .expect("reconnect");
         let replayed = client
             .call_with_id("counter.bump", serde_json::json!({}), "bump-1")
             .await
@@ -137,14 +152,9 @@ fn reused_command_id_with_different_payload_fails() {
     let info = wait_for_owner(&profile);
 
     run(async {
-        let mut client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-b",
-        )
-        .await
-        .expect("connect");
+        let mut client = connect_ready(&profile, &info.token, "client-b")
+            .await
+            .expect("connect");
         let first = client
             .call_with_id(methods::ECHO, serde_json::json!({"value": 1}), "echo-1")
             .await
@@ -176,14 +186,9 @@ fn receipts_survive_a_daemon_restart() {
     let mut first = spawn_daemon(&profile);
     let info = wait_for_owner(&profile);
     run(async {
-        let mut client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-c",
-        )
-        .await
-        .expect("connect");
+        let mut client = connect_ready(&profile, &info.token, "client-c")
+            .await
+            .expect("connect");
         let result = client
             .call_with_id("counter.bump", serde_json::json!({}), "bump-restart")
             .await
@@ -198,7 +203,7 @@ fn receipts_survive_a_daemon_restart() {
     let successor = DaemonGuard(spawn_daemon(&profile));
     let mut successor_info = None;
     for _ in 0..80 {
-        if let Some(candidate) = r_code_client::read_owner_token(&profile.harness_v2_root()) {
+        if let Some(candidate) = r_code_client::read_owner_token(&profile.harness_v1_root()) {
             if candidate.nonce != info.nonce {
                 successor_info = Some(candidate);
                 break;
@@ -208,14 +213,9 @@ fn receipts_survive_a_daemon_restart() {
     }
     let successor_info = successor_info.expect("successor never took over");
     run(async {
-        let mut client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &successor_info.token,
-            "client-c",
-        )
-        .await
-        .expect("reconnect");
+        let mut client = connect_ready(&profile, &successor_info.token, "client-c")
+            .await
+            .expect("reconnect");
         let replayed = client
             .call_with_id("counter.bump", serde_json::json!({}), "bump-restart")
             .await

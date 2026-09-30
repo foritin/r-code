@@ -1,0 +1,70 @@
+{
+  "task_id": "P28",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s28_shell_gate.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED SUITE s28_shell_gate = 5 passed / 0 failed, measured three times (initial, post-tightening, post-fmt): offline_default_shell_is_exact_durable_and_never_spawns (a workspace-mutation offline unit gets the discoverable exact surface; the call returns the honest SafeDisabled refusal carrying inputHash and the offline ceiling; the receipt is durable with the SafeDisabled reason; the replay returns the recorded outcome without re-deciding; a DIFFERENT spec under the same operation key is refused as guessed/stale); unexposed_shell_denies_every_call (an uninjected authority keeps the tool off the list and denies every call); authority_resolution_is_exact_and_settings_free (the full pure matrix: read-only NEVER carries shell authority offline or networked, HostNetwork refused for everyone, networked-without-approval refused, a different-class approval refused, exactly (workspace-mutation, public-internet-client) approves — a pure function whose only inputs are the frozen class/ceiling/approval triple); run_manager_surface_follows_the_exact_six_column_lookup (on a real store: PublicInternetClient hidden without the approval, exposed by the exact active approval, hidden again by supersede — stale authority is no authority); approved_networked_shell_is_durable_and_still_refuses_to_spawn (the approved surface refuses the spawn with the exact ceiling in the audit and a 64-hex receipt). The first full house run caught a REAL DEFECT — the resolver returned OfflineExact for read-only units, leaking the shell descriptor into m03's tool-list pin (shell must never appear there); the read-only refusal moved before the offline arm, the resolver and pins tightened, m03 untouched and green. (2) HOUSE five-group cumulative measured THREE times, all reported: 145 result lines / 1112 passed / 3 failed (baseline + the deterministic m03 leak above + the documented conversation_engine transcript race, re-measured alone: 10 passed), then 145 / 1114 / 1 and 145 / 1114 / 1 on the fixed code (baseline only, zero flake). House is 1115 total / 1114 passed / 1 declared failure — +5 tests (s28) and +1 result line vs P27's 1110/1109/1, zero regressions. (3) OTHER GATES: clippy -p r-code-runtime --all-features --all-targets -D warnings exit 0; cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites — the shell surface spawns nothing); quality_check.py over the four changed files ok=true 0 violations; daemon hygiene: zero r-code-service/harness-native processes after every gate batch.",
+    "total": 1115,
+    "passed": 1114,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P28 and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/tools.rs": {
+          "file_loc": 571,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.128
+        },
+        "crates/r-code-runtime/src/services/authorization.rs": {
+          "file_loc": 795,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.126
+        },
+        "crates/r-code-runtime/src/run_manager.rs": {
+          "file_loc": 2493,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.059
+        },
+        "crates/r-code-runtime/tests/s28_shell_gate.rs": {
+          "file_loc": 404,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.114
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 340 lines; ~165 production lines landed (the P19A approval store and the P27/P26A machinery carry most of the weight — this task is the thin exact gate on top) plus a 404-line suite. The resolver is pure and total; the shell arm reads linearly; run_manager sits at 2493 code loc — 107 under the file gate, the next pressure point after application.rs. max_func_loc/max_nesting null for .rs as always; reviewed by eye — the largest function (shell_call) is ~75 lines, nesting <= 4."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (no mutable/global authority): the surface resolves ONLY from the frozen wire WorkUnit's effect class + network ceiling and ONE six-column exact effect-approval lookup (supersede flips it off — pinned); the resolver is a pure three-parameter function that never touches settings; the tool is undiscoverable and refused without the injected authority. Acceptance ② (Offline default/network exact): Offline needs no proof for effect-capable units; read-only units carry NO shell authority (offline or not — a shell spawns local effects); HostNetwork is refused for everyone; PublicInternetClient requires exactly (class, ceiling) with class mismatch separately refused. Acceptance ③ (all local effects durable): the canonical spec hash, the exact ceiling and the honest refusal land in the operation receipts — a replay returns the recorded outcome without re-deciding and a different spec under the same key is refused; the receipt survives reopening. P28.1 (hash command/argv/cwd/env/profile) — the canonical five-field + ceiling hash; P28.2 (exact ceiling selection) — the pure resolver; P28.3 (separate network audit + repo-exclusive envelope) — the network ceiling is matched per-column in the store lookup and again in the resolver, and the envelope wiring belongs to P24B's activation of the spawn arm. Disclosed: the shell surface never spawns this wave — the exact-approved call honestly refuses SafeDisabled (no sandbox backend; INV-07), which is the durable, auditable shape of 'exact-approved sandboxed Shell' before activation; the m03 leak the first house run caught was fixed in the resolver, not in m03's pin. House 1115/1114/1 with only the declared plan_schema baseline."
+}

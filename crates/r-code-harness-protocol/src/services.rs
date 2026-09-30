@@ -157,6 +157,7 @@ pub struct HarnessCancelResult {
 #[serde(rename_all = "kebab-case")]
 pub enum ModelRole {
     System,
+    Developer,
     User,
     Assistant,
     Tool,
@@ -308,6 +309,10 @@ pub struct ToolsListReply {
 pub struct ToolCallRequest {
     pub tool: String,
     pub input: serde_json::Value,
+    /// Attempt-stable identity for effect reconciliation. Older SDKs place
+    /// this alongside `tool` and `input`; serde maps that outer field here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_key: Option<crate::OperationKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -326,8 +331,14 @@ pub struct ToolCallError {
 }
 
 // ---------------------------------------------------------------------------
-// Managed processes (host.process.open / write / close)
+// Managed processes (host.process.open / read / write / close)
 // ---------------------------------------------------------------------------
+
+/// Maximum decoded stdout/stderr bytes returned by one process read page.
+/// The bound leaves room for base64 and JSON framing below `MAX_FRAME_BYTES`.
+pub const PROCESS_READ_MAX_BYTES: u32 = 256 * 1024;
+/// Maximum long-poll duration accepted by `host.process.read`.
+pub const PROCESS_READ_MAX_WAIT_MS: u32 = 30_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessOpenRequest {
@@ -346,6 +357,80 @@ pub struct ProcessOpenRequest {
 pub struct ProcessOpenReply {
     /// Run-scoped handle; rejected when used on another run.
     pub handle: String,
+}
+
+/// Non-destructive cursor read over the process's globally ordered output log.
+/// Repeating a cursor against the same current log returns the same bounded
+/// page. Delivery is at-least-once; clients deduplicate by frame `sequence`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessReadRequest {
+    pub handle: String,
+    pub cursor: u64,
+    pub max_bytes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessOutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// One entry in the process's global append-only output/terminal log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ProcessOutputFrame {
+    Data {
+        sequence: u64,
+        stream: ProcessOutputStream,
+        #[serde(rename = "dataBase64")]
+        data_base64: String,
+    },
+    Eof {
+        sequence: u64,
+        stream: ProcessOutputStream,
+    },
+    Exit {
+        sequence: u64,
+        #[serde(
+            rename = "exitCode",
+            deserialize_with = "deserialize_required_nullable_i32"
+        )]
+        exit_code: Option<i32>,
+    },
+}
+
+fn deserialize_required_nullable_i32<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<i32>::deserialize(deserializer)
+}
+
+impl ProcessOutputFrame {
+    pub fn sequence(&self) -> u64 {
+        match self {
+            Self::Data { sequence, .. }
+            | Self::Eof { sequence, .. }
+            | Self::Exit { sequence, .. } => *sequence,
+        }
+    }
+}
+
+/// Bounded page from the append-only process log. `next_cursor` is exactly
+/// one past the last returned sequence (or unchanged for an empty page), so
+/// advancing it never creates a gap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessReadReply {
+    pub frames: Vec<ProcessOutputFrame>,
+    pub next_cursor: u64,
+    pub terminal: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -436,12 +521,169 @@ pub struct WorkUnitWire {
     /// Check-definition ids this unit is accepted by.
     #[serde(default)]
     pub acceptance: Vec<String>,
+    /// Canonical workspace-relative paths this unit may observe.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_paths: Vec<String>,
+    /// Canonical workspace-relative paths this unit may mutate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_paths: Vec<String>,
+    /// Whether effects require exclusive ownership of the whole repository.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repo_exclusive: bool,
+    /// Run-owned roots which must start empty. Execution is host-owned.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ephemeral_roots: Vec<String>,
+    /// P19A (API v1.2): the effect authority class of this unit. The
+    /// serde default is the CONSERVATIVE ReadOnly — an old 1.0/1.1 plan
+    /// that omits the field carries no effect authority. A v1.2 package
+    /// emitting anything stronger requires apiMinor >= 2.
+    #[serde(default, skip_serializing_if = "WorkUnitEffectClass::is_read_only")]
+    pub effect_class: WorkUnitEffectClass,
+    /// P19A (API v1.2): the network ceiling this unit may use. The
+    /// default Offline is the conservative floor; PublicInternetClient
+    /// requires an exact persisted effect approval before snapshot
+    /// expansion, and HostNetwork is platform-refused in v1.
+    #[serde(default, skip_serializing_if = "NetworkCeiling::is_offline")]
+    pub network_ceiling: NetworkCeiling,
+}
+
+/// The effect authority a WorkUnit carries (P19A.1). Classes are ordered:
+/// a stronger class never satisfies an approval recorded for a weaker
+/// one (the store's exact-match rule enforces this).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkUnitEffectClass {
+    #[default]
+    ReadOnly,
+    WorkspaceMutation,
+    DependencyPreparation,
+}
+
+impl WorkUnitEffectClass {
+    pub fn is_read_only(&self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceMutation => "workspace-mutation",
+            Self::DependencyPreparation => "dependency-preparation",
+        }
+    }
+}
+
+/// The network ceiling a WorkUnit may open (P19A.1). Offline is the
+/// floor; PublicInternetClient is outbound-client-only; HostNetwork is
+/// the full host stack and is platform-incompatible in v1 (a plan
+/// carrying it fails expansion).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkCeiling {
+    #[default]
+    Offline,
+    PublicInternetClient,
+    HostNetwork,
+}
+
+impl NetworkCeiling {
+    pub fn is_offline(&self) -> bool {
+        matches!(self, Self::Offline)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Offline => "offline",
+            Self::PublicInternetClient => "public-internet-client",
+            Self::HostNetwork => "host-network",
+        }
+    }
+}
+
+/// P19A: the canonical payload hash of one WorkUnit's effect authority
+/// material — the exact bytes an effect approval commits. Stored
+/// approvals and snapshot expansion MUST derive this identically.
+pub fn work_unit_payload_hash(unit: &WorkUnitWire) -> String {
+    crate::canonical_input_hash(&serde_json::json!({
+        "id": unit.id,
+        "dependencies": unit.dependencies,
+        "readPaths": unit.read_paths,
+        "writePaths": unit.write_paths,
+        "repoExclusive": unit.repo_exclusive,
+        "ephemeralRoots": unit.ephemeral_roots,
+        "effectClass": unit.effect_class.as_str(),
+        "networkCeiling": unit.network_ceiling.as_str(),
+    }))
+}
+
+/// Failure to turn a wire path into a canonical workspace-relative path.
+///
+/// The variants intentionally carry no input text so paths or secrets cannot
+/// be echoed into logs by validation failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum WorkspacePathError {
+    #[error("workspace path is empty")]
+    Empty,
+    #[error("workspace path contains a NUL byte")]
+    Nul,
+    #[error("workspace path must be relative")]
+    Absolute,
+    #[error("workspace path contains parent traversal")]
+    ParentTraversal,
+    #[error("workspace path addresses git metadata")]
+    GitMetadata,
+}
+
+/// Normalize a logical path shared by plans, leases and workspace guards.
+///
+/// This is deliberately lexical: physical containment is checked separately
+/// by the workspace service immediately before an effect is attempted.
+pub fn normalize_workspace_relative_path(value: &str) -> Result<String, WorkspacePathError> {
+    if value.is_empty() {
+        return Err(WorkspacePathError::Empty);
+    }
+    if value.as_bytes().contains(&0) {
+        return Err(WorkspacePathError::Nul);
+    }
+    let slash_path = value.replace('\\', "/");
+    let bytes = slash_path.as_bytes();
+    if slash_path.starts_with('/')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    {
+        return Err(WorkspacePathError::Absolute);
+    }
+
+    let mut components = Vec::new();
+    for component in slash_path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => return Err(WorkspacePathError::ParentTraversal),
+            value if value.eq_ignore_ascii_case(".git") => {
+                return Err(WorkspacePathError::GitMetadata);
+            }
+            value => components.push(value),
+        }
+    }
+    if components.is_empty() {
+        return Err(WorkspacePathError::Empty);
+    }
+    Ok(components.join("/"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanPublishRequest {
     pub revision: u64,
     pub work_units: Vec<WorkUnitWire>,
+}
+
+/// Host-confirmed identity of the immutable plan revision that was
+/// published. The wire keeps the existing camelCase field while Rust callers
+/// use the explicit `revision_hash` name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanPublishReply {
+    pub revision: u64,
+    pub revision_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -22,8 +22,9 @@ pub mod control_door;
 pub mod event_coalesce;
 pub mod feature_flags;
 pub mod fs_util;
-pub mod harness_v2;
-pub mod harness_v2_chat;
+pub mod harness_v1;
+pub mod harness_v1_chat;
+mod harness_v1_routes;
 pub mod ipc;
 pub mod legacy_memory;
 pub mod lifecycle_commands;
@@ -98,6 +99,18 @@ pub use workflow_skills::{
     SaveWorkflowSkillTool, ScopedWorkflowSkill, ScopedWorkflowSkillDraft, WorkflowSkill,
     WorkflowSkillCatalog, WorkflowSkillDraft, WorkflowSkillScope, WorkflowSkillSource,
 };
+
+/// P19B-C：本轮注册的桌面命令（`main.rs` 的 `invoke_handler` 逐条列出，
+/// 这里给出唯一权威清单，避免命令与前端 `ipc.ts` 悄悄漂移）。
+///
+/// 效果授权四件套：请求 / 清单 / 撤销 / 决策。都只转发给本机 daemon，
+/// actor 恒为已认证连接身份，客户端无法自选。
+pub const HARNESS_V1_EFFECT_COMMANDS: [&str; 4] = [
+    "cmd_harness_v1_effect_request",
+    "cmd_harness_v1_effect_list",
+    "cmd_harness_v1_effect_revoke",
+    "cmd_harness_v1_approval_decide",
+];
 
 /// 初始化结构化日志框架。
 ///

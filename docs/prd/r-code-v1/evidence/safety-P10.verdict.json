@@ -1,0 +1,61 @@
+{
+  "task_id": "P10",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s10_macos_spawn.rs"
+  ],
+  "tests": {
+    "command": "PLATFORM DISCIPLINE (task contract: Windows dev host + native macOS CI): s10 is #![cfg(target_os = \"macos\")] with 13 authored tests — pre-release gate blocking (touch-file), birth identity before release (ppid == guardian host pid, epoch/usec sanity, owner-identity tuple cross-check), exactly-once release with natural termination, unreleased-Drop kill (file never appears), start_identity injectivity grid + live stability, group leadership via independent getpgid, /dev/fd inherited-set subset of {0,1,2} (CLOEXEC_DEFAULT acceptance), manual UnixStream sessions driving serve_macos_guardian (version-mismatch exit 2, released lifecycle exit 0, daemon-EOF exit 1 with group kill and never-ran proof), and source pins (no /proc/, no KERN_PROC_ALL, no sysctl/kinfo_proc shortcuts; proc_pidinfo+PROC_PIDTBSDINFO, START_SUSPENDED/SETPGROUP/CLOEXEC_DEFAULT/SIGCONT, release_once(mut self), Drop impl, P08 exit codes) — parse-verified on Windows via cargo check --tests, EXECUTES ONLY in native macOS CI, never claimed as run locally. Locally executed (raw test-result sums): lib 72/72; focused s05+s06+s07 34/34 (106 total with lib); cargo check --lib green; clippy --all-targets -D warnings green; cargo fmt --all --check green; quality_check green on macos.rs + mod.rs. The wider cumulative gates were run green at iteration 1 (Runtime 386/386, Store 323/324 declared baseline, Kernel 75/75, workspace no-run/check/clippy/fmt) and iteration 2 changed comments only in a cfg(target_os = \"macos\") file that Windows never compiles.",
+    "total": 831,
+    "passed": 830,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline: migration-count assertion expects 18, schema now at 35; P10 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/process_guard/macos.rs": {
+          "file_loc": 972,
+          "max_comment_block": 12,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.324,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/process_guard/mod.rs": {
+          "file_loc": 110,
+          "max_comment_block": 5,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.111,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "P10 iteration 2 passes the keep gate under the platform verification discipline (Windows dev host + native macOS CI; no WSL, no cross-target). The macOS gate is kernel-held: one posix_spawn call under POSIX_SPAWN_START_SUSPENDED | POSIX_SPAWN_SETPGROUP(0) | POSIX_SPAWN_CLOEXEC_DEFAULT means not one workload instruction can precede the guardian's SIGCONT after a valid Release — strictly stronger than a pre-exec stop (no fork, no pre-exec window). Birth identity is the PROC_PIDTBSDINFO tuple read via libc::proc_pidinfo into a size-pinned repr(C) ProcBsdInfo (XNU layout), fail-closed, re-probed daemon-side and matched before handout; zero /proc dependency (no sysctl/KERN_PROC shortcuts — pinned by tests). The P08 session state machine and protocol codec are reused verbatim (exit codes 0/1/2); release_once(self) is exactly-once by construction; an unreleased Drop SIGKILLs the still-suspended group; CLOEXEC_DEFAULT pins the inherited fd set to exactly {0,1,2}. Honest scope: the guardian runs as a bounded in-process thread — the cross-process guardian binary (daemon-death propagation) is P24H's contract, and the session is stream-generic so that binary is a thin fd wrapper. QA's deep review independently verified every libc 0.2.189 apple binding claim against vendored source and re-derived the 136-byte layout; s10 (13 tests) and the 4 macos.rs unit tests execute in native macOS CI and were never counted as locally run."
+}

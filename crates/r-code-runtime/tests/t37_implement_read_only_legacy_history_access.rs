@@ -1,7 +1,7 @@
 //! T37 — read-only legacy history access.
 //!
 //! Hash-based fixtures confirm old files remain unchanged while
-//! reading/exporting; dev/production/v2 data never cross.
+//! reading/exporting; dev/production/v1 data never cross.
 
 use r_code_runtime::legacy::{LegacyError, LegacyReadOutcome, LegacyReader};
 use std::path::Path;
@@ -41,9 +41,9 @@ fn backup_reads_and_exports_without_touching_the_source() {
     let before_config = hash_of(&legacy_root.join("config.json"));
     let before_jsonl = hash_of(&legacy_root.join("history.jsonl"));
 
-    // Backup into the v2 temporary area.
-    let v2_root = temp.path().join("harness-v2");
-    let copy = v2_root.join("legacy-copy.sqlite3");
+    // Backup into the v1 temporary area.
+    let v1_root = temp.path().join("harness-v1");
+    let copy = v1_root.join("legacy-copy.sqlite3");
     match LegacyReader::backup_readonly(&legacy_db, &copy, Duration::from_secs(30)).expect("backup")
     {
         LegacyReadOutcome::Ready { copy_path } => assert_eq!(copy_path, copy),
@@ -111,16 +111,16 @@ fn dev_production_and_v2_data_never_cross() {
     // Three distinct roots; each keeps its own data.
     let dev_root = temp.path().join("dev-root");
     let prod_root = temp.path().join("prod-root");
-    let v2_root = temp.path().join("harness-v2");
+    let v1_root = temp.path().join("harness-v1");
     for root in [&dev_root, &prod_root] {
         std::fs::create_dir_all(root).expect("root");
         create_legacy_database(&root.join("db.sqlite3"));
     }
 
-    // Dev backs up into ITS v2 temp area, prod into a separate copy.
-    std::fs::create_dir_all(&v2_root).expect("v2");
-    let dev_copy = v2_root.join("dev-copy.sqlite3");
-    let prod_copy = v2_root.join("prod-copy.sqlite3");
+    // Dev backs up into ITS v1 temp area, prod into a separate copy.
+    std::fs::create_dir_all(&v1_root).expect("v1");
+    let dev_copy = v1_root.join("dev-copy.sqlite3");
+    let prod_copy = v1_root.join("prod-copy.sqlite3");
     match LegacyReader::backup_readonly(
         &dev_root.join("db.sqlite3"),
         &dev_copy,

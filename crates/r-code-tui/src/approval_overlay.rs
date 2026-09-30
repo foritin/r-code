@@ -147,6 +147,105 @@ pub fn to_host_decision(decision: ApprovalDecision) -> PermissionDecision {
     }
 }
 
+// ---------------------------------------------------------------------------
+// P19B-C 效果授权浮层：与桌面 Permissions/Canvas 渲染同一份权威材料
+// ---------------------------------------------------------------------------
+
+/// 一条 effect 授权的展示投影。六个材料字段与 daemon
+/// `EffectBinding::material` 冻结的键同名同序；其余字段是落库身份/归属。
+/// 本地客户端只是**读**这一份投影，从不自己派生 class/network/payloadHash。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectAuthority {
+    pub task_id: String,
+    pub plan_revision: String,
+    pub work_unit_id: String,
+    pub effect_class: String,
+    pub network: String,
+    pub payload_hash: String,
+    pub approval_id: String,
+    pub actor_id: String,
+    pub session_id: String,
+    pub scope: String,
+    /// `active` | `superseded`（撤销即 supersede，不是删除）。
+    pub state: String,
+}
+
+impl EffectAuthority {
+    /// 从 `approvals.effect.list` 的一行反序列化。六列材料缺一即不是权威，
+    /// 返回 None 交给调用方隐藏——绝不补默认值伪造出看似有效的授权。
+    pub fn from_list_row(value: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| value.get(key)?.as_str().map(str::to_string);
+        // `is_active` is a two-state test, so any other value would render as
+        // 已撤销 and masquerade as a revocation the daemon never recorded.
+        // The remote projection and the desktop panel reject the same set.
+        let state = match text("state")?.as_str() {
+            s @ ("active" | "superseded") => s.to_string(),
+            _ => return None,
+        };
+        Some(Self {
+            task_id: text("taskId")?,
+            plan_revision: text("planRevision")?,
+            work_unit_id: text("workUnitId")?,
+            effect_class: text("effectClass")?,
+            network: text("network")?,
+            payload_hash: text("payloadHash")?,
+            approval_id: text("approvalId")?,
+            actor_id: text("actorId")?,
+            session_id: text("sessionId")?,
+            scope: text("scope")?,
+            state,
+        })
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.state == "active"
+    }
+}
+
+/// 效果授权的浮层行。键序与桌面 `effectAuthorityRows` 一致；撤销警告在
+/// `active` 与 `superseded` 两种状态下都出现——它是永久语义（仅未来运行），
+/// 不是撤销时才成立的临时提示。
+pub fn effect_overlay_lines(authority: &EffectAuthority) -> Vec<OverlayLine> {
+    let label = |text: String| OverlayLine {
+        text,
+        kind: LineKind::Hint,
+    };
+    let mut lines = vec![
+        OverlayLine {
+            text: format!("已授权的外部能力 · {}", authority.work_unit_id),
+            kind: LineKind::Title,
+        },
+        label(format!("taskId      {}", authority.task_id)),
+        label(format!("planRevision {}", authority.plan_revision)),
+        label(format!("workUnitId  {}", authority.work_unit_id)),
+        label(format!("effectClass {}", authority.effect_class)),
+        label(format!("network     {}", authority.network)),
+        label(format!("payloadHash {}", authority.payload_hash)),
+        label(format!("approvalId  {}", authority.approval_id)),
+        label(format!("scope       {}", authority.scope)),
+        label(format!("actorId     {}", authority.actor_id)),
+        label(format!("sessionId   {}", authority.session_id)),
+        label(format!(
+            "state       {}",
+            if authority.is_active() {
+                "生效中"
+            } else {
+                "已撤销"
+            }
+        )),
+        label("撤销仅影响未来运行：已经冻结的运行快照不会被改写。".to_string()),
+        label("授权编号终身不复用；撤销后重新授权需要发起一次新的请求。".to_string()),
+        label("拒绝或过期不会留下任何授权记录。".to_string()),
+    ];
+    if authority.is_active() {
+        lines.push(OverlayLine {
+            text: "  1. 撤销此授权 (r)".to_string(),
+            kind: LineKind::Option,
+        });
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

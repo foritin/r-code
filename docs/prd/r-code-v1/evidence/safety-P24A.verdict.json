@@ -1,0 +1,89 @@
+{
+  "task_id": "P24A",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s24a_composition.rs",
+    "scripts/check-process-launch-boundary.test.mjs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round, both roles inline; every number recounted from the raw persisted cargo logs by script, never from a summary. (1) INVENTORY VERIFIED TWICE: the first grep pass used rtk grep with \\| alternation, which silently matches nothing — the false-empty result was caught because bang_exec.rs was known to reference LocalShellBackend; the inventory was redone with plain single-pattern greps and then ARBITRATED BY THE GUARD ITSELF, whose first run flagged two additional test-only seam constructors (execution.rs ExecutionService::local, verification.rs VerificationRunner::new) that no grep pattern had surfaced. (2) DECLARED SUITES: s24a_composition 3 passed / 0 failed (dormant surface refuses open/read/write/close with the no-registered-executable floor; source pins — no FakeProcessService in the composition, ManagedProcessService::new present, platform_activation_gate wired in the bin, the daemon binary still free of ManagedProcessService per the s04 pin; startup gate idempotent per boot, persists the boot's report row whose material names THIS boot, verdict stays NotActivated with an unsupported status, and an Activated verdict panics the test). check-process-launch-boundary.test.mjs 4 passed / 0 failed (fresh Command::new caught at the exact line while a tokio::spawn on the neighbouring line passes; fresh LocalShellBackend::new caught in two different scan areas; the allowlisted supervised transport is exempt; a missing scan root is itself a violation so the guard cannot silently narrow; the real repository tree scans clean). The guard itself: 5 areas, 17 owned allowlist entries, exit 0. (3) RETIRED-PIN MIGRATION: s12_safety_api's local-RPC test initially failed against the startup regeneration (the pre-seeded SafeDisabled head was advanced to this boot's current material) — a real semantic collision, not a flake; the pin was migrated to assert the served head IS the freshly regenerated Unsupported material for this boot while every strict-params, redaction, foreign-row-untouched, read-only-count and forged-token assertion stayed byte-identical; s12 now 6 passed / 0 failed. (4) COMPOSITION-CONSUMER CLUSTER green after the production edits: conversation_engine, m03_execution_pipeline, t32, t13, t19 = 32 passed / 0 failed; tui lib 124 passed / 0 failed including the migrated bang contract; s04/s05 wiring pins green inside the full runs. (5) FULL RUNTIME+PROTOCOL measured twice: first run 96 result lines / 554 passed / 1 failed (the s12 collision above, before its migration), second run (final code) 96 lines / 555 passed / 0 failed. (6) HOUSE five-group cumulative measured twice, both reported: 139 lines / 1080 passed / 1 failed in BOTH runs, the single failure the declared plan_schema.rs:245 baseline (18-vs-35) — zero flake members this round. Reconciliation against P23's 1078/1077/1: +3 tests (s24a), no other count moved; house is 1081 total / 1080 passed / 1 failed, zero regressions. (7) OTHER GATES: clippy -p r-code-runtime -p r-code-tui --all-features --all-targets -D warnings exit 0 (after one E0425 missing use-super fix in the migrated bang test); cargo fmt --all -- --check exit 0; node scripts/harness-packaging.test.mjs 2 passed / 0 failed; quality_check.py over all seven changed files ok=true 0 violations (application 2451, r-code-service 1123, bang_exec 59, s24a 137, s12 623, guard 137, guard-test 128 code loc; comment blocks <= 11; NOTE: the tool's comment pass does not parse .mjs // comments, both .mjs header blocks verified <= 7 lines by eye). (8) LOCAL-BACKEND-TEST-ONLY EVIDENCE: grep across runtime src finds ZERO production callers of ExecutionService::local or VerificationRunner::new/default (constructors only, with their test-only docs); LocalShellBackend::new constructions now exist only inside the gateway definition and the two documented seams; bang_exec — the last production consumer — no longer references it (a doc-comment mention is the only remaining textual occurrence outside the gateway crate). (9) DAEMON HYGIENE: Get-CimInstance for r-code-service.exe / r-code-harness-native.exe after every gate batch: zero processes, nothing terminated.",
+    "total": 1081,
+    "passed": 1080,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P24A and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/application.rs": {
+          "file_loc": 2451,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.07
+        },
+        "crates/r-code-runtime/src/bin/r-code-service.rs": {
+          "file_loc": 1123,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.079
+        },
+        "crates/r-code-tui/src/bang_exec.rs": {
+          "file_loc": 59,
+          "max_comment_block": 7,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.283
+        },
+        "crates/r-code-runtime/tests/s24a_composition.rs": {
+          "file_loc": 137,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.191
+        },
+        "crates/r-code-runtime/tests/s12_safety_api.rs": {
+          "file_loc": 623,
+          "max_comment_block": 4,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.06
+        },
+        "scripts/check-process-launch-boundary.mjs": {
+          "file_loc": 137,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        },
+        "scripts/check-process-launch-boundary.test.mjs": {
+          "file_loc": 128,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The task estimate was 300 lines; ~240 production/test lines landed plus two small script files — no incidental complexity. max_func_loc/max_nesting report null for the tool's non-Rust-function pass and were reviewed by eye (no function exceeds ~40 lines, nesting <= 3). The .mjs comment metrics read 0 because quality_check's comment pass does not parse // comments in .mjs files; both files' header blocks were measured by eye at <= 7 lines. The bang_exec comment_ratio 0.283 is a 59-line file carrying its honest history note — within every threshold."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (all production launch sites owned or non-executing): the measured inventory is encoded in a CI guard whose 17 allowlist entries each carry a reason and an owner — guardian/supervisor/helper family, the P23 supervised transport, the Codex-account exception, the pinned bwrap verification, five gateway legacy sites owned by P28/P29, two documented test-only seams — and any fresh Command::new / LocalShellBackend::new outside that list fails CI; the guard caught two seam sites on its own first run that the grep inventory had missed, which is the guard doing its job. Acceptance ② (local backend test-only): the last production LocalShellBackend consumer (TUI bang) is migrated to an honest Unsupported, the production composition's FakeProcessService is replaced by the real dormant ManagedProcessService (no binding, read-only floor, refuses before anything exists), and zero production callers remain for both local-shell constructors. Acceptance ③ (no capability activation): nothing activated — the startup gate call regenerates the boot's report row and prints the honest Unsupported verdict, s24a pins that an Activated verdict cannot appear, and the s04 wiring pins hold untouched. App-side impact stated plainly: plugins' host.process.* now reaches the real supervised surface, which refuses with the dormant-floor reason instead of fake-succeeding, and TUI `!` commands print an honest unavailable notice instead of running unsandboxed — both are the contract's requirement and INV-07's, and both are disclosed here rather than buried. Disclosed follow-ups: P28 removes the two shell seams and the gateway command runner behind an exact-approved sandboxed Shell; P29 replaces the git invocations with the read-only gix reader; P24B attaches the real platform binding and per-run permissions when activation is recovery-gated. House 1081/1080/1 with only the declared plan_schema baseline; zero flake members across two full house runs this round."
+}

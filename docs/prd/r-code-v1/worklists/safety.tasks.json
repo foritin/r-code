@@ -1,0 +1,2945 @@
+{
+  "objective": "Close R-Code v1's complete local-process safety boundary before O-GATE with stable boot identity, durable ownership/quarantine, public process output, proven platform containment/sandbox, converged launch paths, recoverable process effects, immutable effect approval and daemon-only gix.",
+  "end_state": "Every local execution path is supervisor-owned and either Activated by an exact current safety report or undiscoverable; unproved trees/effects quarantine writes; network/Shell authority is exact and audited; officially advertised write targets pass installed native probes; Git reads never mutate metadata.",
+  "non_goals": [
+    "Parallel WorkUnit scheduler",
+    "LeaseFamily or ChildSupervisor",
+    "Worktrees",
+    "Unsandboxed fallback",
+    "Automatic Git writes",
+    "Treating SafeDisabled as Activated"
+  ],
+  "environment": {
+    "language": "Rust 2021",
+    "runtime": "Rust 1.88, Tokio, Tauri 2",
+    "package_manager": "cargo",
+    "os": "Windows development host plus native Windows/macOS/Linux CI",
+    "test_command": "rtk cargo test --workspace --all-features -- --test-threads=1",
+    "notes": "Dirty P/M-GATE baseline. Execute with no-VCS snapshot Engineer/QA loop: no git add/commit/push/worktree. Wave 3 API minor sequence: v1.1 ProcessRead, v1.2 WorkUnit effect/network, v1.3 child-process guarantee. Pin exact gix 0.88.0 features and seccompiler 0.5.0."
+  },
+  "components": [
+    {
+      "id": "ownership",
+      "name": "Durable ownership",
+      "description": "Boot/tree identity, fencing, proof, quarantine and diagnostics."
+    },
+    {
+      "id": "process-wire",
+      "name": "Process output protocol",
+      "description": "API v1 cursor output and compatibility."
+    },
+    {
+      "id": "supervisor",
+      "name": "Process supervisor",
+      "description": "Gated spawn, persist, resume, output, cancel and drain."
+    },
+    {
+      "id": "tree-containment",
+      "name": "Platform containment",
+      "description": "Windows Job, Linux namespace/cgroup and honest macOS SafeDisabled."
+    },
+    {
+      "id": "activation",
+      "name": "Safety activation",
+      "description": "Content-addressed reports and runtime predicates."
+    },
+    {
+      "id": "sandbox",
+      "name": "Platform sandbox",
+      "description": "AppContainer, bwrap/seccomp and Seatbelt diagnostics."
+    },
+    {
+      "id": "launch-convergence",
+      "name": "Launch convergence",
+      "description": "Check/prep/Process/Harness/TUI/daemon use one boundary."
+    },
+    {
+      "id": "process-effects",
+      "name": "Durable process effects",
+      "description": "Quota, before/delta, restart recovery and receipts."
+    },
+    {
+      "id": "shell-contract",
+      "name": "Shell authority",
+      "description": "Immutable effect/network contracts and approvals."
+    },
+    {
+      "id": "readonly-git",
+      "name": "Read-only Git",
+      "description": "Restricted gix reader and adapters."
+    },
+    {
+      "id": "release-gate",
+      "name": "Release gate",
+      "description": "Conformance, helpers, packaging and applicable activation."
+    }
+  ],
+  "open_questions": [
+    "TECH DEBT (pre-existing, confirmed not introduced by P19B-C): quality_check.py reports src-tauri/frontend/src/components/room/Canvas.tsx at file_loc 3193 over the 2600 limit, but the iter/P19B-C/before/ snapshot proves it was already 3190 before that task (which added only the 3 lines that correctly reuse the shared Permissions renderer). Because the gate fails a whole round on any changed file over the limit, whoever next touches Canvas.tsx must split it (FilesPanel at lines ~1858-2339 and the terminal-sidebar helpers are the obvious extractable regions). DECISION NEEDED: whether to schedule a dedicated frontend refactor task, or to record a per-file exemption for this legacy file in the evidence rules.",
+    "M04 regression REPAIRED out-of-band (2026-09-28) and interactive_menu re-greened; ONE test (t35) still red pending a product call. Repaired: record_failure's run.failed payload had been reduced to {\"attemptId\"/\"ownedAttempt\"} with the reason dropped (param renamed `_error: &str`); run_manager.rs now journals the reason in all three branches, so clients/TUI receive the true failure text (TUI shows '没有已配置的默认 Provider；运行尚未启动' instead of '未知错误'); TUI failure_guidance now recognizes the pre-run Provider-guard wording so the /setup guidance survives. Verified: runtime 445/0 unchanged, r-code-tui lib 124/0, clippy/fmt clean, interactive_menu green. STILL RED: r-code-tui t35::honest_failure_lifecycle_through_shared_service. The test has drifted across >=3 layered runtime behavior changes and each fix reveals the next: (a) dropped error payload [repaired], (b) an unconfigured provider is now rejected by a pre-run Provider guard before run.started so runs台账 is empty [t35 runs-assertion updated], (c) set_preferences to a provider that is not actually configured is now refused [NEW failure at t35:204]. DECISION NEEDED (DEFERRED 2026-09-28 by user): adjudicate the current behavior for (c) (should setting a model preference for an unconfigured provider succeed or fail?) and whether t35 should be rewritten as a pre-dispatch-rejection test, or declare it a baseline. The user chose to defer the TUI triage and prioritize the app/desktop side (P19B-C); treat this 1 red t35 test as a known, accepted deferral for now. Note r-code-tui/r-code-host are workspace members but outside the house cumulative denominator, which is why this drifted unnoticed since M04.",
+    "Test hygiene on Windows: the r-code-tui suites that use tests/daemon_common spawn detached r-code-service.exe daemons that outlive the test run and keep target/debug/r-code-service.exe open, so the NEXT run's in-test `cargo build -p r-code-runtime --bin r-code-service` fails with 'failed to remove file' and every daemon_common test turns red at daemon_common/mod.rs:25 with a shifting failure set. Remedy used here: enumerate r-code-service.exe, confirm each is a test leftover by its --ipc-name/--data-root, terminate them, rebuild the binary once, then run. DECISION NEEDED: whether the TUI suites should stop their own daemons (drop-guard) so a leaked process cannot poison the next run.",
+    "P20 KEPT with an honest half-wired gate, and P21 (2026-09-28) confirmed the same shape is load-bearing: production binds neither a check native backend nor a preparation route, and current_platform_material still reports backend 'none-this-wave' + status Unsupported, so required checks are Unavailable and dependency preparation is refused on every platform rather than actually sandboxed. P21 additionally proved WHY the shell trait cannot carry this: r_code_gateway::execution_backend::CommandSpec has fields for command/cwd/timeout only, so mounts and an environment allowlist cannot reach a process at all - which is why preparation now runs through the dedicated DependencyPrepRoute trait (a route that receives the whole DependencyPrepSpec) instead of CommandExecutionBackend. DECISION NEEDED for the round that binds a real platform backend: implement DependencyPrepRoute (and the check-side equivalent) over sandbox/windows.rs build_appcontainer_launch_plan + process_supervisor SpawnSpec - Windows first, since this host executes natively - rather than widening CommandSpec, because widening it drags the bash-tool path into the blast radius. P21 also left prepare_dependencies deliberately unwired (s20 asserts zero production callers), so no user-visible fetch exists yet. P22 (2026-09-29) adds a third unwired surface and two backend seams the same round must eventually close: `ManagedProcessService` is constructed by no production path (s04/s05 pin run_manager.rs and bin/r-code-service.rs free of supervisor wiring), and `ProcessTreeBackend` has no stdin boundary, so interactive `write_validated` answers NoInputChannel for every v1 backend while honest truncation reporting needs a continuation signal in `ProcessReadReply` (r-code-harness-protocol, outside those tasks' file lists). DECISION NEEDED: whether P23+ or a dedicated round implements the input-channel + read-continuation seams.",
+    "FLAKE POLICY NEEDED for the Windows-native process identity/timing suites. Two members of the same family now fail intermittently in a full `cargo test -p r-code-runtime` run and pass in isolation: s07_windows_job_proof::supervisor_completes_windows_backend_runs_with_journal_tree_ids (pre-termination marker must survive into the stored tail; seen 2026-09-28 and 2026-09-29) and t14a_contain_windows_process_trees_with_job_objects::owner_identity_uses_start_time_not_bare_pids (seen 2026-09-29 during P22). P21/P22 each added suites that spawn real children, so the load sensitivity grows with every process task. DECISION: fix the capture/identity races (bound the drain before the termination proof; avoid start-time granularity assumptions) or serialize / limit test threads for the Windows-native suites. Until then, a red member must be re-measured alone and BOTH numbers reported, and a green run must never be kept as the only evidence.",
+    "P22 shipped a live process supervisor: operation identity is now tree-{attempt}-{ownership-epoch}-{sequence} and a fenced restart legitimately produces a NEW supervised tree. Any later task that assumes tree-id shape or reuses handles across restarts must read processes.rs first. Additionally register_profile_effect only parse-checks, so a profile/effect contradiction surfaces at open, not at registration - decide whether registration should refuse earlier.",
+    "P23 WIP LIVE RED (2026-09-29, measured, not a guess): `node scripts/harness-packaging.test.mjs` fails its staged==source assertion because plugins/native/harness.json was advanced to apiMinor 3 (P23.4) while the copy that actually ships inside the desktop bundle, src-tauri/plugins/native/harness.json, is still apiMinor 2 - the exact mirror defect P19A was written up for. src-tauri/... is NOT one of P23's eight declared files, so fixing it needs a recorded deviation, and weakening the assertion is not an option. Two further unverified P23 claims block a KEEP judgement and are recorded here so nobody assumes they hold: (1) whether containment is established BEFORE the child executes - the last code I read still created the child with Command::new(..).spawn() and called prove_contained afterwards, and the repair delegation that was asked to move it to a suspended-create + job-assign + resume shape died at its turn limit, so this is unknown; (2) whether acceptance 1's 'route through supervisor' means ProcessSupervisor::start_with_write_profile as P22 did, or whether transport.rs's private SupervisedTree + IsProcessInJob/PGID proof is an equivalent substitute. Also outstanding: cross-target verification of the macOS/Linux branches (the repair agent was mid-edit on code it cannot compile on this Windows host) and the declared suite s23_harness_supervision.rs, which does not exist. DECISION NEEDED from the user only if the answer to (2) is 'must use ProcessSupervisor', because that would re-scope P23 beyond its eight files; otherwise the next round proceeds on its own judgement and records the reasoning."
+  ],
+  "tasks": [
+    {
+      "id": "P00",
+      "title": "Implement stable cross-process boot identity",
+      "serves": [
+        "ownership",
+        "activation"
+      ],
+      "description": "Provide one canonical identity that is stable across processes for one boot on Windows, Linux and macOS; missing or zero identity is fail-closed.",
+      "building_blocks": [
+        "BootIdentity"
+      ],
+      "tools": [
+        "windows-sys",
+        "libc"
+      ],
+      "packages": [
+        "windows-sys 0.61.2",
+        "libc"
+      ],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/boot.rs",
+          "action": "create",
+          "what": "Implement Linux boot_id, macOS kern.boottime and Windows SystemBootEnvironmentInformation sources."
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/mod.rs",
+          "action": "modify",
+          "what": "Expose BootIdentity and remove changing boot_nonce surrogates."
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/windows.rs",
+          "action": "modify",
+          "what": "Mechanically replace GetTickCount64 owner boot_nonce with canonical BootIdentity."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/processes.rs",
+          "action": "modify",
+          "what": "Mechanically replace Windows and Unix boot_nonce surrogates with canonical BootIdentity."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Enable exact Windows system-information APIs."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s00_boot_identity.rs",
+        "crates/r-code-runtime/src/bin/boot-identity-helper.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P00.1",
+          "description": "Parse and canonicalize /proc/sys/kernel/random/boot_id on Linux."
+        },
+        {
+          "id": "P00.2",
+          "description": "Canonicalize macOS kern.boottime seconds/useconds via sysctl."
+        },
+        {
+          "id": "P00.3",
+          "description": "Query Windows SYSTEM_BOOT_ENVIRONMENT_INFORMATION BootIdentifier and reject unavailable/zero values."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Repeated reads in-process and a helper subprocess are identical; injected reboot identities differ.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Identity never uses elapsed time or CPU counters.",
+        "Missing identity blocks recovery and activation.",
+        "Serialization is canonical across restarts."
+      ],
+      "depends_on": [],
+      "estimated_loc": 220,
+      "suggested_skills": []
+    },
+    {
+      "id": "P01",
+      "title": "Persist process-tree ownership and quarantine",
+      "serves": [
+        "ownership"
+      ],
+      "description": "Replace writer barriers with fenced process-tree records; legacy rows become LegacyUnverifiable with the observed stable BootIdentity for eventual reboot proof.",
+      "building_blocks": [
+        "ProcessTreeRecord",
+        "TerminationProofRecord"
+      ],
+      "tools": [
+        "V1Store"
+      ],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-store/src/v1/schema.rs",
+          "action": "modify",
+          "what": "Add process_trees and proof/quarantine fields with idempotent migration."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/operations.rs",
+          "action": "modify",
+          "what": "Implement prepared/running/terminating/exited/quarantined CAS repositories and migrate legacy barriers."
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/mod.rs",
+          "action": "modify",
+          "what": "Define portable owner/tree/proof records using BootIdentity."
+        },
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "After V1Store open, require canonical BootIdentity and transactionally migrate legacy writer barriers before composition returns."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/mutations.rs",
+          "action": "modify",
+          "what": "In the lease transaction, deny write/repo-exclusive grants when process-tree quarantine or unmigrated legacy barriers exist; preserve read-only grants."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-store/tests/s01_process_ownership.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P01.1",
+          "description": "Persist tree/attempt/workspace/profile, owner pid/start/boot, platform identity, epoch, state and proof."
+        },
+        {
+          "id": "P01.2",
+          "description": "Fence transitions so stale owners cannot claim exit or clear quarantine."
+        },
+        {
+          "id": "P01.3",
+          "description": "Migrate legacy barriers to LegacyUnverifiable with migrated_observed_boot_id; same-boot clearing is impossible."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fault every transaction boundary and reopen without losing quarantine.",
+          "kind": "integration"
+        },
+        {
+          "description": "PID/start/boot reuse and stale epochs never clear proof.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Unproved writers block all write leases.",
+        "Only exact fenced proof clears ordinary quarantine.",
+        "Legacy rows record observed boot for later RebootProof."
+      ],
+      "depends_on": [
+        "P00"
+      ],
+      "estimated_loc": 350,
+      "suggested_skills": []
+    },
+    {
+      "id": "P02",
+      "title": "Expose read-only quarantine diagnostics",
+      "serves": [
+        "ownership",
+        "activation"
+      ],
+      "description": "Give authenticated local clients a redacted quarantine view; clearing/retry is deferred until platform provers exist.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Project quarantine records without mutation."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Add local-only safety.quarantine.get."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/operations.rs",
+          "action": "modify",
+          "what": "Query quarantine by workspace/tree."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s02_quarantine_api.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P02.1",
+          "description": "Return tree/owner/reason/proof status without secrets or raw handles."
+        },
+        {
+          "id": "P02.2",
+          "description": "Reject remote callers and all force-clear attempts."
+        },
+        {
+          "id": "P02.3",
+          "description": "Render LegacyUnverifiable as 'reboot required for legacy proof' with observed boot identity redacted."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Diagnostics survive restart and cannot alter quarantine.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Operators can inspect blocked writes.",
+        "No placeholder proof retry exists.",
+        "No API bypasses death proof."
+      ],
+      "depends_on": [
+        "P01"
+      ],
+      "estimated_loc": 180,
+      "suggested_skills": []
+    },
+    {
+      "id": "P03",
+      "title": "Add the complete API v1 process output/read contract",
+      "serves": [
+        "process-wire"
+      ],
+      "description": "Add cursor-bounded stdout/stderr/eof/exit reads across Rust protocol, JSON schema, SDK, package manifests and Codex adapter while preserving API major 1. This task sets HOST_API v1.1.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-harness-protocol/src/services.rs",
+          "action": "modify",
+          "what": "Define ProcessRead request/reply and ordered frames."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/manifest.rs",
+          "action": "modify",
+          "what": "Add ProcessRead HostService."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/rpc.rs",
+          "action": "modify",
+          "what": "Freeze host.process.read."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/operations.rs",
+          "action": "modify",
+          "what": "Classify read replay/idempotency."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/schema/harness-v1.schema.json",
+          "action": "modify",
+          "what": "Add service/method schema."
+        },
+        {
+          "path": "crates/r-code-kernel/src/ports.rs",
+          "action": "modify",
+          "what": "Extend ProcessService with bounded read."
+        },
+        {
+          "path": "crates/r-code-harness-sdk/src/lib.rs",
+          "action": "modify",
+          "what": "Expose cursor read."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/catalog.rs",
+          "action": "modify",
+          "what": "Advance/test API minor negotiation."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/router.rs",
+          "action": "modify",
+          "what": "Route and authorize ProcessRead."
+        },
+        {
+          "path": "crates/r-code-runtime/src/run_manager.rs",
+          "action": "modify",
+          "what": "Keep planning and safe-mode process-service deny/grant assertions complete after adding ProcessRead."
+        },
+        {
+          "path": "plugins/codex/src/app_server.rs",
+          "action": "modify",
+          "what": "Replace codex.event.next."
+        },
+        {
+          "path": "plugins/codex/harness.json",
+          "action": "modify",
+          "what": "Request exactly Open/Read/Write/Close."
+        },
+        {
+          "path": "src-tauri/plugins/codex/harness.json",
+          "action": "modify",
+          "what": "Keep the staged built-in Codex manifest byte/semantic-equivalent with the source package at API minor 1."
+        },
+        {
+          "path": "scripts/harness-packaging.test.mjs",
+          "action": "modify",
+          "what": "Freeze package/schema consistency."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-harness-protocol/tests/s03_process_read.rs",
+        "crates/r-code-runtime/tests/s03_process_router.rs",
+        "plugins/codex/tests/s03_app_server_read.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P03.1",
+          "description": "Define non-destructive cursor pages: identical cursor returns identical bounded frames, next_cursor advances without gaps, and clients deduplicate stream/frame sequence."
+        },
+        {
+          "id": "P03.2",
+          "description": "Reject cross-run handles, stale cursors and oversized reads."
+        },
+        {
+          "id": "P03.3",
+          "description": "Keep apiMajor=1, negotiate minor additively and prove old 1.x harness compatibility."
+        },
+        {
+          "id": "P03.4",
+          "description": "Remove private Codex event.next and guard schema/Rust/manifest parity."
+        },
+        {
+          "id": "P03.5",
+          "description": "Set HOST_API=1.1 and ProcessRead-requiring package apiMinor=1; older 1.0 stays compatible without the capability."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Parallel streams provide deterministic idempotent at-least-once pages across reconnect.",
+          "kind": "integration"
+        },
+        {
+          "description": "Old minor harness negotiates without ProcessRead; Codex receives exact four-method set.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Reads are run-scoped, bounded and idempotent at-least-once; no exactly-once consumption claim is made.",
+        "All public authority surfaces agree.",
+        "codex.event.next is absent from production."
+      ],
+      "depends_on": [],
+      "estimated_loc": 380,
+      "suggested_skills": []
+    },
+    {
+      "id": "P04",
+      "title": "Define concrete supervisor and backend contracts",
+      "serves": [
+        "supervisor",
+        "ownership",
+        "process-wire"
+      ],
+      "description": "Define implementable prepared/running handles, clean environment/FD policy, output subscription and proof signatures plus a deterministic fake backend.",
+      "building_blocks": [
+        "SpawnSpec",
+        "PreparedChild",
+        "RunningTree",
+        "ProcessTreeBackend"
+      ],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/process_supervisor.rs",
+          "action": "create",
+          "what": "Define SpawnSpec, PreparedChild, RunningTree, OutputFrame, ProcessTreeBackend and fake backend."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Expose supervisor types."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s04_supervisor_contract.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P04.1",
+          "description": "Define prepare, spawn_suspended, persist_identity, resume_once, terminate, wait_and_prove, subscribe_output and drain signatures."
+        },
+        {
+          "id": "P04.2",
+          "description": "Define an explicit inherited handle/FD set and clean env allowlist with no provider credentials/daemon sockets."
+        },
+        {
+          "id": "P04.3",
+          "description": "Implement fake controls for every state/output/proof boundary."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fake backend forbids resume before persistence and double resume.",
+          "kind": "integration"
+        },
+        {
+          "description": "Output cursor/backpressure and env/FD contracts are deterministic.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Contract represents raw Windows and gated Unix children without assuming tokio Child.",
+        "No unspecified inheritance exists.",
+        "Live handles are opaque while durable identities are serializable."
+      ],
+      "depends_on": [
+        "P01",
+        "P03"
+      ],
+      "estimated_loc": 300,
+      "suggested_skills": []
+    },
+    {
+      "id": "P05",
+      "title": "Implement supervisor state machine and fault matrix",
+      "serves": [
+        "supervisor",
+        "ownership"
+      ],
+      "description": "Implement prepare→suspended spawn→persist→resume-once→drain→proof with quarantine at every ambiguous boundary.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/process_supervisor.rs",
+          "action": "modify",
+          "what": "Implement durable orchestration, output storage/backpressure, timeout and cancellation."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/artifacts.rs",
+          "action": "modify",
+          "what": "Store bounded redacted output tails."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s05_supervisor_faults.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P05.1",
+          "description": "Persist Prepared before spawn and platform identity before resume."
+        },
+        {
+          "id": "P05.2",
+          "description": "Drain stdout/stderr concurrently under byte/time bounds."
+        },
+        {
+          "id": "P05.3",
+          "description": "On cancel/restart prove full tree or quarantine; completion follows drain."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fault injection at every boundary never double-runs or clears early.",
+          "kind": "integration"
+        },
+        {
+          "description": "Huge output and blocked readers terminate without deadlock/secret leakage.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No user code runs before persisted ownership.",
+        "Completion follows output drain and proof.",
+        "Ambiguity always quarantines."
+      ],
+      "depends_on": [
+        "P04"
+      ],
+      "estimated_loc": 400,
+      "suggested_skills": []
+    },
+    {
+      "id": "P06",
+      "title": "Build raw suspended Windows child primitive",
+      "serves": [
+        "tree-containment",
+        "supervisor"
+      ],
+      "description": "Use direct CreateProcessW with a single STARTUPINFOEX list, explicit HANDLE_LIST and custom owned process/thread/stdio handles.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [
+        "windows-sys 0.61.2"
+      ],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/windows.rs",
+          "action": "modify",
+          "what": "Implement raw suspended child and resume-once."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Enable exact Windows process/pipe/attribute APIs."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s06_windows_spawn.rs",
+        "crates/r-code-runtime/src/bin/process-tree-helper.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P06.1",
+          "description": "Create stdio and HANDLE_LIST containing only child stdio."
+        },
+        {
+          "id": "P06.2",
+          "description": "Create with SUSPENDED|NO_WINDOW|EXTENDED_STARTUPINFO and return owned handles."
+        },
+        {
+          "id": "P06.3",
+          "description": "Resume primary thread exactly once; setup failure terminates before resume."
+        }
+      ],
+      "tests": [
+        {
+          "description": "FD/handle canaries are not inherited and child emits no pre-resume marker.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No tokio post-spawn assignment race remains.",
+        "Handles close exactly once.",
+        "No visible console appears."
+      ],
+      "depends_on": [
+        "P04"
+      ],
+      "estimated_loc": 360,
+      "suggested_skills": []
+    },
+    {
+      "id": "P07",
+      "title": "Add Windows Job proof and recovery",
+      "serves": [
+        "tree-containment",
+        "ownership"
+      ],
+      "description": "Attach suspended child to Job before resume, persist creation identity, enumerate members and prove full death including nested-Job behavior.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/windows.rs",
+          "action": "modify",
+          "what": "Compose JOB_LIST/assignment, member proof and recovery."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/process_supervisor.rs",
+          "action": "modify",
+          "what": "Register Windows backend."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s07_windows_job_proof.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P07.1",
+          "description": "Prefer JOB_LIST; incompatible enclosing Job is Unsupported."
+        },
+        {
+          "id": "P07.2",
+          "description": "Persist PID/creation time/Job identity before resume."
+        },
+        {
+          "id": "P07.3",
+          "description": "Terminate, enumerate and wait all members with PID-reuse fencing."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Immediate-grandchild, nested Job and daemon-death fixtures prove containment.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Job assignment precedes user code.",
+        "All descendants die before quarantine clears.",
+        "Nested incompatibility never runs loose."
+      ],
+      "depends_on": [
+        "P05",
+        "P06"
+      ],
+      "estimated_loc": 300,
+      "suggested_skills": []
+    },
+    {
+      "id": "P08",
+      "title": "Implement Linux guardian-as-spawner launch gate",
+      "serves": [
+        "tree-containment",
+        "supervisor"
+      ],
+      "description": "Start guardian first; it creates the workload behind a release gate and returns identity before daemon persistence acknowledgement.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [
+        "libc"
+      ],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/unix.rs",
+          "action": "modify",
+          "what": "Replace daemon-spawn-first with guardian client."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-process-guardian.rs",
+          "action": "create",
+          "what": "Implement versioned guardian-as-spawner control protocol."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s08_linux_guardian.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P08.1",
+          "description": "Use pipe2 CLOEXEC and dup only fixed guardian control FDs."
+        },
+        {
+          "id": "P08.2",
+          "description": "Guardian creates gated child and returns outer/group/birth identity."
+        },
+        {
+          "id": "P08.3",
+          "description": "Daemon persists then releases once; EOF before release kills."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Workload inherits no guardian-write/daemon FD and emits nothing before release.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Guardian exists before workload.",
+        "No control descriptor leakage.",
+        "Pre-persistence crash prevents execution."
+      ],
+      "depends_on": [
+        "P04"
+      ],
+      "estimated_loc": 380,
+      "suggested_skills": []
+    },
+    {
+      "id": "P10",
+      "title": "Implement macOS gated spawn and birth identity",
+      "serves": [
+        "tree-containment",
+        "supervisor"
+      ],
+      "description": "Use a guardian launch gate plus PROC_PIDTBSDINFO birth tuple, never /proc.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [
+        "libc"
+      ],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/macos.rs",
+          "action": "create",
+          "what": "Implement gated spawn, birth identity and process-group ownership."
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/mod.rs",
+          "action": "modify",
+          "what": "Route macOS natively."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s10_macos_spawn.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P10.1",
+          "description": "Read pid/ppid/start seconds/useconds via PROC_PIDTBSDINFO."
+        },
+        {
+          "id": "P10.2",
+          "description": "Spawn a group behind guardian release gate."
+        },
+        {
+          "id": "P10.3",
+          "description": "Persist birth/group identity and explicit inherited FDs before release."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Child emits no pre-release marker and recycled pid differs.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No /proc dependency.",
+        "Birth identity is nonzero/persisted.",
+        "Inherited descriptors are explicit."
+      ],
+      "depends_on": [
+        "P04"
+      ],
+      "estimated_loc": 280,
+      "suggested_skills": []
+    },
+    {
+      "id": "P11",
+      "title": "Classify macOS write execution SafeDisabled",
+      "serves": [
+        "tree-containment",
+        "activation"
+      ],
+      "description": "Run descendant diagnostics/adversarial probes, but do not claim complete tree proof for write-capable profiles without kernel containment.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/macos.rs",
+          "action": "modify",
+          "what": "Enumerate identity-checked descendants for diagnostics and terminate best-effort."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/process_supervisor.rs",
+          "action": "modify",
+          "what": "Persist SafeDisabled reason for write profiles."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s11_macos_tree_proof.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P11.1",
+          "description": "Enumerate native descendant birth identities for diagnostics/no-workspace supervision."
+        },
+        {
+          "id": "P11.2",
+          "description": "Run setsid/double-fork adversarial probe."
+        },
+        {
+          "id": "P11.3",
+          "description": "Keep write-capable Check/Process/Shell SafeDisabled in this wave."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Escaping-descendant fixture never yields Activated.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Group snapshots never claim complete proof.",
+        "macOS write execution stays SafeDisabled.",
+        "No recycled foreign process is signalled."
+      ],
+      "depends_on": [
+        "P05",
+        "P10"
+      ],
+      "estimated_loc": 260,
+      "suggested_skills": []
+    },
+    {
+      "id": "P12",
+      "title": "Persist runtime-consumed SafetyCapabilityReport",
+      "serves": [
+        "activation"
+      ],
+      "description": "Content-address reports by OS/arch/boot/backend/policy/helper/executable/probe identity and separate SafeDisabled from Activated.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-store/src/v1/schema.rs",
+          "action": "modify",
+          "what": "Add safety report table/migration."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/safety.rs",
+          "action": "create",
+          "what": "Persist/reload/invalidate reports."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/mod.rs",
+          "action": "modify",
+          "what": "Expose repository."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox.rs",
+          "action": "create",
+          "what": "Define report material and activation predicate."
+        },
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Expose read-only diagnostics."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Route local diagnostic."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-store/tests/s12_safety_reports.rs",
+        "crates/r-code-runtime/tests/s12_safety_api.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P12.1",
+          "description": "Hash platform, BootIdentity, backend/policy/helper/executable and probe material."
+        },
+        {
+          "id": "P12.2",
+          "description": "Invalidate on any identity/boot/policy change and regenerate at startup."
+        },
+        {
+          "id": "P12.3",
+          "description": "SafeDisabled may pass portability but never O-GATE/release activation for advertised writes."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Tampered/stale/foreign reports never activate; restart regeneration is idempotent.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Only exact current report can activate.",
+        "Unsupported is visible but never Activated.",
+        "No unsigned-report claim is made."
+      ],
+      "depends_on": [
+        "P00",
+        "P01",
+        "P05"
+      ],
+      "estimated_loc": 360,
+      "suggested_skills": []
+    },
+    {
+      "id": "P13",
+      "title": "Define sandbox profiles, native probe protocol and activation gates",
+      "serves": [
+        "sandbox",
+        "activation"
+      ],
+      "description": "Freeze exact filesystem/FD/env/network semantics, create a content-addressed probe helper and keep router/run negotiation fail-closed.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox.rs",
+          "action": "modify",
+          "what": "Add backend contract, fake backend and probe runner."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-safety-probe.rs",
+          "action": "create",
+          "what": "Implement versioned request/result deny-probe helper."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/router.rs",
+          "action": "modify",
+          "what": "Deny guessed Process/Verification unless Activated."
+        },
+        {
+          "path": "crates/r-code-runtime/src/run_manager.rs",
+          "action": "modify",
+          "what": "Gate discovery on exact report."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s13_sandbox_contract.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P13.1",
+          "description": "Define read/write/scratch/toolchain/cache/.git/FD/env and Offline/PublicInternetClient/HostNetwork material."
+        },
+        {
+          "id": "P13.2",
+          "description": "Probe outside write, .git, network, registry/keychain, devices, IPC, child escape and env leakage."
+        },
+        {
+          "id": "P13.3",
+          "description": "Bind helper/policy digest and persist Activated only when all required probes pass."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Omitted/ambiguous/forged probe results remain SafeDisabled.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No OS-name/binary-presence inference.",
+        "Network classes are distinct.",
+        "Discovery and guessed calls fail closed."
+      ],
+      "depends_on": [
+        "P12"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P14",
+      "title": "Journal Windows AppContainer ACL deltas",
+      "serves": [
+        "sandbox",
+        "ownership"
+      ],
+      "description": "Persist Before plus PlannedDelta before ACL mutation, read back ActualAfter after apply, and restore only by physical/ACL CAS.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [
+        "windows-sys 0.61.2"
+      ],
+      "files": [
+        {
+          "path": "crates/r-code-store/src/v1/schema.rs",
+          "action": "modify",
+          "what": "Add ACL operation table."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/safety.rs",
+          "action": "modify",
+          "what": "Implement Prepared/Applied/Restored/Conflict repository."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox/windows.rs",
+          "action": "create",
+          "what": "Capture/apply/readback/restore descriptors."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s14_windows_acl_recovery.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P14.1",
+          "description": "Persist physical identity, Before self-relative descriptor and canonical PlannedDelta before apply."
+        },
+        {
+          "id": "P14.2",
+          "description": "Read back normalized ActualAfter; Prepared recovery classifies Before, exact delta or Conflict."
+        },
+        {
+          "id": "P14.3",
+          "description": "Restore Before only when identity/current ACL equal ActualAfter."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Inherited/noncanonical ACE ordering and crashes before/after apply/readback recover or quarantine.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No unjournaled ACL mutation.",
+        "Recovery is semantic/CAS-safe.",
+        "External ACL edits are preserved."
+      ],
+      "depends_on": [
+        "P07",
+        "P12"
+      ],
+      "estimated_loc": 380,
+      "suggested_skills": []
+    },
+    {
+      "id": "P15",
+      "title": "Implement Windows AppContainer policy and launch",
+      "serves": [
+        "sandbox",
+        "tree-containment"
+      ],
+      "description": "Compose HANDLE_LIST, JOB_LIST and SECURITY_CAPABILITIES; grant only explicit executable/toolchain/path ACLs.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox/windows.rs",
+          "action": "modify",
+          "what": "Create SID, explicit ACL plan, security capabilities and probes."
+        },
+        {
+          "path": "crates/r-code-runtime/src/process_guard/windows.rs",
+          "action": "modify",
+          "what": "Accept SECURITY_CAPABILITIES in STARTUPINFOEX."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Enable exact isolation/security/ACL APIs."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s15_windows_appcontainer.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P15.1",
+          "description": "Grant traversal and explicit files/subtrees; never recursive workspace/.git."
+        },
+        {
+          "id": "P15.2",
+          "description": "Offline has no network; PublicInternetClient adds internetClient only; HostNetwork unsupported."
+        },
+        {
+          "id": "P15.3",
+          "description": "Probe under same Job/lowbox and reconcile ACL after proof."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Real lowbox denies outside/.git/registry/device/IPC/private-loopback network and permits exact grants.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Lowbox/Job/ACL finish before resume.",
+        "No provider secret/daemon handle inheritance.",
+        "Failure is SafeDisabled with ACL recovery."
+      ],
+      "depends_on": [
+        "P13",
+        "P14"
+      ],
+      "estimated_loc": 400,
+      "suggested_skills": []
+    },
+    {
+      "id": "P16",
+      "title": "Build non-activating pinned bwrap launch plan",
+      "serves": [
+        "sandbox",
+        "tree-containment"
+      ],
+      "description": "Verify immutable /usr/bin/bwrap >=0.8.0 and construct one user/mount/pid namespace returning outer bwrap and namespace-init identity/fd; do not activate yet.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox/linux.rs",
+          "action": "create",
+          "what": "Build bwrap mount/network/pid plan and identity handoff."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox.rs",
+          "action": "modify",
+          "what": "Register non-activating Linux plan."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s16_linux_bwrap.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P16.1",
+          "description": "Verify bwrap owner/mode/version and usable rootless namespaces."
+        },
+        {
+          "id": "P16.2",
+          "description": "Create exactly one --unshare-pid namespace and return outer pid plus namespace PID1/reaper identity/fd."
+        },
+        {
+          "id": "P16.3",
+          "description": "Mount workspace ro, exact writes/scratch rw, .git hidden and explicit network namespace."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Real bwrap plan proves mount/FD/env/network layout but cannot activate before P09/P17.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Exactly one component owns PID namespace/PID1.",
+        "Missing handoff is SafeDisabled.",
+        "Task cannot activate execution."
+      ],
+      "depends_on": [
+        "P08",
+        "P13"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P09",
+      "title": "Prove the exact bwrap PID namespace or delegated cgroup",
+      "serves": [
+        "tree-containment",
+        "ownership"
+      ],
+      "description": "Consume P16 identity and prove every descendant through the one namespace PID1/reaper; delegated cgroup v2 is optional, process groups are insufficient.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/process_guard/unix.rs",
+          "action": "modify",
+          "what": "Persist/prove outer bwrap and namespace/cgroup identities."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/process_supervisor.rs",
+          "action": "modify",
+          "what": "Register Linux proof capability."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s09_linux_tree_proof.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P09.1",
+          "description": "Persist outer and namespace-init pidfds/start identities/namespace inode before release."
+        },
+        {
+          "id": "P09.2",
+          "description": "Make namespace PID1 reap; terminate until namespace empty."
+        },
+        {
+          "id": "P09.3",
+          "description": "Optionally use delegated cgroup v2; otherwise missing proof stays SafeDisabled."
+        }
+      ],
+      "tests": [
+        {
+          "description": "setsid/double-fork is contained; recycled pid/missing delegation is Unverifiable.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No nested second PID namespace.",
+        "Leader/process-group exit is never proof.",
+        "All members are reaped."
+      ],
+      "depends_on": [
+        "P05",
+        "P08",
+        "P16"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P17",
+      "title": "Compile and attach Linux seccomp policy",
+      "serves": [
+        "sandbox"
+      ],
+      "description": "Pin seccompiler 0.5.0, validate x86_64/aarch64 and pass reviewed BPF through bwrap's seccomp FD.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [
+        "seccompiler 0.5.0"
+      ],
+      "files": [
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Pin seccompiler 0.5.0."
+        },
+        {
+          "path": "Cargo.lock",
+          "action": "modify",
+          "what": "Lock graph."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Enable Linux-only dependency."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox/linux.rs",
+          "action": "modify",
+          "what": "Compile/pass/probe filter."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s17_linux_seccomp.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P17.1",
+          "description": "Support only x86_64/aarch64 audit arch."
+        },
+        {
+          "id": "P17.2",
+          "description": "Mask namespace bits on clone; return ENOSYS for clone3; deny setns/unshare/mount/ptrace/bpf/keyring/module/reboot."
+        },
+        {
+          "id": "P17.3",
+          "description": "Pass non-leaking BPF FD and prove Rust threads/Cargo/Node/subprocesses still work."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Namespace escape fails while ordinary runtimes work on x86_64/aarch64.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No Linux activation without seccomp.",
+        "Unknown arch/compile failure SafeDisabled.",
+        "Workload cannot inherit seccomp FD."
+      ],
+      "depends_on": [
+        "P09",
+        "P16"
+      ],
+      "estimated_loc": 280,
+      "suggested_skills": []
+    },
+    {
+      "id": "P18",
+      "title": "Implement macOS Seatbelt diagnostics and a single-process Harness profile",
+      "serves": [
+        "sandbox",
+        "tree-containment"
+      ],
+      "description": "Use immutable /usr/bin/sandbox-exec; keep write profiles SafeDisabled, but allow NoWorkspaceSingleProcess only with a launchable content-addressed Native profile: fork denied, exec denied except the exact initial Harness replacement, and only immutable macOS runtime read roots.",
+      "building_blocks": [
+        "Seatbelt literal policy",
+        "exact initial-exec exception",
+        "content-addressed Native executable",
+        "probe-derived dyld/system runtime read baseline",
+        "single leader proof"
+      ],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox/macos.rs",
+          "action": "create",
+          "what": "Build literal deny-default profiles and probes."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/sandbox.rs",
+          "action": "modify",
+          "what": "Register diagnostic macOS backend/disabled reason."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s18_macos_seatbelt.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P18.1",
+          "description": "Verify immutable sandbox-exec and exact Native harness path/digest; deny process-fork and deny process-exec except the literal content-addressed Harness executable used for initial replacement."
+        },
+        {
+          "id": "P18.2",
+          "description": "Probe and freeze minimal immutable runtime reads (for example /usr/lib, /System/Library and required dyld cache roots); deny user homes, workspace, keychain, network and host IPC."
+        },
+        {
+          "id": "P18.3",
+          "description": "Bind executable digest and runtime-read policy digest into SafetyCapabilityReport; changed executable/policy invalidates activation while Check/Process/Shell writes remain SafeDisabled."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Native Harness starts/completes and dynamic loading works; fork and exec /bin/sh/non-approved binaries fail; executable/runtime policy changes invalidate activation.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Initial exact Harness exec and immutable system runtime reads are explicitly allowed.",
+        "Fork and every non-approved exec are denied.",
+        "Write capabilities remain SafeDisabled and report identity covers executable/runtime policy."
+      ],
+      "depends_on": [
+        "P11",
+        "P13"
+      ],
+      "estimated_loc": 280,
+      "suggested_skills": []
+    },
+    {
+      "id": "P11R",
+      "title": "Retry quarantine proof with complete platform provers",
+      "serves": [
+        "ownership",
+        "activation"
+      ],
+      "description": "Retry exact platform proof; legacy rows may clear only via RebootProof when current stable BootIdentity differs from migrated_observed_boot_id.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Invoke exact persisted platform prover."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Add authenticated safety.quarantine.retry."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/operations.rs",
+          "action": "modify",
+          "what": "CAS proof and clear matching epoch only."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s11r_quarantine_retry.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P11R.1",
+          "description": "Dispatch ordinary rows by persisted platform/tree identity, never PID alone."
+        },
+        {
+          "id": "P11R.2",
+          "description": "For LegacyUnverifiable refuse same boot; after a different boot persist RebootProof then fenced clear."
+        },
+        {
+          "id": "P11R.3",
+          "description": "Append actor/session/proof audit and reject stale epoch or SafeDisabled/Unverifiable."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Same-boot legacy refusal, post-reboot clearing, stale epoch and audit persistence are deterministic.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No force-clear exists.",
+        "RebootProof requires stable changed BootIdentity.",
+        "Unverifiable ordinary trees remain blocked."
+      ],
+      "depends_on": [
+        "P02",
+        "P07",
+        "P09",
+        "P11"
+      ],
+      "estimated_loc": 240,
+      "suggested_skills": []
+    },
+    {
+      "id": "P19A",
+      "title": "Freeze Shell effect/network contracts and storage",
+      "serves": [
+        "shell-contract"
+      ],
+      "description": "Hash effect classes/network ceiling into Plan/Run and persist separate exact-plan effect approval records; product decision flow is P19B. These public WorkUnit fields advance Wave 3 API to v1.2.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-harness-protocol/src/services.rs",
+          "action": "modify",
+          "what": "Add WorkUnit effect/network fields."
+        },
+        {
+          "path": "crates/r-code-kernel/src/task.rs",
+          "action": "modify",
+          "what": "Carry effect authority into WorkUnit/RunSnapshot."
+        },
+        {
+          "path": "crates/r-code-kernel/src/plans.rs",
+          "action": "modify",
+          "what": "Normalize/hash/validate fields."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/schema.rs",
+          "action": "modify",
+          "what": "Add immutable effect approvals."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/plans.rs",
+          "action": "modify",
+          "what": "Persist/validate exact approval records."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/run_snapshots.rs",
+          "action": "modify",
+          "what": "Require exact effect approval for expansion."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/schema/harness-v1.schema.json",
+          "action": "modify",
+          "what": "Freeze WorkUnit effect/network fields for API v1.2."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/catalog.rs",
+          "action": "modify",
+          "what": "Advance HOST_API to v1.2 with additive compatibility tests."
+        },
+        {
+          "path": "plugins/native/harness.json",
+          "action": "modify",
+          "what": "Require apiMinor 2 when emitting effect/network WorkUnits."
+        },
+        {
+          "path": "scripts/harness-packaging.test.mjs",
+          "action": "modify",
+          "what": "Freeze native package minor/schema parity."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-kernel/tests/s19a_effect_contract.rs",
+        "crates/r-code-store/tests/s19a_effect_store.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P19A.1",
+          "description": "Define ReadOnly/WorkspaceMutation/DependencyPreparation and Offline/PublicInternetClient/HostNetwork ceiling."
+        },
+        {
+          "id": "P19A.2",
+          "description": "Hash into Plan and invalidate approvals on any change."
+        },
+        {
+          "id": "P19A.3",
+          "description": "Store task/plan/WorkUnit/class/network actor/session/scope identity."
+        },
+        {
+          "id": "P19A.4",
+          "description": "Advance host/native minor to 1.2; v1.0/v1.1 packages continue only when they do not require effect fields."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Stale/foreign/weaker/different approvals cannot build snapshots.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Mutable settings never authorize effects.",
+        "Network expansion requires exact record.",
+        "Platform-incompatible class fails.",
+        "A package requiring effect/network fields cannot declare an older minor."
+      ],
+      "depends_on": [
+        "P13"
+      ],
+      "estimated_loc": 400,
+      "suggested_skills": []
+    },
+    {
+      "id": "P19B-R",
+      "title": "Implement authenticated effect approval runtime flow",
+      "serves": [
+        "shell-contract",
+        "activation"
+      ],
+      "description": "Reuse ApprovalStore pending operations to create/list/revoke immutable effect approvals after exact authenticated decisions; this task owns only runtime/store/RPC semantics.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Request/materialize/list/revoke exact approvals."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Add scoped effect RPCs and reuse approvals.decide."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/approval_store.rs",
+          "action": "modify",
+          "what": "Bind pending payload hash to task/plan/WorkUnit/class/network."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s19br_effect_approval_flow.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P19B-R.1",
+          "description": "Create host-owned pending request for exact task/plan/WorkUnit/class/network payload."
+        },
+        {
+          "id": "P19B-R.2",
+          "description": "Grant persists actor/session/scope; deny/expiry creates no approval; retries are idempotent."
+        },
+        {
+          "id": "P19B-R.3",
+          "description": "List/revoke audit; revocation is future-runs-only and cannot mutate frozen RunSnapshot."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Grant/deny/expire/revoke/stale/duplicate/concurrent decisions persist exactly one immutable approval.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No plugin can mint approval.",
+        "Runtime RPCs expose exact request/list/revoke material.",
+        "P19B-C can render one canonical payload."
+      ],
+      "depends_on": [
+        "P19A"
+      ],
+      "estimated_loc": 300,
+      "suggested_skills": []
+    },
+    {
+      "id": "P19B-C",
+      "title": "Connect effect approvals to TUI, remote and desktop clients",
+      "serves": [
+        "shell-contract",
+        "activation"
+      ],
+      "description": "Render and decide the same exact non-rollbackable authority through TUI, remote projection and the desktop Harness v1 bridge/typed IPC/Permissions/Canvas.",
+      "building_blocks": [
+        "shared effect approval material",
+        "desktop daemon bridge",
+        "typed IPC",
+        "client capability gates"
+      ],
+      "tools": [
+        "Tauri",
+        "React",
+        "TUI"
+      ],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-tui/src/approval_overlay.rs",
+          "action": "modify",
+          "what": "Render exact non-rollbackable authority."
+        },
+        {
+          "path": "src-tauri/frontend/src/remote/core/approvals-aggregate.ts",
+          "action": "modify",
+          "what": "Project material/decision."
+        },
+        {
+          "path": "src-tauri/frontend/src/remote/core/capability-ui.ts",
+          "action": "modify",
+          "what": "Require independent scope."
+        },
+        {
+          "path": "src-tauri/src/harness_v1.rs",
+          "action": "modify",
+          "what": "Expose effect request/list/revoke and approvals decision through the desktop daemon bridge."
+        },
+        {
+          "path": "src-tauri/src/lib.rs",
+          "action": "modify",
+          "what": "Register desktop commands/events."
+        },
+        {
+          "path": "src-tauri/frontend/src/lib/ipc.ts",
+          "action": "modify",
+          "what": "Add typed effect approval IPC methods/material."
+        },
+        {
+          "path": "src-tauri/frontend/src/components/room/Permissions.tsx",
+          "action": "modify",
+          "what": "Render exact shell/network authority and request/list/revoke outcomes."
+        },
+        {
+          "path": "src-tauri/frontend/src/components/room/Canvas.tsx",
+          "action": "modify",
+          "what": "Use shared desktop approval presentation in the workbench."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-tui/tests/s19bc_effect_approval.rs",
+        "src-tauri/tests/s19b_effect_bridge.rs",
+        "src-tauri/frontend/src/remote/core/s19bc-effect-approval.test.mjs",
+        "src-tauri/frontend/scripts/s19bc-desktop-approval.test.mjs"
+      ],
+      "subtasks": [
+        {
+          "id": "P19B-C.1",
+          "description": "TUI and remote render task/plan/WorkUnit/class/network plus future-runs-only revocation warning."
+        },
+        {
+          "id": "P19B-C.2",
+          "description": "Tauri bridge and command registration expose request/list/revoke/decide through typed IPC."
+        },
+        {
+          "id": "P19B-C.3",
+          "description": "Permissions and Canvas share one renderer; capability absence makes controls read-only/hidden."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Tauri bridge test proves exact request reaches approvals.decide and materializes one approval.",
+          "kind": "e2e"
+        },
+        {
+          "description": "Desktop Permissions/Canvas static integration exercises typed IPC and exact material; TUI/remote parity holds.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Desktop/TUI/remote display identical authority.",
+        "Authenticated decision materializes exactly one approval.",
+        "Revocation is visibly future-runs-only."
+      ],
+      "depends_on": [
+        "P19B-R"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P20",
+      "title": "Migrate required Checks to supervisor+sandbox",
+      "serves": [
+        "launch-convergence",
+        "sandbox"
+      ],
+      "description": "Remove production LocalShellBackend from VerificationRunner; run offline checks only through exact Activated platform profile and complete proof.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/execution.rs",
+          "action": "modify",
+          "what": "Require injected Activated backend; local test-only."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/verification.rs",
+          "action": "modify",
+          "what": "Run Check offline and bind sandbox/tree/output identities."
+        },
+        {
+          "path": "crates/r-code-runtime/src/run_manager.rs",
+          "action": "modify",
+          "what": "Gate internal Check execution."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s20_sandboxed_checks.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P20.1",
+          "description": "Construct exact executable/argv/cwd/toolchain/read roots Offline SpawnSpec."
+        },
+        {
+          "id": "P20.2",
+          "description": "No activation means CheckUnavailable and zero spawn."
+        },
+        {
+          "id": "P20.3",
+          "description": "Persist evidence after drain/proof with complete fingerprint."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Unavailable report produces no local spawn.",
+          "kind": "integration"
+        },
+        {
+          "description": "Passing fake/native check reaches ReviewReady after proof.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No production LocalShellBackend.",
+        "Check itself always Offline.",
+        "Evidence stales on identity change."
+      ],
+      "depends_on": [
+        "P15",
+        "P17",
+        "P18"
+      ],
+      "estimated_loc": 360,
+      "suggested_skills": []
+    },
+    {
+      "id": "P21",
+      "title": "Separate dependency preparation with immutable cache promotion",
+      "serves": [
+        "launch-convergence",
+        "shell-contract"
+      ],
+      "description": "Use content-addressed read-only lower cache plus run-owned overlay; network fetch is separately approved and promoted only after validation.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/verification_inputs.rs",
+          "action": "modify",
+          "what": "Use supervisor, private overlay and promoted cache."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/execution.rs",
+          "action": "modify",
+          "what": "Add DependencyPreparation class/cache mounts."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/authorization.rs",
+          "action": "modify",
+          "what": "Require exact network effect approval."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s21_dependency_preparation.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P21.1",
+          "description": "Mount immutable lock/toolchain lower cache ro and run overlay; node_modules stays private."
+        },
+        {
+          "id": "P21.2",
+          "description": "Use cargo fetch --locked and npm ci --ignore-scripts/equivalent hook denial."
+        },
+        {
+          "id": "P21.3",
+          "description": "Validate then atomically promote under host lock; Check mounts promoted cache ro."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Cold/warm/poisoned cache, interrupted promotion, package scripts and network audit are isolated.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Check remains Offline.",
+        "No provider credentials in prep env.",
+        "No overlay reused by Check."
+      ],
+      "depends_on": [
+        "P19B-R",
+        "P19B-C",
+        "P20"
+      ],
+      "estimated_loc": 320,
+      "suggested_skills": []
+    },
+    {
+      "id": "P22",
+      "title": "Migrate interactive Process service for non-workspace profiles",
+      "serves": [
+        "launch-convergence",
+        "process-wire"
+      ],
+      "description": "Implement open/read/write/close on supervisor for NoWorkspace/ScratchOnly profiles; CurrentCheckoutWrite remains hidden until P27/P24B.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/process_profiles.rs",
+          "action": "modify",
+          "what": "Add ProcessProfileEffect enum."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/processes.rs",
+          "action": "modify",
+          "what": "Replace direct spawn with supervisor handles/read."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/router.rs",
+          "action": "modify",
+          "what": "Grant complete Process set only under predicate."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s22_managed_process.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P22.1",
+          "description": "Resolve profile to sandbox SpawnSpec and persist before resume."
+        },
+        {
+          "id": "P22.2",
+          "description": "Implement bounded read and validated frame writes."
+        },
+        {
+          "id": "P22.3",
+          "description": "Fence restart handles; hide CurrentCheckoutWrite."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Interactive frames/backpressure/cancel/restart are exact-once/fail-closed.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No direct spawn.",
+        "Handles scope to run/attempt/tree.",
+        "Workspace writes remain undiscoverable."
+      ],
+      "depends_on": [
+        "P03",
+        "P15",
+        "P17",
+        "P18"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P23",
+      "title": "Migrate Harness PluginProcess to supervisor",
+      "serves": [
+        "launch-convergence",
+        "supervisor"
+      ],
+      "description": "Route Native/third-party transport through offline no-workspace/no-provider-secret sandbox before initialize; managed-login harness remains deferred. Child-process manifest semantics advance HOST_API to final Wave 3 minor v1.3.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/plugins/transport.rs",
+          "action": "modify",
+          "what": "Use supervisor I/O/tree handle."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/session.rs",
+          "action": "modify",
+          "what": "Initialize after persisted resume; settle after drain/proof."
+        },
+        {
+          "path": "crates/r-code-runtime/src/run_manager.rs",
+          "action": "modify",
+          "what": "Inject report and quarantine failures."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/src/manifest.rs",
+          "action": "modify",
+          "what": "Add additive child-process requirement metadata; absent defaults to may-spawn."
+        },
+        {
+          "path": "crates/r-code-harness-protocol/schema/harness-v1.schema.json",
+          "action": "modify",
+          "what": "Freeze single-process/may-spawn manifest field."
+        },
+        {
+          "path": "plugins/native/harness.json",
+          "action": "modify",
+          "what": "Declare Native no-child-process requirement."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/catalog.rs",
+          "action": "modify",
+          "what": "Advance HOST_API to v1.3 and enforce required child-process guarantee minor."
+        },
+        {
+          "path": "scripts/harness-packaging.test.mjs",
+          "action": "modify",
+          "what": "Freeze final native apiMinor 3 package digest/schema."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s23_harness_supervision.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P23.1",
+          "description": "Build clean offline no-workspace/no-secret SpawnSpec and read manifest child-process requirement."
+        },
+        {
+          "id": "P23.2",
+          "description": "On macOS use P18 NoWorkspaceSingleProcess only for declared no-child manifests and exact executable/runtime policy; deny fork and all non-approved exec, then prove the single leader."
+        },
+        {
+          "id": "P23.3",
+          "description": "On Windows/Linux contain immediate grandchild; daemon crash/cancel proves tree or quarantines."
+        },
+        {
+          "id": "P23.4",
+          "description": "Advance final Wave 3 host/native minor to 1.3; reject packages that require single-process guarantee while declaring <=1.2."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Native Harness initial exec/dynamic loading succeeds; fork and /bin/sh exec are denied on macOS; immediate grandchild is tree-contained on Windows/Linux; undeclared third-party Harness stays macOS SafeDisabled.",
+          "kind": "e2e"
+        },
+        {
+          "description": "Older host/minor cannot install a package requiring the single-process guarantee; additive older packages remain compatible.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No direct PluginProcess child.",
+        "Mac Native runs only under proven no-fork/no-exec single-process profile.",
+        "Other completion follows full proof/drain.",
+        "Final Wave 3 HOST_API is v1.3 and downgrade refusal is explicit."
+      ],
+      "depends_on": [
+        "P15",
+        "P17",
+        "P18",
+        "P22"
+      ],
+      "estimated_loc": 380,
+      "suggested_skills": []
+    },
+    {
+      "id": "P24A",
+      "title": "Inventory and guard all launch bypasses without activation",
+      "serves": [
+        "launch-convergence",
+        "activation"
+      ],
+      "description": "Migrate/guard raw launch sites and add source guard while every new Process/Check/Harness/Shell production grant remains hidden.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Wire dormant components only."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Regenerate diagnostics without activation."
+        },
+        {
+          "path": "crates/r-code-tui/src/bang_exec.rs",
+          "action": "modify",
+          "what": "Route to daemon or Unsupported."
+        },
+        {
+          "path": "scripts/check-process-launch-boundary.mjs",
+          "action": "create",
+          "what": "Allowlist raw spawn to guardian/supervisor/tests."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "action": "modify",
+          "what": "Run guard."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s24a_composition.rs",
+        "scripts/check-process-launch-boundary.test.mjs"
+      ],
+      "subtasks": [
+        {
+          "id": "P24A.1",
+          "description": "Inventory runtime/gateway/TUI/plugins Command/spawn/LocalShell sites."
+        },
+        {
+          "id": "P24A.2",
+          "description": "Migrate/disable each; keep capabilities hidden."
+        },
+        {
+          "id": "P24A.3",
+          "description": "Fail CI on new direct/private launch paths."
+        }
+      ],
+      "tests": [
+        {
+          "description": "SafeDisabled composition spawns nothing; source guard catches fixtures.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "All production launch sites are owned or non-executing.",
+        "Local backend test-only.",
+        "No capability activation in this task."
+      ],
+      "depends_on": [
+        "P20",
+        "P21",
+        "P22",
+        "P23"
+      ],
+      "estimated_loc": 300,
+      "suggested_skills": []
+    },
+    {
+      "id": "P24H",
+      "title": "Package guardian and safety-probe helpers",
+      "serves": [
+        "launch-convergence",
+        "activation",
+        "release-gate"
+      ],
+      "description": "Provide a runtime-owned helper resolver usable by standalone service/TUI and stage guardian/probe sidecars through the repository's real Windows/macOS packaging scripts; build.rs remains validation-only.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/helper_binaries.rs",
+          "action": "create",
+          "what": "Resolve explicit LaunchOptions paths or verified siblings of r-code-service and verify owner/signature/digest."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Expose HelperBinaryResolver."
+        },
+        {
+          "path": "crates/r-code-runtime/src/profile.rs",
+          "action": "modify",
+          "what": "Carry optional host-owned helper directory in RuntimeProfile/LaunchOptions."
+        },
+        {
+          "path": "crates/r-code-client/src/lib.rs",
+          "action": "modify",
+          "what": "Pass installed service sibling/helper directory when auto-starting daemon for Tauri or standalone TUI."
+        },
+        {
+          "path": "scripts/build-branded-installer.ps1",
+          "action": "modify",
+          "what": "Build and stage target-triple guardian/probe sidecars for Windows."
+        },
+        {
+          "path": "scripts/manual/package-macos.sh",
+          "action": "modify",
+          "what": "Build and stage target-triple guardian/probe sidecars for macOS."
+        },
+        {
+          "path": "src-tauri/build.rs",
+          "action": "modify",
+          "what": "Validate already-staged helpers only; never launch nested cargo."
+        },
+        {
+          "path": "src-tauri/tauri.conf.json",
+          "action": "modify",
+          "what": "Bundle staged sidecars."
+        },
+        {
+          "path": "src-tauri/tauri.local-package.conf.json",
+          "action": "modify",
+          "what": "Mirror local bundle sidecars."
+        },
+        {
+          "path": "scripts/harness-packaging.test.mjs",
+          "action": "modify",
+          "what": "Test Tauri-installed and standalone-daemon layouts, substitution and omission."
+        }
+      ],
+      "test_files": [
+        "src-tauri/tests/s24h_sidecars.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P24H.1",
+          "description": "Resolve explicit absolute helper paths first, otherwise verified siblings of r-code-service; never search PATH."
+        },
+        {
+          "id": "P24H.2",
+          "description": "Stage helpers in actual Windows/macOS packaging scripts with target-triple names; build.rs validates only."
+        },
+        {
+          "id": "P24H.3",
+          "description": "Pass helper directory through r-code-client for Tauri and standalone TUI/service startup; smoke both layouts."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Packaged helpers launch and tampered/missing binaries never activate.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "r-code-runtime owns helper resolution without depending on src-tauri.",
+        "Both real packaging flows ship helpers.",
+        "Tauri and standalone daemon reject missing/tampered helpers as SafeDisabled."
+      ],
+      "depends_on": [
+        "P08",
+        "P13"
+      ],
+      "estimated_loc": 280,
+      "suggested_skills": []
+    },
+    {
+      "id": "P25",
+      "title": "Persist durable process-effect operations",
+      "serves": [
+        "process-effects",
+        "ownership"
+      ],
+      "description": "Persist command/tree/lease/before manifest/scan policy/ephemeral roots/delta state before resume; artifact lifecycle is P26A.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-store/src/v1/schema.rs",
+          "action": "modify",
+          "what": "Add process_effect_operations."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/process_effects.rs",
+          "action": "create",
+          "what": "Implement fenced states/recovery queries."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/mod.rs",
+          "action": "modify",
+          "what": "Expose repository."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-store/tests/s25_process_effect_store.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P25.1",
+          "description": "Persist operation/tree/lease/command/before/ignore/ephemeral/bounds before resume."
+        },
+        {
+          "id": "P25.2",
+          "description": "Add monotonic idempotent transitions."
+        },
+        {
+          "id": "P25.3",
+          "description": "Query incomplete startup effects and couple quarantine to receipt."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Crash every state; stale owner cannot advance.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No process resumes without durable before state.",
+        "Recovery never reruns command.",
+        "Quarantine lasts through receipt."
+      ],
+      "depends_on": [
+        "P01"
+      ],
+      "estimated_loc": 350,
+      "suggested_skills": []
+    },
+    {
+      "id": "P26A",
+      "title": "Manage process-effect artifact quota and retention",
+      "serves": [
+        "process-effects"
+      ],
+      "description": "Reserve disk before spawn, refcount/dedup manifests/inverse blobs, retain through ReviewReady/rollback and crash-safely GC after terminal receipt.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-store/src/v1/schema.rs",
+          "action": "modify",
+          "what": "Add artifact refs/reservations/retention."
+        },
+        {
+          "path": "crates/r-code-store/src/v1/process_effects.rs",
+          "action": "modify",
+          "what": "Own/release refs atomically."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/artifacts.rs",
+          "action": "modify",
+          "what": "Quota reservation/dedup/GC."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s26a_effect_artifacts.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P26A.1",
+          "description": "Preflight free space/profile quota and reserve before resume."
+        },
+        {
+          "id": "P26A.2",
+          "description": "Deduplicate with durable refs from active effect/candidate/review."
+        },
+        {
+          "id": "P26A.3",
+          "description": "GC only after terminal receipt/retention; recover interrupted refcount/GC."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Low disk, duplicate blobs, crash refcount/GC and rollback retention are safe.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No command starts without quota.",
+        "Active inverse data never collected.",
+        "GC idempotent."
+      ],
+      "depends_on": [
+        "P25"
+      ],
+      "estimated_loc": 320,
+      "suggested_skills": []
+    },
+    {
+      "id": "P26",
+      "title": "Implement bounded stable before/delta scanner",
+      "serves": [
+        "process-effects"
+      ],
+      "description": "Capture content+physical manifests and deterministic create/edit/delete/binary delta under exact scope/ignored/ephemeral policy and hard bounds.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/process_effects.rs",
+          "action": "create",
+          "what": "Implement bounded manifests/delta/CAS."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/workspaces.rs",
+          "action": "modify",
+          "what": "Expose scan/ignored/ephemeral primitives."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Expose effects."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s26_process_delta.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P26.1",
+          "description": "Bound 200k entries, 20GiB logical bytes, 120s; overflow Unavailable."
+        },
+        {
+          "id": "P26.2",
+          "description": "Reject links/out-of-scope/pre-existing ignored/ephemeral; CAS all file forms."
+        },
+        {
+          "id": "P26.3",
+          "description": "Double-capture or revalidate every identity immediately before launch release."
+        },
+        {
+          "id": "P26.4",
+          "description": "Capture twice after exit to detect post-exit drift."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Large/binary/delete/create/link/ignored/ephemeral fixtures are deterministic.",
+          "kind": "integration"
+        },
+        {
+          "description": "Concurrent initial-scan edits abort before user code.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "Every file has content+physical identity.",
+        "Unbounded/ambiguous scan cannot receipt.",
+        "Foreign bytes preserved."
+      ],
+      "depends_on": [
+        "P13",
+        "P25",
+        "P26A"
+      ],
+      "estimated_loc": 400,
+      "suggested_skills": []
+    },
+    {
+      "id": "P27",
+      "title": "Recover process effects without command re-execution",
+      "serves": [
+        "process-effects",
+        "launch-convergence"
+      ],
+      "description": "Wrap workspace-writing processes with repo-exclusive ownership and recover by terminate/prove/measure/reconcile, updating every write-capable launch call site.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/process_effects.rs",
+          "action": "modify",
+          "what": "Execute/recover/reconcile envelope."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mutations.rs",
+          "action": "modify",
+          "what": "Persist measured multi-file deltas."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/processes.rs",
+          "action": "modify",
+          "what": "Wrap CurrentCheckoutWrite."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/verification_inputs.rs",
+          "action": "modify",
+          "what": "Wrap any checkout-writing preparation."
+        },
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Recover incomplete effects before write ingress."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s27_process_effect_recovery.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P27.1",
+          "description": "Acquire repo-exclusive, persist before, resume once and attach tree."
+        },
+        {
+          "id": "P27.2",
+          "description": "Normal/restart: prove tree, scan once, persist delta/receipts and release."
+        },
+        {
+          "id": "P27.3",
+          "description": "Out-of-scope/unattributable drift Conflict; never rerun."
+        },
+        {
+          "id": "P27.4",
+          "description": "NoWorkspace/ScratchOnly skip checkout delta; CurrentCheckoutWrite never does."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Fault every boundary and assert one spawn plus exact forward recovery.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Lost receipt never repeats command.",
+        "Lease/quarantine lasts through receipt.",
+        "CAS rollback preserves later edits."
+      ],
+      "depends_on": [
+        "P24A",
+        "P25",
+        "P26"
+      ],
+      "estimated_loc": 400,
+      "suggested_skills": []
+    },
+    {
+      "id": "P28",
+      "title": "Expose only exact-approved sandboxed Shell",
+      "serves": [
+        "shell-contract",
+        "process-effects"
+      ],
+      "description": "Add Shell only for frozen WorkUnit effect authority and active platform-compatible approval, via ProcessEffectEnvelope.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/tools.rs",
+          "action": "modify",
+          "what": "Expose/call exact shell."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/authorization.rs",
+          "action": "modify",
+          "what": "Validate class/cwd/repo/network approval."
+        },
+        {
+          "path": "crates/r-code-runtime/src/run_manager.rs",
+          "action": "modify",
+          "what": "Inject dormant shell under final predicate."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s28_shell_gate.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P28.1",
+          "description": "Hash command/argv/cwd/env/profile."
+        },
+        {
+          "id": "P28.2",
+          "description": "Select exact Offline/PublicInternetClient/HostNetwork by platform+approval."
+        },
+        {
+          "id": "P28.3",
+          "description": "Audit network separately and run repo-exclusive envelope."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Planning/guessed/stale/unapproved/mismatched Shell is denied.",
+          "kind": "integration"
+        },
+        {
+          "description": "Approved cancel/delta/restart spawns once.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No mutable/global authority.",
+        "Offline default/network exact.",
+        "All local effects durable."
+      ],
+      "depends_on": [
+        "P19B-R",
+        "P19B-C",
+        "P27"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P24B",
+      "title": "Activate production services only after recovery",
+      "serves": [
+        "launch-convergence",
+        "activation"
+      ],
+      "description": "Grant capabilities only after exact report, supervisor/sandbox and applicable ProcessEffectEnvelope are complete.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Compose Activated backends and recovery before ingress."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Block ingress/advertisement until ready."
+        },
+        {
+          "path": "crates/r-code-runtime/src/run_manager.rs",
+          "action": "modify",
+          "what": "Grant exact per-capability predicates."
+        },
+        {
+          "path": "crates/r-code-runtime/src/plugins/router.rs",
+          "action": "modify",
+          "what": "Keep guessed calls denied."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/processes.rs",
+          "action": "modify",
+          "what": "Activate CurrentCheckoutWrite only through envelope."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s24b_activation.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P24B.1",
+          "description": "Recover ownership/effects before write ingress."
+        },
+        {
+          "id": "P24B.2",
+          "description": "Activate NoWorkspace/ScratchOnly directly; checkout writes only through envelope."
+        },
+        {
+          "id": "P24B.3",
+          "description": "Publish exact diagnostics; SafeDisabled hidden."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Every intermediate prior state exposes zero unsafe service; only final predicates activate.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "No landing order exposes unsafe writes.",
+        "SafeDisabled grants nothing.",
+        "Ingress waits recovery."
+      ],
+      "depends_on": [
+        "P20",
+        "P21",
+        "P22",
+        "P23",
+        "P24A",
+        "P27",
+        "P28"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P29",
+      "title": "Implement restricted gix status/log reader",
+      "serves": [
+        "readonly-git"
+      ],
+      "description": "Pin `gix = { version = \"=0.88.0\", default-features = false, features = [\"status\", \"revision\", \"sha1\"] }`; runtime repository options reject external filters/includes/alternates.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [
+        "gix 0.88.0"
+      ],
+      "files": [
+        {
+          "path": "Cargo.toml",
+          "action": "modify",
+          "what": "Pin exact gix 0.88.0 with status, revision and sha1 features; default features off."
+        },
+        {
+          "path": "Cargo.lock",
+          "action": "modify",
+          "what": "Lock reviewed graph."
+        },
+        {
+          "path": "crates/r-code-runtime/Cargo.toml",
+          "action": "modify",
+          "what": "Use exactly gix = { version = \"=0.88.0\", default-features = false, features = [\"status\", \"revision\", \"sha1\"] }; attributes/command arrive transitively but runtime disables process filters."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/git_read.rs",
+          "action": "create",
+          "what": "Implement reader and safe repository options."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/mod.rs",
+          "action": "modify",
+          "what": "Expose internally."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s29_gix_status_log.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P29.1",
+          "description": "Open canonical repo/common-dir and reject external config includes/alternates."
+        },
+        {
+          "id": "P29.2",
+          "description": "Configure attributes/filter plumbing so malicious process filters are rejected, never executed; expose bounded status/log."
+        },
+        {
+          "id": "P29.3",
+          "description": "Fingerprint live Git metadata and compare to a separate-copy GIT_OPTIONAL_LOCKS=0 oracle."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Status/log parity plus malicious process-filter fixture proves no command execution and no live metadata change.",
+          "kind": "integration"
+        }
+      ],
+      "acceptance_criteria": [
+        "No Git executable/filter in production.",
+        "Repository object not plugin-visible.",
+        "Reads make zero metadata changes."
+      ],
+      "depends_on": [
+        "P13"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P30",
+      "title": "Add bounded gix diff and read-only adapters",
+      "serves": [
+        "readonly-git",
+        "launch-convergence"
+      ],
+      "description": "Add bounded text/binary diff and register status/log/diff in Planning/Execution/Application without any write surface.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/src/services/git_read.rs",
+          "action": "modify",
+          "what": "Implement bounded diff."
+        },
+        {
+          "path": "crates/r-code-runtime/src/services/tools.rs",
+          "action": "modify",
+          "what": "Expose read-only descriptors."
+        },
+        {
+          "path": "crates/r-code-runtime/src/application.rs",
+          "action": "modify",
+          "what": "Expose projections."
+        },
+        {
+          "path": "crates/r-code-runtime/src/bin/r-code-service.rs",
+          "action": "modify",
+          "what": "Route read RPCs."
+        }
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/s30_gix_diff_tools.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P30.1",
+          "description": "Bound files/hunks/bytes/time and represent binary metadata."
+        },
+        {
+          "id": "P30.2",
+          "description": "Register read-only tools; no generic git descriptor."
+        },
+        {
+          "id": "P30.3",
+          "description": "Source-guard write APIs and repeat fingerprints."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Diff parity uses separate no-lock oracle; bounds/cancel/metadata invariance hold.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Only status/log/diff public.",
+        "No write/Git executable discoverable.",
+        "Bounds fail cleanly."
+      ],
+      "depends_on": [
+        "P29"
+      ],
+      "estimated_loc": 300,
+      "suggested_skills": []
+    },
+    {
+      "id": "P31",
+      "title": "Build deterministic safety conformance gate",
+      "serves": [
+        "release-gate",
+        "ownership",
+        "supervisor",
+        "sandbox",
+        "launch-convergence",
+        "process-effects",
+        "shell-contract",
+        "readonly-git"
+      ],
+      "description": "Exercise fake/native identities and every durable fault boundary; SafeDisabled never counts as Activated.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": "crates/r-code-runtime/tests/s31_safety_gate.rs",
+          "action": "create",
+          "what": "Cross-platform fake E2E."
+        },
+        {
+          "path": "scripts/verify-safety-v1.mjs",
+          "action": "create",
+          "what": "Run tests/probes/guards and emit redacted report."
+        }
+      ],
+      "test_files": [
+        "scripts/verify-safety-v1.test.mjs"
+      ],
+      "subtasks": [
+        {
+          "id": "P31.1",
+          "description": "Cover ownership/resume/output/cancel/proof, activation, effects, shell and gix."
+        },
+        {
+          "id": "P31.2",
+          "description": "Assert zero direct/private/Git bypasses."
+        },
+        {
+          "id": "P31.3",
+          "description": "Emit per-target exact Activated/SafeDisabled digests."
+        },
+        {
+          "id": "P31.4",
+          "description": "Cover legacy same-boot refusal, post-reboot RebootProof clearing and stale epoch audit."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Every omitted proof/report/receipt fails activation; report deterministic.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "O-GATE predicate requires Activated.",
+        "Faults preserve quarantine/one resume.",
+        "Report contains no secrets."
+      ],
+      "depends_on": [
+        "P24B",
+        "P24H",
+        "P27",
+        "P28",
+        "P30",
+        "P11R"
+      ],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "P32",
+      "title": "Integrate native probes into packaging and release policy",
+      "serves": [
+        "release-gate"
+      ],
+      "description": "Run native installed-layout probes; require Activated only for targets/capabilities advertised as write-enabled, while macOS may ship SafeDisabled with those capabilities hidden.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "action": "modify",
+          "what": "Run fake/native platform jobs."
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "action": "modify",
+          "what": "Enforce installed-layout applicable activation."
+        },
+        {
+          "path": "src-tauri/build.rs",
+          "action": "modify",
+          "what": "Verify sidecar inclusion."
+        },
+        {
+          "path": "src-tauri/tauri.conf.json",
+          "action": "modify",
+          "what": "Freeze helpers."
+        },
+        {
+          "path": "src-tauri/src/packaging.rs",
+          "action": "modify",
+          "what": "Run installed helper smoke/digest."
+        },
+        {
+          "path": "scripts/windows-reliability/docs-consistency-check.mjs",
+          "action": "modify",
+          "what": "Require runbook."
+        },
+        {
+          "path": "docs/support/operations/safety-boundary.md",
+          "action": "create",
+          "what": "Document prerequisites/SafeDisabled/quarantine."
+        },
+        {
+          "path": ".github/release.yml",
+          "action": "modify",
+          "what": "Keep repository release metadata consistent with helper/activation policy."
+        }
+      ],
+      "test_files": [
+        "scripts/verify-safety-v1.test.mjs",
+        "src-tauri/tests/s32_installed_safety.rs"
+      ],
+      "subtasks": [
+        {
+          "id": "P32.1",
+          "description": "Before tauri-action, every matrix target builds target-triple guardian/probe and stages exact filenames in src-tauri/binaries; Linux also installs bwrap."
+        },
+        {
+          "id": "P32.2",
+          "description": "Run AppContainer/Linux probes and record macOS write SafeDisabled; portability accepts disabled while advertised writes require Activated."
+        },
+        {
+          "id": "P32.3",
+          "description": "Inspect final AppImage/deb/MSI/dmg installed contents, launch helpers, and enforce operator/downgrade runbook."
+        }
+      ],
+      "tests": [
+        {
+          "description": "Release matrix fails when staged filenames or final package helper contents are missing/tampered; applicable Activated policy is enforced.",
+          "kind": "e2e"
+        }
+      ],
+      "acceptance_criteria": [
+        "Advertised write targets prove Activated.",
+        "macOS SafeDisabled hides O-GATE/Check/Process/Shell.",
+        "Missing/tampered helpers fail policy."
+      ],
+      "depends_on": [
+        "P31"
+      ],
+      "estimated_loc": 300,
+      "suggested_skills": []
+    }
+  ],
+  "order": [
+    "P00",
+    "P01",
+    "P02",
+    "P03",
+    "P04",
+    "P05",
+    "P06",
+    "P07",
+    "P08",
+    "P10",
+    "P11",
+    "P12",
+    "P13",
+    "P14",
+    "P15",
+    "P16",
+    "P09",
+    "P17",
+    "P18",
+    "P11R",
+    "P19A",
+    "P19B-R",
+    "P19B-C",
+    "P20",
+    "P21",
+    "P22",
+    "P23",
+    "P24A",
+    "P24H",
+    "P25",
+    "P26A",
+    "P26",
+    "P27",
+    "P28",
+    "P24B",
+    "P29",
+    "P30",
+    "P31",
+    "P32"
+  ]
+}

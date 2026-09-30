@@ -1,0 +1,61 @@
+{
+  "task_id": "P18",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s18_macos_seatbelt.rs"
+  ],
+  "tests": {
+    "command": "PLATFORM DISCIPLINE (task contract: Windows dev host + native macOS CI; no WSL, no cross-target EXECUTION): macos.rs and s18 are both #![cfg(target_os = \"macos\")] — the Windows gates prove cfg discipline, s18 parse and cross-platform dependency-graph integrity only; s18 (7 authored tests, no mocks: the pinned-binary verification with raw-stat root:wheel and 0o022 immutability re-asserted, the lifecycle e2e launching the REAL /usr/bin/sandbox-exec over a profile built by MacosSeatbeltBackend::build_profile with a canonical /bin/sh copy as the literal Harness — the process cannot start unless dyld resolves libSystem through the frozen read roots, and an explicit /private/etc/hosts read proves frozen-root reads; the fork denial survived by the parent shell ((true) subshell fails, the parent still prints FORK-DENIED — errno semantics, not a kill); exec discipline — `exec /bin/sh` fails non-zero while `exec '<harness literal>'` self-replacement succeeds, pinning the ONE allowance to the literal path; write/network/user-home denials through fork-free in-shell redirections against a test-owned tempdir leak target, a /Users/Shared marker the unsandboxed test creates (drop-guarded), and a curl-copy Harness whose outbound connect to a test-owned 127.0.0.1 listener must fail with NO connection ever accepted; the P18.3 policy identity — harness path, harness sha256 and profile text each change the seatbelt_policy_material digest, and the profile text pins exactly ONE process-exec allowance carrying the literal verbatim, an explicit (deny process-fork), per-root frozen read allowances and no /Users, network or write allowance on any allow line; fail-closed input validation — relative/untrimmed/empty/quote/backslash harness paths and .., /Users, .git, relative, quote-bearing roots refused InvalidProfile, write-capable SandboxProfileMaterial gets policy_digest Err carrying the safe-disabled reason, and an empty harness path never yields a digest; and the non-activation pins — run_probes permanently Err('non-activating', 'P20 pending'), digest determinism over the real binary, include_str! source pins that macos.rs never touches platform_activation_gate/current_platform_material/SafetyStatus::Activated and the sandbox.rs gate material stays none-this-wave with MacosSeatbeltBackend never wired in) and every Seatbelt path EXECUTE ONLY in native macOS CI and are never counted as run locally. LOCAL WINDOWS GATES (single-threaded, --no-fail-fast, raw test-result sums): rtk cargo check -p r-code-runtime --tests green with s18 compiling to an empty suite (0 tests); focused neighbor suites 90/90 across 15 s-targets plus store s01/s12 16/16; full Runtime 415 passed / 0 failed across 82 suites; Kernel 75/75; Store 416 passed / 1 failed with the ONLY failure the declared pre-existing plan_schema baseline (clean_database_and_schema_18_upgrade_reach_latest_complete_schema: migration-count assertion expects 18, schema now at 35; P18 changed no store code); harness-protocol + harness-sdk 33/33; codex plugin 13/13; cumulative 953/952/1 unchanged; rtk cargo test --workspace --all-features --no-run exit 0, rtk cargo check --workspace --all-features exit 0, rtk cargo clippy --workspace --all-features --all-targets -- -D warnings exit 0, rtk cargo fmt --all -- --check exit 0 (QA formatted only its own new test file); quality_check.py ok=true / 0 violations (macos.rs file_loc 227 max_comment_block 10 comment_ratio 0.343; sandbox.rs file_loc 545 max_comment_block 10). INDEPENDENT cross-target COMPILE verification (QA-executed, the P17 discipline): a scratch crate OUTSIDE the repo (%TEMP%/scratch-p18, deleted after the run) carrying macos.rs copied VERBATIM (byte-identical, 10000 bytes, sha256 3a0e20f82f89dd2fca6a5871d455ddffc4c49f9874b75071aadb48d95659c8f3) plus minimal super:: shims for the P13 contract items and the REAL r-code-harness-protocol as a path dependency — including a shim-side constant forcing name resolution into the cfg-gated module body (services::sandbox::macos::PINNED_SANDBOX_EXEC_PATH), so a cfg-excluded or empty file could not pass — ran cargo check --target aarch64-apple-darwin CLEAN (exit 0). This is compile-only evidence, honestly distinct from execution; SBPL syntax acceptance and the dyld sufficiency of the frozen read set remain macOS-CI e2e proofs by design (a missing allowance fails loudly there and the profile text's digest commits every change); no WSL was used and nothing was executed against the cross target.",
+    "total": 953,
+    "passed": 952,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing plan_schema baseline: migration-count assertion expects 18, schema now at 35; P18 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/sandbox/macos.rs": {
+          "file_loc": 227,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.343,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/sandbox.rs": {
+          "file_loc": 545,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.265,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS — the literal deny-default SBPL discipline holds on deep review and every Windows gate is green at the unchanged 953/952/1 baseline (only the declared plan_schema 18-vs-35): exactly ONE (allow process-exec (literal <harness>)) allowance with the path validated absolute/trimmed/quote-and-backslash-free, an explicit (deny process-fork) atop deny default, the frozen per-root immutable runtime read set (/usr/lib, /System/Library, /usr/share, /private/etc plus probed cryptex roots) with /Users reads, network*, mach-lookup, file-write* and signal all denied, the P18.3 identity binding harness path + sha256 + profile text into the report digest (any change re-identifies via the P12 predicate), write-capable classes refused a launchable policy digest outright with the refusal being the SafeDisabled reason, and run_probes permanently Err so nothing activates before P20; the sandbox.rs diff is exactly the cfg'd module registration. QA's s18 (7 tests) launches the real /usr/bin/sandbox-exec with a canonical /bin/sh-copy Harness literal and executes ONLY in native macOS CI, where the one open semantic risk is adjudicated: whether deny default lets the kernel/dyld map the harness from its temp path under the frozen read set alone — the PRD's profile sketch deliberately carries no harness file-read allowance, so a CI launch failure there is the designed loud signal to extend the frozen set (a one-line profile change), not a Windows-verifiable defect."
+}

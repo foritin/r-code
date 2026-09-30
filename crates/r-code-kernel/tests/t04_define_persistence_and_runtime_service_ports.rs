@@ -175,6 +175,7 @@ async fn fakes_implement_every_port_with_expected_shapes() {
             token.clone(),
             r_code_harness_protocol::ToolCallRequest {
                 tool: "read_file".into(),
+                operation_key: None,
                 input: serde_json::json!({"path": "a.txt"}),
             },
         )
@@ -249,7 +250,7 @@ fn kernel_dependency_graph_excludes_forbidden_crates() {
     for path in [kernel_cargo, protocol_cargo] {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         // Only the [dependencies] section is the link-time surface;
-        // dev-dependencies serve in-crate tests (e.g. the v2 store
+        // dev-dependencies serve in-crate tests (e.g. the v1 store
         // round-trip fixture) without shipping in the kernel.
         let lower = text
             .split("[dependencies]")

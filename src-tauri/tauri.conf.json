@@ -76,7 +76,9 @@
       "binaries/r-code-tui",
       "binaries/r-code-service",
       "binaries/r-code-harness-native",
-      "binaries/r-code-harness-codex"
+      "binaries/r-code-harness-codex",
+      "binaries/r-code-process-guardian",
+      "binaries/r-code-safety-probe"
     ],
     "resources": [
       "plugins/native/*",

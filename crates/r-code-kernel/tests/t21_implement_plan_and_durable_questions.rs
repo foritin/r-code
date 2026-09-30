@@ -2,9 +2,11 @@
 //!
 //! Contract tests cover dependency order, stale updates, crash-after-answer
 //! (resume once) and missing acceptance evidence, both in-memory and
-//! through the v2 store.
+//! through the v1 store.
 
-use r_code_harness_protocol::services::{QuestionsAskRequest, WorkUnitWire};
+use r_code_harness_protocol::services::{
+    NetworkCeiling, QuestionsAskRequest, WorkUnitEffectClass, WorkUnitWire,
+};
 use r_code_harness_protocol::OperationKey;
 use r_code_kernel::plans::*;
 use r_code_kernel::questions::*;
@@ -17,12 +19,24 @@ fn units() -> Vec<WorkUnitWire> {
             description: "first".into(),
             dependencies: vec![],
             acceptance: vec!["check:a".into()],
+            read_paths: vec![],
+            write_paths: vec![],
+            repo_exclusive: false,
+            ephemeral_roots: vec![],
+            effect_class: WorkUnitEffectClass::ReadOnly,
+            network_ceiling: NetworkCeiling::Offline,
         },
         WorkUnitWire {
             id: "u2".into(),
             description: "second".into(),
             dependencies: vec!["u1".into()],
             acceptance: vec![],
+            read_paths: vec![],
+            write_paths: vec![],
+            repo_exclusive: false,
+            ephemeral_roots: vec![],
+            effect_class: WorkUnitEffectClass::ReadOnly,
+            network_ceiling: NetworkCeiling::Offline,
         },
     ]
 }
@@ -182,9 +196,9 @@ fn questions_persist_answer_once_and_replay_continuations() {
 }
 
 #[test]
-fn plans_and_questions_round_trip_through_the_v2_store() {
+fn plans_and_questions_round_trip_through_the_v1_store() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let store = r_code_store::v2::V2Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
+    let store = r_code_store::v1::V1Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
 
     // Plan snapshot persistence.
     store

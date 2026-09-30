@@ -89,13 +89,13 @@ impl FanoutHub {
 /// returns, ordering (seq ascending) and the persisted-before-published
 /// invariant fall out of the store itself (F8).
 pub struct CursorPublisher {
-    store: Arc<r_code_store::v2::V2Store>,
+    store: Arc<r_code_store::v1::V1Store>,
     hub: Arc<FanoutHub>,
     cursor: u64,
 }
 
 impl CursorPublisher {
-    pub fn new(store: Arc<r_code_store::v2::V2Store>, hub: Arc<FanoutHub>) -> Self {
+    pub fn new(store: Arc<r_code_store::v1::V1Store>, hub: Arc<FanoutHub>) -> Self {
         Self {
             store,
             hub,

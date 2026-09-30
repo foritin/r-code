@@ -82,7 +82,7 @@ export function providerLabel(name: string): string {
  * agent-config 的 ProviderConfig 只有单个 `model` 字段。内置服务的候选模型
  * 现在由 `provider_catalog.rs` 提供，但它是一份会过期的静态清单，也覆盖不到
  * 用户自建的网关——所以仍然记住用户实际用过的名字，两者合并展示。
- * 等后端接上厂商的 /v1/models 发现能力后，这一层可以退成纯兜底。
+ * 后端实时发现结果另存为带线路指纹的同步快照；本表只保留手输兜底。
  */
 const CUSTOM_KEY = "r-code.provider.models";
 
@@ -110,7 +110,16 @@ const SYNCED_KEY = "r-code.provider.synced";
 interface SyncedModels {
   at: number;
   models: string[];
+  baseUrl?: string;
+  protocol?: ProviderProtocol;
 }
+
+interface SyncedModelRoute {
+  baseUrl: string;
+  protocol?: ProviderProtocol;
+}
+
+const normalizeModelRouteUrl = (value: string) => value.trim().replace(/\/+$/, "").toLowerCase();
 
 function readSynced(): Record<string, SyncedModels> {
   try {
@@ -123,14 +132,23 @@ function readSynced(): Record<string, SyncedModels> {
 }
 
 /** 持久化一次模型同步结果（设置页点开已保存服务时自动写入）。 */
-export function rememberSyncedModels(providerName: string, models: string[]): void {
+export function rememberSyncedModels(
+  providerName: string,
+  models: string[],
+  route?: SyncedModelRoute,
+): void {
   const trimmed = Array.from(
     new Set(models.map((model) => model.trim()).filter(Boolean)),
   ).slice(0, SYNCED_MODEL_CAP);
   if (trimmed.length === 0) return;
   try {
     const all = readSynced();
-    all[providerName] = { at: Date.now(), models: trimmed };
+    all[providerName] = {
+      at: Date.now(),
+      models: trimmed,
+      baseUrl: route ? normalizeModelRouteUrl(route.baseUrl) : undefined,
+      protocol: route?.protocol,
+    };
     window.localStorage.setItem(SYNCED_KEY, JSON.stringify(all));
   } catch {
     /* 受限环境下不持久化，不影响本次使用 */
@@ -138,8 +156,26 @@ export function rememberSyncedModels(providerName: string, models: string[]): vo
 }
 
 /** 最近一次同步快照；从未同步过为 null。`at` 供新鲜度判断。 */
-export function syncedModelsFor(providerName: string): SyncedModels | null {
-  return readSynced()[providerName] ?? null;
+export function syncedModelsFor(providerName: string, route?: SyncedModelRoute): SyncedModels | null {
+  const snapshot = readSynced()[providerName] ?? null;
+  if (!snapshot || !route) return snapshot;
+  // 旧版快照没有线路身份，不能拿来阻止新协议的首次同步。
+  if (!snapshot.baseUrl || !snapshot.protocol) return null;
+  if (snapshot.baseUrl !== normalizeModelRouteUrl(route.baseUrl)) return null;
+  if (route.protocol && snapshot.protocol !== route.protocol) return null;
+  return snapshot;
+}
+
+/** Provider 的线路或凭据保存成功后丢弃旧快照，下一次读取必须按新权限重拉。 */
+export function forgetSyncedModels(providerName: string): void {
+  try {
+    const all = readSynced();
+    if (!(providerName in all)) return;
+    delete all[providerName];
+    window.localStorage.setItem(SYNCED_KEY, JSON.stringify(all));
+  } catch {
+    /* 受限环境下没有可清理的持久化快照 */
+  }
 }
 
 export function rememberModel(providerName: string, model: string): void {
@@ -186,6 +222,8 @@ async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
   const rawChoices = Object.entries(response.config.providers ?? {}).map(([name, config]) => {
     const model = config.model || "";
     const preset = presetOf(config.provider_kind ?? name);
+    const protocol = response.provider_status?.[name]?.effective_protocol ?? config.protocol ?? preset?.protocol;
+    const baseUrl = config.base_url || preset?.base_url || "";
     // 配置里的模型排最前，其后是预设候选、自动同步快照，最后是用户手输过的。
     // 预设候选带能力标注（vision）；同步/手填模型能力未知，需要时经
     // resolveImageCapability 单独查询。
@@ -194,7 +232,7 @@ async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
         [
           model,
           ...(preset?.models ?? []).map((entry) => entry.id),
-          ...(syncedModelsFor(name)?.models ?? []),
+          ...(syncedModelsFor(name, { baseUrl, protocol })?.models ?? []),
           ...(custom[name] ?? []),
         ].filter(Boolean)
       )
@@ -206,7 +244,7 @@ async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
       model: model || preset?.model || name,
       models,
       ready: Boolean(response.provider_status?.[name]?.ready),
-      protocol: response.provider_status?.[name]?.effective_protocol ?? config.protocol ?? preset?.protocol,
+      protocol,
       presetModels: preset?.models,
     };
   });

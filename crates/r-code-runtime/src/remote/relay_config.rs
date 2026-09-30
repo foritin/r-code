@@ -1,7 +1,7 @@
 //! Desktop relay configuration and outbound link (R18, F12): the relay is
 //! **opt-in** — with no configured URL the daemon never dials anything
 //! (zero outbound connections, R18.A1). Configuring a URL persists it to
-//! `<harness-v2>/relay.json` and starts the outbound owner registration
+//! `<harness-v1>/relay.json` and starts the outbound owner registration
 //! loop; the status machine (unconfigured/connecting/online/backoff)
 //! mirrors the frontends' connection state machine.
 
@@ -41,8 +41,8 @@ pub enum RelayStatus {
 
 /// The owner's long-term Ed25519 identity (persisted 0600 next to the
 /// config; the Noise static key derives from it — R17).
-fn ensure_owner_identity(harness_v2_root: &std::path::Path) -> Result<PathBuf, String> {
-    let path = harness_v2_root.join("relay-identity.json");
+fn ensure_owner_identity(harness_v1_root: &std::path::Path) -> Result<PathBuf, String> {
+    let path = harness_v1_root.join("relay-identity.json");
     if !path.exists() {
         let mut seed = [0u8; 32];
         rand_core::OsRng.fill_bytes(&mut seed);
@@ -95,13 +95,13 @@ pub struct RelayLink {
 impl RelayLink {
     /// Open the link from the profile root. With no persisted config the
     /// status stays `unconfigured` and **no connection task exists**.
-    pub fn open(harness_v2_root: &std::path::Path) -> Result<Self, String> {
-        ensure_owner_identity(harness_v2_root)?;
-        let config_path = harness_v2_root.join("relay.json");
+    pub fn open(harness_v1_root: &std::path::Path) -> Result<Self, String> {
+        ensure_owner_identity(harness_v1_root)?;
+        let config_path = harness_v1_root.join("relay.json");
         let (status_tx, _) = watch::channel(RelayStatus::Unconfigured);
         let link = Self {
             config_path,
-            identity_path: harness_v2_root.join("relay-identity.json"),
+            identity_path: harness_v1_root.join("relay-identity.json"),
             status_tx,
             attempts: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         };

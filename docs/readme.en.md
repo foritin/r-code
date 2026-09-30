@@ -6,8 +6,9 @@ The top level of `docs/` contains navigation, active plans in `prd/`, and suppor
 
 | Document | Purpose |
 | --- | --- |
-| [Pluggable Harness refactor plan](./prd/pluggable-harness/plan.md) | Active architecture, plugin protocol, verification, recovery, and implementation plan; product refactor has not started (Chinese) |
-| [Pre-refactor architecture baseline](./support/archive/architecture-before-harness-v2.md) | Archived implementation reference for migration and code investigation (Chinese) |
+| [R-Code v1 unified architecture and implementation PRD](./prd/r-code-v1/index.md) | Active execution entry, evidence-backed progress, provider/planning/execution/safety boundaries, and recovery protocol (Chinese) |
+| [Harness v1 reference](./prd/pluggable-harness/architecture.md) | Implemented plugin architecture, [protocol](./prd/pluggable-harness/protocol-v1.md), and [author guide](./prd/pluggable-harness/plugin-author-guide.md); the original PRD is archived |
+| [Pre-refactor architecture baseline](./support/archive/architecture-before-pluggable-harness.md) | Archived implementation reference for migration and code investigation (Chinese) |
 | [Web tools and MCP](./support/guides/mcp.md) | Native web access, MCP management, Registry, security confirmation, cross-platform startup, and failure recovery (Chinese) |
 | [Evolution memory](./support/guides/memory.md) | Global/project scope, automatic triggers, Reviewer, approval, injection, persistence, and privacy boundaries (Chinese) |
 | [Plan mode and enhanced review](./support/guides/plan-mode.en.md) | Goals, structured human confirmation, Plan projection, feature todos, enhanced review, concurrency, and crash recovery |
@@ -24,14 +25,14 @@ The top level of `docs/` contains navigation, active plans in `prd/`, and suppor
 
 | Document | Status |
 | --- | --- |
-| [Pluggable Harness refactor](./prd/pluggable-harness/plan.md) | `ready_for_implementation`; [52 tasks](./prd/pluggable-harness/tasks.json) define execution order and acceptance; [independent review](./prd/pluggable-harness/review.json) passed |
+| [R-Code v1 unified implementation](./prd/r-code-v1/index.md) | In progress: P-GATE 9/9, M-GATE 4/4, Safety 5/39 kept; P05 is unverified WIP. Historical Harness T00–T42 evidence is preserved in the [archive](./support/archive/pluggable-harness-prd/progress.md). |
 
 ## Historical Implementation Contracts
 
 | Document | Status |
 | --- | --- |
 | [Pi-alignment + TUI plan](./support/archive/pi-alignment/pi-alignment-and-tui-prd.md) | Archived; original status belongs to its historical revision, not the active worklist |
-| [TUI v2 / R-Code CLI plan](./support/archive/tui-v2/r-code-cli-prd.md) | Archived with its research, prototype, and freeze; normative digests and historical evidence are preserved |
+| [TUI v1 / R-Code CLI plan](./support/archive/tui-v1/r-code-cli-prd.md) | Archived with its research, prototype, and freeze; normative digests and historical evidence are preserved |
 | [Historical Codex rich-interaction contract](./support/contracts/codex-rich-interaction-prd.md) | Its `38/38` evidence applies to a specific 2026-08-25 revision; the current dirty `dev` must be revalidated by M0-02 |
 | [Historical Windows command-reliability contract](./support/contracts/windows-command-reliability-prd.md) | Frozen contract for its completed revision; retained for maintenance and traceability, not as a new todo source |
 

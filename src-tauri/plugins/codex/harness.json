@@ -3,7 +3,7 @@
   "id": "codex.r-code",
   "version": "1.0.1",
   "apiMajor": 1,
-  "apiMinor": 0,
+  "apiMinor": 1,
   "displayName": "R-Code Codex Harness",
   "description": "Built-in Codex harness: App Server workflow through managed host processes with pinned process-profile constraints.",
   "supportedPlatforms": [
@@ -22,6 +22,7 @@
   ],
   "requestedHostServices": [
     "host.process.open",
+    "host.process.read",
     "host.process.write",
     "host.process.close",
     "host.tools.list",

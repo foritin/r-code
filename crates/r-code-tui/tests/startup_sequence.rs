@@ -24,7 +24,7 @@ fn render_demo() {
                 .as_bytes(),
         )
         .expect("write startup frame");
-    let live2: Vec<String> = vec!["> ask anything".into(), "状态行 v2".into()];
+    let live2: Vec<String> = vec!["> ask anything".into(), "状态行 v1".into()];
     stdout
         .write_all(
             renderer

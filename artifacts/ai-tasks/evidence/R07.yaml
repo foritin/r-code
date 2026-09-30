@@ -29,7 +29,7 @@ changed_paths:
 
 decisions:
   - DM47: HTTP/WS 分流 = 手动读请求头（限 8KiB/10s）→ /app 静态（tokio::fs， traversal 拒绝）→ 其余手写 101（tungstenite handshake::derive_accept_key）+ from_raw_socket——绕开 accept_async 吞流问题，路径完全自控（后续 /events 路由同点扩展）。
-  - DM48: app 目录 = listen 的 app_dir 参数（装配处 env R_CODE_REMOTE_APP_DIR 或 <harness-v2>/remote-app；service main 装配接在 R08/R14）。未配置=404+修复指引（不做假页面）。
+  - DM48: app 目录 = listen 的 app_dir 参数（装配处 env R_CODE_REMOTE_APP_DIR 或 <harness-v1>/remote-app；service main 装配接在 R08/R14）。未配置=404+修复指引（不做假页面）。
   - DM49: PWA transport 是 DOM WebSocket adapter（R21 PlatformAdapter 注入点）；core 投影器零 DOM 依赖（node --test 直跑，Node 24 原生 strip-types）。
   - DM50: 连接屏为占位（手动 host/port/deviceId/token——真配对流 R08/R09；凭据存 localStorage 本机，F10）。
   - DM51: PWA 的 TLS 自签信任：同源 wss 由用户首跳接受（浏览器层 TOFU）；码内指纹校验（rcode://pair fp=）在 R08 配对闭环中作为不可绕过的应用层校验。

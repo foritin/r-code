@@ -466,6 +466,17 @@ export const COMMANDS = {
     kind: "node-test",
     file: "scripts/remote/r28-checklist.test.mjs",
   },
+  // P19B-C: the remote projection of an effect approval must be the same
+  // authority the desktop and TUI render, and must fail closed. Without this
+  // registration a spec under src/remote/core/ is never executed at all.
+  "P19B-C.A1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/s19bc-effect-approval.test.mjs",
+  },
+  "P19B-C.B1": {
+    kind: "node-test",
+    file: "src-tauri/frontend/src/remote/core/s19bc-effect-approval.test.mjs",
+  },
 };
 
 function runCommand(spec) {

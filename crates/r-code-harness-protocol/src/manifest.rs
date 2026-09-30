@@ -10,6 +10,20 @@ use serde::{Deserialize, Serialize};
 /// Current harness manifest schema version.
 pub const MANIFEST_SCHEMA_VERSION: &str = "1";
 
+/// The minimum apiMinor a package must declare to ask the host for the
+/// single-process guarantee (P23.4): only a 1.3 host can enforce a declared
+/// no-fork/no-exec child-process policy, so a package that requires the
+/// guarantee cannot declare an older minor and stay compatible. The floor is
+/// also the final Wave 3 host minor — [`WAVE3_HOST_API`] derives from it.
+pub const SINGLE_PROCESS_MIN_API_MINOR: u32 = 3;
+
+/// The final Wave 3 host API the runtime negotiates and advertises (P23.4).
+/// `rpc::HOST_API_VERSION` is the protocol's declared single source of truth
+/// and must carry this exact value; while it still names an older minor the
+/// runtime catalog — the place that decides install eligibility — uses this
+/// constant, so the two can never disagree about what a package may ask for.
+pub const WAVE3_HOST_API: ApiVersion = ApiVersion::new(1, SINGLE_PROCESS_MIN_API_MINOR);
+
 /// String harness identity. Identities are opaque to the host; equality is
 /// exact string equality and they are never parsed for meaning.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -159,6 +173,8 @@ pub enum HostService {
     ToolsCall,
     #[serde(rename = "host.process.open")]
     ProcessOpen,
+    #[serde(rename = "host.process.read")]
+    ProcessRead,
     #[serde(rename = "host.process.write")]
     ProcessWrite,
     #[serde(rename = "host.process.close")]
@@ -198,6 +214,7 @@ impl HostService {
         HostService::ToolsList,
         HostService::ToolsCall,
         HostService::ProcessOpen,
+        HostService::ProcessRead,
         HostService::ProcessWrite,
         HostService::ProcessClose,
         HostService::ContextRead,
@@ -221,6 +238,7 @@ impl HostService {
             HostService::ToolsList => "host.tools.list",
             HostService::ToolsCall => "host.tools.call",
             HostService::ProcessOpen => "host.process.open",
+            HostService::ProcessRead => "host.process.read",
             HostService::ProcessWrite => "host.process.write",
             HostService::ProcessClose => "host.process.close",
             HostService::ContextRead => "host.context.read",
@@ -268,6 +286,33 @@ pub struct HarnessManifest {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub process_profiles: Vec<ProcessProfileDecl>,
+    /// P19A (API v1.2): the package declares that it emits WorkUnit
+    /// effect/network fields. A manifest carrying this flag MUST declare
+    /// apiMinor >= 2 — an older-minor package cannot require effect
+    /// fields and stay compatible (validated below and enforced again at
+    /// negotiation).
+    #[serde(
+        rename = "requiresEffectFields",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub requires_effect_fields: bool,
+    /// P23.1/P23.4 (API v1.3): the package declares that it runs as ONE
+    /// process — it never forks and never execs another image — and therefore
+    /// requires the host's single-process guarantee. A manifest carrying this
+    /// flag MUST declare apiMinor >= 3: no host below 1.3 can deny fork or
+    /// exec, so requiring the guarantee there would be a promise the host
+    /// cannot keep (refused by name in validate()). Absent (the default) is
+    /// NOT a claim of innocence: it means "undeclared", and the transport
+    /// enforces containment for it rather than trusting it. Serializing stays
+    /// byte-identical for every pre-P23 package because the flag is skipped
+    /// when false.
+    #[serde(
+        rename = "requiresSingleProcess",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub requires_single_process: bool,
 }
 
 /// Errors produced by manifest validation and capability negotiation.
@@ -279,6 +324,15 @@ pub enum ManifestError {
     InvalidHarnessId(String),
     #[error("manifest version is invalid: {0}")]
     InvalidVersion(String),
+    #[error("api {declared:?} cannot require effect fields (needs 1.2+)")]
+    EffectFieldsNeedNewerApi { declared: (u32, u32) },
+    /// P23.4: the downgrade refusal. Named by harness id and by the declaration
+    /// that asked for a guarantee this apiMinor cannot receive, so a packaging
+    /// check can match the reason text exactly.
+    #[error(
+        "harness {id:?} requires the single-process guarantee but declares api {declared:?} (needs 1.3+)"
+    )]
+    SingleProcessNeedsNewerApi { id: String, declared: (u32, u32) },
     #[error("platform {platform:?} is not supported by this host (supports {supported:?})")]
     UnsupportedPlatform {
         platform: String,
@@ -317,6 +371,25 @@ impl HarnessManifest {
             return Err(ManifestError::UnsupportedSchemaVersion {
                 found: self.schema_version.clone(),
                 expected: MANIFEST_SCHEMA_VERSION.to_string(),
+            });
+        }
+        // P19A.4: a package requiring effect/network WorkUnit fields
+        // cannot declare an apiMinor older than 2.
+        if self.requires_effect_fields && (self.api_major != 1 || self.api_minor < 2) {
+            return Err(ManifestError::EffectFieldsNeedNewerApi {
+                declared: (self.api_major, self.api_minor),
+            });
+        }
+        // P23.4: the same explicit, additive rule one minor later. A package
+        // that requires the single-process guarantee names itself and the
+        // declaration that cannot be honoured; additive older packages that
+        // never ask for the guarantee are untouched by this arm.
+        if self.requires_single_process
+            && (self.api_major != 1 || self.api_minor < SINGLE_PROCESS_MIN_API_MINOR)
+        {
+            return Err(ManifestError::SingleProcessNeedsNewerApi {
+                id: self.id.0.clone(),
+                declared: (self.api_major, self.api_minor),
             });
         }
         if !self.id.is_valid() {
@@ -474,6 +547,8 @@ impl HarnessManifestBuilder {
                 requested_host_services: Vec::new(),
                 config_schema: serde_json::json!({}),
                 process_profiles: Vec::new(),
+                requires_effect_fields: false,
+                requires_single_process: false,
             },
         }
     }
@@ -481,6 +556,22 @@ impl HarnessManifestBuilder {
     pub fn api(mut self, major: u32, minor: u32) -> Self {
         self.manifest.api_major = major;
         self.manifest.api_minor = minor;
+        self
+    }
+
+    /// P19A: declare that the package emits WorkUnit effect/network
+    /// fields (requires apiMinor >= 2; the manifest builder chain
+    /// enforces it at validate time).
+    pub fn requires_effect_fields(mut self) -> Self {
+        self.manifest.requires_effect_fields = true;
+        self
+    }
+
+    /// P23.1/P23.4: declare that the package runs as one process and requires
+    /// the host's single-process guarantee (requires apiMinor >= 3; enforced
+    /// at validate time, refused by name below it).
+    pub fn requires_single_process(mut self) -> Self {
+        self.manifest.requires_single_process = true;
         self
     }
 

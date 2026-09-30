@@ -1,0 +1,55 @@
+{
+  "task_id": "M03",
+  "iteration": 6,
+  "tests_authored": [
+    "crates/r-code-kernel/tests/m03_execution_lifecycle.rs",
+    "crates/r-code-store/tests/m03_verification_store.rs",
+    "crates/r-code-runtime/tests/m03_candidate_capture.rs",
+    "crates/r-code-runtime/tests/m03_execution_pipeline.rs",
+    "crates/r-code-runtime/tests/m03_run_snapshot.rs",
+    "crates/r-code-runtime/tests/m03_cancel_race.rs",
+    "crates/r-code-kernel/tests/t03_implement_kernel_domain_and_transitions.rs",
+    "crates/r-code-kernel/tests/t18_implement_verification_profiles_and_evidence_sto.rs",
+    "crates/r-code-kernel/tests/t20_implement_completion_arbitration.rs",
+    "crates/r-code-kernel/tests/t25_implement_terminal_cancellation_and_generation_f.rs",
+    "crates/r-code-store/tests/t05_create_v1_profile_and_durable_storage_schema.rs",
+    "crates/r-code-store/tests/t06_exact_plan_approvals.rs",
+    "crates/r-code-runtime/tests/t07_route_native_host_services.rs",
+    "crates/r-code-runtime/tests/t19_implement_host_verification_runner.rs",
+    "crates/r-code-runtime/tests/p_gate_support/mod.rs",
+    "crates/r-code-runtime/tests/p_gate_planning.rs",
+    "crates/r-code-runtime/tests/p_gate_approval.rs"
+  ],
+  "tests": {
+    "command": "M03 targeted suites; cumulative protocol/kernel/store/runtime/native/evals regressions; workspace all-feature no-run; workspace all-target Clippy -D warnings",
+    "total": 835,
+    "passed": 835,
+    "failed": 0,
+    "regression_green": true,
+    "failed_tests": []
+  },
+  "quality": {
+    "simplicity": 3,
+    "readability": 4,
+    "comment_hygiene": 5,
+    "organization": 3,
+    "style_match": 4,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "thresholds": {
+        "max_comment_block": 12,
+        "max_comment_line_len": 120,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "max_file_loc": 2600
+      },
+      "largest_changed_file_loc": 2310
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "M03 iteration 6 passes the keep gate. Exact approval-bound single-WorkUnit dispatch, Execution/Repair snapshots, CAS competition, durable Candidate/Evidence binding, pass/fail/unavailable/timeout/drift outcomes, queue stop gates, capability denial, lease cleanup, restart behavior, and cancellation ownership/transcript recovery are covered; the sole excluded Rust baseline is the pre-existing plan_schema migration-count assertion."
+}

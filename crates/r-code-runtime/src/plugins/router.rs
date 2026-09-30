@@ -4,23 +4,32 @@
 //! effectful service runs:
 //! 1. the method must exist in the protocol (fail closed);
 //! 2. the method's host service must be part of the negotiated grants;
-//! 3. the run generation must still be live (late callbacks rejected);
-//! 4. run-scoped handles must belong to this run;
-//! 5. effectful calls deduplicate through attempt-stable operation keys.
+//! 3. a host-pinned process effect above the interactive ceiling hides the
+//!    method entirely, exactly as if the protocol had no such method;
+//! 4. the run generation must still be live (late callbacks rejected);
+//! 5. run-scoped handles must belong to this run;
+//! 6. effectful calls deduplicate through attempt-stable operation keys.
 
 use r_code_harness_protocol::rpc::{error_code, RpcError, RpcNotification, RpcRequest};
 use r_code_harness_protocol::services::*;
 use r_code_harness_protocol::{ApprovalsRequest, HostService, OperationKey, RunIdentity};
 use r_code_kernel::children::ChildrenSupervisor;
+use r_code_kernel::plans::{PlanRevision, PlanRevisionMaterial};
 use r_code_kernel::ports::{
     GenerationToken, JournalStore, ModelService, ProcessService, RunGuard, ServiceError,
     ToolService,
 };
+use r_code_kernel::task::{RunSnapshot, RunSnapshotPhase, TaskExecution, TaskKind};
+use r_code_store::v1::V1Store;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::plugins::approval_store::{ApprovalStore, DEFAULT_DECISION_TIMEOUT};
+use crate::services::artifacts::{ArtifactError, ArtifactStore};
+use crate::services::context::{ContextError, TranscriptWriter, MAX_TRANSCRIPT_PAGE_LIMIT};
+use crate::services::process_profiles::ProcessProfileEffect;
 
 /// A persisted question raised by a plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,11 +71,83 @@ pub struct HostRouter {
     pub host_observations: Mutex<Vec<(String, serde_json::Value)>>,
     /// Completion proposals recorded from the plugin (arbitrated in T20).
     pub recorded_proposals: Mutex<Vec<CompletionProposalRequest>>,
+    /// Host-confirmed immutable plan publications for finalization fencing.
+    pub recorded_plan_publications: Mutex<Vec<PlanPublishReply>>,
     /// Child supervision for host.children (shared with the daemon).
     pub children: Option<Arc<Mutex<ChildrenSupervisor>>>,
     /// The parent's permission ceiling bounding spawned children.
     pub parent_ceiling: PermissionCeiling,
+    transcript: Option<Arc<TranscriptWriter>>,
+    artifacts: Option<Arc<ArtifactStore>>,
+    v1_store: Option<Arc<V1Store>>,
+    run_snapshot: Option<RunSnapshot>,
+    required_checks: Vec<String>,
+    plan_publish_enabled: bool,
+    task_kind: Option<TaskKind>,
+    /// Host-pinned process-profile effects (P22.3). A pinned workspace-write
+    /// effect keeps the whole interactive Process set unadvertised and
+    /// unroutable; an unpinned profile is resolved by the service itself,
+    /// which refuses it without starting anything.
+    process_effects: HashMap<String, ProcessProfileEffect>,
     checkpoint_revision: std::sync::atomic::AtomicU64,
+}
+
+/// Task-scoped service availability used for both negotiation and routing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RouterServiceAvailability {
+    pub model_stream: bool,
+    pub tools: bool,
+    pub context: bool,
+    pub artifacts: bool,
+    pub plan_publish: bool,
+    pub questions: bool,
+    pub approvals: bool,
+    pub checkpoints: bool,
+    pub completion: bool,
+    /// P13 activation gate for sandboxed effect services (Process* and
+    /// VerificationRun): true ONLY when an exact current
+    /// SafetyCapabilityReport evaluated to Activated. Guessed calls stay
+    /// denied; nothing may grant these services without this flag.
+    pub sandbox_activated: bool,
+}
+
+impl RouterServiceAvailability {
+    fn supports(self, service: HostService) -> bool {
+        match service {
+            HostService::ModelStream => self.model_stream,
+            HostService::ToolsList | HostService::ToolsCall => self.tools,
+            HostService::ContextRead => self.context,
+            HostService::ArtifactsPut | HostService::ArtifactsRead => self.artifacts,
+            HostService::PlanPublish => self.plan_publish,
+            HostService::QuestionsAsk => self.questions,
+            HostService::ApprovalsRequest => self.approvals,
+            HostService::CheckpointSave => self.checkpoints,
+            HostService::CompletionPropose => self.completion,
+            HostService::ProcessOpen
+            | HostService::ProcessRead
+            | HostService::ProcessWrite
+            | HostService::ProcessClose
+            | HostService::VerificationRun => self.sandbox_activated,
+            HostService::PlanUpdate
+            | HostService::ChildrenSpawn
+            | HostService::ChildrenWait
+            | HostService::ChildrenCancel => false,
+        }
+    }
+}
+
+/// Intersect manifest requests with services that are actually usable for
+/// this task. The returned vector is the single grant list shared by the
+/// router and `NegotiatedCapabilities`.
+pub fn supported_requested_services(
+    requested: &[HostService],
+    availability: RouterServiceAvailability,
+) -> Vec<HostService> {
+    requested
+        .iter()
+        .copied()
+        .filter(|service| availability.supports(*service))
+        .collect()
 }
 
 /// Which host service a wire method requires.
@@ -76,6 +157,7 @@ pub fn service_for_method(method: &str) -> Option<HostService> {
         "host.tools.list" => HostService::ToolsList,
         "host.tools.call" => HostService::ToolsCall,
         "host.process.open" => HostService::ProcessOpen,
+        "host.process.read" => HostService::ProcessRead,
         "host.process.write" => HostService::ProcessWrite,
         "host.process.close" => HostService::ProcessClose,
         "host.context.read" => HostService::ContextRead,
@@ -120,10 +202,59 @@ impl HostRouter {
             observed_events: Mutex::new(Vec::new()),
             host_observations: Mutex::new(Vec::new()),
             recorded_proposals: Mutex::new(Vec::new()),
+            recorded_plan_publications: Mutex::new(Vec::new()),
             children: None,
             parent_ceiling: PermissionCeiling::Full,
+            transcript: None,
+            artifacts: None,
+            v1_store: None,
+            run_snapshot: None,
+            required_checks: Vec::new(),
+            plan_publish_enabled: false,
+            task_kind: None,
+            process_effects: HashMap::new(),
             checkpoint_revision: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Pin the workspace effect of one process profile, host-side only.
+    ///
+    /// The effect decides discovery: an effect above the interactive ceiling
+    /// drops every Process service from this run's grants, so the tool set is
+    /// never advertised, and [`Self::process_request_is_hidden`] makes a call
+    /// for it answer exactly like an unknown method (P22.3, acceptance ③).
+    pub fn pin_process_profile_effect(
+        mut self,
+        profile: &str,
+        effect: ProcessProfileEffect,
+    ) -> Self {
+        self.process_effects.insert(profile.to_string(), effect);
+        // Grants name services, not profiles, so an above-ceiling pin cannot
+        // remove the surface for a profile this run may legitimately use. The
+        // surface is pruned only when the run has no admissible profile at all;
+        // otherwise the request-time hide below is what keeps a workspace
+        // writing profile undiscoverable.
+        let any_admissible = self
+            .process_effects
+            .values()
+            .any(|effect| effect.interactive_process_admitted());
+        if !any_admissible {
+            self.granted.retain(|service| {
+                !matches!(
+                    service,
+                    HostService::ProcessOpen
+                        | HostService::ProcessRead
+                        | HostService::ProcessWrite
+                        | HostService::ProcessClose
+                )
+            });
+        }
+        self
+    }
+
+    /// The host-pinned effect of one profile, if it has one.
+    pub fn process_effect(&self, profile: &str) -> Option<ProcessProfileEffect> {
+        self.process_effects.get(profile).copied()
     }
 
     /// Share the daemon-wide approval store (RunManager wiring); a router
@@ -144,6 +275,35 @@ impl HostRouter {
         self
     }
 
+    pub fn with_transcript(mut self, transcript: Arc<TranscriptWriter>) -> Self {
+        self.transcript = Some(transcript);
+        self
+    }
+
+    pub fn with_artifacts(mut self, artifacts: Arc<ArtifactStore>) -> Self {
+        self.artifacts = Some(artifacts);
+        self
+    }
+
+    pub fn with_v1_store(mut self, store: Arc<V1Store>) -> Self {
+        self.v1_store = Some(store);
+        self
+    }
+
+    pub fn with_plan_publication(
+        mut self,
+        snapshot: RunSnapshot,
+        task_kind: TaskKind,
+        required_checks: Vec<String>,
+        enabled: bool,
+    ) -> Self {
+        self.run_snapshot = Some(snapshot);
+        self.task_kind = Some(task_kind);
+        self.required_checks = required_checks;
+        self.plan_publish_enabled = enabled;
+        self
+    }
+
     fn next_checkpoint_revision(&self) -> u64 {
         use std::sync::atomic::Ordering;
         self.checkpoint_revision.fetch_add(1, Ordering::SeqCst) + 1
@@ -160,13 +320,42 @@ impl HostRouter {
         Err(error)
     }
 
+    /// Whether this request names a Process profile the host pinned above the
+    /// interactive ceiling (P22.3). Only `host.process.open` carries a profile
+    /// name; read/write/close can only ever address a tree this router opened,
+    /// and an open for an unpinned profile is refused by the service, which
+    /// starts nothing.
+    fn process_request_is_hidden(&self, request: &RpcRequest) -> bool {
+        if request.method != "host.process.open" {
+            return false;
+        }
+        let profile = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("profile"))
+            .and_then(|profile| profile.as_str())
+            .unwrap_or_default();
+        matches!(
+            self.process_effect(profile),
+            Some(effect) if !effect.interactive_process_admitted()
+        )
+    }
+
     /// Handle one plugin request. All gates run before any effect.
     pub async fn handle_request(&self, request: RpcRequest) -> Result<serde_json::Value, RpcError> {
         // 1. Known method?
         if let Some(error) = r_code_harness_protocol::rpc::reject_unknown_method(&request.method) {
             return Err(error);
         }
-        // 2. Granted service?
+        // 2. A process profile the host pinned above the interactive ceiling
+        // answers exactly like a method that does not exist. This runs before
+        // the grant and generation checks so that a hidden profile cannot be
+        // turned into a policy message, and cannot be distinguished from a
+        // method this run was never granted.
+        if self.process_request_is_hidden(&request) {
+            return Err(RpcError::method_not_found(&request.method));
+        }
+        // 3. Granted service?
         let required = match service_for_method(&request.method) {
             Some(service) => service,
             None => return Err(RpcError::method_not_found(&request.method)),
@@ -181,7 +370,7 @@ impl HostRouter {
                 data: None,
             });
         }
-        // 3. Live generation?
+        // 4. Live generation?
         let token = self.token();
         if let Err(error) = self.guard.check(&token) {
             return Err(stale_error(error));
@@ -202,11 +391,11 @@ impl HostRouter {
             "host.tools.call" => {
                 let call: ToolCallRequest = serde_json::from_value(params.clone())
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-                let operation_key = operation_key_of(&params);
+                let operation_key = call.operation_key.clone();
                 self.deduplicated(operation_key, "host.tools.call", &params, || {
                     Box::pin(async move {
                         let name = call.tool.clone();
-                        let input_preview = preview(&call.input.to_string());
+                        let input_preview = tool_input_preview(&call.tool, &call.input);
                         self.observe(
                             "tool.call",
                             serde_json::json!({
@@ -248,6 +437,7 @@ impl HostRouter {
             "host.model.stream" => {
                 let model_request: ModelStreamRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                self.sync_transcript(&model_request)?;
                 let mut sink = RouterStreamSink::default();
                 let outcome = self
                     .models
@@ -294,6 +484,43 @@ impl HostRouter {
                     "assistant": assistant,
                 }))
             }
+            "host.context.read" => {
+                let read: ContextReadRequest = serde_json::from_value(params)
+                    .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                if read.projection != "transcript" {
+                    return Err(RpcError::invalid_params(
+                        "only the transcript context projection is available",
+                    ));
+                }
+                let transcript = self.task_transcript()?;
+                let limit = read
+                    .limit
+                    .unwrap_or(100)
+                    .clamp(1, MAX_TRANSCRIPT_PAGE_LIMIT);
+                let page = transcript.read_page(read.cursor.unwrap_or(0), limit);
+                Ok(serde_json::to_value(page).unwrap_or_default())
+            }
+            "host.artifacts.put" => {
+                let put: ArtifactsPutRequest = serde_json::from_value(params)
+                    .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                let artifacts = self.task_artifacts()?;
+                let reference = artifacts
+                    .put(&put, &self.identity.task_id)
+                    .map_err(artifact_error)?;
+                Ok(serde_json::to_value(reference).unwrap_or_default())
+            }
+            "host.artifacts.read" => {
+                let read: ArtifactsReadRequest = serde_json::from_value(params)
+                    .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                let artifacts = self.task_artifacts()?;
+                let reply = artifacts.read(&read).map_err(artifact_error)?;
+                Ok(serde_json::to_value(reply).unwrap_or_default())
+            }
+            "host.plan.publish" => {
+                let publish: PlanPublishRequest = serde_json::from_value(params)
+                    .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                self.publish_plan(publish)
+            }
             "host.process.open" => {
                 let open: ProcessOpenRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
@@ -316,6 +543,36 @@ impl HostRouter {
                     },
                 )
                 .await
+            }
+            "host.process.read" => {
+                let mut read: ProcessReadRequest = serde_json::from_value(params)
+                    .map_err(|error| RpcError::invalid_params(error.to_string()))?;
+                if read.max_bytes == 0 || read.max_bytes > PROCESS_READ_MAX_BYTES {
+                    return Err(RpcError::invalid_params(format!(
+                        "maxBytes must be in 1..={PROCESS_READ_MAX_BYTES}"
+                    )));
+                }
+                if read
+                    .wait_ms
+                    .is_some_and(|wait_ms| wait_ms > PROCESS_READ_MAX_WAIT_MS)
+                {
+                    return Err(RpcError::invalid_params(format!(
+                        "waitMs exceeds {PROCESS_READ_MAX_WAIT_MS}"
+                    )));
+                }
+                let (run, raw) = split_run_handle(&read.handle)
+                    .ok_or_else(|| run_mismatch("process handle carries no run identity"))?;
+                if run != self.identity.run_id {
+                    self.reject(run_mismatch("process handle belongs to another run"))?;
+                }
+                read.handle = raw;
+                let reply = self
+                    .processes
+                    .read(token, read.clone())
+                    .await
+                    .map_err(service_error)?;
+                validate_process_read_page(&read, &reply).map_err(RpcError::internal)?;
+                serde_json::to_value(reply).map_err(|error| RpcError::internal(error.to_string()))
             }
             "host.process.write" => {
                 let write: ProcessWriteRequest = serde_json::from_value(params)
@@ -351,9 +608,15 @@ impl HostRouter {
             "host.questions.ask" => {
                 let question: QuestionsAskRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-                // Questions persist before suspension (persistence wiring is
-                // T21); the id is host-generated either way.
-                let question_id = format!("q-{}-{}", self.identity.run_id, question_counter_next());
+                let question_id = format!(
+                    "q-{}-{}",
+                    self.identity.run_id,
+                    uuid::Uuid::new_v4().simple()
+                );
+                if let Some(store) = &self.v1_store {
+                    self.validate_question_owner(store)?;
+                    self.persist_question(store, &question_id, &question)?;
+                }
                 self.questions.raised(RaisedQuestion {
                     question_id: question_id.clone(),
                     text: question.text.clone(),
@@ -483,6 +746,238 @@ impl HostRouter {
         }
     }
 
+    fn task_transcript(&self) -> Result<&Arc<TranscriptWriter>, RpcError> {
+        let transcript = self
+            .transcript
+            .as_ref()
+            .ok_or_else(|| RpcError::internal("transcript service is not configured"))?;
+        if transcript.task_id() != self.identity.task_id {
+            return Err(run_mismatch("transcript belongs to another task"));
+        }
+        Ok(transcript)
+    }
+
+    fn sync_transcript(&self, request: &ModelStreamRequest) -> Result<(), RpcError> {
+        let Some(transcript) = &self.transcript else {
+            return Ok(());
+        };
+        if transcript.task_id() != self.identity.task_id {
+            return Err(run_mismatch("transcript belongs to another task"));
+        }
+        // System/developer blocks are frozen control inputs in RunSnapshot,
+        // not conversation history. Excluding that leading control layer
+        // lets a later approved run use a new prompt without rewriting the
+        // task's canonical user/assistant/tool prefix.
+        let messages = request
+            .messages
+            .iter()
+            .filter(|message| !matches!(message.role, ModelRole::System | ModelRole::Developer))
+            .cloned()
+            .collect::<Vec<_>>();
+        transcript.sync_messages(&messages).map_err(context_error)
+    }
+
+    fn task_artifacts(&self) -> Result<&Arc<ArtifactStore>, RpcError> {
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| RpcError::internal("artifact service is not configured"))?;
+        if artifacts
+            .task_id()
+            .is_some_and(|task_id| task_id != self.identity.task_id)
+        {
+            return Err(run_mismatch("artifact store belongs to another task"));
+        }
+        Ok(artifacts)
+    }
+
+    fn publish_plan(&self, request: PlanPublishRequest) -> Result<serde_json::Value, RpcError> {
+        if !self.plan_publish_enabled
+            || !matches!(
+                self.task_kind,
+                Some(TaskKind::PlanDraft | TaskKind::Implementation | TaskKind::Repair)
+            )
+        {
+            return Err(protocol_violation(
+                "plan publication is not enabled for this task",
+            ));
+        }
+        let snapshot = self
+            .run_snapshot
+            .as_ref()
+            .ok_or_else(|| RpcError::internal("run snapshot is not configured"))?;
+        snapshot
+            .validate_identity()
+            .map_err(|_| protocol_violation("run snapshot failed identity validation"))?;
+        if snapshot.material().task_id != self.identity.task_id {
+            return Err(run_mismatch("run snapshot belongs to another task"));
+        }
+        if !matches!(snapshot.phase(), RunSnapshotPhase::Planning) {
+            return Err(protocol_violation("only a planning run may publish a plan"));
+        }
+        let store = self
+            .v1_store
+            .as_ref()
+            .ok_or_else(|| RpcError::internal("plan store is not configured"))?;
+        let current = store
+            .current_plan_revision(&self.identity.task_id)
+            .map_err(|_| RpcError::internal("plan head could not be loaded"))?;
+        let expected_next = match current.as_ref() {
+            Some(revision) => revision
+                .material()
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| protocol_violation("plan revision overflow"))?,
+            None => 1,
+        };
+        let is_exact_replay = current
+            .as_ref()
+            .is_some_and(|revision| revision.material().revision == request.revision);
+        if request.revision != expected_next && !is_exact_replay {
+            return Err(protocol_violation(&format!(
+                "plan revision must be the next head ({expected_next})"
+            )));
+        }
+        if request
+            .work_units
+            .iter()
+            .any(|unit| unit.id.trim().is_empty() || unit.description.trim().is_empty())
+        {
+            return Err(RpcError::invalid_params(
+                "plan work units require non-empty ids and descriptions",
+            ));
+        }
+        let expected_head = current
+            .as_ref()
+            .map(|revision| revision.reference().clone());
+        let parent_revision = current.as_ref().and_then(|revision| {
+            if revision.material().revision == request.revision {
+                revision.material().parent_revision.clone()
+            } else {
+                Some(revision.reference().clone())
+            }
+        });
+        let material = snapshot.material();
+        let route_digest = r_code_harness_protocol::canonical_input_hash(
+            &serde_json::to_value(&material.provider)
+                .map_err(|_| RpcError::internal("provider snapshot could not be encoded"))?,
+        );
+        let mut required_checks = self.required_checks.clone();
+        required_checks.sort();
+        required_checks.dedup();
+        let check_digest = r_code_harness_protocol::canonical_input_hash(
+            &serde_json::to_value(&required_checks)
+                .map_err(|_| RpcError::internal("required checks could not be encoded"))?,
+        );
+        let revision = PlanRevision::new(PlanRevisionMaterial {
+            task_id: self.identity.task_id.clone(),
+            revision: request.revision,
+            parent_revision,
+            current_base_hash: material.workspace.baseline_sha256.clone(),
+            workspace_baseline: material.workspace.baseline_sha256.clone(),
+            route_digest,
+            prompt_digest: material.prompt.content_sha256.clone(),
+            permission_digest: material.permissions.revision.clone(),
+            check_digest,
+            required_checks,
+            work_units: request.work_units,
+        })
+        .map_err(|_| RpcError::invalid_params("plan revision is invalid"))?;
+        let revision_ref = store
+            .publish_plan_revision(&revision, expected_head.as_ref())
+            .map_err(|_| protocol_violation("plan publication failed"))?;
+        let reply = PlanPublishReply {
+            revision: request.revision,
+            revision_hash: revision_ref.as_str().to_string(),
+        };
+        self.recorded_plan_publications
+            .lock()
+            .expect("plan publications")
+            .push(reply.clone());
+        Ok(serde_json::to_value(reply).unwrap_or_default())
+    }
+
+    fn persist_question(
+        &self,
+        store: &V1Store,
+        question_id: &str,
+        question: &QuestionsAskRequest,
+    ) -> Result<(), RpcError> {
+        store
+            .save_question(
+                question_id,
+                &self.identity.task_id,
+                &self.identity.run_id,
+                &question.text,
+                &question.options,
+                question.blocking,
+            )
+            .map_err(|_| RpcError::internal("question could not be persisted"))?;
+
+        for _ in 0..8 {
+            let (mut task, revision) = store
+                .load_task_with_revision(&self.identity.task_id)
+                .map_err(|_| RpcError::internal("question task could not be loaded"))?
+                .ok_or_else(|| RpcError::internal("question task does not exist"))?;
+            match &task.execution {
+                TaskExecution::Running {
+                    attempt_id,
+                    generation,
+                } if attempt_id == &self.identity.attempt_id
+                    && *generation == self.identity.generation => {}
+                _ => {
+                    return Err(run_mismatch(
+                        "question does not belong to the active run generation",
+                    ));
+                }
+            }
+            if question.blocking {
+                task.wait_for_input(self.identity.generation, question_id)
+                    .map_err(|_| protocol_violation("task cannot wait for this question"))?;
+            }
+            let event = r_code_kernel::ports::JournalEvent {
+                seq: 0,
+                task_id: self.identity.task_id.clone(),
+                kind: "question.raised".to_string(),
+                payload: serde_json::json!({
+                    "questionId": question_id,
+                    "runId": self.identity.run_id,
+                    "attemptId": self.identity.attempt_id,
+                    "generation": self.identity.generation,
+                    "blocking": question.blocking,
+                }),
+            };
+            match store.save_task_and_events_if_revision(&task, vec![event], revision) {
+                Ok(_) => return Ok(()),
+                Err(r_code_store::v1::V1StoreError::StaleTaskRevision { .. }) => continue,
+                Err(_) => return Err(RpcError::internal("question event could not be persisted")),
+            }
+        }
+        Err(RpcError::internal(
+            "question task stayed busy during persistence",
+        ))
+    }
+
+    fn validate_question_owner(&self, store: &V1Store) -> Result<(), RpcError> {
+        let (task, _) = store
+            .load_task_with_revision(&self.identity.task_id)
+            .map_err(|_| RpcError::internal("question task could not be loaded"))?
+            .ok_or_else(|| RpcError::internal("question task does not exist"))?;
+        match task.execution {
+            TaskExecution::Running {
+                attempt_id,
+                generation,
+            } if attempt_id == self.identity.attempt_id
+                && generation == self.identity.generation =>
+            {
+                Ok(())
+            }
+            _ => Err(run_mismatch(
+                "question does not belong to the active run generation",
+            )),
+        }
+    }
+
     /// Progress notifications from the plugin.
     pub async fn handle_notification(&self, notification: RpcNotification) {
         if notification.method == "harness.event" {
@@ -543,12 +1038,30 @@ impl HostRouter {
                         operation_key: key.clone(),
                         method: method.to_string(),
                         input_hash: hash.clone(),
-                        outcome: r_code_kernel::task::ReceiptOutcome::Completed {
-                            result: serde_json::Value::Null,
+                        outcome: r_code_kernel::task::ReceiptOutcome::Indeterminate {
+                            reason: "operation-in-flight".to_string(),
                         },
                     })
                     .await
                     .map_err(service_error)?;
+                let result = execute().await?;
+                self.store
+                    .save_receipt(r_code_kernel::task::OperationReceipt {
+                        attempt_id: self.identity.attempt_id.clone(),
+                        operation_key: key,
+                        method: method.to_string(),
+                        input_hash: hash,
+                        outcome: r_code_kernel::task::ReceiptOutcome::Completed {
+                            result: result.clone(),
+                        },
+                    })
+                    .await
+                    .map_err(service_error)?;
+                Ok(result)
+            }
+            r_code_harness_protocol::ReplayDecision::Reconcile { class: _ }
+                if method == "host.tools.call" =>
+            {
                 let result = execute().await?;
                 self.store
                     .save_receipt(r_code_kernel::task::OperationReceipt {
@@ -628,6 +1141,17 @@ fn preview(value: &str) -> String {
     }
 }
 
+fn tool_input_preview(tool: &str, input: &serde_json::Value) -> String {
+    if matches!(tool, "create_file" | "edit" | "apply_patch" | "delete_file") {
+        let path = input
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<invalid>");
+        return serde_json::json!({"path": path, "content": "<redacted>"}).to_string();
+    }
+    preview(&input.to_string())
+}
+
 fn split_run_handle(handle: &str) -> Option<(String, String)> {
     let (run, raw) = handle.split_once(':')?;
     Some((run.to_string(), raw.to_string()))
@@ -638,6 +1162,38 @@ fn run_mismatch(message: &str) -> RpcError {
         code: error_code::RUN_MISMATCH,
         message: message.to_string(),
         data: None,
+    }
+}
+
+fn protocol_violation(message: &str) -> RpcError {
+    RpcError {
+        code: error_code::PROTOCOL_VIOLATION,
+        message: message.to_string(),
+        data: None,
+    }
+}
+
+fn context_error(error: ContextError) -> RpcError {
+    match error {
+        ContextError::HistoryFork | ContextError::InvalidTranscript => {
+            protocol_violation("canonical transcript validation failed")
+        }
+        ContextError::DuplicateWriter(_) | ContextError::Io(_) => {
+            RpcError::internal("transcript service failed")
+        }
+    }
+}
+
+fn artifact_error(error: ArtifactError) -> RpcError {
+    match error {
+        ArtifactError::Base64
+        | ArtifactError::FrameTooLarge
+        | ArtifactError::InvalidReference
+        | ArtifactError::InvalidRange => RpcError::invalid_params(error.to_string()),
+        ArtifactError::TaskMismatch => run_mismatch("artifact store belongs to another task"),
+        ArtifactError::Io(_) | ArtifactError::NotFound => {
+            RpcError::internal("artifact service failed")
+        }
     }
 }
 
@@ -671,10 +1227,82 @@ fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
-fn question_counter_next() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    COUNTER.fetch_add(1, Ordering::SeqCst)
+/// The wire contract of one bounded process page: contiguous sequences, no
+/// stream frame after its EOF, terminal metadata carried only by a final exit
+/// frame, and never more bytes than the caller asked for. The managed process
+/// service reuses it so a page cannot pass one caller and fail another.
+pub fn validate_process_read_page(
+    request: &ProcessReadRequest,
+    reply: &ProcessReadReply,
+) -> Result<(), String> {
+    let mut expected = request.cursor;
+    let mut decoded_bytes = 0usize;
+    let mut stdout_eof = false;
+    let mut stderr_eof = false;
+    let mut saw_exit = false;
+    for (index, frame) in reply.frames.iter().enumerate() {
+        if frame.sequence() != expected {
+            return Err("process read frame sequence has a gap".into());
+        }
+        expected = expected
+            .checked_add(1)
+            .ok_or("process read cursor overflow")?;
+        match frame {
+            ProcessOutputFrame::Data {
+                stream,
+                data_base64,
+                ..
+            } => {
+                let after_eof = match stream {
+                    ProcessOutputStream::Stdout => stdout_eof,
+                    ProcessOutputStream::Stderr => stderr_eof,
+                };
+                if after_eof || saw_exit {
+                    return Err("process read data follows a terminal frame".into());
+                }
+                let bytes = base64_decode(data_base64)
+                    .map_err(|_| "process read data is not base64".to_string())?;
+                if bytes.is_empty() {
+                    return Err("process read data frame is empty".into());
+                }
+                decoded_bytes = decoded_bytes
+                    .checked_add(bytes.len())
+                    .ok_or("process read byte count overflow")?;
+            }
+            ProcessOutputFrame::Eof { stream, .. } => {
+                let seen = match stream {
+                    ProcessOutputStream::Stdout => &mut stdout_eof,
+                    ProcessOutputStream::Stderr => &mut stderr_eof,
+                };
+                if *seen || saw_exit {
+                    return Err("process read contains duplicate or late EOF".into());
+                }
+                *seen = true;
+            }
+            ProcessOutputFrame::Exit { exit_code, .. } => {
+                if saw_exit || index + 1 != reply.frames.len() || !reply.terminal {
+                    return Err("process read exit frame is invalid".into());
+                }
+                if *exit_code != reply.exit_code {
+                    return Err("process read exit metadata disagrees".into());
+                }
+                saw_exit = true;
+            }
+        }
+    }
+    if reply.next_cursor != expected {
+        return Err("process read nextCursor does not follow the page".into());
+    }
+    if reply.terminal && !reply.frames.is_empty() && !saw_exit {
+        return Err("non-empty terminal process read lacks a final exit frame".into());
+    }
+    if decoded_bytes > request.max_bytes as usize {
+        return Err("process read page exceeds maxBytes".into());
+    }
+    if !reply.terminal && reply.exit_code.is_some() {
+        return Err("non-terminal process read contains exit metadata".into());
+    }
+    Ok(())
 }
 
 /// Collecting stream sink used by the router's model bridge.

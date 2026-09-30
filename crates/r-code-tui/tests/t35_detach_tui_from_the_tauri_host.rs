@@ -2,8 +2,9 @@
 //!
 //! a) `cargo tree -p r-code-tui` 无 tauri/wry（依赖图守卫）；
 //! b) 脚本化会话生命周期走共享 r-code-service（真进程、真 ModelBroker）：
-//!    不配 provider → 发送 → run.failed 带 "unknown model selection" →
-//!    task.detail 恢复 pending → 二次发送仍被接受（真实故障路径，非 mock）；
+//!    不配 provider → 发送 → run.failed 带诚实原因（未配置 Provider 的运行前
+//!    门，见 run_snapshots）→ task.detail 恢复 pending、任务不卡运行态 →
+//!    二次发送仍被接受并同样诚实失败（真实故障路径，非 mock）；
 //! c) PTY 冒烟：真 r-code-tui 二进制连共享服务启动，首屏出"尚未配置"引导，
 //!    Ctrl+C 退出，守护进程清理。
 mod daemon_common;
@@ -108,14 +109,14 @@ async fn honest_failure_lifecycle_through_shared_service() {
             .with_ipc_name(env.ipc_name.clone()),
     )
     .expect("profile");
-    let engine = r_code_tui::engine::V2ChatClient::from_profile(profile, Some(service_bin));
+    let engine = r_code_tui::engine::V1ChatClient::from_profile(profile, Some(service_bin));
 
     // 生命周期：建会话 → 发送（run 启动）→ 无 provider 的真实失败 →
     // 任务重开（pending）→ 二次发送仍被接受。
     let task_id = engine.ensure_session("t35").await.expect("ensure session");
     assert!(!task_id.is_empty());
 
-    let first = engine.send(&task_id, "hello v2").await.expect("first send");
+    let first = engine.send(&task_id, "hello v1").await.expect("first send");
     assert!(
         matches!(first, r_code_tui::engine::SendOutcome::Started { .. }),
         "空闲发送必须启动 run：{first:?}"
@@ -160,9 +161,14 @@ async fn honest_failure_lifecycle_through_shared_service() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let failure = failure.expect("run.failed 事件必须出现（无 provider 的真实失败）");
+    // 无 provider 的失败现在由运行前 Provider 门拦下（run_snapshots 的
+    // "没有已配置的默认 Provider；运行尚未启动"），而不是等 model broker
+    // 解析时才报 "unknown model selection"——同一个用户问题，更早、更诚实
+    // 的失败面。两者任一都算通过，门重排后仍能证明 run.failed 带了真实原因。
     assert!(
-        failure.contains("unknown model selection"),
-        "失败原因应是模型解析错误（空 registry）：{failure}"
+        failure.contains("没有已配置的默认 Provider")
+            || failure.contains("unknown model selection"),
+        "失败原因应是未配置 provider（运行前门或 model 解析）：{failure}"
     );
     assert!(
         matches!(
@@ -173,7 +179,11 @@ async fn honest_failure_lifecycle_through_shared_service() {
     );
     assert!(second_failed, "第二次 run 也应诚实失败（仍无 provider）");
 
-    // task.detail：状态恢复 pending、不 running、runs 已记账。
+    // task.detail：状态恢复 pending、不 running。未配置 provider 的失败现在
+    // 在 run 快照冻结阶段就被 provider 门拒下（run_snapshots：没有已配置的默认
+    // Provider；运行尚未启动），run 在 run.started 记账之前就被拒，因此 runs
+    // 台账为空——这是"更早的诚实拒绝"，不是记账丢失：run.failed 仍带真实原因，
+    // 任务也未卡在运行态。台账记账路径由带 provider 的用例覆盖。
     let detail = engine.task_detail(&task_id).await.expect("detail");
     assert!(!detail.running, "失败后任务不在运行态");
     assert_eq!(
@@ -182,8 +192,8 @@ async fn honest_failure_lifecycle_through_shared_service() {
         detail.state
     );
     assert!(
-        detail.runs.len() >= 2,
-        "两次 run 都已记账：{:?}",
+        detail.runs.is_empty(),
+        "provider 门在 run.started 之前拒绝，runs 台账应为空：{:?}",
         detail.runs
     );
 

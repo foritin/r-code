@@ -16,6 +16,13 @@ pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Grace period after `harness.cancel` before the process tree is killed.
 pub const CANCEL_GRACE: Duration = Duration::from_secs(5);
 
+/// The protocol's host API version (P19A froze minor 2: WorkUnit
+/// effect/network fields). The single source of truth — the runtime
+/// catalog and every negotiation site derive from this constant. Older
+/// 1.x packages keep negotiating additively; only packages that emit
+/// effect/network fields need apiMinor >= 2.
+pub const HOST_API_VERSION: crate::manifest::ApiVersion = crate::manifest::ApiVersion::new(1, 2);
+
 /// Host-to-plugin lifecycle methods.
 pub const HOST_TO_PLUGIN_METHODS: &[&str] = &[
     "initialize",
@@ -32,6 +39,7 @@ pub const PLUGIN_TO_HOST_METHODS: &[&str] = &[
     "host.tools.list",
     "host.tools.call",
     "host.process.open",
+    "host.process.read",
     "host.process.write",
     "host.process.close",
     "host.context.read",

@@ -54,7 +54,7 @@ async fn surface(tag: &str) -> Surface {
     let identity = ensure_identity(&root).expect("identity");
     let handler = Arc::new(CommandDedup::new(
         tag,
-        Arc::new(r_code_store::v2::V2Store::open(&root.join("j.db")).expect("store")),
+        Arc::new(r_code_store::v1::V1Store::open(&root.join("j.db")).expect("store")),
         Arc::new(NullHandler),
     ));
     let manager = Arc::new(r_code_runtime::remote::RemoteManager::new(

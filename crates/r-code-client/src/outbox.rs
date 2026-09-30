@@ -25,8 +25,8 @@ pub struct Outbox {
 
 impl Outbox {
     /// Load (or create) the outbox for one client beneath the profile root.
-    pub fn open(harness_v2_root: &Path, client_id: &str) -> io::Result<Self> {
-        let dir = harness_v2_root.join("client-outbox");
+    pub fn open(harness_v1_root: &Path, client_id: &str) -> io::Result<Self> {
+        let dir = harness_v1_root.join("client-outbox");
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{client_id}.json"));
         let entries = std::fs::read_to_string(&path)
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn outbox_prepares_before_send_and_survives_reopen() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let root = temp.path().join("harness-v2");
+        let root = temp.path().join("harness-v1");
         let mut outbox = Outbox::open(&root, "client-a").expect("open");
         let entry = outbox
             .prepare("cmd-1", "task.create", serde_json::json!({"title": "fix"}))

@@ -235,6 +235,7 @@ async fn unknown_and_ungranted_methods_fail_closed() {
             "host.tools.call",
             serde_json::to_value(ToolCallRequest {
                 tool: "bash".into(),
+                operation_key: None,
                 input: serde_json::json!({"command": "ls"}),
             })
             .unwrap(),

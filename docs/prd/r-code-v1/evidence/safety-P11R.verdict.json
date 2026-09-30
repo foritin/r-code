@@ -1,0 +1,69 @@
+{
+  "task_id": "P11R",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s11r_quarantine_retry.rs"
+  ],
+  "tests": {
+    "command": "CROSS-PLATFORM, FULLY LOCAL ON THE WINDOWS DEV HOST (no WSL, no cross-target execution; the macOS/Linux-only s* suites compile empty exactly as at baseline). The Engineer applied all three iteration-1 fixes and the s11r suite passes UNCHANGED (9/9, QA edited no test this round — verified by full read: every digest assertion already encodes the corrected sha256:-prefixed contract, the NULL-migrated-boot test pins LegacyCorrupt). Re-run gates, single-threaded, --no-fail-fast, canonical (ok|FAILED) passed-sum counting: (1) rtk proxy cargo test -p r-code-runtime --all-features --no-fail-fast --test s11r_quarantine_retry -- --test-threads=1 => 9/9 including both previously-pinned defects; (2) full Runtime -p r-code-runtime => 424 passed / 0 failed across 83 suites (the s11r e2e spawns a real daemon + real DaemonClient, killed by guard; zero r-code-service orphans after); (3) full Store -p r-code-store => 416 passed / 1 failed, the ONLY failure the declared pre-existing plan_schema baseline clean_database_and_schema_18_upgrade_reach_latest_complete_schema (18-vs-35; P11R changed no store test); (4) Kernel -p r-code-kernel => 75/75; harness-protocol + harness-sdk => 33/33; codex (runtime --lib filter codex) => 13/13; cumulative 962 attempts / 961 passed / 1 failed (declared baseline only); (5) rtk cargo clippy --workspace --all-features --all-targets -- -D warnings => clean; (6) rtk cargo fmt --all -- --check => clean; (7) rtk cargo test --workspace --all-features --no-run && rtk cargo check --workspace --all-features => both exit 0 (all three changed files compile on every platform); (8) quality_check.py on operations.rs + application.rs + r-code-service.rs (--max-comment-block 12 --max-comment-line-len 120 --max-func-loc 100 --max-nesting 5 --max-file-loc 2600) => ok=true, zero violations (max comment blocks 11/8/8).",
+    "total": 962,
+    "passed": 961,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "r-code-store plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline: migration-count assertion expects 18, schema now at 35; P11R changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-store/src/v1/operations.rs": {
+          "file_loc": 1616,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.028,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/application.rs": {
+          "file_loc": 2365,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.061,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/bin/r-code-service.rs": {
+          "file_loc": 1057,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.063,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS — iteration 2 closed all three pinned defects exactly as declared and the s11r suite passes 9/9 with zero test edits: the retry view's treeRef/proofRef now carry the sha256: prefix every sibling reference surface uses (application.rs redact closure), the legacy branch's match on migrated_observed_boot_identity refuses None/invalid as LegacyCorrupt and only mints the RebootProof for a valid DIFFERENT boot so previousBootIdentity is always a real boot (operations.rs retry legacy branch), and the retry doc block is trimmed to 11 lines. The core P11R contract stands proven: dispatch by persisted identity/fence only, same-boot and corrupt refusals touch nothing, the post-reboot clear persists exactly one evidence-borne RebootProof through the same proof-validated CAS, ordinary proof-less trees stay blocked with no force-clear anywhere, replay never mints, failed CAS attempts roll back atomically, and the strict local-only RPC returns redacted digest references. Defense-in-depth note (non-gating): validate_proof's LegacyUnverifiable arm retains the pre-P11R vacuous comparison for a NULL migrated boot, but every P11R surface now refuses such rows (retry LegacyCorrupt, diagnostics legacy_corrupt, has_complete_termination_proof false), so no reachable path mints a null-previous RebootProof and a hypothetical direct-CAS proof would leave the workspace still blocked and flagged corrupt. Regression green within the declared plan_schema 18-vs-35 baseline; clippy/fmt/check/no-run and quality gates all clean."
+}

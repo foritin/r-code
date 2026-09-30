@@ -39,9 +39,12 @@ fn definition(check_id: &str) -> CheckDefinition {
 fn evidence(check_id: &str, digest: &str, passed: bool) -> EvidenceRecord {
     EvidenceRecord {
         evidence_id: format!("ev-{check_id}-{digest}"),
+        task_id: "task-1".into(),
         check_id: check_id.into(),
+        definition_identity: definition(check_id).identity(),
         candidate_digest: digest.into(),
         environment: "node test".into(),
+        environment_fingerprint: "environment:node-test".into(),
         passed,
         host_output: None,
         recorded_by: Provenance::Host,

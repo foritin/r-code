@@ -1,0 +1,61 @@
+{
+  "task_id": "P05",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s05_supervisor_faults.rs"
+  ],
+  "tests": {
+    "command": "focused s05 12/12 and s04 9/9; full Runtime 364/364 across 67 suites; full Kernel 75/75; harness-protocol + harness-sdk 33/33; codex plugin 13/13; full Store 323/324 with the single failure being the declared pre-existing plan_schema migration-count baseline (expects 18, actual 35, untouched by P05); workspace all-feature check and test --no-run green; workspace all-feature all-target Clippy -D warnings green; cargo fmt --all --check green; quality_check green",
+    "total": 809,
+    "passed": 808,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline: migration-count assertion expects 18, schema now at 35; P05 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 4,
+    "comment_hygiene": 5,
+    "organization": 4,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/process_supervisor.rs": {
+          "file_loc": 1376,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.006,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/artifacts.rs": {
+          "file_loc": 328,
+          "max_comment_block": 6,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.065,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "P05 iteration 2 passes the keep gate. The durable supervisor state machine persists ownership before any user code (ResumePending with owner observed before resume_once), completes only after terminal drain with an in-page Exit frame, exact P01 nine-field proof, and a task-owned redacted tail, and quarantines at every ambiguous boundary: all journal transition faults and lost acks, all backend faults, resume lost-ack (never retried), proof forgery (8 variants), page corruption, deadline overflow, cancellation, run/termination timeouts and backpressure all end durable Quarantined or, for the lost Completed ack, durable Completed surfaced by recover(). The reference journal is documented as a test adapter with no V1Store wiring and no production activation. Orchestrator note: rustfmt (mechanical, semantics-preserving) was additionally applied to two pre-existing drifted test files outside P05 scope (runtime tests/t04_task_route_creation.rs, plugins/codex/tests/t30_port_codex_interactions_and_completion.rs) so the workspace rustfmt gate could be honestly green; both suites re-verified (runtime 156/156 incl. t04, codex 13/13 incl. t30)."
+}

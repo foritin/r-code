@@ -1733,8 +1733,8 @@ pub async fn project_conversation_create_typed(
 pub async fn task_prepare(state: &CommandState, task_id: &str) -> Result<(), String> {
     let _ = (state, task_id);
     // T42：旧聊天执行链（task-local bridge + ensure_real_runtime）已退役，
-    // Harness v2 daemon 自管任务环境，无需预热。
-    Err("任务预热已随旧执行链退役；Harness v2 会话无需 prepare".to_string())
+    // Harness v1 daemon 自管任务环境，无需预热。
+    Err("任务预热已随旧执行链退役；Harness v1 会话无需 prepare".to_string())
 }
 
 /// 修改会话显示名称。标题不参与模型上下文，因此无需重建 runtime。
@@ -1766,7 +1766,7 @@ pub(crate) async fn refresh_runtime_task_context_if_present(
     task: &Task,
 ) -> Result<(), String> {
     let _ = (state, task);
-    // T42：runtime 级任务上下文缓存随旧执行链退役；Harness v2 daemon 每次
+    // T42：runtime 级任务上下文缓存随旧执行链退役；Harness v1 daemon 每次
     // run 自行读取任务上下文，宿主侧无需刷新。
     Ok(())
 }
@@ -1938,7 +1938,7 @@ async fn dispatch_plan_continuation(
             refresh_runtime_task_context_if_present(state, &task).await?;
         }
     }
-    // T42：旧聊天执行链已退役，续接消息改由用户通过 Harness v2 会话发送。
+    // T42：旧聊天执行链已退役，续接消息改由用户通过 Harness v1 会话发送。
     if let Err(mark_error) = state.plan_store.mark_continuation_failed(
         task_id,
         question_set_id,
@@ -1951,7 +1951,7 @@ async fn dispatch_plan_continuation(
         );
     }
     let _ = message;
-    Err("回答已保存；自动续跑已随旧执行链退役，请通过 Harness v2 会话发送续接消息".to_string())
+    Err("回答已保存；自动续跑已随旧执行链退役，请通过 Harness v1 会话发送续接消息".to_string())
 }
 
 pub async fn plan_answer(
@@ -2116,7 +2116,7 @@ async fn drain_plan_implementation_queue(
     let task = require_task(state, task_id)?;
     refresh_runtime_task_context_if_present(state, &task).await?;
     // T42：旧队列派发已随执行链退役；实施消息保留在持久队列中，由用户经
-    // Harness v2 会话触发。
+    // Harness v1 会话触发。
     state
         .plan_store
         .get_plan(task_id, plan_id)
@@ -6549,7 +6549,7 @@ where
     });
 }
 
-/// 面向 Plan 入口决定/重试的队列派发入口：旧派发循环已退役，v2 由 daemon 自管。
+/// 面向 Plan 入口决定/重试的队列派发入口：旧派发循环已退役，Harness v1 由 daemon 自管。
 pub(crate) async fn dispatch_queue_for_task(state: &CommandState, task_id: &str) {
     let _ = (state, task_id);
 }
@@ -6567,7 +6567,7 @@ pub async fn agent_abort_subagent(
     {
         return Ok(());
     }
-    // T42：原生子代理运行已迁移 Harness v2；宿主侧仅保留外部 CLI 子代理取消。
+    // T42：原生子代理运行已迁移 Harness v1；宿主侧仅保留外部 CLI 子代理取消。
     let _ = subagent_id;
     Err("子代理不存在或已经结束".to_string())
 }
@@ -6611,7 +6611,7 @@ pub async fn agent_queue_reorder(
     QueuedMessageRepository::new(&state.db)
         .reorder_pending(task_id, &branch.id, queue_ids)
         .map_err(err_str)?;
-    // T42：排序后不再触发旧派发循环；发送由 Harness v2 会话负责。
+    // T42：排序后不再触发旧派发循环；发送由 Harness v1 会话负责。
     Ok(())
 }
 
@@ -6629,7 +6629,7 @@ pub async fn agent_queue_update(
     QueuedMessageRepository::new(&state.db)
         .update_pending_message(queue_id, task_id, &branch.id, message)
         .map_err(err_str)?;
-    // T42：不再触发旧派发循环；发送由 Harness v2 会话负责。
+    // T42：不再触发旧派发循环；发送由 Harness v1 会话负责。
     Ok(())
 }
 
@@ -6859,8 +6859,8 @@ pub async fn agent_queue_steer(
         return Ok("queued_next".to_string());
     }
 
-    // T42：原生子代理运行已迁移 Harness v2；宿主侧不再 steer 旧 bridge 运行，
-    // 已认领的消息恢复到队首，由 Harness v2 会话继续处理。
+    // T42：原生子代理运行已迁移 Harness v1；宿主侧不再 steer 旧 bridge 运行，
+    // 已认领的消息恢复到队首，由 Harness v1 会话继续处理。
     restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
     Ok("queued_next".to_string())
 }
@@ -6960,7 +6960,7 @@ pub async fn agent_resend(
         .map_err(err_str)?;
 
     // T42：编辑重发的发送段已随旧执行链退役；分支已创建并激活，
-    // 用户通过 Harness v2 会话继续发送新消息。
+    // 用户通过 Harness v1 会话继续发送新消息。
     let _ = message;
     Ok(())
 }
@@ -7947,8 +7947,8 @@ pub async fn change_request(
     if task.state != TaskState::ReviewReady {
         return Err("只有等待审核的任务可以请求修改".to_string());
     }
-    // T42：审核反馈重发已随旧聊天执行链退役；请通过 Harness v2 会话直接发送反馈。
-    Err("审核反馈自动重发已随旧执行链退役；请通过 Harness v2 会话直接发送反馈".to_string())
+    // T42：审核反馈重发已随旧聊天执行链退役；请通过 Harness v1 会话直接发送反馈。
+    Err("审核反馈自动重发已随旧执行链退役；请通过 Harness v1 会话直接发送反馈".to_string())
 }
 
 /// 简易 unified diff：基于 LCS 的行级对比，变化块上下文 ±3 行，省略段用 hunk 行。
@@ -11258,7 +11258,7 @@ pub struct ProviderSettingsInput {
 }
 
 /// 设置页发起的模型目录读取。`api_key` 只在本次请求内存中使用；留空时尝试读取
-/// `name` 对应的已保存凭据或环境变量。
+/// `name` 对应的已保存凭据或环境变量，并强制改用该配置已保存的地址与协议。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderModelsInput {
@@ -11424,14 +11424,36 @@ pub async fn provider_catalog() -> Result<serde_json::Value, String> {
 }
 
 /// 读取服务端实时模型列表。显式传入的新密钥优先；留空时只从运行时设置视图读取
-/// 该配置已有的持久化 / 环境变量密钥。响应和错误都不会包含密钥或响应正文。
-pub async fn provider_models(
-    state: &CommandState,
-    input: ProviderModelsInput,
-) -> Result<serde_json::Value, String> {
-    use crate::provider_catalog::{AuthStyle, Protocol};
+/// 该配置已有的持久化 / 环境变量密钥。使用已保存密钥时，地址和协议也必须取自
+/// 同一条已保存配置，绝不接受 WebView 同时传来的覆盖值。响应和错误都不会包含
+/// 密钥或响应正文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderModelDiscoveryTarget {
+    base_url: String,
+    protocol: ProviderProtocol,
+    auth: crate::provider_catalog::AuthStyle,
+}
 
-    let name = input.name.trim();
+fn provider_model_auth(
+    preset: Option<&crate::provider_catalog::Preset>,
+    protocol: ProviderProtocol,
+) -> crate::provider_catalog::AuthStyle {
+    preset.map_or_else(
+        || {
+            if protocol == ProviderProtocol::AnthropicMessages {
+                crate::provider_catalog::AuthStyle::XApiKey
+            } else {
+                crate::provider_catalog::AuthStyle::Bearer
+            }
+        },
+        |item| item.auth,
+    )
+}
+
+fn requested_provider_model_target(
+    name: &str,
+    input: &ProviderModelsInput,
+) -> Result<ProviderModelDiscoveryTarget, String> {
     let preset = input
         .preset
         .as_deref()
@@ -11442,42 +11464,83 @@ pub async fn provider_models(
     } else {
         input.base_url.trim()
     };
-    let protocol = Protocol::parse(&input.protocol)
+    let protocol = ProviderProtocol::parse(&input.protocol)
         .ok_or_else(|| format!("未知的线路协议“{}”", input.protocol.trim()))?;
-    let auth = preset.map_or_else(
-        || {
-            if protocol == Protocol::AnthropicMessages {
-                AuthStyle::XApiKey
-            } else {
-                AuthStyle::Bearer
+    if let Some(preset) = preset {
+        if let Some(allowed) = crate::provider_catalog::allowed_protocols(preset.id, base_url) {
+            if !allowed.contains(&protocol) {
+                return Err(format!("当前接口地址不支持“{}”", protocol.as_str()));
             }
-        },
-        |item| item.auth,
-    );
+        }
+    }
+    Ok(ProviderModelDiscoveryTarget {
+        base_url: base_url.to_string(),
+        protocol,
+        auth: provider_model_auth(preset, protocol),
+    })
+}
 
+fn stored_provider_model_target(
+    name: &str,
+    provider: &agent_config::ProviderConfig,
+) -> ProviderModelDiscoveryTarget {
+    let identity = provider
+        .provider_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name);
+    let preset = provider_preset(identity).or_else(|| provider_preset(name));
+    let base_url = if provider.base_url.trim().is_empty() {
+        preset.map_or("", |item| item.base_url)
+    } else {
+        provider.base_url.trim()
+    };
+    let protocol = resolve_effective_protocol(identity, provider);
+    ProviderModelDiscoveryTarget {
+        base_url: base_url.to_string(),
+        protocol,
+        auth: provider_model_auth(preset, protocol),
+    }
+}
+
+pub async fn provider_models(
+    state: &CommandState,
+    input: ProviderModelsInput,
+) -> Result<serde_json::Value, String> {
+    let name = input.name.trim();
     let supplied_key = input
         .api_key
         .as_deref()
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(str::to_string);
-    let api_key = if supplied_key.is_some() || name.is_empty() {
-        supplied_key
+    let (target, api_key) = if let Some(key) = supplied_key {
+        (requested_provider_model_target(name, &input)?, Some(key))
+    } else if name.is_empty() {
+        (requested_provider_model_target(name, &input)?, None)
     } else {
         let settings = SettingsService::new(state.config_dir.clone());
-        settings
-            .load_global_unvalidated()
-            .map_err(err_str)?
-            .providers
-            .get(name)
-            .map(|provider| provider.api_key.trim())
-            .filter(|key| !key.is_empty())
-            .map(str::to_string)
+        let config = settings.load_global_unvalidated().map_err(err_str)?;
+        if let Some(provider) = config.providers.get(name) {
+            let target = stored_provider_model_target(name, provider);
+            let key =
+                (!provider.api_key.trim().is_empty()).then(|| provider.api_key.trim().to_string());
+            (target, key)
+        } else {
+            // 新建、自建且尚未填写密钥的服务仍可尝试公开模型目录；此分支没有
+            // 已保存凭据，因此使用表单地址不会形成密钥外发能力。
+            (requested_provider_model_target(name, &input)?, None)
+        }
     };
 
-    let response =
-        crate::provider_models::discover_models(base_url, api_key.as_deref(), protocol, auth)
-            .await?;
+    let response = crate::provider_models::discover_models(
+        &target.base_url,
+        api_key.as_deref(),
+        target.protocol,
+        target.auth,
+    )
+    .await?;
     serde_json::to_value(response).map_err(err_str)
 }
 
@@ -11759,6 +11822,7 @@ pub async fn settings_save_provider(
                 .map(str::to_string)
         }),
     };
+    let catalog_identity = provider_kind.as_deref().unwrap_or(name.as_str());
     let output_limits = agent_config::ProviderConfig {
         base_url: base_url.clone(),
         api_key: String::new(),
@@ -11771,11 +11835,11 @@ pub async fn settings_save_provider(
     };
     if let (Some(requested), Some(limit)) = (
         input.max_tokens,
-        provider_max_output_tokens(&name, &output_limits),
+        provider_max_output_tokens(catalog_identity, &output_limits),
     ) {
         if requested > limit {
             // 最常见的误填是把上下文窗口当成最大输出，所以把两者区别写进提示。
-            let context_hint = provider_preset(&name)
+            let context_hint = provider_preset(catalog_identity)
                 .and_then(|preset| preset.context_window)
                 .map(|window| format!("，{window} 是上下文窗口，不是单次输出上限"))
                 .unwrap_or_default();
@@ -11824,8 +11888,12 @@ pub async fn settings_save_provider(
         .and_then(|provider| provider.get("protocol"))
         .and_then(serde_json::Value::as_str)
         .and_then(ProviderProtocol::parse);
-    let protocol =
-        protocol_to_persist(&name, &base_url, input.protocol.as_deref(), stored_protocol)?;
+    let protocol = protocol_to_persist(
+        catalog_identity,
+        &base_url,
+        input.protocol.as_deref(),
+        stored_protocol,
+    )?;
     let stored_show_reasoning = config_json
         .get("providers")
         .and_then(|providers| providers.get(&name))
@@ -23784,7 +23852,7 @@ output_per_mtok = 0.0
         let source_path = state.sessions_dir.join(format!("{}.jsonl", task.id));
         let source_before = std::fs::read_to_string(&source_path).unwrap();
 
-        // T42：agent_resend 只保留“从历史消息分叉”的语义，发送改走 Harness v2。
+        // T42：agent_resend 只保留“从历史消息分叉”的语义，发送改走 Harness v1。
         agent_resend(&state, &task.id, &original_id, "edited")
             .await
             .unwrap();
@@ -25383,25 +25451,25 @@ kind = "codex_cli"
     /// 目录不认的协议要被拒绝，避免存下一个必然 400 的组合。
     #[test]
     fn saving_a_protocol_the_preset_does_not_support_is_rejected() {
-        let preset = provider_preset("zhipu_coding").unwrap();
+        let preset = provider_preset("kimi_coding").unwrap();
         assert!(!preset.native.contains(&ProviderProtocol::OpenAiResponses));
 
         let error = protocol_to_persist(
-            "zhipu_coding",
+            "kimi_coding",
             preset.base_url,
             Some("openai_responses"),
             None,
         )
         .unwrap_err();
         assert!(
-            error.contains("该地址不支持") && error.contains("openai_chat"),
+            error.contains("该地址不支持") && error.contains("anthropic_messages"),
             "实际报错：{error}"
         );
 
         // 但地址被改写后不设限：自建网关实现了什么我们无从知道
         let rewritten = "https://relay.example.com/v1";
         let allowed =
-            protocol_to_persist("zhipu_coding", rewritten, Some("openai_responses"), None).unwrap();
+            protocol_to_persist("kimi_coding", rewritten, Some("openai_responses"), None).unwrap();
         assert_eq!(allowed, ProviderProtocol::OpenAiResponses);
 
         // 写错的字面量要报错，而不是静默落到某个默认值
@@ -25435,6 +25503,33 @@ kind = "codex_cli"
             resolve_effective_protocol("openai", &legacy),
             resolve_effective_protocol("openai", &chat)
         );
+    }
+
+    #[test]
+    fn stored_model_discovery_uses_the_saved_route_and_stable_identity() {
+        let saved = provider_cfg_with_identity(
+            "https://open.bigmodel.cn/api/v1",
+            "glm-5.3",
+            ProviderProtocol::OpenAiResponses,
+            "zhipu_coding",
+        );
+        let target = stored_provider_model_target("renamed-glm-plan", &saved);
+        assert_eq!(target.base_url, "https://open.bigmodel.cn/api/v1");
+        assert_eq!(target.protocol, ProviderProtocol::OpenAiResponses);
+        assert_eq!(target.auth, crate::provider_catalog::AuthStyle::Bearer);
+    }
+
+    #[test]
+    fn requested_model_discovery_rejects_a_mismatched_coding_plan_route() {
+        let input = ProviderModelsInput {
+            name: "zhipu_coding".to_string(),
+            preset: Some("zhipu_coding".to_string()),
+            base_url: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
+            api_key: Some("test-key".to_string()),
+            protocol: "openai_responses".to_string(),
+        };
+        let error = requested_provider_model_target("zhipu_coding", &input).unwrap_err();
+        assert!(error.contains("当前接口地址不支持"));
     }
 
     #[test]

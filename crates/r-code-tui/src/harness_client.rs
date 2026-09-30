@@ -1,4 +1,4 @@
-//! TUI Harness v2 客户端（/plugins 命令组，T36）。
+//! TUI Harness v1 客户端（/plugins 命令组，T36）。
 //!
 //! 与 GUI 走同一套 ApplicationService 操作（经 r-code-client 连接共享
 //! r-code-service 守护进程），不依赖 r-code-host/Tauri。命令输出为
@@ -53,7 +53,7 @@ impl HarnessCommandOutcome {
     }
 }
 
-/// v2 客户端桥（每个 TUI 进程一个；克隆共享配置）。
+/// v1 客户端桥（每个 TUI 进程一个；克隆共享配置）。
 #[derive(Clone)]
 pub struct HarnessTuiClient {
     profile: RuntimeProfile,
@@ -91,7 +91,7 @@ impl HarnessTuiClient {
 
     async fn connect(&self) -> Result<DaemonClient, String> {
         let info = r_code_client::ensure_daemon(
-            &self.profile.harness_v2_root(),
+            &self.profile.harness_v1_root(),
             &self.profile.ipc_endpoint(),
             &self.profile.profile_id(),
             self.service_binary.as_deref(),
@@ -364,7 +364,7 @@ fn short_reason(reason: &str) -> String {
 }
 
 /// r-code-service 二进制定位：R_CODE_SERVICE_BIN 显式优先，其次 exe 旁
-///（打包布局）。T35 起 engine.rs 的 V2ChatClient 复用同一解析。
+///（打包布局）。T35 起 engine.rs 的 V1ChatClient 复用同一解析。
 pub fn default_service_binary() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("R_CODE_SERVICE_BIN") {
         return Some(PathBuf::from(path));

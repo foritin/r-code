@@ -6,7 +6,8 @@
 use r_code_gateway::gateway::ToolGateway;
 use r_code_gateway::tools::{CreateFileTool, ReadFileTool};
 use r_code_harness_protocol::services::{
-    ContentBlock, ModelMessage, ModelRole, ModelStreamRequest, StreamEvent, StreamPayload,
+    ContentBlock, ModelMessage, ModelRole, ModelStreamRequest, ProposalKind, StreamEvent,
+    StreamPayload,
 };
 use r_code_harness_protocol::{
     ApiVersion, HarnessId, HostService, NegotiatedCapabilities, PackageRef, RunIdentity,
@@ -20,7 +21,7 @@ use r_code_runtime::services::authorization::{
     AuthorizationService, EffectivePermissions, WorkspaceCapability,
 };
 use r_code_runtime::services::tools::GatewayToolService;
-use r_code_store::v2::V2Store;
+use r_code_store::v1::V1Store;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -131,7 +132,7 @@ async fn native_binary_edits_a_real_fixture_through_public_host_apis() {
         ToolGateway::new(Arc::new(r_code_gateway::permission::PermissionEngine::new()));
     gateway.register(Box::new(CreateFileTool));
     gateway.register(Box::new(ReadFileTool));
-    let store = Arc::new(V2Store::open(&temp.path().join("tasks.sqlite3")).expect("store"));
+    let store = Arc::new(V1Store::open(&temp.path().join("tasks.sqlite3")).expect("store"));
     let tools: Arc<dyn ToolService> = Arc::new(GatewayToolService::new(
         Arc::new(gateway),
         Arc::new(AuthorizationService::new()),
@@ -182,7 +183,7 @@ async fn native_binary_edits_a_real_fixture_through_public_host_apis() {
         },
         guard,
         router.clone(),
-        serde_json::json!({}),
+        serde_json::json!({"taskMode": "execution"}),
         TransportLimits::default(),
     )
     .await
@@ -247,6 +248,7 @@ async fn native_binary_edits_a_real_fixture_through_public_host_apis() {
     // And proposed completion for host arbitration.
     let proposals = router.recorded_proposals.lock().expect("proposals").clone();
     assert!(!proposals.is_empty(), "the loop proposed completion");
+    assert_eq!(proposals.last().unwrap().kind, ProposalKind::Implementation);
 
     session.cancel("done").await.expect("cancel");
     let _ = ModelRole::User;

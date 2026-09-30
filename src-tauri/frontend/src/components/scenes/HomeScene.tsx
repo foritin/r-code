@@ -8,10 +8,7 @@ import {
   recoveryCleanup,
   recoveryData,
   settingsGet,
-  planCreate,
   taskCreate,
-  taskSetInference,
-  taskSetModel,
   taskUpdateGoal,
   workspaceChoose,
   workspaceSetAccessMode,
@@ -338,21 +335,22 @@ export function HomeScene() {
         taskMode,
         activeProvider?.name ?? null,
         agentEngine,
+        activeModel || null,
+        draftInference,
       );
-      if (agentEngine === "r_code" && activeProvider) {
-        if (activeModel && activeModel !== activeProvider.model) await taskSetModel(task.id, activeModel);
-        if (Object.keys(draftInference).length > 0) await taskSetInference(task.id, draftInference);
-      }
       if (persistentGoal.trim()) {
         stage = "设置目标";
         await taskUpdateGoal(task.id, persistentGoal);
       }
-      if (taskMode === "plan") {
-        stage = "创建计划";
-        await planCreate(task.id);
-      }
       stage = "发送消息";
-      await agentSend(task.id, message, effectiveAgentSendMode(sendMode, false), files);
+      await agentSend(
+        task.id,
+        message,
+        effectiveAgentSendMode(sendMode, false),
+        files,
+        [],
+        currentWorkspacePath,
+      );
       await refreshTasks().catch(() => {});
       attachments.clear();
       setGoalMode(false);

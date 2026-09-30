@@ -144,9 +144,12 @@ fn plugins_ignoring_cancellation_still_end_terminal() {
     assert!(matches!(
         state.record_evidence(r_code_kernel::task::EvidenceRecord {
             evidence_id: "late".into(),
+            task_id: "task-1".into(),
             check_id: "c".into(),
+            definition_identity: "definition:c".into(),
             candidate_digest: "d".into(),
             environment: "e".into(),
+            environment_fingerprint: "environment:e".into(),
             passed: true,
             host_output: None,
             recorded_by: r_code_harness_protocol::Provenance::Host,

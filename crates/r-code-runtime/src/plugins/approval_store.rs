@@ -1,35 +1,35 @@
 //! Persistent approval pending-operation store (RA1).
 //!
 //! Approval operations are host-created facts projected into the journal:
-//! `approval.requested` when the host registers one, `approval.decided`
-//! when a first decision lands (client decision or timeout denial). The
-//! in-memory index is a projection of those events — a restarted daemon
-//! rebuilds pending state from the journal, so a decision is only visible
-//! once its event has been persisted (journal write happens *before* the
-//! in-memory commit).
-//!
-//! Frozen payload contract (RA1):
-//! - `approval.requested` — `{opId, summary, runId, createdSeq, createdMs}`;
-//!   the task id rides the journal row's task_id column.
-//! - `approval.decided` — `{opId, decision: "granted"|"denied", decidedBy,
-//!   decidedSeq, runId}` where `decidedBy` is the deciding client id or
-//!   the literal `"<timeout>"`.
-//!
-//! `createdSeq`/`decidedSeq` are the journal water level (highest
-//! allocated seq) *before* the event is written: an append-only event
-//! cannot reference its own rowid. Both are monotonic and comparable,
-//! which is all list ordering and cursor resumption need.
+//! `approval.requested` on registration, `approval.decided` on the first
+//! decision (client or timeout denial); later deciders replay the identical
+//! record. The in-memory index is a projection of those events — a restarted
+//! daemon rebuilds it, and the journal write happens *before* the in-memory
+//! commit, so a decision is visible only once persisted. P19B-R adds one
+//! optional `effect` binding key to `approval.requested`; rebuild restores
+//! it, so a restarted daemon still materializes only the exact approved
+//! payload, and RA1 events without the key rebuild unchanged. Frozen payload
+//! contracts live on `EVENT_REQUESTED` / `EVENT_DECIDED`.
 
 use r_code_harness_protocol::ApprovalDecision;
 use r_code_kernel::ports::{JournalEvent, JournalStore};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, Mutex};
 
-/// Journal kind for a host-registered pending operation.
+/// Journal kind for a host-registered pending operation. Frozen payload
+/// (RA1): `{opId, summary, runId, createdSeq, createdMs}`, plus P19B-R's
+/// optional `effect` binding; the task id rides the journal row's task_id
+/// column. `createdSeq` is the journal water level (highest allocated seq)
+/// *before* the write — an append-only event cannot reference its own rowid.
 pub const EVENT_REQUESTED: &str = "approval.requested";
-/// Journal kind for a first decision on a pending operation.
+/// Journal kind for a first decision on a pending operation. Frozen payload
+/// (RA1): `{opId, decision: "granted"|"denied", decidedBy, decidedSeq, runId}`
+/// where `decidedBy` is the deciding client id or the literal `"<timeout>"`;
+/// `decidedSeq` is the water level *before* the write. Both seqs are
+/// monotonic and comparable, which is all list ordering/cursors need.
 pub const EVENT_DECIDED: &str = "approval.decided";
 
 /// Default time an approval request waits before a timeout denial.
@@ -43,6 +43,46 @@ pub struct DecisionRecord {
     pub decided_seq: u64,
 }
 
+/// P19B-R: the exact effect authority a pending operation commits to. This
+/// binds a host-created request to one (plan revision, WorkUnit, effect
+/// class, network ceiling, payload hash) tuple so a granted decision can
+/// materialize EXACTLY the approved payload — and nothing broader. The task
+/// id rides the pending operation / journal row, so it is not repeated here.
+/// Field names are the canonical wire material P19B-C renders from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectBinding {
+    pub plan_revision: String,
+    pub work_unit_id: String,
+    pub effect_class: String,
+    pub network: String,
+    pub payload_hash: String,
+}
+
+impl EffectBinding {
+    /// Project the binding to the canonical request/list material. The task
+    /// id is supplied by the caller (it rides the pending operation row).
+    pub fn material(&self, task_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "taskId": task_id,
+            "planRevision": self.plan_revision,
+            "workUnitId": self.work_unit_id,
+            "effectClass": self.effect_class,
+            "network": self.network,
+            "payloadHash": self.payload_hash,
+        })
+    }
+}
+
+/// P19B-R: one pending effect-approval operation resolved to its owning
+/// task and exact binding (the materialization input for a granted
+/// decision).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectContext {
+    pub task_id: String,
+    pub binding: EffectBinding,
+}
+
 /// One pending operation with its (optional) decision.
 #[derive(Debug)]
 struct PendingOp {
@@ -51,6 +91,9 @@ struct PendingOp {
     task_id: String,
     created_seq: u64,
     created_ms: i64,
+    /// P19B-R: present only for effect-approval requests; binds the pending
+    /// operation to the exact payload a grant may materialize.
+    effect: Option<EffectBinding>,
     decision: Option<DecisionRecord>,
     tx: watch::Sender<Option<DecisionRecord>>,
     /// Keeps the watch channel open: a tokio watch channel closes (and
@@ -80,6 +123,9 @@ pub struct PendingView {
     pub task_id: String,
     pub created_seq: u64,
     pub created_ms: i64,
+    /// P19B-R: the exact effect authority bound to this pending operation,
+    /// present only for effect-approval requests.
+    pub effect: Option<EffectBinding>,
 }
 
 /// Host-side persistent approval store shared by the run manager, the
@@ -137,6 +183,37 @@ impl ApprovalStore {
         run_id: &str,
         task_id: &str,
     ) -> watch::Receiver<Option<DecisionRecord>> {
+        self.register_with_effect(op_id, summary, run_id, task_id, None)
+            .await
+    }
+
+    /// P19B-R: register a host-owned effect-approval request bound to the
+    /// exact (plan revision, WorkUnit, class, network, payload hash) tuple.
+    /// Same host-only, idempotent contract as [`Self::register`]: the first
+    /// registration wins and journals `effect` in its `approval.requested`
+    /// event, a re-registration observes the existing operation and never
+    /// writes a second event. A plugin cannot reach this path — only the
+    /// authenticated application surface calls it.
+    pub async fn register_effect(
+        &self,
+        op_id: &str,
+        summary: &str,
+        run_id: &str,
+        task_id: &str,
+        effect: EffectBinding,
+    ) -> watch::Receiver<Option<DecisionRecord>> {
+        self.register_with_effect(op_id, summary, run_id, task_id, Some(effect))
+            .await
+    }
+
+    async fn register_with_effect(
+        &self,
+        op_id: &str,
+        summary: &str,
+        run_id: &str,
+        task_id: &str,
+        effect: Option<EffectBinding>,
+    ) -> watch::Receiver<Option<DecisionRecord>> {
         {
             let ops = self.ops.lock().await;
             if let Some(op) = ops.get(op_id) {
@@ -145,13 +222,18 @@ impl ApprovalStore {
         }
         let created_seq = self.store.max_event_seq().await;
         let created_ms = now_ms();
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "opId": op_id,
             "summary": summary,
             "runId": run_id,
             "createdSeq": created_seq,
             "createdMs": created_ms,
         });
+        if let Some(binding) = &effect {
+            // Bind the payload hash to the exact effect authority so a
+            // rebuilt daemon still refuses to materialize anything broader.
+            payload["effect"] = serde_json::to_value(binding).unwrap_or_default();
+        }
         self.append_event(task_id, EVENT_REQUESTED, payload).await;
         let mut ops = self.ops.lock().await;
         // Another register raced in: first event wins, second caller
@@ -169,12 +251,26 @@ impl ApprovalStore {
                 task_id: task_id.to_string(),
                 created_seq,
                 created_ms,
+                effect,
                 decision: None,
                 tx,
                 keepalive_rx,
             },
         );
         receiver
+    }
+
+    /// P19B-R: the owning task plus the exact effect authority bound to a
+    /// pending operation, or `None` when the op is an ordinary (non-effect)
+    /// approval or was never host-created. The decide path reads this to
+    /// materialize only what was requested.
+    pub async fn effect_context(&self, op_id: &str) -> Option<EffectContext> {
+        let ops = self.ops.lock().await;
+        let op = ops.get(op_id)?;
+        op.effect.clone().map(|binding| EffectContext {
+            task_id: op.task_id.clone(),
+            binding,
+        })
     }
 
     /// Receiver for an already-registered operation; `None` means the op id
@@ -251,6 +347,7 @@ impl ApprovalStore {
                 task_id: op.task_id.clone(),
                 created_seq: op.created_seq,
                 created_ms: op.created_ms,
+                effect: op.effect.clone(),
             })
             .collect();
         rows.sort_by_key(|row| row.created_seq);
@@ -312,6 +409,10 @@ impl ApprovalStore {
                     };
                     ops.entry(op_id.to_string()).or_insert_with(|| {
                         let (tx, keepalive_rx) = watch::channel(None);
+                        let effect = event
+                            .payload
+                            .get("effect")
+                            .and_then(|value| serde_json::from_value(value.clone()).ok());
                         PendingOp {
                             summary: event
                                 .payload
@@ -336,6 +437,7 @@ impl ApprovalStore {
                                 .get("createdMs")
                                 .and_then(|v| v.as_i64())
                                 .unwrap_or_default(),
+                            effect,
                             decision: None,
                             tx,
                             keepalive_rx,

@@ -1,0 +1,163 @@
+{
+  "task_id": "P19A",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-kernel/tests/s19a_effect_contract.rs",
+    "crates/r-code-store/tests/s19a_effect_store.rs",
+    "crates/r-code-runtime/tests/s19a_effect_snapshot_gate.rs"
+  ],
+  "tests": {
+    "command": "Windows dev host, Git Bash, every command foreground with an explicit timeout <=5min, --test-threads=1, Store with --no-fail-fast, counts summed over UNFILTERED 'test result:' lines. Tooling note (found this task and worth keeping): plain `rtk cargo test` truncates a long crate run — it stopped the full Runtime run at 26 suites / 162 tests / 116s while printing a summary that looked complete — so every cumulative count here was taken through `rtk proxy cargo test ...` (unfiltered) piped into a counter that echoes each 'test result:' line, names the suite behind any non-zero failed/filtered-out, and prints every panic line; nothing was suppressed. NEW SUITES (25 tests): rtk cargo test -p r-code-kernel --all-features --test s19a_effect_contract (9/9); rtk cargo test -p r-code-store --all-features --no-fail-fast --test s19a_effect_store (9/9); rtk cargo test -p r-code-runtime --all-features --no-fail-fast --test s19a_effect_snapshot_gate (7/7). CUMULATIVE: rtk proxy cargo test -p r-code-runtime --all-features --no-fail-fast (431 passed / 0 failed); rtk proxy cargo test -p r-code-kernel --all-features --no-fail-fast (84/0); rtk proxy cargo test -p r-code-store --all-features --no-fail-fast (425 passed / 1 failed / 426 total, the only failure the declared plan_schema baseline); rtk proxy cargo test -p r-code-harness-protocol -p r-code-harness-sdk --all-features --no-fail-fast (33/0); rtk proxy cargo test -p r-code-harness-codex --all-features --no-fail-fast (13/0). Cumulative 987 total / 986 passed / 1 failed against the 962/961/1 P11R baseline: +25 tests, no new failures. COUNT INTEGRITY, stated plainly: the Runtime sum contains two 'test result: ok. 1 passed; ... 10 filtered out' lines that are NOT extra suites — crates/r-code-runtime/tests/s00_boot_identity.rs::current_identity_is_stable_in_process_and_across_restarted_processes re-spawns its own test binary twice with a boot_identity_exact_child_probe filter and those children inherit stdout, so their result lines land in the parent's stream (verified by running --test s00_boot_identity alone: 11 passed for the suite plus the two child echoes). The suite-level truth is therefore 429 distinct Runtime tests, and the recorded 424 baseline carries the same two echoes, which is why 431 = 424 + 7 holds under the house summation rule; both numbers are reported rather than silently de-duplicated. WORKSPACE GATES: rtk cargo test --workspace --all-features --no-run exit 0; rtk cargo check --workspace --all-features exit 0 (511 crates, 1m33s); rtk cargo clippy --workspace --all-features --all-targets -- -D warnings exit 0 (no issues); rtk cargo fmt --all -- --check exit 0 (QA ran rtk cargo fmt -p r-code-kernel -p r-code-store to format only its own two new test files; no other file needed formatting). OTHER GATES: node scripts/harness-packaging.test.mjs 2 passed / 0 failed in 15.1s — the second case really builds r-code-service and r-code-harness-native and boots the daemon over a path containing spaces, and the first now also asserts the staged native manifest deep-equals its source; rtk proxy python.exe .agents/skills/plan-loop/tools/validate_plan.py --tasks docs/prd/r-code-v1/worklists/safety.tasks.json → ok=true, 0 errors, 0 warnings, 39 tasks / 11 components covered; rtk proxy python.exe .agents/skills/swe-loop/tools/quality_check.py over the 16 changed production files (ok=true, 0 violations) and over QA's 3 new test files (ok=true, 0 violations). PLATFORM DISCIPLINE: P19A added no cfg(target_os)-gated code — verified by diffing all 13 contract files against iter/P19A/before/ for added target_os lines (zero hits) — so no scratch-crate cross-target cargo check was required this task, and the s08/s09/s10/s11/s16/s17/s18 platform suites remain parse-only on this Windows host (they compile to 0-test suites and execute only in native Linux/macOS CI); those 0-test lines are included in the sums above exactly as in every prior verdict, and no platform-suite result is claimed as locally executed.",
+    "total": 987,
+    "passed": 986,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing plan_schema baseline, unchanged by P19A: crates/r-code-store/tests/plan_schema.rs:245 asserts the LEGACY schema_version table reads 18 after manually deleting versions 19..34, and it reads 35 (left: 35, right: 18) because LATEST_SCHEMA_VERSION has advanced past the test's hardcoded DELETE list. P19A touches v1_schema_migrations (the v1 ledger), not the legacy schema_version counter, so the numbers are identical to the P11R baseline."
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-harness-protocol/src/services.rs": {
+          "file_loc": 771,
+          "max_comment_block": 6,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.201
+        },
+        "crates/r-code-harness-protocol/src/manifest.rs": {
+          "file_loc": 517,
+          "max_comment_block": 5,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.129
+        },
+        "crates/r-code-harness-protocol/src/rpc.rs": {
+          "file_loc": 247,
+          "max_comment_block": 5,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.138
+        },
+        "crates/r-code-harness-protocol/src/operations.rs": {
+          "file_loc": 240,
+          "max_comment_block": 6,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.27
+        },
+        "crates/r-code-harness-protocol/schema/harness-v1.schema.json": {
+          "file_loc": 312,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        },
+        "crates/r-code-kernel/src/task.rs": {
+          "file_loc": 1594,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.091
+        },
+        "crates/r-code-kernel/src/plans.rs": {
+          "file_loc": 540,
+          "max_comment_block": 7,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.084
+        },
+        "crates/r-code-store/src/v1/schema.rs": {
+          "file_loc": 452,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.013
+        },
+        "crates/r-code-store/src/v1/plans.rs": {
+          "file_loc": 1027,
+          "max_comment_block": 5,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.041
+        },
+        "crates/r-code-runtime/src/services/run_snapshots.rs": {
+          "file_loc": 403,
+          "max_comment_block": 4,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.058
+        },
+        "crates/r-code-runtime/src/plugins/catalog.rs": {
+          "file_loc": 323,
+          "max_comment_block": 6,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.118
+        },
+        "crates/r-code-runtime/src/run_manager.rs": {
+          "file_loc": 2345,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.046
+        },
+        "plugins/native/harness.json": {
+          "file_loc": 49,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        },
+        "plugins/native/src/loop_engine.rs": {
+          "file_loc": 363,
+          "max_comment_block": 6,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.12
+        },
+        "scripts/harness-packaging.test.mjs": {
+          "file_loc": 218,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        },
+        "src-tauri/plugins/native/harness.json": {
+          "file_loc": 49,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "qa_test_files": {
+        "crates/r-code-kernel/tests/s19a_effect_contract.rs": {
+          "file_loc": 438,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.012
+        },
+        "crates/r-code-store/tests/s19a_effect_store.rs": {
+          "file_loc": 692,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.013
+        },
+        "crates/r-code-runtime/tests/s19a_effect_snapshot_gate.rs": {
+          "file_loc": 466,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.011
+        }
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS — all three iteration-1 defects are fixed and pinned green, and the cumulative gate is 987/986/1 (only the declared plan_schema legacy schema_version 18-vs-35 baseline) with workspace check/clippy --all-targets/--no-run/fmt at exit 0, node packaging 2/2 and quality_check clean over 16 production files. The refine round closed the one product-visible hole: src-tauri/plugins/native/harness.json — the manifest tauri.conf.json bundles and the installer scripts stage the sidecar beside — now matches its source at apiMinor 2 + requiresEffectFields, and the packaging test asserts that parity for native exactly as it already did for codex, so P19A.4 holds in the shipped package and not only in the repo copy; the store's duplicate-approval path now pre-loads by approval_id inside the same IMMEDIATE transaction (the persist_plan_approval house pattern) instead of string-matching a 'PRIMARY KEY' message rusqlite never emits, the idempotency check compares the complete persisted record so one approval id can never carry two actors/sessions/timestamps, and the stringly-typed EffectApprovalError enum is replaced by three real PlanStoreError variants P19B-R can branch on. 25 new tests prove the contract with real stores and a real RunSnapshotBuilder: the six kebab enum values round-trip and reject near-miss spellings, a pre-P19A document parses to the ReadOnly/Offline floor and re-serializes byte-identically against a replica of the old wire struct so old plan hashes cannot move, the payload hash is sensitive to all eight authority keys and deliberately blind to description, HostNetwork dies at plan validation, the effect fields are inside the plan revision hash, requiresEffectFields is refused below apiMinor 2 while 1.0/1.1 packages still negotiate against host 1.2, the store refuses every one of eight near-miss identities and twelve invalid records plus junk columns through raw SQL, a plan approval never authorizes an effect, supersede is future-runs-only, and the runtime gate refuses an escalated unit with no source, with a foreign/stale/weaker/edited approval, after supersede, and on any unit-vs-plan drift. Two honest notes for P19B-R: work_unit_effect_approvals has no FK to plan_revisions (plan_approvals does) and the store never checks the revision exists, so an approval for an unpublished revision is storable though inert — the gate matches six columns derived from the real approved plan; and the runtime test file is a recorded deviation because neither declared test crate can see RunSnapshotBuilder."
+}

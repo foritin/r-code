@@ -11,7 +11,7 @@ use r_code_kernel::ports::{HarnessSession, JournalStore, RunGuard};
 use r_code_kernel::task::{Attempt, TaskContract, TaskKind};
 use r_code_kernel::testing::{FakeModelService, FakeProcessService, FakeToolService};
 use r_code_runtime::plugins::*;
-use r_code_store::v2::V2Store;
+use r_code_store::v1::V1Store;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,9 +76,9 @@ async fn third_party_fixture_installs_and_runs_through_public_paths() {
     let binary = repair_harness_binary();
     let source = stage_package(temp.path(), &binary);
 
-    // Install through the real installer + catalog + v2 store.
+    // Install through the real installer + catalog + v1 store.
     let store = Arc::new(
-        V2Store::open(&temp.path().join("harness-v2").join("tasks.sqlite3")).expect("store"),
+        V1Store::open(&temp.path().join("harness-v1").join("tasks.sqlite3")).expect("store"),
     );
     let catalog = PluginCatalog::new(temp.path().join("plugins"), store.clone());
     let installed = catalog

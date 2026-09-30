@@ -13,7 +13,7 @@
         "crates/r-code-runtime/src/run_manager.rs",
         "crates/r-code-runtime/src/plugins/router.rs",
         "crates/r-code-runtime/src/application.rs",
-        "crates/r-code-store/src/v2/journal.rs"
+        "crates/r-code-store/src/v1/journal.rs"
       ],
       "tests": [
         "host.approvals.request 产生 approval.requested 事件（op id/工具名/参数/风险档/runId）；决策后 approval.decided；重启后 pending op 从 journal 重建；迟到/重复决策拒入；插件等待期间阻塞直到决策或超时"
@@ -249,7 +249,7 @@
         "src-tauri/frontend/src/remote/"
       ],
       "tests": [
-        "有能力设备 send/cancel 成功；无能力设备 PermissionDenied；运行中发送=排队（v2 既有语义）"
+        "有能力设备 send/cancel 成功；无能力设备 PermissionDenied；运行中发送=排队（v1 既有语义）"
       ],
       "acceptance": "PWA 输入框发送/中止/继续对话；能力默认关，配对时桌面勾选授予；写动作审计（device_id 入 journal 扩展字段或事件）"
     },
@@ -285,9 +285,9 @@
       ],
       "tests": [
         "前置：host.approvals 请求产生持久审批事件（approval.requested/decided），QuestionSink 落地为真实通道（现状 IgnoreQuestions 占位）；远程批准/拒绝落到同一 pending op",
-        "无能力拒绝；批准审计含 device_id；迟到决策拒入（v2 既有门不变）"
+        "无能力拒绝；批准审计含 device_id；迟到决策拒入（v1 既有门不变）"
       ],
-      "acceptance": "复用 v2 审批语义（op 宿主创建、单 op、作用域校验）；**先补齐 daemon 审批事件面**（当前协议只有请求位、事件未外发——R12 验收包含这一前置接线）；PWA 审批卡片（对照 prototype.html 屏③：命令全文/风险档/来源/批准拒绝）；可配置“高敏动作要求桌面二次确认”"
+      "acceptance": "复用 v1 审批语义（op 宿主创建、单 op、作用域校验）；**先补齐 daemon 审批事件面**（当前协议只有请求位、事件未外发——R12 验收包含这一前置接线）；PWA 审批卡片（对照 prototype.html 屏③：命令全文/风险档/来源/批准拒绝）；可配置“高敏动作要求桌面二次确认”"
     },
     {
       "id": "R13",

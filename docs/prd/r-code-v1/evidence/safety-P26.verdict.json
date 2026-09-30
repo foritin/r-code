@@ -1,0 +1,70 @@
+{
+  "task_id": "P26",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s26_process_delta.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED SUITE s26_process_delta = 6 passed / 0 failed, measured four times (initial, post-fix, strict-concurrent rerun, post-fmt): manifests_are_deterministic_and_deltas_cover_every_kind (unchanged tree captures byte-identical; every file carries a 64-hex content digest plus physical identity; one exercise of each of Created/Edited/Deleted/Binary comes out path-sorted exactly with duplicates untouched); unbounded_scans_are_unavailable_and_cannot_receipt (entries bound, logical-byte bound and a zero deadline each refuse as Unavailable with the named reason); links_rejected_ignored_ephemeral_excluded_foreign_bytes_preserved (a real junction on Windows — the host lacks the symlink privilege, and a junction is a reparse point the is_symlink check detects identically; std symlink on Unix; .git, a custom ignored prefix and an ephemeral root never enter the manifest and their bytes survive every capture/delta cycle verbatim); cas_pass_journals_every_form_and_refuses_stale_content (manifest JSON + five distinct file digests journaled — the duplicate pair shares one digest — every digest refcount-live in the store, and a post-capture edit makes the CAS pass abort as ConcurrentEdit instead of journaling stale content); concurrent_initial_scan_edit_aborts_before_user_code (STRENGTHENED after the first cut passed vacuously: a size-alternating racer over a 4MiB file must produce at least one OBSERVED ConcurrentEdit abort within 120 attempts, while any capture that completes is revalidation-consistent); revalidate_and_post_exit_double_capture_close_the_doors (a single foreign edit refuses the launch release; two post-exit captures over a drifting tree disagree while a stable tree holds None). (2) HOUSE five-group cumulative measured twice, both reported: 143 result lines / 1103 passed / 1 failed (baseline only, zero flake) and 143 / 1102 / 2 on the identical code (baseline + the documented conversation_engine transcript race, re-measured alone immediately after: 10 passed / 0 failed). House is 1104 total / 1103 passed / 1 declared failure — +6 tests (s26) and +1 result line vs P26A's 1098/1097/1, zero regressions. (3) OTHER GATES: clippy -p r-code-runtime --all-features --all-targets -D warnings exit 0; cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites — the scanner spawns nothing); quality_check.py over the four changed files ok=true 0 violations; daemon hygiene: zero r-code-service/harness-native processes after every gate batch.",
+    "total": 1104,
+    "passed": 1103,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P26 and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/process_effects.rs": {
+          "file_loc": 351,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.199
+        },
+        "crates/r-code-runtime/src/services/workspaces.rs": {
+          "file_loc": 984,
+          "max_comment_block": 12,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.084
+        },
+        "crates/r-code-runtime/src/services/mod.rs": {
+          "file_loc": 29,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.138
+        },
+        "crates/r-code-runtime/tests/s26_process_delta.rs": {
+          "file_loc": 424,
+          "max_comment_block": 9,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.128
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 400 lines; 351 production lines landed plus a 424-line suite — the scanner is one walk, one join and three small lifecycle helpers, no speculative structure. max_func_loc/max_nesting null for .rs as always; reviewed by eye — the largest function (capture_manifest) is ~70 lines, nesting <= 4. The concurrent test was deliberately strengthened from a vacuous pass to a REQUIRED observation before being accepted."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (every file has content+physical identity): FileIdentity carries the sha256 of the observed bytes plus the stat pair and a binary flag, captured under a two-stat bracket so the content identity always describes bytes that existed as a stable physical identity. Acceptance ② (unbounded/ambiguous scan cannot receipt): entries, logical-byte and wall-clock bounds each refuse as Unavailable — the error a receipt path treats as no-launch; ambiguity (a concurrent edit, a link) refuses as well. Acceptance ③ (foreign bytes preserved): pre-existing ignored paths, .git and ephemeral roots never enter the manifest, are never read-modified, and survive every capture/delta/CAS cycle verbatim — pinned byte-for-byte. P26.1 proven (all three bounds), P26.2 proven (link/junction rejection incl. Windows reparse points, out-of-scope by construction, ignored/ephemeral exclusion, CAS of every form through the P26A journal with dedup and refcounts, stale-content refusal), P26.3 proven (revalidate-every-identity refuses on a single foreign edit), P26.4 proven (post-exit double capture detects drift, holds None on a stable tree). Disclosed: the scanner is not yet wired into any launch path — P27 wraps processes with it and owns delta application/foreign-byte CAS restore; the concurrent-abort test requires an observed abort (size-alternating racer, 120 attempts) after its first cut passed vacuously. House 1104/1103/1 with only the declared plan_schema baseline; the conversation_engine race member appeared once, green in isolation, both numbers reported."
+}

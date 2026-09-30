@@ -15,6 +15,7 @@ pub mod process_guard;
 pub mod profile;
 pub mod providers;
 pub mod remote;
+pub mod run_drive;
 pub mod run_manager;
 pub mod services;
 pub mod settings;

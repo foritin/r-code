@@ -1,7 +1,7 @@
 //! 会话树（G8：/tree 分支导航 + /fork 消息级分叉选择器；T35 起数据源 =
 //! 守护进程 `task.branches` + journal 投影）。
 //!
-//! v2 语义：pi 的树是 session 文件内 entry 树；本仓 v2 的分支 = **分支任务**
+//! v1 语义：pi 的树是 session 文件内 entry 树；本仓 v1 的分支 = **分支任务**
 //!（`task.clone` 派生的子任务，`parent_task_id` 谱系）。当前任务自身即
 //! main 分支；其子任务为子分支。Enter 切换到 main = 幂等（提示"已切换到
 //! 分支 main"）；子分支切换 = 接管对应任务（事件重放重建 transcript）。
@@ -21,7 +21,7 @@ pub struct BranchNode {
     pub depth: usize,
 }
 
-/// v2 分支行（`task.branches` + 当前任务派生；由壳层装配）。
+/// v1 分支行（`task.branches` + 当前任务派生；由壳层装配）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchInfo {
     pub id: String,

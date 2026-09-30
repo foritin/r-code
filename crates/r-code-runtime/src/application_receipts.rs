@@ -1,7 +1,7 @@
 //! Daemon-side application command deduplication.
 //!
 //! Wraps any [`ApplicationHandler`] with `(profile_id, client_id,
-//! command_id)` receipts persisted in the v2 store. Effects execute once;
+//! command_id)` receipts persisted in the v1 store. Effects execute once;
 //! reconnects replay the recorded result; a reused command id with a
 //! different canonical payload is refused. This layer is independent of the
 //! plugin-attempt `operation_key` dedup in the RPC router.
@@ -9,7 +9,7 @@
 use crate::daemon::ApplicationHandler;
 use r_code_harness_protocol::application::ApplicationCommand;
 use r_code_harness_protocol::{EventEnvelope, RunIdentity};
-use r_code_store::v2::{CommandReceiptState, V2Store};
+use r_code_store::v1::{CommandReceiptState, V1Store};
 use std::sync::Arc;
 
 /// Canonical hash of a command: method + canonical params. Object keys are
@@ -22,12 +22,12 @@ pub fn canonical_command_hash(method: &str, params: &serde_json::Value) -> Strin
 /// Deduplicating wrapper over an inner handler.
 pub struct CommandDedup {
     profile_id: String,
-    store: Arc<V2Store>,
+    store: Arc<V1Store>,
     inner: Arc<dyn ApplicationHandler>,
 }
 
 impl CommandDedup {
-    pub fn new(profile_id: &str, store: Arc<V2Store>, inner: Arc<dyn ApplicationHandler>) -> Self {
+    pub fn new(profile_id: &str, store: Arc<V1Store>, inner: Arc<dyn ApplicationHandler>) -> Self {
         Self {
             profile_id: profile_id.to_string(),
             store,

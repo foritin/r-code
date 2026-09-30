@@ -1,67 +1,46 @@
 //! `!` 直通执行（M4-04 / R-SHELL-01）。
 //!
-//! 经宿主 shell 执行链（`LocalShellBackend` = plan_shell 五级解析 + tokio
-//! spawn + kill_tree），不开新裸进程通道；输出进 transcript 的 Shell 行（dim，
-//! 与 ToolCard 类型层区分）。用户亲手键入 `!` 即用户授权（codex `!` 语义）。
+//! P24A 起 `!` 不再持有 TUI 进程内的 LocalShellBackend 裸通道：宿主的
+//! Shell 面要到 P28 才会按「exact-approved sandboxed Shell」暴露，在那之前
+//! 这里以 Unsupported 拒绝（fail-closed），本会话不执行任何命令、不开任何
+//! 新裸进程通道。输出仍进 transcript 的 Shell 行（dim，与 ToolCard 类型层
+//! 区分）。
 
-use std::path::Path;
-
-use r_code_gateway::execution_backend::{CommandExecutionBackend, CommandSpec, LocalShellBackend};
-
-/// 执行一条 `!command`，返回 (合并输出, 退出码)。
-/// 超时 120s（collect 内部先 kill_tree 再收尾）。
-pub async fn run_bang(command: &str, cwd: &Path) -> (String, Option<i32>) {
-    let backend = LocalShellBackend::new();
-    let spec = CommandSpec {
-        command: command.to_string(),
-        cwd: cwd.to_path_buf(),
-        timeout: std::time::Duration::from_secs(120),
-    };
-    let handle = match backend.spawn(&spec, None).await {
-        Ok(handle) => handle,
-        Err(error) => return (format!("启动失败：{error}"), None),
-    };
-    match backend.collect(handle, &spec, None).await {
-        Ok(output) => {
-            let mut text = output.stdout;
-            if !output.stderr.trim().is_empty() {
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(&output.stderr);
-            }
-            (text, output.exit_code)
-        }
-        Err(error) => (format!("执行失败：{error}"), None),
-    }
+/// 执行一条 `!command`：宿主尚未暴露受监督的 Shell，如实返回 Unsupported。
+/// 返回 (说明文本, 退出码=None)；命令未被执行。
+pub async fn run_bang(_command: &str, _cwd: &std::path::Path) -> (String, Option<i32>) {
+    (
+        "！直通执行暂不可用：宿主尚未暴露受监督的 Shell（P28 前保持关闭）；本次未执行任何命令。"
+            .to_string(),
+        None,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// M4-04.A1：! 执行输出进 Shell 行（成功含输出 + 退出码 0；失败退出码 1）。
+    /// P24A：`!` 在宿主暴露受监督 Shell 之前 fail-closed——命令不执行，
+    /// 退出码为 None，输出如实说明原因（不再借道 LocalShellBackend）。
     #[tokio::test]
-    async fn bang_execution_collects_output_and_exit_code() {
+    async fn bang_refuses_until_the_host_exposes_a_sandboxed_shell() {
         let cwd = tempfile::tempdir().expect("tempdir");
-        let (output, exit) = run_bang("echo bang-ok", cwd.path()).await;
-        assert_eq!(exit, Some(0), "成功退出码");
+        let (output, exit) = run_bang("echo must-not-run", cwd.path()).await;
+        assert_eq!(exit, None, "未执行的命令没有退出码");
         assert!(
-            output.trim().contains("bang-ok"),
-            "stdout 必须进输出：{output}"
+            output.contains("暂不可用"),
+            "输出必须如实说明不可用：{output}"
         );
-        // Shell 行投影：prompt + output（dim 渲染在 app 层，类型层见 ShellRow）。
-        let rows = crate::bang_command::shell_rows("echo bang-ok", &output, exit);
+        assert!(!output.contains("must-not-run"), "命令不得被执行：{output}");
+        // Shell 行投影仍可用（prompt + 说明行；dim 渲染在 app 层）。
+        let rows = crate::bang_command::shell_rows("!echo must-not-run", &output, exit);
         assert!(matches!(
             &rows[1],
             crate::TranscriptRow::Shell(crate::bang_command::ShellRow::Output {
-                exit_code: Some(0),
+                exit_code: None,
                 ..
             })
         ));
-        // 失败命令：退出码 1。
-        let (_, fail_exit) = run_bang("sh -c 'exit 1'", cwd.path()).await;
-        assert_eq!(fail_exit, Some(1), "失败退出码必须透传");
     }
 
     /// M4-04.A3：! 输入态的提示符语义色（light-red 由 app 层映射）。

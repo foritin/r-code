@@ -63,11 +63,64 @@ async fn passing_check_produces_host_evidence() {
     assert_eq!(outcome.exit_code, Some(0));
     let evidence = outcome.evidence.expect("evidence present");
     assert!(evidence.passed);
+    assert_eq!(evidence.task_id, "task-1");
+    assert_eq!(evidence.check_id, definition.check_id);
+    assert_eq!(evidence.definition_identity, definition.identity());
     assert_eq!(evidence.candidate_digest, manifest.candidate_id);
+    assert!(!evidence.environment_fingerprint.is_empty());
     assert!(matches!(
         evidence.recorded_by,
         r_code_harness_protocol::Provenance::Host
     ));
+}
+
+#[tokio::test]
+async fn private_materialization_and_output_redaction_fail_closed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (binding, manifest) = setup(
+        temp.path(),
+        "console.log('api_key=TOP_SECRET'); console.error('token=TOP_SECRET'); process.exit(1);",
+    );
+    let definition = node_check(vec!["verify.js".into()]);
+    let runner = VerificationRunner::new();
+    let occupied = temp.path().join("occupied");
+    std::fs::create_dir(&occupied).unwrap();
+    std::fs::write(occupied.join("foreign.txt"), b"foreign").unwrap();
+    let unavailable = runner
+        .run(
+            &binding,
+            &manifest,
+            &FrozenControlStore::new(temp.path().join("frozen-private")),
+            &definition,
+            &occupied,
+            Duration::from_secs(60),
+        )
+        .await;
+    assert!(matches!(
+        unavailable.status,
+        CheckStatus::Unavailable { .. }
+    ));
+    assert!(unavailable.evidence.is_none());
+    assert_eq!(
+        std::fs::read(occupied.join("foreign.txt")).unwrap(),
+        b"foreign"
+    );
+
+    let failed = runner
+        .run(
+            &binding,
+            &manifest,
+            &FrozenControlStore::new(temp.path().join("frozen-redaction")),
+            &definition,
+            &temp.path().join("verify-redaction"),
+            Duration::from_secs(60),
+        )
+        .await;
+    assert!(matches!(failed.status, CheckStatus::Failed { .. }));
+    assert!(!failed.stdout_tail.contains("TOP_SECRET"));
+    assert!(!failed.stderr_tail.contains("TOP_SECRET"));
+    assert!(failed.stdout_tail.contains("<redacted>"));
+    assert!(failed.stderr_tail.contains("<redacted>"));
 }
 
 #[tokio::test]

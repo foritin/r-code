@@ -1,14 +1,17 @@
-//! r-code-service: the single-owner background daemon for one v2 profile.
+//! r-code-service: the single-owner background daemon for one v1 profile.
 //!
 //! Boot order: explicit `--profile` (never inferred) → RuntimeProfile →
-//! profile ownership lock → open the v2 store → compose the
+//! profile ownership lock → open the v1 store → compose the
 //! ApplicationService (real surface: plugin catalog, task lifecycle, the
 //! durable event journal) → bind the authenticated local endpoint → serve.
 //! The daemon does not exit when frontends disconnect; it stops only via an
 //! explicit `service.shutdown` command or process termination.
 
 use r_code_harness_protocol::application::methods;
-use r_code_runtime::application::{ApplicationError, ApplicationService};
+use r_code_runtime::application::{
+    ApplicationError, ApplicationService, CompositionPolicy, CreateTaskInput, PatchField,
+    ReviewActionContext, TaskPreferencesPatch, UnverifiedOverrideInput,
+};
 use r_code_runtime::application_receipts::CommandDedup;
 use r_code_runtime::daemon::{ApplicationHandler, Daemon, ProfileLock};
 use r_code_runtime::services::authorization::{
@@ -16,11 +19,11 @@ use r_code_runtime::services::authorization::{
 };
 use r_code_runtime::services::models::ModelBroker;
 use r_code_runtime::services::settings_store::{
-    ProviderEntry, SettingsBackedResolver, SettingsStore,
+    ProviderEntry, SettingsBackedResolver, SettingsStore, SettingsStoreError, V1Settings,
 };
 use r_code_runtime::services::tools::GatewayToolService;
 use r_code_runtime::{LaunchOptions, RuntimeProfile};
-use r_code_store::v2::V2Store;
+use r_code_store::v1::V1Store;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -30,7 +33,7 @@ use tokio::sync::Notify;
 struct ServiceHandler {
     service: Arc<ApplicationService>,
     shutdown: Arc<Notify>,
-    /// Profile v2 root: hosts the persistent side-effect counter used by
+    /// Profile v1 root: hosts the persistent side-effect counter used by
     /// dedup contract tests.
     harness_root: std::path::PathBuf,
     /// The remote-control surface (R08 wiring): device registry, pairing
@@ -83,6 +86,226 @@ impl RemoteSurface {
 
 fn method_error(error: ApplicationError) -> String {
     error.to_string()
+}
+
+/// Stable daemon-boundary settings failures. These strings deliberately omit
+/// filesystem/credential backend details so API keys can never be reflected
+/// through an RPC error.
+fn settings_error(error: SettingsStoreError) -> String {
+    match error {
+        SettingsStoreError::Corrupt { .. } => "settings_corrupt".to_string(),
+        SettingsStoreError::StaleRevision { expected, actual } => {
+            format!("settings_stale_revision:expected={expected}:actual={actual}")
+        }
+        SettingsStoreError::MissingCredential { selection } => {
+            format!("settings_missing_credential:provider={selection}")
+        }
+        SettingsStoreError::UnknownProvider { selection } => {
+            format!("settings_unknown_provider:provider={selection}")
+        }
+        SettingsStoreError::ProviderNotConfigured { selection } => {
+            format!("settings_provider_not_configured:provider={selection}")
+        }
+        SettingsStoreError::InvalidProtocol {
+            selection,
+            protocol,
+        } => format!("settings_invalid_protocol:provider={selection}:protocol={protocol}"),
+        SettingsStoreError::RevisionOverflow(_) => "settings_revision_overflow".to_string(),
+        SettingsStoreError::Credential {
+            operation,
+            selection,
+        } => format!("settings_credential_error:operation={operation}:provider={selection}"),
+        SettingsStoreError::ProviderUnavailable { selection } => {
+            format!("settings_provider_unavailable:provider={selection}")
+        }
+        SettingsStoreError::Read { .. }
+        | SettingsStoreError::Serialize(_)
+        | SettingsStoreError::Persist { .. }
+        | SettingsStoreError::LockPoisoned => "settings_io_error".to_string(),
+    }
+}
+
+fn expected_settings_revision(params: &serde_json::Value) -> Result<u64, String> {
+    let Some(value) = params.get("expectedRevision") else {
+        return Err("settings_revision_required".to_string());
+    };
+    value
+        .as_u64()
+        .ok_or_else(|| "settings_revision_invalid".to_string())
+}
+
+fn settings_mutation_response(
+    service: &ApplicationService,
+    settings: V1Settings,
+) -> Result<serde_json::Value, String> {
+    let providers = service
+        .settings()
+        .availability_checked()
+        .map_err(settings_error)?;
+    Ok(serde_json::json!({
+        "revision": settings.revision,
+        "settings": settings,
+        "providers": providers,
+    }))
+}
+
+fn quarantine_workspace_filter(params: &serde_json::Value) -> Result<Option<&str>, String> {
+    let object = params
+        .as_object()
+        .ok_or_else(|| "safety.quarantine.get params must be an object".to_string())?;
+    if object.keys().any(|key| key != "workspaceKey") {
+        return Err("unknown safety.quarantine.get parameter".to_string());
+    }
+    match object.get("workspaceKey") {
+        None => Ok(None),
+        Some(value) => {
+            let workspace_key = value
+                .as_str()
+                .ok_or_else(|| "workspaceKey must be a string".to_string())?;
+            if workspace_key.is_empty() {
+                return Err("workspaceKey must not be empty".to_string());
+            }
+            Ok(Some(workspace_key))
+        }
+    }
+}
+
+/// P12: the safety report diagnostic accepts only an optional capability
+/// filter. Strictly read-only — no parameter can mutate or prune reports.
+fn safety_report_capability_filter(params: &serde_json::Value) -> Result<Option<&str>, String> {
+    let object = params
+        .as_object()
+        .ok_or_else(|| "safety.report.get params must be an object".to_string())?;
+    if object.keys().any(|key| key != "capability") {
+        return Err("unknown safety.report.get parameter".to_string());
+    }
+    match object.get("capability") {
+        None => Ok(None),
+        Some(value) => {
+            let capability = value
+                .as_str()
+                .ok_or_else(|| "capability must be a string".to_string())?;
+            if capability.is_empty() {
+                return Err("capability must not be empty".to_string());
+            }
+            Ok(Some(capability))
+        }
+    }
+}
+
+fn optional_string(value: &serde_json::Value, field: &str) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|text| Some(text.to_string()))
+        .ok_or_else(|| format!("{field} must be a string or null"))
+}
+
+fn string_patch(params: &serde_json::Value, field: &str) -> Result<PatchField<String>, String> {
+    match params.get(field) {
+        None => Ok(PatchField::Unchanged),
+        Some(value) if value.is_null() => Ok(PatchField::Clear),
+        Some(value) => value
+            .as_str()
+            .map(|value| PatchField::Set(value.to_string()))
+            .ok_or_else(|| format!("{field} must be a string or null")),
+    }
+}
+
+fn parse_task_preferences_patch(
+    params: &serde_json::Value,
+) -> Result<TaskPreferencesPatch, String> {
+    let model_route = match params.get("modelRoute") {
+        None => PatchField::Unchanged,
+        Some(value) if value.is_null() => PatchField::Clear,
+        Some(value) => PatchField::Set(
+            serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid modelRoute: {error}"))?,
+        ),
+    };
+    let inference = match params.get("inference") {
+        None => PatchField::Unchanged,
+        Some(value) if value.is_null() => PatchField::Clear,
+        Some(value) => PatchField::Set(value.clone()),
+    };
+    let system_prompt = string_patch(params, "systemPrompt")?;
+    if let PatchField::Set(prompt) = &system_prompt {
+        if prompt.contains('\0') || prompt.chars().count() > 20_000 {
+            return Err("systemPrompt must contain no NUL and be at most 20000 characters".into());
+        }
+    }
+    let workspace_path = string_patch(params, "workspacePath")?;
+    if let PatchField::Set(path) = &workspace_path {
+        if path.trim().is_empty() || path.contains('\0') || path.chars().count() > 4_096 {
+            return Err(
+                "workspacePath must be non-empty, contain no NUL, and be at most 4096 characters"
+                    .into(),
+            );
+        }
+    }
+    let require_desktop_confirm = params
+        .get("requireDesktopConfirm")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or("requireDesktopConfirm must be a boolean")
+        })
+        .transpose()?;
+    Ok(TaskPreferencesPatch {
+        model_route,
+        legacy_model: string_patch(params, "model")?,
+        inference,
+        mode: string_patch(params, "mode")?,
+        system_prompt,
+        workspace_path,
+        require_desktop_confirm,
+        harness_id: string_patch(params, "harnessId")?,
+    })
+}
+
+fn task_kind_from_params(
+    params: &serde_json::Value,
+) -> Result<r_code_kernel::task::TaskKind, String> {
+    if let Some(mode) = params.get("mode").and_then(|value| value.as_str()) {
+        return match mode {
+            "ask" => Ok(r_code_kernel::task::TaskKind::Conversation),
+            "edit" | "auto" => Ok(r_code_kernel::task::TaskKind::Implementation),
+            "plan" => Ok(r_code_kernel::task::TaskKind::PlanDraft),
+            other => Err(format!("invalid task mode {other:?}")),
+        };
+    }
+    Ok(match params["kind"].as_str().unwrap_or("conversation") {
+        "implementation" => r_code_kernel::task::TaskKind::Implementation,
+        "plan-draft" => r_code_kernel::task::TaskKind::PlanDraft,
+        "repair" => r_code_kernel::task::TaskKind::Repair,
+        _ => r_code_kernel::task::TaskKind::Conversation,
+    })
+}
+
+fn review_context(
+    params: &serde_json::Value,
+    actor_id: &str,
+) -> Result<ReviewActionContext, String> {
+    Ok(ReviewActionContext {
+        action_id: params["actionId"]
+            .as_str()
+            .ok_or("missing actionId")?
+            .to_string(),
+        expected_task_revision: params["expectedTaskRevision"]
+            .as_u64()
+            .ok_or("missing expectedTaskRevision")?,
+        candidate_digest: params["candidateDigest"]
+            .as_str()
+            .ok_or("missing candidateDigest")?
+            .to_string(),
+        actor_id: actor_id.to_string(),
+        session_id: params["sessionId"]
+            .as_str()
+            .ok_or("missing sessionId")?
+            .to_string(),
+    })
 }
 
 #[async_trait::async_trait]
@@ -158,19 +381,24 @@ impl ApplicationHandler for ServiceHandler {
                 Ok(serde_json::Value::Null)
             }
             "task.create" => {
+                let has_explicit_route =
+                    params.get("modelRoute").is_some() || params.get("harnessId").is_some();
                 // Omitted task ids get a host-generated one (TUI /new).
                 let task_id = params["taskId"]
                     .as_str()
                     .map(str::to_string)
                     .unwrap_or_else(|| format!("task-{}", uuid::Uuid::new_v4().simple()));
-                let task_id = task_id.as_str();
-                let objective = params["objective"].as_str().ok_or("missing objective")?;
-                let kind = match params["kind"].as_str().unwrap_or("conversation") {
-                    "implementation" => r_code_kernel::task::TaskKind::Implementation,
-                    "plan-draft" => r_code_kernel::task::TaskKind::PlanDraft,
-                    "repair" => r_code_kernel::task::TaskKind::Repair,
-                    _ => r_code_kernel::task::TaskKind::Conversation,
-                };
+                let title = params
+                    .get("title")
+                    .map(|value| optional_string(value, "title"))
+                    .transpose()?
+                    .flatten();
+                let objective = params["objective"]
+                    .as_str()
+                    .or(title.as_deref())
+                    .ok_or("missing objective")?
+                    .to_string();
+                let kind = task_kind_from_params(&params)?;
                 let required_checks: Vec<String> = params["requiredChecks"]
                     .as_array()
                     .map(|checks| {
@@ -180,11 +408,28 @@ impl ApplicationHandler for ServiceHandler {
                             .collect()
                     })
                     .unwrap_or_default();
-                let state = self
-                    .service
-                    .create_task(task_id, objective, kind, required_checks)
-                    .await
-                    .map_err(method_error)?;
+                let patch = parse_task_preferences_patch(&params)?;
+                let mut preferences = r_code_kernel::task::TaskPreferences::default();
+                patch.apply_to(&mut preferences);
+                let harness_id = match &patch.harness_id {
+                    PatchField::Set(harness_id) => Some(harness_id.clone()),
+                    PatchField::Unchanged | PatchField::Clear => None,
+                };
+                let input = CreateTaskInput {
+                    task_id,
+                    objective,
+                    title,
+                    kind,
+                    required_checks,
+                    preferences,
+                    harness_id,
+                };
+                let state = if has_explicit_route {
+                    self.service.create_task_configured(input).await
+                } else {
+                    self.service.create_task_legacy_default(input).await
+                }
+                .map_err(method_error)?;
                 Ok(
                     serde_json::json!({"taskId": state.contract.task_id, "revision": state.contract.revision}),
                 )
@@ -214,6 +459,98 @@ impl ApplicationHandler for ServiceHandler {
                     .await
                     .map_err(method_error)
             }
+            "plan.get" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let plan = self.service.plan(task_id).await.map_err(method_error)?;
+                Ok(serde_json::to_value(plan).unwrap_or_default())
+            }
+            "plan.approve" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let revision_hash = params["revisionHash"]
+                    .as_str()
+                    .or_else(|| params["revision_hash"].as_str())
+                    .ok_or("missing revisionHash")?;
+                let plan = self
+                    .service
+                    .approve_plan(
+                        task_id,
+                        revision_hash,
+                        &command.command_id,
+                        &command.client_id,
+                        &command.command_id,
+                    )
+                    .await
+                    .map_err(method_error)?;
+                Ok(serde_json::to_value(plan).unwrap_or_default())
+            }
+            "plan.revise" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let reason = params["reason"]
+                    .as_str()
+                    .unwrap_or("user-requested-revision");
+                self.service
+                    .revise_plan(task_id, reason)
+                    .await
+                    .map_err(method_error)
+            }
+            "review.get" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let review = self.service.review(task_id).await.map_err(method_error)?;
+                Ok(serde_json::to_value(review).unwrap_or_default())
+            }
+            "review.accept" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let context = review_context(&params, &command.client_id)?;
+                let result = self
+                    .service
+                    .accept_review(task_id, context)
+                    .await
+                    .map_err(method_error)?;
+                Ok(serde_json::to_value(result).unwrap_or_default())
+            }
+            "review.reject" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let reason = params["reason"].as_str().ok_or("missing reason")?;
+                let context = review_context(&params, &command.client_id)?;
+                let result = self
+                    .service
+                    .reject_review(task_id, context, reason)
+                    .await
+                    .map_err(method_error)?;
+                Ok(serde_json::to_value(result).unwrap_or_default())
+            }
+            "review.acceptUnverified" | "review.override" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let reason = params["reason"]
+                    .as_str()
+                    .ok_or("missing reason")?
+                    .to_string();
+                let checks = params["checks"]
+                    .as_array()
+                    .ok_or("missing checks")?
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .ok_or("checks must contain strings")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let context = review_context(&params, &command.client_id)?;
+                let result = self
+                    .service
+                    .accept_unverified(
+                        task_id,
+                        UnverifiedOverrideInput {
+                            context,
+                            reason,
+                            checks,
+                        },
+                    )
+                    .await
+                    .map_err(method_error)?;
+                Ok(serde_json::to_value(result).unwrap_or_default())
+            }
             "task.cancel" => {
                 let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
                 let cancelled = self
@@ -236,6 +573,83 @@ impl ApplicationHandler for ServiceHandler {
                     .map_err(method_error)?;
                 Ok(serde_json::to_value(detail).unwrap_or_default())
             }
+            "git.read" => {
+                // P30: the only git RPC family — status/log over the
+                // restricted reader; diff is the pure git_diff tool.
+                let Some(params) = params.as_object() else {
+                    return Err("git.read params must be an object".into());
+                };
+                let projection = params
+                    .get("projection")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("status");
+                let git_dir = params
+                    .get("gitDir")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("git.read requires a canonical gitDir")?;
+                let limit = params
+                    .get("limit")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(100) as usize;
+                let value = self
+                    .service
+                    .git_read_projection(projection, std::path::Path::new(git_dir), limit)
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(value).map_err(|error| error.to_string())
+            }
+            "safety.quarantine.get" => {
+                let workspace_key = quarantine_workspace_filter(&params)?;
+                let diagnostics = self
+                    .service
+                    .quarantine_diagnostics(workspace_key)
+                    .map_err(method_error)?;
+                serde_json::to_value(diagnostics).map_err(|error| error.to_string())
+            }
+            "safety.report.get" => {
+                let capability = safety_report_capability_filter(&params)?;
+                let diagnostics = self
+                    .service
+                    .safety_report_diagnostics(capability)
+                    .map_err(method_error)?;
+                serde_json::to_value(diagnostics).map_err(|error| error.to_string())
+            }
+            "safety.quarantine.retry" => {
+                // P11R: an authenticated local retry with the exact
+                // platform proof rules. Remote transports cannot reach
+                // this method (the remote gate refuses unknown methods).
+                let object = params.as_object().ok_or_else(|| {
+                    "safety.quarantine.retry params must be an object".to_string()
+                })?;
+                if !object
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "treeId" | "actor" | "session"))
+                    || object.is_empty()
+                {
+                    return Err(
+                        "safety.quarantine.retry accepts only treeId, actor and session".into(),
+                    );
+                }
+                let tree_id = object
+                    .get("treeId")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or("treeId must be a non-empty string")?;
+                let actor = object
+                    .get("actor")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or("actor must be a non-empty string")?;
+                let session = object
+                    .get("session")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or("session must be a non-empty string")?;
+                let view = self
+                    .service
+                    .retry_quarantine(tree_id, actor, session)
+                    .map_err(method_error)?;
+                serde_json::to_value(view).map_err(|error| error.to_string())
+            }
             "task.rename" => {
                 let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
                 let title = params["title"].as_str().ok_or("missing title")?;
@@ -247,16 +661,9 @@ impl ApplicationHandler for ServiceHandler {
             }
             "task.setPreferences" => {
                 let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
-                let preferences = r_code_kernel::task::TaskPreferences {
-                    model: params["model"].as_str().map(str::to_string),
-                    inference: params.get("inference").cloned(),
-                    mode: params["mode"].as_str().map(str::to_string),
-                    require_desktop_confirm: params["requireDesktopConfirm"]
-                        .as_bool()
-                        .unwrap_or(false),
-                };
+                let patch = parse_task_preferences_patch(&params)?;
                 self.service
-                    .set_task_preferences(task_id, preferences)
+                    .set_task_preferences_patch(task_id, patch)
                     .await
                     .map_err(method_error)?;
                 Ok(serde_json::Value::Null)
@@ -282,14 +689,23 @@ impl ApplicationHandler for ServiceHandler {
                 Ok(serde_json::to_value(branches).unwrap_or_default())
             }
             "models.available" => {
-                let availability = self.service.settings().availability();
+                let availability = self
+                    .service
+                    .settings()
+                    .availability_checked()
+                    .map_err(settings_error)?;
                 Ok(serde_json::to_value(availability).unwrap_or_default())
             }
             "settings.get" => {
-                let settings = self.service.settings().load();
+                let settings = self
+                    .service
+                    .settings()
+                    .load_checked()
+                    .map_err(settings_error)?;
                 Ok(serde_json::to_value(settings).unwrap_or_default())
             }
             "settings.apply" => {
+                let expected_revision = expected_settings_revision(&params)?;
                 let selection = params["selection"].as_str().ok_or("missing selection")?;
                 let entry = ProviderEntry {
                     selection: selection.to_string(),
@@ -299,30 +715,32 @@ impl ApplicationHandler for ServiceHandler {
                     env_var: params["envVar"].as_str().map(str::to_string),
                 };
                 let api_key = params["apiKey"].as_str();
-                self.service
+                let settings = self
+                    .service
                     .settings()
-                    .apply_provider(entry, api_key)
-                    .map_err(|e| ApplicationError::Settings(e.to_string()).to_string())?;
-                Ok(
-                    serde_json::to_value(self.service.settings().availability())
-                        .unwrap_or_default(),
-                )
+                    .apply_provider_at_revision(expected_revision, entry, api_key)
+                    .map_err(settings_error)?;
+                settings_mutation_response(&self.service, settings)
             }
             "settings.setDefault" => {
+                let expected_revision = expected_settings_revision(&params)?;
                 let selection = params["selection"].as_str().ok_or("missing selection")?;
-                self.service
+                let settings = self
+                    .service
                     .settings()
-                    .set_default(selection)
-                    .map_err(|e| ApplicationError::Settings(e.to_string()).to_string())?;
-                Ok(serde_json::Value::Null)
+                    .set_default_at_revision(expected_revision, selection)
+                    .map_err(settings_error)?;
+                settings_mutation_response(&self.service, settings)
             }
             "settings.removeProvider" => {
+                let expected_revision = expected_settings_revision(&params)?;
                 let selection = params["selection"].as_str().ok_or("missing selection")?;
-                self.service
+                let settings = self
+                    .service
                     .settings()
-                    .remove_provider(selection)
-                    .map_err(|e| ApplicationError::Settings(e.to_string()).to_string())?;
-                Ok(serde_json::Value::Null)
+                    .remove_provider_at_revision(expected_revision, selection)
+                    .map_err(settings_error)?;
+                settings_mutation_response(&self.service, settings)
             }
             "codex.status" => r_code_runtime::services::codex_cli::codex_integration_status().await,
             "codex.startLogin" => {
@@ -346,6 +764,50 @@ impl ApplicationHandler for ServiceHandler {
             "approvals.list" => {
                 let pending = self.service.approvals_list().await;
                 Ok(serde_json::json!({"pending": pending}))
+            }
+            // P19B-R scoped effect approvals: host-owned request/list/revoke
+            // over the exact approved-plan material. Decisions reuse the
+            // ordinary authenticated approvals.decide path below. These
+            // methods are local-only for now (the remote capability gate
+            // refuses unknown methods); plugins never see them — the plugin
+            // router exposes no effect surface at all.
+            "approvals.effect.request" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let work_unit_id = params["workUnitId"].as_str().ok_or("missing workUnitId")?;
+                // Default operation id = command id (the plan.approve
+                // precedent): unique per request, stable across deduped
+                // retries. An explicit operationId lets a client pin its
+                // own idempotency key.
+                let operation_id = params["operationId"]
+                    .as_str()
+                    .unwrap_or(&command.command_id);
+                let run_id = params["runId"].as_str().unwrap_or("");
+                self.service
+                    .effect_approval_request(task_id, work_unit_id, operation_id, run_id)
+                    .await
+                    .map_err(method_error)
+            }
+            "approvals.effect.list" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                self.service
+                    .effect_approval_list(task_id)
+                    .await
+                    .map_err(method_error)
+            }
+            "approvals.effect.revoke" => {
+                let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
+                let work_unit_id = params["workUnitId"].as_str().ok_or("missing workUnitId")?;
+                // Attribution mirrors plan.approve: the authenticated
+                // connection is the actor, the command id the session.
+                self.service
+                    .effect_approval_revoke(
+                        task_id,
+                        work_unit_id,
+                        &command.client_id,
+                        &command.command_id,
+                    )
+                    .await
+                    .map_err(method_error)
             }
             "device.list" => Ok(serde_json::json!({
                 "devices": self.remote.manager.list_devices()
@@ -398,11 +860,14 @@ impl ApplicationHandler for ServiceHandler {
             "approvals.decide" => {
                 // Local console decision (the remote transport arrives as
                 // "approvals.decide$remote", injected by the listener's
-                // gate — the suffix is unreachable from the wire).
+                // gate — the suffix is unreachable from the wire). The
+                // command id is the audit session (P19B-R effect grants
+                // persist actor/session/scope).
                 self.service
-                    .approvals_decide(
+                    .approvals_decide_with_session(
                         &params,
                         &command.client_id,
+                        &command.command_id,
                         r_code_runtime::application::CommandSource::Local,
                     )
                     .await
@@ -413,9 +878,10 @@ impl ApplicationHandler for ServiceHandler {
                 // (enforced by the listener gate before this runs). The
                 // audit identity is the authenticated device id.
                 self.service
-                    .approvals_decide(
+                    .approvals_decide_with_session(
                         &params,
                         &command.client_id,
+                        &command.command_id,
                         r_code_runtime::application::CommandSource::Remote,
                     )
                     .await
@@ -493,21 +959,21 @@ fn main() {
         .build()
         .expect("tokio runtime");
     runtime.block_on(async move {
-        let lock = match ProfileLock::acquire(&profile.harness_v2_root(), &profile.profile_id()) {
+        let lock = match ProfileLock::acquire(&profile.harness_v1_root(), &profile.profile_id()) {
             Ok(lock) => lock,
             Err(error) => {
                 eprintln!("r-code-service: {error}");
                 std::process::exit(3);
             }
         };
-        let identity = match lock.identity(&profile.harness_v2_root()) {
+        let identity = match lock.identity(&profile.harness_v1_root()) {
             Ok(identity) => identity,
             Err(error) => {
                 eprintln!("r-code-service: {error}");
                 std::process::exit(3);
             }
         };
-        let store = match V2Store::open(&profile.database_path()) {
+        let store = match V1Store::open(&profile.database_path()) {
             Ok(store) => Arc::new(store),
             Err(error) => {
                 eprintln!("r-code-service: store failure: {error}");
@@ -515,9 +981,9 @@ fn main() {
             }
         };
         // Real composition: gateway tools over the profile workspaces root;
-        // the model broker resolves through the v2 settings store (live:
+        // the model broker resolves through the v1 settings store (live:
         // settings applied at runtime take effect on the next model call).
-        let settings_store = SettingsStore::new(profile.harness_v2_root());
+        let settings_store = SettingsStore::for_profile(&profile);
         let models: Arc<dyn r_code_kernel::ports::ModelService> = Arc::new(ModelBroker::new(
             SettingsBackedResolver::new(settings_store),
         ));
@@ -533,19 +999,52 @@ fn main() {
                 },
                 EffectivePermissions::full(),
             ));
-        let service = match ApplicationService::compose(&profile, models, tools) {
+        let service = match ApplicationService::compose_with_policy(
+            &profile,
+            models,
+            tools,
+            CompositionPolicy::StrictDaemon,
+        ) {
             Ok(service) => Arc::new(service),
             Err(error) => {
                 eprintln!("r-code-service: composition failure: {error}");
                 std::process::exit(6);
             }
         };
+        // P24B: publish the activation readiness BEFORE any ingress is
+        // bound — recovery already ran inside composition (the readiness
+        // was evaluated after it), and the granted set states exactly what
+        // this boot may advertise. An unactivated host publishes an empty
+        // set: SafeDisabled grants nothing.
+        let readiness = service.activation_readiness();
+        eprintln!(
+            "r-code-service: activation readiness: recovered={} granted={:?} verdict={:?}",
+            readiness.recovered, readiness.granted_capabilities, readiness.activation
+        );
         // Undecided approvals from a previous daemon stay decidable: the
         // pending index rebuilds from the journal (RA1).
         service.rebuild_approvals().await;
+        // P24A: regenerate this boot's safety diagnostics WITHOUT activating
+        // anything. The gate re-derives the current platform report
+        // (idempotent persistence) and evaluates the honest verdict —
+        // Unsupported this wave — which safety.report.get serves and every
+        // process/check/harness launch consults. Nothing opens here.
+        match r_code_runtime::process_guard::BootIdentity::current() {
+            Ok(boot) => {
+                let sandbox_gate = r_code_runtime::services::sandbox::platform_activation_gate(
+                    store.as_ref(),
+                    boot.as_str(),
+                );
+                eprintln!("r-code-service: sandbox gate: {sandbox_gate:?}");
+            }
+            Err(error) => {
+                eprintln!("r-code-service: boot identity failure: {error}");
+                std::process::exit(3);
+            }
+        }
         // Remote surface (R08): registry/pairing/identity under the profile
         // root; the console app directory comes from the bundle or env.
-        let harness_root = profile.harness_v2_root();
+        let harness_root = profile.harness_v1_root();
         let registry = match r_code_runtime::remote::DeviceRegistry::open(&harness_root) {
             Ok(registry) => Arc::new(registry),
             Err(error) => {
@@ -579,7 +1078,7 @@ fn main() {
         // The pairing listener keeps the journal-cursor publisher fed.
         {
             let store_for_events =
-                Arc::new(V2Store::open(&profile.database_path()).expect("store reopen"));
+                Arc::new(V1Store::open(&profile.database_path()).expect("store reopen"));
             let hub = remote.manager.hub.clone();
             tokio::spawn(async move {
                 let publisher = r_code_runtime::remote::CursorPublisher::new(store_for_events, hub);
@@ -605,7 +1104,7 @@ fn main() {
         let handler = Arc::new(ServiceHandler {
             service,
             shutdown: Arc::new(Notify::new()),
-            harness_root: profile.harness_v2_root(),
+            harness_root: profile.harness_v1_root(),
             remote,
         });
         let shutdown = handler.shutdown.clone();
@@ -635,4 +1134,51 @@ fn main() {
         shutdown.notified().await;
         serving.abort();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_preference_patch_preserves_omitted_fields_and_sets_prompt_scope() {
+        let mut preferences = r_code_kernel::task::TaskPreferences {
+            model_route: None,
+            model: Some("configured-model".into()),
+            inference: Some(serde_json::json!({"reasoning_effort": "high"})),
+            mode: Some("ask".into()),
+            system_prompt: None,
+            workspace_path: None,
+            require_desktop_confirm: true,
+        };
+
+        let patch = parse_task_preferences_patch(&serde_json::json!({
+            "mode": "edit",
+            "systemPrompt": "project prompt",
+            "workspacePath": "D:/workspace/project",
+        }))
+        .expect("parse preferences patch");
+        patch.apply_to(&mut preferences);
+
+        assert_eq!(preferences.model.as_deref(), Some("configured-model"));
+        assert_eq!(
+            preferences.inference,
+            Some(serde_json::json!({"reasoning_effort": "high"}))
+        );
+        assert_eq!(preferences.mode.as_deref(), Some("edit"));
+        assert_eq!(preferences.system_prompt.as_deref(), Some("project prompt"));
+        assert_eq!(
+            preferences.workspace_path.as_deref(),
+            Some("D:/workspace/project")
+        );
+        assert!(preferences.require_desktop_confirm);
+    }
+
+    #[test]
+    fn task_preference_patch_rejects_an_invalid_prompt() {
+        let error =
+            parse_task_preferences_patch(&serde_json::json!({"systemPrompt": "bad\u{0}prompt"}))
+                .expect_err("NUL prompt must be rejected");
+        assert!(error.contains("NUL"));
+    }
 }

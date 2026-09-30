@@ -95,10 +95,14 @@ if (-not $SkipInnerBuild) {
     Copy-Item -LiteralPath $tuiSource -Destination (Join-Path $tuiDestinationDir "r-code-tui-$architectureTarget.exe") -Force
 
     # T38: sidecar set = TUI + shared daemon + two built-in harness plugins.
+    # P24H: + the guardian and safety-probe helpers (runtime-owned bins),
+    # staged with target-triple names exactly like the other sidecars.
     $harnessSidecars = @(
         @{ Package = "r-code-runtime"; Bin = "r-code-service" },
         @{ Package = "r-code-harness-native"; Bin = "r-code-harness-native" },
-        @{ Package = "r-code-harness-codex"; Bin = "r-code-harness-codex" }
+        @{ Package = "r-code-harness-codex"; Bin = "r-code-harness-codex" },
+        @{ Package = "r-code-runtime"; Bin = "r-code-process-guardian" },
+        @{ Package = "r-code-runtime"; Bin = "r-code-safety-probe" }
     )
     foreach ($sidecar in $harnessSidecars) {
         & $cargoCommand.Source @("build", "--release", "-p", $sidecar.Package, "--bin", $sidecar.Bin)

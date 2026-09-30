@@ -29,7 +29,7 @@ jobs:
           cache-dependency-path: src-tauri/frontend/package-lock.json
       - name: Verify release metadata
         run: |
-          node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs scripts/icon-assets.test.mjs scripts/verify-codex-interaction.test.mjs scripts/verify-product-experience.test.mjs scripts/verify-windows-reliability.test.mjs scripts/verify-tui-v2.test.mjs
+          node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs scripts/icon-assets.test.mjs scripts/verify-codex-interaction.test.mjs scripts/verify-product-experience.test.mjs scripts/verify-windows-reliability.test.mjs scripts/verify-tui-v1.test.mjs
           node scripts/check-installer-frontend.mjs
           node scripts/release.mjs check
       - name: Install frontend dependencies
@@ -228,8 +228,23 @@ jobs:
         # Serial execution avoids platform-dependent false hangs under CI load.
         run: cargo test --workspace --all-features -- --test-threads=1
 
-      - name: Harness v2 acceptance (guards + conformance)
-        run: node scripts/verify-harness-v2.mjs --profile quick
+      - name: Harness v1 acceptance (guards + conformance)
+        run: node scripts/verify-harness-v1.mjs --profile quick
+      # P31/P32 安全一致性门：跨平台 fake 套件全集 + 启动边界守卫 + 打包声明，
+      # 输出脱敏的逐目标 Activated/SafeDisabled 报告。原生专属目标（linux
+      # s08/s09/s16/s17、macos s10/s11/s18、s23 平台臂）在各自的原生 job 执行，
+      # 此门只证明跨平台部分并诚实分离，不会把 native 目标当失败。
+      - name: Safety conformance gate (P31/P32)
+        run: |
+          node scripts/verify-safety-v1.mjs
+          node --test scripts/verify-safety-v1.test.mjs
+      # P24A.3 进程启动边界门禁：production 源里的裸进程创建必须落在守护/监督
+      # 缝或已记录的 legacy 站点上；新增旁路直接红。纯静态扫描，秒级。
+      # 同步跑 guard 自身的逻辑测试（fixture 捕获/豁免/缺根必红）。
+      - name: Process launch boundary guard (P24A)
+        run: |
+          node scripts/check-process-launch-boundary.mjs
+          node --test scripts/check-process-launch-boundary.test.mjs
       # Windows 命令执行可靠性金集回归门禁（windows-reliability PRD R-MET-01/M4-02）：
       # fast 档真实执行（净化 PATH → 五级解析 → Git Bash），失败即阻断本 job。
       # 预算：fast 41 条串行 < 2min（单条 60s 上限、命令平均 < 1s）。

@@ -5,7 +5,7 @@
 //! run）。输入区模式态：非 ask 档显示 `[mode]` 前缀，plan 用 magenta
 //!（色彩语义 §2.7）。
 
-use crate::engine::V2ChatClient;
+use crate::engine::V1ChatClient;
 
 /// 循环序（= 模式枚举序）。
 pub const MODE_CYCLE: [&str; 4] = ["ask", "edit", "auto", "plan"];
@@ -39,7 +39,7 @@ pub fn mode_badge(mode: &str) -> Option<(&'static str, BadgeColor)> {
 }
 
 /// 写回任务模式（守护进程校验未知模式；影响下一次 run）。
-pub async fn apply_mode(engine: &V2ChatClient, task_id: &str, mode: &str) -> Result<(), String> {
+pub async fn apply_mode(engine: &V1ChatClient, task_id: &str, mode: &str) -> Result<(), String> {
     if !MODE_CYCLE.contains(&mode) {
         return Err(format!("未知模式：{mode}"));
     }
@@ -87,14 +87,17 @@ mod tests {
             )
             .await
             .expect("create");
-        // 与 V2ChatClient::set_preferences 同参数形状（mode 字符串）。
+        // 与 V1ChatClient::set_preferences 同参数形状（mode 字符串）。
         service
             .set_task_preferences(
                 "task-mode",
                 r_code_kernel::task::TaskPreferences {
+                    model_route: None,
                     model: None,
                     inference: None,
                     mode: Some("plan".to_string()),
+                    system_prompt: None,
+                    workspace_path: None,
                     require_desktop_confirm: false,
                 },
             )
@@ -103,7 +106,7 @@ mod tests {
         let detail = service.task_detail("task-mode").await.expect("detail");
         assert_eq!(detail.mode.as_deref(), Some("plan"));
         // 非法模式：TUI 层拒绝（不连 daemon）。
-        let engine = crate::engine::V2ChatClient::from_profile(profile, None);
+        let engine = crate::engine::V1ChatClient::from_profile(profile, None);
         assert!(apply_mode(&engine, "task-mode", "bogus").await.is_err());
     }
 

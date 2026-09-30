@@ -113,9 +113,12 @@ pub async fn run_conformance_suite() -> Vec<ConformanceResult> {
     // 2. Stale evidence: passing record for another candidate.
     let stale = [EvidenceRecord {
         evidence_id: "ev-old".into(),
+        task_id: "task-1".into(),
         check_id: "check:required".into(),
+        definition_identity: definitions[0].identity(),
         candidate_digest: "digest-old".into(),
         environment: "node test".into(),
+        environment_fingerprint: "d".repeat(64),
         passed: true,
         host_output: None,
         recorded_by: Provenance::Host,

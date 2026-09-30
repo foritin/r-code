@@ -5,7 +5,7 @@
 
 use r_code_harness_protocol::Platform;
 use r_code_runtime::plugins::*;
-use r_code_store::v2::V2Store;
+use r_code_store::v1::V1Store;
 use std::fs;
 use std::path::Path;
 
@@ -43,7 +43,7 @@ fn write_package(root: &Path, name: &str, version: &str, body: &[u8]) -> std::io
 }
 
 fn catalog(temp: &Path) -> PluginCatalog {
-    let store = V2Store::open(&temp.join("harness-v2").join("tasks.sqlite3")).expect("store");
+    let store = V1Store::open(&temp.join("harness-v1").join("tasks.sqlite3")).expect("store");
     PluginCatalog::new(temp.join("plugins"), std::sync::Arc::new(store))
 }
 

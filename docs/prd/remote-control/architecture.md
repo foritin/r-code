@@ -91,7 +91,7 @@ approvals:decide 审批 pending op 的批准/拒绝（R3；每次决策审计落
 
 ## 7. 设备登记格式
 
-`harness-v2/<profile>/devices/registry.json`：
+`harness-v1/<profile>/devices/registry.json`：
 
 ```jsonc
 {
@@ -129,9 +129,9 @@ approvals:decide 审批 pending op 的批准/拒绝（R3；每次决策审计落
 - daemon 侧 `RelayTransport` 是 IpcTransport 的第三种实现：对上层仍是 ApplicationFrame 字节流，ApplicationHandler 无感知。
 - relay 代码位置预留 `crates/r-code-relay/`，本计划不创建。
 
-## 10. 与 Harness v2 不变量的兼容
+## 10. 与 Harness v1 不变量的兼容
 
-| v2 不变量 | 远程控制的遵守方式 |
+| v1 不变量 | 远程控制的遵守方式 |
 | --- | --- |
 | 单 owner（OS 锁） | 远程是 owner 持有的额外终端，不产生第二个 daemon；锁语义不变 |
 | 审批只认宿主 pending op | 远程决策引用同一 op id；op 创建/作用域/单 op 语义零改动 |

@@ -66,6 +66,83 @@ test("packaging declarations cover service, guardian mode and built-in plugins",
     assert.ok(manifest.requestedHostServices.length > 0);
   }
 
+  const codexSource = JSON.parse(
+    readFileSync(join(repoRoot, "plugins/codex/harness.json"), "utf8"),
+  );
+  const codexStaged = JSON.parse(
+    readFileSync(join(repoRoot, "src-tauri/plugins/codex/harness.json"), "utf8"),
+  );
+  assert.deepEqual(codexStaged, codexSource, "staged Codex manifest must match its source");
+  assert.equal(codexSource.apiMajor, 1);
+  assert.equal(codexSource.apiMinor, 1);
+  assert.deepEqual(
+    codexSource.requestedHostServices
+      .filter((service) => service.startsWith("host.process."))
+      .sort(),
+    ["host.process.close", "host.process.open", "host.process.read", "host.process.write"],
+  );
+
+  // P19A advanced the native package to API v1.2 for WorkUnit effect/network
+  // fields; P23.4 advances it to the final Wave 3 minor 3, where the package
+  // also declares it runs as one process and therefore requires the host's
+  // single-process guarantee. A package carrying the flag can never declare an
+  // older minor, exactly like the effect-fields rule one minor below it.
+  const nativeSource = JSON.parse(
+    readFileSync(join(repoRoot, "plugins/native/harness.json"), "utf8"),
+  );
+  // tauri.conf.json bundles src-tauri/plugins/* and the installer scripts
+  // stage the sidecar binary beside that manifest, so the staged copy is the
+  // one that ships: it can never drift from its source.
+  const nativeStaged = JSON.parse(
+    readFileSync(join(repoRoot, "src-tauri/plugins/native/harness.json"), "utf8"),
+  );
+  assert.deepEqual(nativeStaged, nativeSource, "staged native manifest must match its source");
+  assert.equal(nativeSource.apiMajor, 1);
+  assert.equal(nativeSource.apiMinor, 3, "native package advanced to the final Wave 3 API v1.3");
+  assert.equal(nativeSource.requiresEffectFields, true);
+  assert.equal(
+    nativeSource.requiresSingleProcess,
+    true,
+    "the native harness declares one process, so the host must enforce the guarantee",
+  );
+  assert.ok(
+    !("requiresEffectFields" in codexSource) || codexSource.apiMinor >= 2,
+    "a package requiring effect fields cannot declare an older minor",
+  );
+  assert.ok(
+    !("requiresSingleProcess" in codexSource) || codexSource.apiMinor >= 3,
+    "a package requiring the single-process guarantee cannot declare an older minor",
+  );
+
+  const publicSchema = JSON.parse(
+    readFileSync(join(repoRoot, "crates/r-code-harness-protocol/schema/harness-v1.schema.json"), "utf8"),
+  );
+  assert.ok(
+    publicSchema.properties.requestedHostServices.items.enum.includes("host.process.read"),
+    "manifest schema exposes ProcessRead",
+  );
+  assert.ok(publicSchema.definitions.ProcessReadRequest, "ProcessRead request schema frozen");
+  assert.ok(publicSchema.definitions.ProcessReadReply, "ProcessRead reply schema frozen");
+  // P19A: the effect/network contract is frozen in the public schema.
+  assert.equal(publicSchema.properties.requiresEffectFields.type, "boolean");
+  // P23.1: so is the child-process declaration, additive and defaulted off.
+  assert.equal(publicSchema.properties.requiresSingleProcess.type, "boolean");
+  assert.equal(publicSchema.properties.requiresSingleProcess.default, false);
+  assert.deepEqual(publicSchema.definitions.WorkUnitEffectClass.enum, [
+    "read-only",
+    "workspace-mutation",
+    "dependency-preparation",
+  ]);
+  assert.deepEqual(publicSchema.definitions.NetworkCeiling.enum, [
+    "offline",
+    "public-internet-client",
+    "host-network",
+  ]);
+
+  const appServer = readFileSync(join(repoRoot, "plugins/codex/src/app_server.rs"), "utf8");
+  assert.ok(!appServer.includes("codex.event.next"), "private Codex polling method removed");
+  assert.ok(appServer.includes("process_read"), "Codex consumes the public ProcessRead SDK");
+
   // 4) Codex ships its declarative process profile as package data.
   const profile = JSON.parse(
     readFileSync(join(repoRoot, "src-tauri/plugins/codex/process-profile.json"), "utf8"),
@@ -80,6 +157,67 @@ test("packaging declarations cover service, guardian mode and built-in plugins",
   }
   const sh = readFileSync(join(repoRoot, "scripts/manual/package-macos.sh"), "utf8");
   assert.ok(sh.includes("r-code-service"), "macOS script builds the service");
+});
+
+test("guardian and safety-probe helpers ship through every packaging flow (P24H)", () => {
+  const helpers = ["r-code-process-guardian", "r-code-safety-probe"];
+
+  // 1) Both real packaging scripts stage the helpers with target-triple
+  //    names, exactly like every other sidecar (substitution, not a
+  //    separate convention).
+  const ps1 = readFileSync(join(repoRoot, "scripts/build-branded-installer.ps1"), "utf8");
+  const sh = readFileSync(join(repoRoot, "scripts/manual/package-macos.sh"), "utf8");
+  for (const helper of helpers) {
+    assert.ok(
+      ps1.includes(`Bin = "${helper}"`),
+      `installer does not build the ${helper} sidecar`,
+    );
+    assert.ok(ps1.includes(`"$($sidecar.Bin)-$architectureTarget.exe"`), "installer triple staging");
+    assert.ok(sh.includes(helper), `macOS script does not build the ${helper} sidecar`);
+  }
+
+  // 2) The Tauri bundle declares the helpers, and the local-package overlay
+  //    mirrors the same externalBin set (no divergence between flows).
+  const conf = JSON.parse(readFileSync(join(repoRoot, "src-tauri/tauri.conf.json"), "utf8"));
+  const localConf = JSON.parse(
+    readFileSync(join(repoRoot, "src-tauri/tauri.local-package.conf.json"), "utf8"),
+  );
+  for (const helper of helpers) {
+    assert.ok(
+      conf.bundle.externalBin.includes(`binaries/${helper}`),
+      `tauri.conf.json does not bundle ${helper}`,
+    );
+  }
+  assert.deepEqual(
+    localConf.bundle.externalBin,
+    conf.bundle.externalBin,
+    "local-package overlay must mirror the bundled sidecar set",
+  );
+
+  // 3) build.rs stays validation-only and knows the helpers: no nested
+  //    cargo launch, just the placeholder/magic refusal in packaging mode.
+  const buildRs = readFileSync(join(repoRoot, "src-tauri/build.rs"), "utf8");
+  for (const helper of helpers) {
+    assert.ok(buildRs.includes(`"${helper}"`), `build.rs sidecar list missing ${helper}`);
+  }
+  assert.ok(
+    !buildRs.includes("Command::new") && !buildRs.includes("std::process"),
+    "build.rs must never launch a nested build (comments may mention cargo)",
+  );
+
+  // 4) Omission is a refusal, not a silent shrink: the runtime resolver and
+  //    the profile plumbing exist for the helpers the scripts stage.
+  const resolver = readFileSync(
+    join(repoRoot, "crates/r-code-runtime/src/services/helper_binaries.rs"),
+    "utf8",
+  );
+  assert.ok(resolver.includes(`pub const GUARDIAN_HELPER`), "resolver names the guardian");
+  assert.ok(resolver.includes(`pub const SAFETY_PROBE_HELPER`), "resolver names the probe");
+  const client = readFileSync(join(repoRoot, "crates/r-code-client/src/lib.rs"), "utf8");
+  assert.ok(
+    client.includes("--helper-dir"),
+    "the daemon auto-start must bind the helper directory",
+  );
 });
 
 test("installed startup works through the immutable registry, spaces in path", () => {
@@ -119,8 +257,8 @@ test("installed startup works through the immutable registry, spaces in path", (
       env: { ...process.env, R_CODE_BUILTIN_PLUGINS_DIR: resources },
     });
     try {
-      const ownerPath = join(dataRoot, "harness-v2", "owner.json");
-      const pluginsDir = join(dataRoot, "harness-v2", "plugins", "native.r-code");
+      const ownerPath = join(dataRoot, "harness-v1", "owner.json");
+      const pluginsDir = join(dataRoot, "harness-v1", "plugins", "native.r-code");
       const deadline = Date.now() + 30_000;
       while (Date.now() < deadline) {
         if (existsSync(ownerPath) && existsSync(pluginsDir)) break;

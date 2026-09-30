@@ -55,7 +55,7 @@ fn spawn_daemon(profile: &RuntimeProfile) -> Child {
 
 fn wait_for_owner(profile: &RuntimeProfile) -> r_code_client::DaemonInfo {
     for _ in 0..80 {
-        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v2_root()) {
+        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v1_root()) {
             return info;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -70,6 +70,28 @@ fn run<F: Future>(future: F) -> F::Output {
         .build()
         .expect("test runtime")
         .block_on(future)
+}
+
+/// `owner.json` proves profile ownership, not listener readiness. Preserve
+/// the same owner token while waiting for the endpoint to become reachable;
+/// authentication and protocol errors remain immediate test failures.
+async fn connect_ready(
+    profile: &RuntimeProfile,
+    profile_id: &str,
+    token: &str,
+    client_id: &str,
+) -> Result<DaemonClient, r_code_client::ClientError> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match DaemonClient::connect(&profile.ipc_endpoint(), profile_id, token, client_id).await {
+            Err(r_code_client::ClientError::Unreachable(_))
+                if tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            result => return result,
+        }
+    }
 }
 
 #[test]
@@ -94,14 +116,9 @@ fn competing_daemons_converge_to_one_owner() {
 
     // The first owner is untouched and still serving.
     run(async {
-        let mut client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-1",
-        )
-        .await
-        .expect("client connects to live owner");
+        let mut client = connect_ready(&profile, &profile.profile_id(), &info.token, "client-1")
+            .await
+            .expect("client connects to live owner");
         let pong = client
             .call(methods::PING, serde_json::json!({}))
             .await
@@ -119,13 +136,8 @@ fn token_authentication_rejects_forged_handshakes() {
     let info = wait_for_owner(&profile);
 
     run(async {
-        let error = match DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            "forged-token",
-            "intruder",
-        )
-        .await
+        let error = match connect_ready(&profile, &profile.profile_id(), "forged-token", "intruder")
+            .await
         {
             Err(error) => error,
             Ok(_) => panic!("forged token must be rejected"),
@@ -133,17 +145,11 @@ fn token_authentication_rejects_forged_handshakes() {
         assert!(matches!(error, r_code_client::ClientError::Handshake(_)));
 
         // Wrong profile id is equally rejected.
-        let error = match DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            "harness-v2/production",
-            &info.token,
-            "intruder",
-        )
-        .await
-        {
-            Err(error) => error,
-            Ok(_) => panic!("wrong profile must be rejected"),
-        };
+        let error =
+            match connect_ready(&profile, "harness-v1/production", &info.token, "intruder").await {
+                Err(error) => error,
+                Ok(_) => panic!("wrong profile must be rejected"),
+            };
         assert!(matches!(error, r_code_client::ClientError::Handshake(_)));
     });
 }
@@ -164,7 +170,7 @@ fn stale_owner_is_taken_over_after_a_kill() {
     let successor = DaemonGuard(spawn_daemon(&profile));
     let mut successor_info = None;
     for _ in 0..80 {
-        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v2_root()) {
+        if let Some(info) = r_code_client::read_owner_token(&profile.harness_v1_root()) {
             if info.nonce != first_info.nonce {
                 successor_info = Some(info);
                 break;
@@ -176,8 +182,8 @@ fn stale_owner_is_taken_over_after_a_kill() {
     assert_ne!(successor_info.token, first_info.token, "new owner identity");
 
     run(async {
-        let mut client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
+        let mut client = connect_ready(
+            &profile,
             &profile.profile_id(),
             &successor_info.token,
             "client-2",
@@ -202,22 +208,12 @@ fn two_clients_share_the_daemon_and_results_survive_reconnects() {
 
     run(async {
         // Two simultaneous clients.
-        let mut client_a = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-a",
-        )
-        .await
-        .expect("client a");
-        let mut client_b = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-b",
-        )
-        .await
-        .expect("client b");
+        let mut client_a = connect_ready(&profile, &profile.profile_id(), &info.token, "client-a")
+            .await
+            .expect("client a");
+        let mut client_b = connect_ready(&profile, &profile.profile_id(), &info.token, "client-b")
+            .await
+            .expect("client b");
         assert_eq!(client_a.daemon_nonce, client_b.daemon_nonce, "same daemon");
 
         // Durable command results: same (client, command) replays its result.
@@ -230,14 +226,9 @@ fn two_clients_share_the_daemon_and_results_survive_reconnects() {
 
         // Reconnect as a new connection and repeat the id: original result.
         drop(client_a);
-        let mut client_a2 = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "client-a",
-        )
-        .await
-        .expect("client a reconnects");
+        let mut client_a2 = connect_ready(&profile, &profile.profile_id(), &info.token, "client-a")
+            .await
+            .expect("client a reconnects");
         let replayed = client_a2
             .call_with_id(methods::ECHO, echo_params, "cmd-1")
             .await
@@ -262,14 +253,9 @@ fn work_continues_after_the_frontend_exits() {
 
     // A frontend submits a slow command, then "closes" (connection dropped).
     run(async {
-        let mut frontend = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "frontend",
-        )
-        .await
-        .expect("frontend");
+        let mut frontend = connect_ready(&profile, &profile.profile_id(), &info.token, "frontend")
+            .await
+            .expect("frontend");
         // Send the slow command but drop the connection before the reply.
         let _ = frontend
             .call_with_id("slow-echo", serde_json::json!({"work": 1}), "slow-1")
@@ -281,14 +267,10 @@ fn work_continues_after_the_frontend_exits() {
     run(async {
         // The daemon kept running through the frontend exit; the durable
         // result for (frontend, slow-1) is retrievable by a reconnect.
-        let mut same_client = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "frontend",
-        )
-        .await
-        .expect("same client id reconnects");
+        let mut same_client =
+            connect_ready(&profile, &profile.profile_id(), &info.token, "frontend")
+                .await
+                .expect("same client id reconnects");
         let result = same_client
             .call_with_id("slow-echo", serde_json::json!({"work": 1}), "slow-1")
             .await
@@ -296,14 +278,9 @@ fn work_continues_after_the_frontend_exits() {
         assert_eq!(result["work"], 1);
 
         // Fresh work still flows.
-        let mut next = DaemonClient::connect(
-            &profile.ipc_endpoint(),
-            &profile.profile_id(),
-            &info.token,
-            "frontend-2",
-        )
-        .await
-        .expect("second frontend");
+        let mut next = connect_ready(&profile, &profile.profile_id(), &info.token, "frontend-2")
+            .await
+            .expect("second frontend");
         let pong = next
             .call(methods::PING, serde_json::json!({}))
             .await

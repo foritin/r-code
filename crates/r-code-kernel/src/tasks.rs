@@ -186,12 +186,11 @@ impl TaskService {
         }
         let mut contract = source.contract.clone();
         contract.task_id = new_task_id.to_string();
-        let mut state = TaskState::new(contract);
-        state
-            .set_candidate_digest(source.candidate_digest.clone())
-            .map_err(TaskServiceError::Transition)?;
-        let mut branch = state;
+        let mut branch = TaskState::new(contract);
         branch.work_units = source.work_units.clone();
+        // E05: the branch inherits the per-unit records (each unit's
+        // candidate digest and verification outcome) of the units it copies.
+        branch.unit_records = source.unit_records.clone();
         self.parents
             .lock()
             .expect("parents")

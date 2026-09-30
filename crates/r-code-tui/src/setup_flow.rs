@@ -1,8 +1,8 @@
 //! `/setup` 引导式模型服务配置（症状3：无配置时 `/model` 是死端，没有
 //! 可操作的流程）。
 //!
-//! T35 起数据面与 v2 共享服务同源：预设目录 = `r_code_runtime` 的
-//! `provider_catalog::PRESETS`（自桌面迁移），落盘 = v2 `SettingsStore`
+//! T35 起数据面与 v1 共享服务同源：预设目录 = `r_code_runtime` 的
+//! `provider_catalog::PRESETS`（自桌面迁移），落盘 = v1 `SettingsStore`
 //!（profile root 的 settings.json + 平台凭据后端）。守护进程的
 //! `SettingsBackedResolver` 每次 run 前重读 settings.json，保存即对下一次
 //! 发送生效（与 `settings.apply` RPC 等价；此处本地直写以保持浮层同步
@@ -315,7 +315,7 @@ fn preset_entry(preset: &Preset, env_var: Option<String>) -> ProviderEntry {
     }
 }
 
-/// 保存配置：插入/覆盖该预设的 v2 provider 条目并设为默认。
+/// 保存配置：插入/覆盖该预设的 v1 provider 条目并设为默认。
 /// api_key 明文只在这条路径上出现一次——`SettingsStore::apply_provider`
 /// 把它迁入平台凭据后端，settings.json 不落 key 材料。守护进程每次 run
 /// 前重读 settings.json（live resolver），保存即生效。
@@ -351,7 +351,7 @@ pub fn env_var_names(preset_id: &str) -> Vec<String> {
     names
 }
 
-/// 环境变量条目实际登记的变量（v2 条目单变量字段：厂商别名优先，无别名
+/// 环境变量条目实际登记的变量（v1 条目单变量字段：厂商别名优先，无别名
 /// 的预设用 profile 作用域变量）。
 fn registered_env_var(preset_id: &str) -> String {
     env_var_names(preset_id)
@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn apply_env_mode_writes_entry_without_credentials() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let profile_root = dir.path().join("harness-v2");
+        let profile_root = dir.path().join("harness-v1");
         std::fs::create_dir_all(&profile_root).expect("mkdir");
         apply_env_mode(&profile_root, preset("openai")).expect("apply env mode");
 
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(
             provider.env_var.as_deref(),
             Some("OPENAI_API_KEY"),
-            "厂商别名变量登记（v2 单变量字段取首个）"
+            "厂商别名变量登记（v1 单变量字段取首个）"
         );
         // settings.json 不含任何 key 材料。
         let text =
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn apply_writes_settings_without_plaintext_key() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let profile_root = dir.path().join("harness-v2");
+        let profile_root = dir.path().join("harness-v1");
         std::fs::create_dir_all(&profile_root).expect("mkdir");
         apply(&profile_root, preset("anthropic"), "  sk-ant-secret-1  ").expect("apply");
 

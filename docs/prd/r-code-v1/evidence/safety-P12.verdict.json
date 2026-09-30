@@ -1,0 +1,101 @@
+{
+  "task_id": "P12",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-store/tests/s12_safety_reports.rs",
+    "crates/r-code-runtime/tests/s12_safety_api.rs"
+  ],
+  "tests": {
+    "command": "Iteration-2 re-runs (local Windows, Git Bash, foreground): rtk proxy cargo test -p r-code-store --all-features --no-fail-fast -- --test-threads=1 (416 passed / 1 failed = the declared plan_schema baseline only; the prune FK test s12_safety_reports::prune_keeps_the_current_row_removes_stale_and_never_orphans_the_head now passes); rtk proxy cargo test -p r-code-runtime --all-features --no-fail-fast -- --test-threads=1 (392/392, includes the 6 s12_safety_api tests); rtk cargo clippy --workspace --all-features --all-targets -- -D warnings (clean); rtk cargo fmt --all -- --check (clean); rtk proxy python.exe .agents/skills/swe-loop/tools/quality_check.py on the 7 P12 files (ok, 0 violations). Iteration-1 full gates still standing for the untouched crates: rtk proxy cargo test -p r-code-kernel --all-features -- --test-threads=1 (75/75); rtk proxy cargo test -p r-code-harness-protocol -p r-code-harness-sdk --all-features -- --test-threads=1 (33/33); rtk proxy cargo test -p r-code-harness-codex --all-features -- --test-threads=1 (13/13); rtk cargo test --workspace --all-features --no-run and rtk cargo check --workspace --all-features (clean). BASELINE CORRECTION (carried from iteration 1): cargo's default fail-fast stopped older ledger Store counts at the plan_schema target and undercounted the crate (e.g. the 323/324 rows); the honest full-Store total with --no-fail-fast is 417, and Store cumulative counts use --no-fail-fast from now on. All suites are cross-platform and were executed locally on Windows; only the macOS/Linux-only s08/s10/s11 suites compile empty here (their #[cfg] bodies are native) and run only in native CI.",
+    "total": 930,
+    "passed": 929,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "Declared pre-existing baseline failure (panicked at crates/r-code-store/tests/plan_schema.rs:245, assertion left == right failed: left 35, right 18): the v18-era simulation strips newer schema objects and DELETEs schema_version rows 19-34, but the current numeric ledger stands at LATEST_SCHEMA_VERSION=35 (migrations.rs:14, registry-consistent — the clean-database assert earlier in the same test passes at 35), so the version-35 row survives the DELETE and the expected-18 assertion fails. Same declared baseline as P11; P12 adds only the string-id 'safety-capability-reports' row to the separate v1_schema_migrations ledger and does not bump the numeric version, so this is not a P12 regression. Corrects iteration 1's ledger, which recorded the actual as 36; the fresh iteration-2 measurement is 35."
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-store/src/v1/schema.rs": {
+          "file_loc": 402,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.015,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-store/src/v1/safety.rs": {
+          "file_loc": 222,
+          "max_comment_block": 6,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.127,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-store/src/v1/mod.rs": {
+          "file_loc": 24,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.143,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/sandbox.rs": {
+          "file_loc": 238,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.233,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/application.rs": {
+          "file_loc": 2287,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.058,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/bin/r-code-service.rs": {
+          "file_loc": 1020,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.062,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/mod.rs": {
+          "file_loc": 25,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.136,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "summary": "PASS: 929/930 cumulative (Runtime 392 + Kernel 75 + Store 416/417 + protocol/sdk 33 + codex 13) with quality_pass true — P12 delivers the content-addressed safety capability report store (put/current/history/prune, byte-idempotent regeneration), the timestamp-free SafetyReportMaterial with the fail-closed evaluate_safety_activation predicate, and the redacted local-only safety.report.get diagnostics; nothing activates this wave because P13 owns the probe protocol (Unsupported/SafeDisabled never activate, zero or failing probes stay NotActivated). Iteration 2 fixed the one real defect — prune_safety_reports now upserts the capability head BEFORE deleting the other rows inside the same IMMEDIATE transaction, so the safety_report_heads FK no longer rejects the prune and the previously failing test passes unchanged — and removed the dead safety_activation_summary helper (simplicity now 5). The single remaining failure is the declared pre-existing plan_schema baseline (expects 18, actual 35 = LATEST_SCHEMA_VERSION since P11; iteration 1's ledger said 36, corrected here to the measured value), and the fail-fast discovery stands: full-Store counts use --no-fail-fast (417 total) because cargo's default fail-fast undercounted older ledger rows."
+}

@@ -1,0 +1,64 @@
+{
+  "task_id": "P29",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s29_gix_status_log.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED SUITE s29_gix_status_log = 6 passed / 0 failed, measured three times on the final code (post-fix, stability rerun, post-fmt): opens_only_the_canonical_git_dir (HEAD-file signature refuses the worktree root and foreign paths; plain-data output with untracked reported; limit truncates, zero refuses); status_and_log_parity_against_the_git_oracle (normalized tuple-set equality against real `git status --porcelain` and sorted-id equality against `git log --format=%H`, both run on a separate copy with GIT_OPTIONAL_LOCKS=0); malicious_process_filter_is_never_executed_by_the_reader (filter driver configured in the repository's OWN config, required=true, attribute-wired payload file — the reader diffs the filtered file and never executes anything, while the CONTROL ARM on a sacrificial copy proves real git does execute the very same filter); reads_leave_the_live_git_metadata_byte_identical (recursive size+mtime fingerprint of .git before/after status+log); hostile_environment_cannot_inject_configuration (GIT_CONFIG_COUNT injection of a filter driver and showUntrackedFiles=no changes nothing the reader sees — proven in a re-executed child process after the first full-suite run caught in-process env mutation leaking into sibling tests' git oracle calls); the_repository_object_is_not_plugin_visible (crate root never re-exports gix or the reader; the plugin router never mentions it). Two real defects were measured and fixed inside the round: the first cut opened the worktree root (gix accepts it), and the env race above. One Windows truth recorded: git-for-windows runs filter commands through its bundled sh which strips backslashes — marker paths must use forward slashes. (2) HOUSE five-group cumulative measured THREE times, all reported: 141 result lines / 1090 passed / 2 failed in all three runs — run 1 = plan_schema baseline + the documented s07 load race (re-measured alone immediately: 10 passed / 0 failed); run 2 = baseline + the s29 env race that MOTIVATED the child re-exec fix (the only code change between runs 2 and 3); final run on the fixed code = baseline + the documented conversation_engine::cancel_settles_the_run_as_cancelled transcript race (re-measured alone immediately: 10 passed / 0 failed). House is 1091 total / 1090 passed / 1 declared failure, zero regressions vs P25's 1086/1085/1 (+6 s29, +1 result line). (3) OTHER GATES: clippy -p r-code-runtime --all-features --all-targets -D warnings exit 0; cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites — the reader spawns nothing, gix reads in-process); node scripts/harness-packaging.test.mjs 3 passed / 0 failed; quality_check.py over the three changed files ok=true 0 violations (git_read 233 / mod 27 / s29 410 code loc; comment blocks <= 12); daemon hygiene: zero r-code-service/harness-native processes after every gate batch.",
+    "total": 1091,
+    "passed": 1090,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P29 and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/git_read.rs": {
+          "file_loc": 233,
+          "max_comment_block": 12,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.273
+        },
+        "crates/r-code-runtime/src/services/mod.rs": {
+          "file_loc": 27,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.125
+        },
+        "crates/r-code-runtime/tests/s29_gix_status_log.rs": {
+          "file_loc": 410,
+          "max_comment_block": 9,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.111
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 280 lines; 233 production lines landed plus a 410-line suite — the mapping table (gix items to plain data) is the bulk of the module and every arm is reachable from the parity test. The reader was developed compile-probe style against the registry source: six rustc rounds, zero guessed APIs in the shipped code. max_func_loc/max_nesting null for .rs as always; reviewed by eye — the largest function (map_status_item) is ~55 lines, nesting <= 4."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (no Git executable/filter in production): the reader is pinned gix =0.88.0 with default features off and status/revision/sha1 only; process filters are structurally impossible — no configuration section is trusted for filter drivers, so even a filter configured in the repository's own config reads as absent, and the malicious-filter test proves the reader never spawns anything while its control arm proves real git executes the same filter. The reader itself spawns nothing (guard stays green with no new allowlist entries). Acceptance ② (repository object not plugin-visible): the gix Repository handle is private behind plain-data types, the module lives under services with internal exposure only, and the crate root + plugin router are pinned never to mention it. Acceptance ③ (reads make zero metadata changes): the recursive .git fingerprint is byte-identical across status+log — no index write-back, no locks. P29.1 proven (canonical repo/common-dir only, external includes and alternates closed by isolated permissions + the HEAD-file signature), P29.2 proven (bounded status/log exposed; malicious process filters rejected never executed), P29.3 proven (fingerprint vs the separate-copy GIT_OPTIONAL_LOCKS=0 oracle — the oracle drives parity, the fingerprint drives immutability). Disclosed: the gateway's legacy git invocations remain the P24A guard's owned LEGACY entries — P30 wires them onto this reader; log order is walk-order (consumers sort); the env-injection proof runs in a child process (recorded test-isolation rule). House 1091/1090/1 with only the declared plan_schema baseline; the s07 and conversation_engine race members each appeared once across three runs and were green in isolation both times, all numbers reported."
+}

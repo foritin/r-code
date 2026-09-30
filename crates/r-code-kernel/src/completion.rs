@@ -21,6 +21,28 @@ pub struct ArbitrationInputs<'a> {
     pub unavailable: Vec<(String, String)>,
 }
 
+/// Arbitrate a proposal against a task's per-unit records (E05): the
+/// task-level candidate digest is DERIVED from the anchored unit record —
+/// never a stored single-slot copy — and the evidence is the task's
+/// host-owned record set. The verdict itself stays task-level: it
+/// aggregates the per-unit outcomes.
+pub fn arbitrate_task(
+    state: &crate::task::TaskState,
+    definitions: &[CheckDefinition],
+    unavailable: Vec<(String, String)>,
+    proposal: &CompletionProposal,
+) -> Arbitration {
+    let digest = state.task_candidate_digest();
+    let inputs = ArbitrationInputs {
+        contract: &state.contract,
+        candidate_digest: digest.as_deref(),
+        evidence: &state.evidence,
+        definitions,
+        unavailable,
+    };
+    arbitrate(&inputs, proposal)
+}
+
 /// The full verdict including repair-shaped outcomes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Arbitration {

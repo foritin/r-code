@@ -1,8 +1,8 @@
 //! Coding-task paired evaluations (T40).
 //!
 //! Fixed task fixtures; the paired runner keeps harness/model/config/task
-//! fixed and compares either baseline-vs-v2 or two strategies of the same
-//! v2 harness. It records verified completion, false completion,
+//! fixed and compares either baseline-vs-v1 or two strategies of the same
+//! v1 harness. It records verified completion, false completion,
 //! interventions, recovery, time and cost; missing facts stay
 //! `unavailable` — never fabricated. Host faults are separated from
 //! successful outcomes.

@@ -1,0 +1,61 @@
+{
+  "task_id": "P08",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s08_linux_guardian.rs"
+  ],
+  "tests": {
+    "command": "PLATFORM DISCIPLINE (task contract: Windows dev host + native Linux CI): s08 is #![cfg(target_os = \"linux\")] with 11 authored tests — gate blocks execution until release (touch-file detector), identity-before-release, exactly-once release with natural group termination, unreleased-Drop EOF kill, pre-persistence-crash no-execution, missing-binary Unsupported refusal, foreign-version Hello refusal, daemon-EOF kill exit 1, released workload fd set subset of {0,1,2}, post-release group sweep with grandchild, source pin — it is PARSE-verified on Windows via cargo check --tests and EXECUTES ONLY in native Linux CI; it was never run locally and is NOT counted in the numbers below. Locally executed (raw unfiltered test-result sums): focused s05+s06+s07 34/34; full Runtime 386/386 across 71 suites (s08 and the guardian bin compile as empty 0-test suites on Windows); full Kernel 75/75; full Store 323/324 with the single failure being the declared pre-existing plan_schema migration-count baseline (expects 18, actual 35, untouched by P08); workspace all-feature check and test --no-run green; workspace all-feature all-target Clippy -D warnings green; cargo fmt --all --check green; quality_check green on the two P08 sources",
+    "total": 831,
+    "passed": 830,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline: migration-count assertion expects 18, schema now at 35; P08 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/process_guard/unix.rs": {
+          "file_loc": 1502,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.26,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/bin/r-code-process-guardian.rs": {
+          "file_loc": 51,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.417,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "P08 iteration 2 passes the keep gate under the platform verification discipline (Windows dev host + native Linux CI; no WSL, no cross-target). Guardian-as-spawner launch gate: the guardian binary starts before any workload and owns a versioned two-pipe control protocol (pure codec, 64 KiB cap, per-frame version enforcement); the workload is forked with pre-exec prctl(PR_SET_PDEATHSIG)/setpgid/close-3-4/raise(SIGSTOP)-last so zero workload instructions can precede SIGCONT; the daemon receives outer/group/birth identity before persistence and releases exactly once via a consumed gate; EOF before release (daemon death or unreleased Drop) SIGKILLs the stopped group; the workload's inherited descriptor set is empty (pre-exec closes the control fds; s08 asserts fd set subset of {0,1,2} in CI); incompatible or missing guardian refuses fail-closed. unix.rs unit tests (codec) and s08 execute in native Linux CI — honestly not claimed as locally run. QA deep review found no compile-blocking defects (libc signatures, ownership, pre_exec bounds, bounded-wait thread discipline all verified by reading)."
+}

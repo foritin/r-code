@@ -19,7 +19,7 @@ use r_code_runtime::services::authorization::{
     AuthorizationService, EffectivePermissions, WorkspaceCapability,
 };
 use r_code_runtime::services::tools::GatewayToolService;
-use r_code_store::v2::V2Store;
+use r_code_store::v1::V1Store;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -86,7 +86,7 @@ impl ModelService for TextModel {
 
 async fn spawn_session(
     binary: &std::path::Path,
-    store: Arc<V2Store>,
+    store: Arc<V1Store>,
     model: Arc<dyn ModelService>,
 ) -> PluginSession {
     let identity = RunIdentity {
@@ -187,7 +187,7 @@ fn input(
 async fn restart_resumes_from_the_checkpoint_and_replays_inputs() {
     let binary = native_binary();
     let temp = tempfile::tempdir().expect("tempdir");
-    let store = Arc::new(V2Store::open(&temp.path().join("tasks.sqlite3")).expect("store"));
+    let store = Arc::new(V1Store::open(&temp.path().join("tasks.sqlite3")).expect("store"));
     let model = Arc::new(TextModel {
         requests: std::sync::Mutex::new(Vec::new()),
     });
@@ -246,7 +246,7 @@ async fn restart_resumes_from_the_checkpoint_and_replays_inputs() {
 async fn accepted_steer_lands_in_the_persisted_state_before_the_finish() {
     let binary = native_binary();
     let temp = tempfile::tempdir().expect("tempdir");
-    let store = Arc::new(V2Store::open(&temp.path().join("tasks.sqlite3")).expect("store"));
+    let store = Arc::new(V1Store::open(&temp.path().join("tasks.sqlite3")).expect("store"));
     let model = Arc::new(TextModel {
         requests: std::sync::Mutex::new(Vec::new()),
     });
@@ -287,4 +287,57 @@ async fn accepted_steer_lands_in_the_persisted_state_before_the_finish() {
         "steer text must land in the persisted state"
     );
     session.cancel("done").await.expect("stop");
+}
+
+#[tokio::test]
+async fn corrupt_or_unknown_role_checkpoints_fail_before_model_stream() {
+    let binary = native_binary();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = Arc::new(V1Store::open(&temp.path().join("tasks.sqlite3")).expect("store"));
+    let model = Arc::new(TextModel {
+        requests: std::sync::Mutex::new(Vec::new()),
+    });
+    let fixtures = [
+        (1, br#"{not-json"#.to_vec(), "bad checkpoint state"),
+        (
+            2,
+            serde_json::to_vec(&serde_json::json!({
+                "messages": [{
+                    "role": "future-role",
+                    "blocks": [{"type": "text", "text": "must fail closed"}]
+                }]
+            }))
+            .expect("checkpoint json"),
+            "unknown wire message role",
+        ),
+    ];
+
+    for (revision, state, expected_error) in fixtures {
+        let artifact = store
+            .save_checkpoint("attempt-1", revision, state, revision)
+            .await
+            .expect("save invalid fixture");
+        let session = spawn_session(&binary, store.clone(), model.clone()).await;
+        let error = session
+            .resume(
+                &attempt(),
+                &artifact,
+                &[input(
+                    revision + 10,
+                    r_code_harness_protocol::InputKind::User,
+                    "resume",
+                )],
+            )
+            .await
+            .expect_err("invalid checkpoint must fail");
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected resume error: {error}"
+        );
+        session.cancel("done").await.expect("stop failed session");
+        assert!(
+            model.requests.lock().unwrap().is_empty(),
+            "invalid checkpoint must not reach model_stream"
+        );
+    }
 }

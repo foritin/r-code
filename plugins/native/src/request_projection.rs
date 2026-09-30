@@ -39,6 +39,17 @@ pub enum WireBlock {
     },
 }
 
+/// A persisted conversation could not be projected onto the model wire.
+///
+/// Conversation checkpoints intentionally retain their string role so older
+/// checkpoints remain readable. Projection is the trust boundary: only the
+/// canonical v1 roles are accepted and corrupt or future roles fail closed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ProjectionError {
+    #[error("unknown wire message role {role:?}")]
+    UnknownRole { role: String },
+}
+
 /// Project the conversation into a model request.
 pub fn project_request(
     state: &ConversationState,
@@ -46,7 +57,7 @@ pub fn project_request(
     tools: &[ToolDescriptor],
     selection: Option<&str>,
     inference: Option<serde_json::Value>,
-) -> ModelStreamRequest {
+) -> Result<ModelStreamRequest, ProjectionError> {
     let mut messages = Vec::new();
     if !system_prompt.trim().is_empty() {
         messages.push(ModelMessage {
@@ -58,9 +69,16 @@ pub fn project_request(
     }
     for message in &state.messages {
         let role = match message.role.as_str() {
+            "system" => ModelRole::System,
+            "developer" => ModelRole::Developer,
             "user" => ModelRole::User,
+            "assistant" => ModelRole::Assistant,
             "tool" => ModelRole::Tool,
-            _ => ModelRole::Assistant,
+            role => {
+                return Err(ProjectionError::UnknownRole {
+                    role: role.to_string(),
+                });
+            }
         };
         let blocks = message
             .blocks
@@ -88,13 +106,13 @@ pub fn project_request(
             content: blocks,
         });
     }
-    ModelStreamRequest {
+    Ok(ModelStreamRequest {
         selection: selection.map(str::to_string),
         messages,
         tools: tools.to_vec(),
         inference,
         deadline_ms: None,
-    }
+    })
 }
 
 /// Append an assistant turn (text + pending tool calls) to the state.

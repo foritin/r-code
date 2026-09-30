@@ -3,7 +3,9 @@
   "id": "native.r-code",
   "version": "1.0.1",
   "apiMajor": 1,
-  "apiMinor": 0,
+  "apiMinor": 3,
+  "requiresEffectFields": true,
+  "requiresSingleProcess": true,
   "displayName": "R-Code Native Harness",
   "description": "Built-in native harness: multi-turn model/tool loop, Plan/HITL, steer and cross-harness delegation over public host services.",
   "supportedPlatforms": [

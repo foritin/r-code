@@ -336,6 +336,45 @@ jobs:
           cp "target/${{ matrix.rust-target }}/release/r-code-tui$( [[ '${{ matrix.platform }}' == windows-* ]] && echo '.exe' )"              "src-tauri/binaries/r-code-tui-${{ matrix.rust-target }}$( [[ '${{ matrix.platform }}' == windows-* ]] && echo '.exe' )"
           ls -la src-tauri/binaries/
 
+      # P32.1 发布前置：本矩阵目标先把 target-triple 的 guardian/probe
+      # helper 构建并 stage 进 src-tauri/binaries（与 tauri.conf 的
+      # externalBin 声明逐名对齐）。缺失或名字不匹配会在下面的校验步
+      # 直接红——绝不带占位文件进入 tauri-action。
+      - name: Build and stage safety helpers (P32.1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p r-code-runtime \
+            --bin r-code-process-guardian --bin r-code-safety-probe \
+            --target ${{ matrix.rust-target }}
+          exe=""
+          [[ '${{ matrix.platform }}' == windows-* ]] && exe=".exe"
+          cp "target/${{ matrix.rust-target }}/release/r-code-process-guardian${exe}" \
+             "src-tauri/binaries/r-code-process-guardian-${{ matrix.rust-target }}${exe}"
+          cp "target/${{ matrix.rust-target }}/release/r-code-safety-probe${exe}" \
+             "src-tauri/binaries/r-code-safety-probe-${{ matrix.rust-target }}${exe}"
+          ls -la src-tauri/binaries/
+
+      # P32.1（Linux）：bwrap 是 Linux 沙箱的 pinned 依赖，发布镜像必须
+      # 随包安装（AppImage/deb 都走 apt 依赖声明；这里验证 runner 上可
+      # 用，安装进最终包由打包脚本与包管理器完成）。
+      - name: Verify bwrap availability (linux, P32.1)
+        if: matrix.platform == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          bwrap --version
+
+      # P32.2 发布策略：本目标的安装布局探针/激活判定在打包后执行
+      # （见 tauri-action 之后的 policy 步）。此处先跑跨平台安全门，
+      # 保证源码级一致性先行；原生专属探针在对应矩阵 job 内执行。
+      - name: Safety conformance gate (source level, P32.2)
+        shell: bash
+        run: |
+          node scripts/verify-safety-v1.mjs
+
       - name: Validate Apple signing and notarization secrets
         if: startsWith(matrix.platform, 'macos-') && needs.validate.outputs.apple_signed == 'true'
         shell: bash
@@ -434,6 +473,18 @@ jobs:
           uploadUpdaterJson: false
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: ${{ matrix.upload_workflow_artifacts }}
+
+      # P32.2/P32.3 安装布局安全策略：tauri-action 产出安装包后，在最终
+      # 工件上执行平台安全验证——helper 存在与魔数/摘要校验（packaging
+      # 模块的 installed-helper smoke），并按各目标的适用激活判定执行。
+      # 本波没有任何平台在出货产品中广告 write 能力，因此所有目标接受
+      # SafeDisabled/Unsupported（macOS 即此形态：write 面隐藏）；一旦
+      # 某目标改为 write_advertised=true，同一步骤会拒绝非 Activated 的
+      # 探针结果——策略在 s32_installed_safety.rs 有确定性测试钉死。
+      - name: Installed-layout safety policy (P32.2/P32.3)
+        shell: bash
+        run: |
+          cargo test -p r-code-host --test s32_installed_safety --all-features -- --test-threads=1
 
       - name: Verify signed and notarized macOS bundles
         if: startsWith(matrix.platform, 'macos-') && needs.validate.outputs.apple_signed == 'true'

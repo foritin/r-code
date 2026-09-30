@@ -1,0 +1,45 @@
+{
+  "task_id": "E05",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-kernel/tests/e05_kernel_concurrent_units.rs"
+  ],
+  "tests": {
+    "command": "rtk proxy cargo test -p r-code-kernel --test e05_kernel_concurrent_units -- --test-threads=1 (5/5); full kernel crate single-threaded 92 tests green; runtime affected suites single-threaded green (m03_execution_pipeline 10, m04_review_flow 12, m04_review_rpc 1, s20 19, t19 7, m03_cancel_race 2, o00_headroom_split 4 - regression sentinel); house five-group cumulative --no-fail-fast --test-threads=1 measured TWICE, both reported: 150 result lines / 1136 passed / 1 failed in BOTH runs, the single failure the declared plan_schema.rs:245 baseline; ZERO flake. House becomes 1137/1136/1 (e05's 5 tests enter the denominator). E05 adds no store migration so the 18-vs-35 baseline pair is unchanged and remains the only declared red.",
+    "total": 1137,
+    "passed": 1136,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); E05 touches no store file and the red is byte-identical in both runs"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-kernel/src/task.rs": {"file_loc": 2378, "max_comment_block": 9, "long_comment_lines": 0, "comment_ratio": 0.145},
+        "crates/r-code-kernel/src/tasks.rs": {"file_loc": 497, "max_comment_block": 6, "long_comment_lines": 0, "comment_ratio": 0.118},
+        "crates/r-code-kernel/src/completion.rs": {"file_loc": 171, "max_comment_block": 4, "long_comment_lines": 0, "comment_ratio": 0.164},
+        "crates/r-code-kernel/tests/e05_kernel_concurrent_units.rs": {"file_loc": 652, "max_comment_block": 8, "long_comment_lines": 0, "comment_ratio": 0.155},
+        "crates/r-code-runtime/src/run_manager.rs": {"file_loc": 2253, "max_comment_block": 11, "long_comment_lines": 0, "comment_ratio": 0.057},
+        "crates/r-code-runtime/src/application/review_flow.rs": {"file_loc": 626, "max_comment_block": 1, "long_comment_lines": 0, "comment_ratio": 0.003},
+        "crates/r-code-runtime/src/services/review.rs": {"file_loc": 890, "max_comment_block": 9, "long_comment_lines": 0, "comment_ratio": 0.099}
+      },
+      "thresholds": {"file_loc": 2600}
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "summary": "PASS - the kernel now admits N concurrent InProgress units with per-unit outcomes, dependency-aware failure blocking, read-only no-effect completion, exact single-actor accepts refusing unsettled waves, and a legacy-row serde fold that keeps old persisted tasks decodable; the whole 23-file consumer ring migrated in one green change."
+}

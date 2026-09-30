@@ -169,7 +169,7 @@ impl AppFlavor {
         Ok(())
     }
 
-    /// Harness-v2 handoff values for the shared daemon profile. The GUI passes
+    /// Harness-v1 handoff values for the shared daemon profile. The GUI passes
     /// its build flavor explicitly to `r-code-runtime::LaunchOptions`; this
     /// method exposes the matching flavor spelling and the per-flavor data
     /// root without linking the runtime crate.

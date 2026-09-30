@@ -1,12 +1,12 @@
 //! 思考级别控制（M2-02 / R-THINK-01；T35 起写回走守护进程
 //! `task.setPreferences` 的 inference）。
 //!
-//! 档位集合 = v2 harness config `inference` 载荷接受的 `reasoning_effort`
+//! 档位集合 = v1 harness config `inference` 载荷接受的 `reasoning_effort`
 //! 全集（比 pi 的七档多 `ultra`——以引擎契约为准，见 MC-3）。选中写回
 //! per-task 偏好（影响下一次 run）；thinking 字段随档位映射：
 //! `none` → disabled，其余 → enabled。
 
-use crate::engine::V2ChatClient;
+use crate::engine::V1ChatClient;
 
 /// 档位全集（升序；升降步进与 clamp 的序即此数组序）。
 pub const EFFORT_LEVELS: [&str; 8] = [
@@ -34,7 +34,7 @@ pub fn step_level(level: Option<&str>, delta: i32) -> &'static str {
 /// 选中写回：per-task inference 偏好（守护进程持久化于任务；影响下一次
 /// run——运行中的 run 不受影响，无需拒绝路径）。
 pub async fn apply_thinking(
-    engine: &V2ChatClient,
+    engine: &V1ChatClient,
     task_id: &str,
     level: &str,
 ) -> Result<(), String> {
@@ -133,9 +133,12 @@ mod tests {
                 .set_task_preferences(
                     "task-think",
                     r_code_kernel::task::TaskPreferences {
+                        model_route: None,
                         model: None,
                         inference: Some(inference),
                         mode: None,
+                        system_prompt: None,
+                        workspace_path: None,
                         require_desktop_confirm: false,
                     },
                 )
@@ -143,7 +146,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("level {level} must apply: {error}"));
         }
         // 非法档位在 TUI 层拒绝（不进 daemon）。
-        let engine = crate::engine::V2ChatClient::from_profile(profile, None);
+        let engine = crate::engine::V1ChatClient::from_profile(profile, None);
         assert!(
             apply_thinking(&engine, "task-think", "extreme")
                 .await

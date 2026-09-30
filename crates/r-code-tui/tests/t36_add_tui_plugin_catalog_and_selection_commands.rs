@@ -137,7 +137,7 @@ async fn plugins_lifecycle_with_machine_readable_outcomes() {
     {
         use r_code_client::DaemonClient;
         let info = r_code_client::ensure_daemon(
-            &harness.profile().harness_v2_root(),
+            &harness.profile().harness_v1_root(),
             &harness.profile().ipc_endpoint(),
             &harness.profile().profile_id(),
             Some(&target_binary("r-code-service")),
@@ -200,7 +200,7 @@ async fn plugins_lifecycle_with_machine_readable_outcomes() {
     {
         use r_code_client::DaemonClient;
         let info = r_code_client::ensure_daemon(
-            &harness.profile().harness_v2_root(),
+            &harness.profile().harness_v1_root(),
             &harness.profile().ipc_endpoint(),
             &harness.profile().profile_id(),
             Some(&target_binary("r-code-service")),

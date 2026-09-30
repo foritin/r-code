@@ -1,6 +1,6 @@
 //! T04a — explicit isolated RuntimeProfile.
 //!
-//! Acceptance: fresh v2 startup and both client flavors leave old
+//! Acceptance: fresh Harness v1 startup and both client flavors leave old
 //! DB/config/JSONL unchanged and resolve identical intended profile
 //! identities.
 
@@ -25,7 +25,7 @@ fn legacy_layout(root: &Path) {
 }
 
 #[test]
-fn fresh_v2_startup_leaves_legacy_data_untouched() {
+fn fresh_v1_startup_leaves_legacy_data_untouched() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("data-root");
     legacy_layout(&root);
@@ -39,17 +39,17 @@ fn fresh_v2_startup_leaves_legacy_data_untouched() {
         &LaunchOptions::new(ProfileFlavor::Development).with_data_root(&root),
     )
     .expect("resolve");
-    profile.ensure_layout().expect("fresh v2 layout");
+    profile.ensure_layout().expect("fresh v1 layout");
 
-    // All v2 state is strictly below <data_root>/harness-v2.
-    let v2 = profile.harness_v2_root();
-    assert!(v2.starts_with(&root));
-    assert!(v2.ends_with("harness-v2"));
-    assert!(profile.database_path().starts_with(&v2));
-    assert!(profile.plugins_root().starts_with(&v2));
-    assert!(profile.blobs_root().starts_with(&v2));
-    assert!(profile.checkpoints_root().starts_with(&v2));
-    assert!(v2.is_dir(), "v2 layout created");
+    // All Harness v1 state is strictly below <data_root>/harness-v1.
+    let v1 = profile.harness_v1_root();
+    assert!(v1.starts_with(&root));
+    assert!(v1.ends_with("harness-v1"));
+    assert!(profile.database_path().starts_with(&v1));
+    assert!(profile.plugins_root().starts_with(&v1));
+    assert!(profile.blobs_root().starts_with(&v1));
+    assert!(profile.checkpoints_root().starts_with(&v1));
+    assert!(v1.is_dir(), "v1 layout created");
     assert!(profile.database_path().parent().unwrap().is_dir());
 
     // Legacy bytes are bit-identical.
@@ -57,8 +57,29 @@ fn fresh_v2_startup_leaves_legacy_data_untouched() {
         assert_eq!(hash_of(&root.join(&name)), digest, "{name} mutated");
     }
 
-    // No v2 path ever escapes the harness-v2 subtree of the data root.
-    assert!(profile.database_path().starts_with(&v2));
+    // No Harness v1 path ever escapes its subtree of the data root.
+    assert!(profile.database_path().starts_with(&v1));
+}
+
+#[test]
+fn temporary_pre_v1_directory_is_moved_without_losing_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("data-root");
+    let pre_v1 = root.join("harness-v2");
+    std::fs::create_dir_all(pre_v1.join("plugins")).expect("pre-v1 layout");
+    std::fs::write(pre_v1.join("tasks.sqlite3"), b"existing-state").expect("seed state");
+
+    let profile = RuntimeProfile::resolve(
+        &LaunchOptions::new(ProfileFlavor::Development).with_data_root(&root),
+    )
+    .expect("resolve");
+    profile.ensure_layout().expect("migrate layout");
+
+    assert!(!pre_v1.exists(), "temporary directory was retired");
+    assert_eq!(
+        std::fs::read(profile.database_path()).expect("migrated database"),
+        b"existing-state"
+    );
 }
 
 #[test]
@@ -74,13 +95,13 @@ fn both_flavors_resolve_distinct_but_stable_identities() {
     .unwrap();
 
     assert_ne!(dev.profile_id(), prod.profile_id());
-    assert_ne!(dev.harness_v2_root(), prod.harness_v2_root());
+    assert_ne!(dev.harness_v1_root(), prod.harness_v1_root());
     assert_ne!(dev.credential_service(), prod.credential_service());
     assert_ne!(dev.ipc_endpoint(), prod.ipc_endpoint());
-    assert_eq!(dev.profile_id(), "harness-v2/development");
-    assert_eq!(prod.profile_id(), "harness-v2/production");
-    assert_eq!(dev.credential_service(), "r-code-harness-v2-dev");
-    assert_eq!(prod.credential_service(), "r-code-harness-v2");
+    assert_eq!(dev.profile_id(), "harness-v1/development");
+    assert_eq!(prod.profile_id(), "harness-v1/production");
+    assert_eq!(dev.credential_service(), "r-code-harness-v1-dev");
+    assert_eq!(prod.credential_service(), "r-code-harness-v1");
 
     // Repeated resolution is deterministic (same identity every launch).
     let dev_again = RuntimeProfile::resolve(
@@ -94,7 +115,7 @@ fn both_flavors_resolve_distinct_but_stable_identities() {
         (IpcEndpoint::NamedPipe { name: a }, IpcEndpoint::NamedPipe { name: b }) => {
             assert!(a.contains("development"));
             assert!(b.contains("production"));
-            assert!(a.starts_with(r"\\.\pipe\r-code-harness-v2-"));
+            assert!(a.starts_with(r"\\.\pipe\r-code-harness-v1-"));
         }
         (IpcEndpoint::UnixSocket { path: a }, IpcEndpoint::UnixSocket { path: b }) => {
             assert!(a.to_string_lossy().contains("development"));
@@ -154,13 +175,13 @@ fn flavor_is_explicit_and_never_inferred() {
     let options = LaunchOptions::parse_args(&args).expect("parse");
     let profile = RuntimeProfile::resolve(&options).expect("resolve");
     assert_eq!(profile.data_root(), Path::new("X:/custom/root"));
-    assert_eq!(profile.profile_id(), "harness-v2/development");
+    assert_eq!(profile.profile_id(), "harness-v1/development");
 }
 
 #[test]
 fn default_data_roots_match_flavor_identifiers() {
     // The default-root table mirrors the desktop flavor identifiers so the
-    // v2 tree grows inside the same per-flavor AppData root.
+    // Harness v1 tree grows inside the same per-flavor AppData root.
     let root = Path::new("appdata");
     let dev = ProfileFlavor::Development.data_root_under(root);
     let prod = ProfileFlavor::Production.data_root_under(root);

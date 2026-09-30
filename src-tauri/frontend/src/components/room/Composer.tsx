@@ -588,6 +588,7 @@ export function Composer({
         mode,
         attachmentIds.length > 0 ? [] : files,
         attachmentIds,
+        workspacePath,
       );
       const firstTurnTitle = /^新对话(?:\s+\d+)?$/.test(task?.title.trim() ?? "") && !task?.goal.trim()
         ? (message.trim() || `分析 ${files[0]?.name ?? "附加文件"}`).slice(0, 48)

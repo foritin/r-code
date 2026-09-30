@@ -6,7 +6,7 @@
 //! 影响下一次 run）。渲染层（app.rs）只消费 `visible_rows`，键位路由见
 //! `handle_key`。
 
-use crate::engine::V2ChatClient;
+use crate::engine::V1ChatClient;
 
 /// 一条可选模型（provider 分组下的一员）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,12 +15,12 @@ pub struct ModelEntry {
     pub model: String,
     /// 来源说明（默认/已配置/缺鉴权），渲染为附注。
     pub source: String,
-    /// 是否已鉴权（v2 has_credential）。不可用的仍列出但标注——功能入口
+    /// 是否已鉴权（v1 has_credential）。不可用的仍列出但标注——功能入口
     /// 不因缺 key 消失，选择后发送即报可操作错误。
     pub available: bool,
 }
 
-/// v2 `models.available` → 选择器条目（provider 分组稳定序：先按
+/// v1 `models.available` → 选择器条目（provider 分组稳定序：先按
 /// provider 名、再按 model 名排序，保证循环/滚动确定性）。
 pub fn picker_entries(models: &[crate::engine::ModelRow]) -> Vec<ModelEntry> {
     let mut entries: Vec<ModelEntry> = models
@@ -178,10 +178,10 @@ impl ModelPicker {
     }
 }
 
-/// 选中写回：`task.setPreferences {model: selection}`（v2 语义：selection
+/// 选中写回：`task.setPreferences {model: selection}`（v1 语义：selection
 /// 即模型服务选择 id，影响下一次 run）。返回 footer 联动标签。
 pub async fn apply_model_selection(
-    engine: &V2ChatClient,
+    engine: &V1ChatClient,
     task_id: &str,
     entry: &ModelEntry,
 ) -> Result<String, String> {
@@ -194,6 +194,48 @@ pub async fn apply_model_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stage_native_harness(root: &std::path::Path) -> std::path::PathBuf {
+        let package = root.join("native-package");
+        let bin = package.join("bin");
+        std::fs::create_dir_all(&bin).expect("package directories");
+        let executable = if cfg!(windows) {
+            "native-fixture.exe"
+        } else {
+            "native-fixture"
+        };
+        std::fs::copy(
+            std::env::current_exe().expect("current test executable"),
+            bin.join(executable),
+        )
+        .expect("stage native executable");
+        let platform = match r_code_harness_protocol::Platform::current() {
+            r_code_harness_protocol::Platform::WindowsX64 => "windows-x64",
+            r_code_harness_protocol::Platform::MacosArm64 => "macos-arm64",
+            r_code_harness_protocol::Platform::MacosX64 => "macos-x64",
+            r_code_harness_protocol::Platform::LinuxX64 => "linux-x64",
+        };
+        std::fs::write(
+            package.join("harness.json"),
+            serde_json::json!({
+                "schema_version": "1",
+                "id": "native.r-code",
+                "version": "1.0.0",
+                "apiMajor": 1,
+                "apiMinor": 0,
+                "displayName": "Native",
+                "supportedPlatforms": [{
+                    "platform": platform,
+                    "executable": "bin/native-fixture"
+                }],
+                "requestedHostServices": ["host.model.stream"],
+                "configSchema": {"type": "object"}
+            })
+            .to_string(),
+        )
+        .expect("write native manifest");
+        package
+    }
 
     fn row(
         selection: &str,
@@ -328,9 +370,30 @@ mod tests {
             std::sync::Arc::new(r_code_kernel::testing::FakeModelService::default());
         let tools: std::sync::Arc<dyn r_code_kernel::ports::ToolService> =
             std::sync::Arc::new(r_code_kernel::testing::FakeToolService::default());
+        let provider_env = format!("R_CODE_TUI_MODEL_KEY_{}", std::process::id());
+        std::env::set_var(&provider_env, "test-secret");
+        r_code_runtime::services::settings_store::SettingsStore::for_profile(&profile)
+            .compare_and_swap(
+                0,
+                r_code_runtime::services::settings_store::V1Settings {
+                    revision: 0,
+                    providers: vec![r_code_runtime::services::settings_store::ProviderEntry {
+                        selection: "openai".into(),
+                        model: "gpt-5.6".into(),
+                        base_url: None,
+                        protocol: None,
+                        env_var: Some(provider_env.clone()),
+                    }],
+                    default_selection: Some("openai".into()),
+                },
+            )
+            .expect("configure provider");
         let service =
             r_code_runtime::application::ApplicationService::compose(&profile, models, tools)
                 .expect("compose");
+        service
+            .install_package_from_directory(&stage_native_harness(dir.path()))
+            .expect("install native harness");
         service
             .create_task(
                 "task-model",
@@ -347,15 +410,18 @@ mod tests {
             source: "已配置".to_string(),
             available: true,
         };
-        // 写回语义与 V2ChatClient::set_preferences 相同的 params（engine 走
+        // 写回语义与 V1ChatClient::set_preferences 相同的 params（engine 走
         // task.setPreferences RPC；此处直接调 service 同名能力验证读回）。
         service
             .set_task_preferences(
                 "task-model",
                 r_code_kernel::task::TaskPreferences {
+                    model_route: None,
                     model: Some(entry.provider.clone()),
                     inference: None,
                     mode: None,
+                    system_prompt: None,
+                    workspace_path: None,
                     require_desktop_confirm: false,
                 },
             )
@@ -363,5 +429,6 @@ mod tests {
             .expect("set preferences");
         let detail = service.task_detail("task-model").await.expect("detail");
         assert_eq!(detail.model.as_deref(), Some("openai"));
+        std::env::remove_var(provider_env);
     }
 }

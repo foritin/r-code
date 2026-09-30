@@ -1,11 +1,11 @@
-//! Explicit runtime profiles and harness-v2 path isolation.
+//! Explicit runtime profiles and harness-v1 path isolation.
 //!
 //! A `RuntimeProfile` is constructed *before* any store, settings, plugin or
 //! provider service initializes. The flavor is always explicit: the GUI passes
 //! its build flavor, TUI/service take `--profile`, and the runtime itself
 //! never infers identity from Tauri features.
 //!
-//! All v2 data lives under `<data_root>/harness-v2`; legacy databases,
+//! All Harness v1 data lives under `<data_root>/harness-v1`; legacy databases,
 //! configuration and JSONL history in the parent root are never read for
 //! writes and never modified.
 
@@ -14,6 +14,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use r_code_harness_protocol::IpcEndpoint;
+
+const PRE_V1_HARNESS_DIR: &str = "harness-v2";
 
 /// Development or production identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,9 +42,20 @@ impl ProfileFlavor {
         }
     }
 
-    /// Default credential service name for the v2 credential service. These
-    /// are distinct from the legacy v1 service names.
+    /// Default credential service name for the Harness v1 credential service. These are distinct
+    /// from the pre-Harness application service names.
     pub fn credential_service(self) -> &'static str {
+        match self {
+            ProfileFlavor::Development => "r-code-harness-v1-dev",
+            ProfileFlavor::Production => "r-code-harness-v1",
+        }
+    }
+
+    /// Credential service used by the temporary pre-v1 Harness build. This is
+    /// exposed only inside the runtime so the settings store can perform its
+    /// one-time, lazy credential migration without making the old namespace a
+    /// supported public configuration surface.
+    pub(crate) fn pre_v1_credential_service(self) -> &'static str {
         match self {
             ProfileFlavor::Development => "r-code-harness-v2-dev",
             ProfileFlavor::Production => "r-code-harness-v2",
@@ -95,6 +108,10 @@ pub struct LaunchOptions {
     /// Endpoint-name override for the daemon IPC (tests isolating parallel
     /// profiles on one machine). None derives from the flavor.
     pub ipc_name: Option<String>,
+    /// Host-owned directory holding the guardian/probe helper binaries
+    /// (P24H). None falls back to the daemon executable's own directory —
+    /// PATH is never searched.
+    pub helper_dir: Option<PathBuf>,
 }
 
 impl LaunchOptions {
@@ -103,6 +120,7 @@ impl LaunchOptions {
             flavor,
             data_root: None,
             ipc_name: None,
+            helper_dir: None,
         }
     }
 
@@ -116,6 +134,12 @@ impl LaunchOptions {
         self
     }
 
+    /// Bind the host-owned helper directory (P24H).
+    pub fn with_helper_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.helper_dir = Some(dir.into());
+        self
+    }
+
     /// Parse `--profile <flavor>` and `--data-root <path>` from an argument
     /// list. When `default` is None the flavor must be explicit.
     pub fn parse_args_with_default(
@@ -125,6 +149,7 @@ impl LaunchOptions {
         let mut flavor = default;
         let mut data_root: Option<PathBuf> = None;
         let mut ipc_name: Option<String> = None;
+        let mut helper_dir: Option<PathBuf> = None;
         let mut index = 0;
         while index < args.len() {
             let arg = args[index].as_str();
@@ -153,6 +178,13 @@ impl LaunchOptions {
                     ipc_name = Some(value.clone());
                     index += 2;
                 }
+                "--helper-dir" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or(ProfileError::MissingValue("--helper-dir"))?;
+                    helper_dir = Some(PathBuf::from(value));
+                    index += 2;
+                }
                 other => return Err(ProfileError::UnexpectedArgument(other.to_string())),
             }
         }
@@ -160,6 +192,7 @@ impl LaunchOptions {
             flavor: flavor.ok_or(ProfileError::AmbiguousFlavor)?,
             data_root,
             ipc_name,
+            helper_dir,
         })
     }
 
@@ -175,6 +208,7 @@ pub struct RuntimeProfile {
     flavor: ProfileFlavor,
     data_root: PathBuf,
     ipc_name: Option<String>,
+    helper_dir: Option<PathBuf>,
 }
 
 impl RuntimeProfile {
@@ -191,6 +225,7 @@ impl RuntimeProfile {
             flavor: options.flavor,
             data_root,
             ipc_name: options.ipc_name.clone(),
+            helper_dir: options.helper_dir.clone(),
         })
     }
 
@@ -203,43 +238,57 @@ impl RuntimeProfile {
         self.ipc_name.as_deref()
     }
 
+    /// The host-owned helper directory bound at launch, when one was
+    /// supplied (P24H). None means the helper resolver falls back to the
+    /// daemon executable's own directory.
+    pub fn helper_dir(&self) -> Option<&Path> {
+        self.helper_dir.as_deref()
+    }
+
     pub fn data_root(&self) -> &Path {
         &self.data_root
     }
 
     /// Stable identity string; clients use it to discover the same daemon.
     pub fn profile_id(&self) -> String {
-        format!("harness-v2/{}", self.flavor.as_str())
+        format!("harness-v1/{}", self.flavor.as_str())
     }
 
-    /// Root of all v2 state: `<data_root>/harness-v2`. Legacy data in
-    /// `data_root` is untouched.
-    pub fn harness_v2_root(&self) -> PathBuf {
-        self.data_root.join("harness-v2")
+    /// Root of all Harness v1 state: `<data_root>/harness-v1`.
+    pub fn harness_v1_root(&self) -> PathBuf {
+        self.data_root.join("harness-v1")
+    }
+
+    fn pre_v1_harness_root(&self) -> PathBuf {
+        self.data_root.join(PRE_V1_HARNESS_DIR)
     }
 
     pub fn database_path(&self) -> PathBuf {
-        self.harness_v2_root().join("tasks.sqlite3")
+        self.harness_v1_root().join("tasks.sqlite3")
     }
 
     pub fn plugins_root(&self) -> PathBuf {
-        self.harness_v2_root().join("plugins")
+        self.harness_v1_root().join("plugins")
     }
 
     pub fn blobs_root(&self) -> PathBuf {
-        self.harness_v2_root().join("blobs")
+        self.harness_v1_root().join("blobs")
     }
 
     pub fn workspaces_root(&self) -> PathBuf {
-        self.harness_v2_root().join("workspaces")
+        self.harness_v1_root().join("workspaces")
     }
 
     pub fn checkpoints_root(&self) -> PathBuf {
-        self.harness_v2_root().join("checkpoints")
+        self.harness_v1_root().join("checkpoints")
     }
 
     pub fn credential_service(&self) -> &'static str {
         self.flavor.credential_service()
+    }
+
+    pub(crate) fn pre_v1_credential_service(&self) -> &'static str {
+        self.flavor.pre_v1_credential_service()
     }
 
     /// OS-local IPC endpoint for the profile daemon.
@@ -250,23 +299,39 @@ impl RuntimeProfile {
             .unwrap_or_else(|| self.flavor.as_str().to_string());
         if cfg!(windows) {
             IpcEndpoint::NamedPipe {
-                name: format!(r"\\.\pipe\r-code-harness-v2-{suffix}"),
+                name: format!(r"\\.\pipe\r-code-harness-v1-{suffix}"),
             }
         } else {
             let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| std::env::temp_dir());
             IpcEndpoint::UnixSocket {
-                path: runtime_dir.join(format!("r-code-harness-v2-{suffix}.sock")),
+                path: runtime_dir.join(format!("r-code-harness-v1-{suffix}.sock")),
             }
         }
     }
 
-    /// Create the v2 directory layout. Only ever writes below
-    /// `harness-v2`; idempotent.
+    /// Create the Harness v1 directory layout. A pre-v1 development build used the temporary
+    /// pre-v1 directory label for this same schema; when v1 does not exist yet, rename that
+    /// complete tree in place before opening any database so tasks, settings, plugins and remote
+    /// identity remain intact.
     pub fn ensure_layout(&self) -> io::Result<()> {
+        let root = self.harness_v1_root();
+        let pre_v1_root = self.pre_v1_harness_root();
+        if !root.exists() && pre_v1_root.exists() {
+            std::fs::rename(&pre_v1_root, &root).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "migrate {} to {}: {error}",
+                        pre_v1_root.display(),
+                        root.display()
+                    ),
+                )
+            })?;
+        }
         for dir in [
-            self.harness_v2_root(),
+            root,
             self.plugins_root(),
             self.blobs_root(),
             self.workspaces_root(),

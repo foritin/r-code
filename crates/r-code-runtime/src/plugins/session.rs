@@ -3,7 +3,13 @@
 //! The session wires the transport's callback surface into the
 //! [`HostRouter`], forwards lifecycle requests (start/resume/steer/cancel)
 //! and enforces generation fencing on every outbound call. It implements the
-//! kernel's `HarnessSession` port.
+//! kernel's `HarnessSession` port. Since P23 the process it binds is a
+//! supervised one: [`crate::plugins::transport::spawn_plugin`] refuses a launch
+//! whose offline/no-workspace material, containment policy or journal record is
+//! not in order, so a session never exists over an unmanaged child, and the
+//! handshake this layer runs only begins after that child was created inside
+//! its containment, recorded `Running` and resumed. None of the framing, EOF
+//! or write/read semantics this layer depends on changed.
 
 use crate::plugins::router::HostRouter;
 use crate::plugins::transport::{spawn_plugin, PluginCallbacks, PluginProcess, TransportLimits};

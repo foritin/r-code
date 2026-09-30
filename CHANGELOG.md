@@ -16,8 +16,13 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - R-Code CLI（TUI）会话树：`/fork` 从任意历史消息分叉重发（文本回填编辑器可改写）、`/tree` 分支树导航与切换、`/clone` 克隆当前会话为新会话。
 - R-Code CLI（TUI）`/login`：Codex / ChatGPT 账号 OAuth 登录（浏览器或设备码，委托 Codex CLI 在独立终端窗口完成）；其余模型服务保持 API key 模式（`/setup`）。
 
+### Changed
+
+- 可插拔 Harness 固化为唯一的 v1：代码模块、`V1Store`、桌面桥、Tauri 命令、Profile/IPC、验收脚本与活跃文档统一使用 v1 命名，不再并列保留 v2 标识。曾使用临时 pre-v1 名称的开发版本会在首次启动 v1 时先停止旧 daemon，再原地迁移任务、设置、插件、远程身份与凭据，不创建第二套数据。
+
 ### Fixed
 
+- 协作 Prompt 贯通 Harness v1：主 Agent 采用新的 R-Code 内置协作基线；设置页保存的全局 Prompt 与项目“追加 / 覆盖”规则会在创建任务及每次发送前重新解析，并作为真实 system prompt 进入 Native 模型请求。Prompt 仍可编辑，也可一键恢复随应用发布的默认值。
 - 模型流式输出跨 TCP 分片切开多字节字符（顿号/emoji 等）被逐片 lossy 解码成 `�` 并随工具入参永久写入计划/会话存储的问题：OpenAI 兼容与 Responses 两套 SSE 解析器改为字节缓冲、按完整行边界解码（Anthropic 解析器此前已是正确实现）。
 - 「当前任务步骤」浮层漂移：长步骤列表的浮层曾被按 `scrollHeight`（忽略列表 46vh 限高的内容全高）定位，空间判定误判后贴到视口顶部、与锚点按钮之间悬空数百像素；现在按解除内联约束后的实际布局尺寸定位，并在入场动画结束后补一次重定位，浮层紧贴锚点正上方。
 - R-Code CLI（TUI）浮层闪关：Windows 下按键 Press+Release 双事件使模型/思考等选择器在打开瞬间被 Release 事件关闭。

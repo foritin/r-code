@@ -1,0 +1,166 @@
+{
+  "objective": "Activate one approved R-Code WorkUnit safely in the current checkout and prove edit, verification, review and CAS rollback end to end.",
+  "end_state": "After exact plan approval, one WorkUnit can execute only within its approved paths, every mutation has a durable before/after journal, required checks bind host evidence to the candidate, successful work reaches ReviewReady, and accept or reject completes without overwriting later user edits.",
+  "non_goals": [
+    "Parallel WorkUnit execution",
+    "Child-agent execution",
+    "Uncontrolled shell or network access",
+    "Git index, commit, push, ref or submodule writes"
+  ],
+  "environment": {
+    "language": "Rust 2021 plus TypeScript frontend",
+    "runtime": "Rust 1.88, Tokio, Tauri 2, Node 20",
+    "package_manager": "cargo and npm",
+    "os": "Windows development host; cross-platform contracts",
+    "test_command": "rtk cargo test --workspace --all-features -- --test-threads=1",
+    "notes": "Continue on the dirty P-GATE baseline. Use snapshots, no commits or pushes, and preserve the two declared baseline failures."
+  },
+  "components": [
+    {"id": "leases", "name": "Durable path ownership", "description": "Approved logical/physical path scopes with fencing and recovery."},
+    {"id": "mutation", "name": "Mutation journal", "description": "Prepared/applied/receipted file effects with CAS before-images."},
+    {"id": "execution", "name": "Sequential WorkUnit execution", "description": "One approved unit dispatched with an Execution RunSnapshot."},
+    {"id": "verification", "name": "Host verification", "description": "Candidate-bound checks and immutable evidence."},
+    {"id": "review", "name": "Review and rollback", "description": "ReviewReady acceptance, rejection and explicit Unverified override."}
+  ],
+  "open_questions": [],
+  "tasks": [
+    {
+      "id": "M01",
+      "title": "Persist authorized path leases and mutation operations",
+      "serves": ["leases", "mutation"],
+      "description": "Define approved WorkUnit effect scopes and durable lease/operation records with logical and physical path identity.",
+      "files": [
+        {"path": "crates/r-code-harness-protocol/src/services.rs", "action": "modify", "what": "Add additive WorkUnit read/write/effect scopes."},
+        {"path": "crates/r-code-kernel/src/task.rs", "action": "modify", "what": "Carry approved effect scopes into WorkUnits."},
+        {"path": "crates/r-code-kernel/src/plans.rs", "action": "modify", "what": "Validate canonical effect paths before hashing a PlanRevision."},
+        {"path": "crates/r-code-runtime/src/services/workspaces.rs", "action": "modify", "what": "Resolve logical and physical path identities."},
+        {"path": "crates/r-code-runtime/Cargo.toml", "action": "modify", "what": "Enable target-specific filesystem identity APIs."},
+        {"path": "crates/r-code-store/src/v1/schema.rs", "action": "modify", "what": "Add durable leases and mutation operation tables."},
+        {"path": "crates/r-code-store/src/v1/mutations.rs", "action": "create", "what": "Implement fenced lease and operation repositories."},
+        {"path": "crates/r-code-store/src/v1/mod.rs", "action": "modify", "what": "Expose mutation persistence."},
+        {"path": "crates/r-code-store/src/v1/plans.rs", "action": "modify", "what": "Populate effect defaults in legacy plan adapters."},
+        {"path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Populate additive effect scopes in generated WorkUnits."}
+      ],
+      "subtasks": [
+        {"id": "M01.1", "description": "Normalize approved read/write paths and validate WorkUnit scopes inside the checkout."},
+        {"id": "M01.2", "description": "Acquire/release durable shared, exclusive and repository leases with monotonic fencing epochs."},
+        {"id": "M01.3", "description": "Persist Prepared, Applied and Receipted operations plus before/after SHA-256 and CAS blobs."}
+      ],
+      "tests": [
+        {"description": "Path alias, traversal, symlink/junction and nonexistent-output parent identities fail closed.", "kind": "integration"},
+        {"description": "Lease conflict, stale fencing, restart and idempotent operation replay are deterministic.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "A lease can never authorize a path outside the exact approved Plan scope.",
+        "Every mutation operation has one durable ownership epoch and recoverable state.",
+        "Stale owners cannot complete or receipt newer operations."
+      ],
+      "depends_on": [],
+      "estimated_loc": 400
+    },
+    {
+      "id": "M02",
+      "title": "Execute mediated file mutations through the journal",
+      "serves": ["leases", "mutation", "execution"],
+      "description": "Expose approved create/edit/delete/apply-patch tools rooted at the current checkout and record CAS-safe deltas.",
+      "files": [
+        {"path": "crates/r-code-harness-protocol/src/services.rs", "action": "modify", "what": "Carry attempt-stable operation keys into ToolService calls."},
+        {"path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "Persist indeterminate receipts and reconcile mediated tool retries."},
+        {"path": "crates/r-code-runtime/src/services/tools.rs", "action": "modify", "what": "Build an execution ToolService bound to approved paths."},
+        {"path": "crates/r-code-runtime/src/services/mutations.rs", "action": "create", "what": "Coordinate leases, before-images, file effects and receipts."},
+        {"path": "crates/r-code-runtime/src/services/artifacts.rs", "action": "modify", "what": "Resolve durable CAS references used by mutation recovery."},
+        {"path": "crates/r-code-runtime/src/services/mod.rs", "action": "modify", "what": "Expose mutation execution."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Select execution tools only for an approved Execution snapshot."},
+        {"path": "crates/r-code-store/src/v1/mutations.rs", "action": "modify", "what": "Persist intended before/after identities before file effects."},
+        {"path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Submit Implementation proposals for execution runs."}
+      ],
+      "subtasks": [
+        {"id": "M02.1", "description": "Resolve the approved WorkUnit and acquire its write leases before tool discovery."},
+        {"id": "M02.2", "description": "Journal before-images before each mediated file effect and persist measured after-images."},
+        {"id": "M02.3", "description": "Reconcile Applied-without-Receipt operations without repeating their effects."}
+      ],
+      "tests": [
+        {"description": "Approved edits succeed; out-of-scope and guessed writes are denied before touching disk.", "kind": "e2e"},
+        {"description": "Fault injection at every operation boundary recovers without duplicate writes.", "kind": "integration"},
+        {"description": "Concurrent external edits create Conflict and are never overwritten.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "Every file write is mediated by the durable mutation journal.",
+        "The current checkout is the only writable root.",
+        "Git metadata and unapproved ignored files remain unwritable."
+      ],
+      "depends_on": ["M01"],
+      "estimated_loc": 400
+    },
+    {
+      "id": "M03",
+      "title": "Dispatch one WorkUnit and bind verification evidence",
+      "serves": ["execution", "verification"],
+      "description": "Create an Execution RunSnapshot from the active approval, run one dependency-ready WorkUnit, capture its Candidate and execute required host checks.",
+      "files": [
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Dispatch one approved unit and build an Execution snapshot."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Project Verifying and RepairRequired task phases."},
+        {"path": "crates/r-code-runtime/src/plugins/transport.rs", "action": "modify", "what": "Expose bounded confirmation that the main Harness process exited before Candidate verification can proceed."},
+        {"path": "crates/r-code-runtime/src/services/run_snapshots.rs", "action": "modify", "what": "Build approval-bound Execution snapshots with WorkUnit identity."},
+        {"path": "crates/r-code-runtime/src/services/workspaces.rs", "action": "modify", "what": "Capture post-mutation candidates for verification."},
+        {"path": "crates/r-code-runtime/src/services/verification.rs", "action": "modify", "what": "Produce complete candidate/environment-bound evidence."},
+        {"path": "crates/r-code-store/src/v1/schema.rs", "action": "modify", "what": "Separate immutable check definitions from evidence rows."},
+        {"path": "crates/r-code-store/src/v1/journal.rs", "action": "modify", "what": "Apply idempotent additive verification migrations when opening an existing v1 store."},
+        {"path": "crates/r-code-store/src/v1/runs.rs", "action": "modify", "what": "Revalidate that an Execution/Repair snapshot names a WorkUnit in the exact currently approved Plan inside the persistence transaction."},
+        {"path": "crates/r-code-store/src/v1/verification.rs", "action": "modify", "what": "Persist definitions and immutable evidence separately."},
+        {"path": "crates/r-code-kernel/src/task.rs", "action": "modify", "what": "Transition through Verifying and RepairRequired."},
+        {"path": "crates/r-code-evals/src/harness_conformance.rs", "action": "modify", "what": "Mechanically populate the additive Evidence identity fields in the existing conformance fixture."}
+      ],
+      "subtasks": [
+        {"id": "M03.1", "description": "Choose exactly one dependency-ready WorkUnit and mark its attempt durable."},
+        {"id": "M03.2", "description": "Capture the post-mutation CandidateManifest and invalidate evidence on drift."},
+        {"id": "M03.3", "description": "Run required definitions, persist Evidence and classify pass/fail/unavailable."}
+      ],
+      "tests": [
+        {"description": "Approved execution survives daemon restart and never dispatches twice.", "kind": "e2e"},
+        {"description": "Passed checks reach ReviewReady; failed or unavailable checks reach RepairRequired.", "kind": "integration"},
+        {"description": "Candidate or input drift makes evidence stale.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "Execution snapshots always reference the active exact plan approval.",
+        "Required checks are host-owned and bound to candidate plus environment.",
+        "ReviewReady is impossible while checks or descendant processes remain active."
+      ],
+      "depends_on": ["M02"],
+      "estimated_loc": 400
+    },
+    {
+      "id": "M04",
+      "title": "Complete ReviewReady acceptance and CAS rollback",
+      "serves": ["review", "mutation", "verification"],
+      "description": "Expose candidate changes and evidence, accept verified work, reject through CAS rollback, and audit explicit Unverified acceptance.",
+      "files": [
+        {"path": "crates/r-code-runtime/src/services/review.rs", "action": "modify", "what": "Use SHA-256 and durable mutation records for review/rollback."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Expose review get, accept, reject and Unverified override."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Add daemon review RPCs."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Mechanically project the additive VerifiedAccepted and UnverifiedAccepted terminal verdict labels."},
+        {"path": "crates/r-code-runtime/src/services/workspaces.rs", "action": "modify", "what": "Bind Candidate identity and live revalidation to stable physical file identities so same-byte alias replacement is stale."},
+        {"path": "crates/r-code-store/src/v1/mutations.rs", "action": "modify", "what": "Enumerate exact-attempt Mutation Journal operations in stable order for Review projection and reverse CAS rollback."},
+        {"path": "crates/r-code-kernel/src/task.rs", "action": "modify", "what": "Finalize VerifiedAccepted or audited UnverifiedAccepted."}
+      ],
+      "subtasks": [
+        {"id": "M04.1", "description": "Project WorkUnit-owned diffs, Candidate identity and verification evidence."},
+        {"id": "M04.2", "description": "Accept verified candidate without Git mutation."},
+        {"id": "M04.3", "description": "Reject by CAS rollback or surface Conflict; persist Unverified actor/reason/check list."}
+      ],
+      "tests": [
+        {"description": "Edit, check, ReviewReady and accept completes VerifiedAccepted without commit.", "kind": "e2e"},
+        {"description": "Reject restores only unchanged agent after-images and preserves later user edits.", "kind": "e2e"},
+        {"description": "Unverified override requires actor, reason and failed/missing checks and is immutable.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "M-GATE is deterministic with a fake Provider and one WorkUnit.",
+        "Rollback never overwrites bytes that no longer match the recorded after hash.",
+        "No review action stages, commits, pushes or modifies Git refs."
+      ],
+      "depends_on": ["M03"],
+      "estimated_loc": 400
+    }
+  ],
+  "order": ["M01", "M02", "M03", "M04"]
+}

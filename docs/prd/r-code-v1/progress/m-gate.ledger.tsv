@@ -1,0 +1,30 @@
+iter	task	phase	tests	quality	pass	note
+0	-	baseline	P-GATE retained; declared plan_schema/i18n failures only	-	-	M-GATE starts from the passing T01-T08B baseline
+1	M01	engineer	-	-	-	Added canonical effect scopes, path identity, durable leases and fenced mutation states
+1	M01	qa	25/27	min4	no	Windows case-folding and ancestor/descendant scope overlap required refinement
+2	M01	engineer	-	-	-	Refined case-insensitive canonical hashes and component-aware overlap checks
+2	M01	qa	613/613	min4	yes	Targeted and affected regressions, Clippy, formatting and quality pass
+2	M01	keep	613/613	min4	yes	Durable authorized lease and mutation foundation kept
+3	M02	engineer	-	-	-	Added operation-keyed mediated writes with pre-effect CAS intent and crash reconciliation
+3	M02	qa	9/10	min4	no	Execution activation accepted an approved WorkUnit with empty write scope
+4	M02	engineer	-	-	-	Rejected empty write scope before approval/service/lease construction
+4	M02	qa	437/437	min4	yes	Mutation faults, CAS recovery, route/tool boundaries, Native modes and cumulative gates pass
+4	M02	keep	437/437	min4	yes	Journal-mediated single-file mutation service kept; Ready dispatch remains off
+5	M03	engineer	-	-	-	Added explicit single-WorkUnit execution, host Candidate capture, immutable evidence and ReviewReady/RepairRequired gates
+5	M03	qa	23/27	min3	no	Rejected forged ArtifactRef, missing approved WorkUnit membership, over-redacted diagnostics and canonical transcript divergence
+6	M03	engineer	-	-	-	Hardened evidence/snapshot persistence, diagnostics and canonical execution input
+6	M03	qa	30/31	min3	no	Approve-immediate-send could strand durable input behind an exiting planning drive
+7	M03	engineer	-	-	-	Made Ready handoff queue-aware and slot-serialized
+7	M03	qa	31/32	min3	no	CAS-losing RunManager could mutate the winning active attempt through generic failure cleanup
+8	M03	engineer	-	-	-	Made failure settlement attempt-owned and registered ownership before Harness startup
+8	M03	qa	533 cumulative plus targeted	min3	no	Pending pre-dispatch failures were not audited or acknowledged; cancellation recovery exposed deterministic runtime regressions
+9	M03	engineer	-	-	-	Restored safe Pending/Ready failure cleanup and bounded process-backed cancellation
+9	M03	qa	conversation and pipeline targeted	min3	no	Late cancel could truncate a naturally completed ReviewReady transcript and stale drive could reverse Cancelled
+10	M03	engineer	-	-	-	Fenced cancellation ordering, retry ownership and transcript rollback
+10	M03	qa	835/835	min3	yes	All targeted, affected cumulative, workspace compile, Clippy and quality gates pass
+10	M03	keep	835/835	min3	yes	Exact-approved single WorkUnit reaches ReviewReady or RepairRequired with durable evidence and recoverable failure ownership
+11	M04	engineer	-	-	-	Added exact Review projection, terminal accept/override, durable inverse-journal rollback and daemon review RPCs
+11	M04	qa	13/18	min3	no	Found final-candidate TOCTOU, same-byte physical replacement, post-lease partial rollback, inverse recovery/audit and ReviewReady override gaps
+12	M04	engineer	-	-	-	Bound Candidate physical identity, added final recapture and made inverse rollback/review override fully recoverable and exact
+12	M04	qa	855/855	min3	yes	Review/rollback/override targeted, cumulative, workspace compile, Clippy, formatting and quality gates pass
+12	M04	keep	855/855	min3	yes	M-GATE kept: exact ReviewReady accept/reject/override preserves user edits and never mutates Git metadata

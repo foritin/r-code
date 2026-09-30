@@ -1,0 +1,314 @@
+{
+  "objective": "Connect the existing R-Code v1 platform components into a durable, provider-bound, read-only PRD planning path whose configuration cannot drift during a run.",
+  "end_state": "A GUI-created task preserves its selected provider/model and current checkout, the daemon persists an immutable planning RunSnapshot, the model broker preserves system and tool semantics, a plan is persisted and approved by exact revision, and P-GATE proves that no write-capable tool is reachable before approval.",
+  "non_goals": [
+    "Write-capable shell activation before M-GATE",
+    "Parallel WorkUnit or child-agent execution before O-GATE",
+    "Automatic Git staging, commits, pushes, index writes or ref writes"
+  ],
+  "environment": {
+    "language": "Rust 2021 plus TypeScript frontend",
+    "runtime": "Rust 1.88, Tokio, Tauri 2, Node 20",
+    "package_manager": "cargo and npm",
+    "os": "Windows development host; Windows/macOS/Linux product targets",
+    "test_command": "rtk cargo test --workspace --all-features -- --test-threads=1",
+    "notes": "The working tree already contains user-owned Harness v1, prompt and provider changes. Use snapshots and never reset, bulk-format, commit or push."
+  },
+  "components": [
+    {"id": "run-snapshot", "name": "Immutable run identity", "description": "A content-addressed configuration snapshot bound to every attempt."},
+    {"id": "settings", "name": "Daemon settings authority", "description": "Revisioned provider metadata and host-owned credentials."},
+    {"id": "workspace", "name": "Current checkout binding", "description": "Canonical task workspace identity and scoped tools."},
+    {"id": "model", "name": "Canonical transcript and broker", "description": "Correct system, assistant and tool-result projection."},
+    {"id": "plan", "name": "Plan revision and approval", "description": "Read-only planning with exact revision approval."},
+    {"id": "client", "name": "GUI task route", "description": "Provider, model, engine and workspace survive task creation."}
+  ],
+  "open_questions": [],
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "Persist immutable planning and execution run snapshots",
+      "serves": ["run-snapshot"],
+      "description": "Add typed snapshot contracts and V1Store persistence, keeping planning snapshots plan-less while execution snapshots require an exact approval reference.",
+      "files": [
+        {"path": "crates/r-code-kernel/src/task.rs", "action": "modify", "what": "Define snapshot contracts and bind Attempt to snapshot identity."},
+        {"path": "crates/r-code-store/src/v1/schema.rs", "action": "modify", "what": "Add run snapshot schema and migration metadata."},
+        {"path": "crates/r-code-store/src/v1/runs.rs", "action": "create", "what": "Persist and load immutable snapshots."},
+        {"path": "crates/r-code-store/src/v1/mod.rs", "action": "modify", "what": "Expose the run snapshot repository."}
+      ],
+      "subtasks": [
+        {"id": "T01.1", "description": "Define provider, prompt, workspace, permission and plan snapshot references with deterministic SHA-256 identity."},
+        {"id": "T01.2", "description": "Persist snapshots insert-only and reject the same id with different content."},
+        {"id": "T01.3", "description": "Preserve serde compatibility for legacy Attempt rows while requiring new attempts to reference a snapshot."}
+      ],
+      "tests": [
+        {"description": "Snapshot canonical hash is deterministic and changes for every material input.", "kind": "unit"},
+        {"description": "V1Store round-trips snapshots and rejects conflicting reuse.", "kind": "integration"},
+        {"description": "Existing v1 databases migrate without losing tasks or events.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "Planning snapshots allow no plan revision; execution and repair snapshots require an approval reference.",
+        "Run snapshots are immutable and content-addressed.",
+        "No credential material is serialized in a snapshot."
+      ],
+      "depends_on": [],
+      "estimated_loc": 360
+    },
+    {
+      "id": "T02",
+      "title": "Make daemon provider settings revisioned and snapshot-resolvable",
+      "serves": ["settings", "run-snapshot"],
+      "description": "Add atomic settings revisions, explicit corruption errors and a credential-free provider route snapshot resolved once per run.",
+      "files": [
+        {"path": "crates/r-code-runtime/src/services/settings_store.rs", "action": "modify", "what": "CAS revisions, atomic writes, fail-closed loads and route snapshot resolution."},
+        {"path": "crates/r-code-runtime/src/profile.rs", "action": "modify", "what": "Supply the profile credential namespace."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Compose settings with the resolved runtime profile."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Expose checked reads and revision-aware mutation RPCs."}
+      ],
+      "subtasks": [
+        {"id": "T02.1", "description": "Add revision and expected-revision CAS to V1Settings."},
+        {"id": "T02.2", "description": "Replace truncate-write and silent parse fallback with atomic replace and typed errors."},
+        {"id": "T02.3", "description": "Resolve provider/model/base URL/protocol/capability metadata without exposing credentials."}
+      ],
+      "tests": [
+        {"description": "Concurrent stale settings writes are rejected.", "kind": "unit"},
+        {"description": "Corrupt JSON fails closed and the previous file survives interrupted replacement.", "kind": "unit"},
+        {"description": "Changing settings after resolution does not mutate a route snapshot.", "kind": "unit"}
+      ],
+      "acceptance_criteria": [
+        "Daemon settings are revisioned and written atomically.",
+        "Corruption is distinguishable from an empty configuration.",
+        "Resolved route metadata contains no API key.",
+        "Production composition uses the profile credential namespace and daemon RPCs preserve checked/CAS semantics."
+      ],
+      "depends_on": ["T01"],
+      "estimated_loc": 300
+    },
+    {
+      "id": "T03",
+      "title": "Freeze the selected provider, prompt and checkout before dispatch",
+      "serves": ["run-snapshot", "settings", "workspace"],
+      "description": "Construct and persist the planning snapshot before run.started, then derive harness configuration from that snapshot only.",
+      "files": [
+        {"path": "crates/r-code-runtime/src/services/workspaces.rs", "action": "modify", "what": "Expose a serializable current-checkout identity."},
+        {"path": "crates/r-code-runtime/src/services/settings_store.rs", "action": "modify", "what": "Resolve one provider instance and credential-free route for the run."},
+        {"path": "crates/r-code-runtime/src/services/models.rs", "action": "modify", "what": "Provide a frozen single-route resolver for a run."},
+        {"path": "crates/r-code-runtime/src/services/run_snapshots.rs", "action": "create", "what": "Build frozen snapshots outside the run orchestration loop."},
+        {"path": "crates/r-code-runtime/src/services/mod.rs", "action": "modify", "what": "Expose the snapshot builder module."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Build, persist and consume one immutable snapshot per run."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Project credential-free run snapshot metadata."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Disable injected-model fallback for every real daemon profile."},
+        {"path": "crates/r-code-store/src/v1/runs.rs", "action": "modify", "what": "Query the latest snapshot metadata for task projections."},
+        {"path": "crates/r-code-store/src/v1/journal.rs", "action": "modify", "what": "Add revision-fenced task saves and checkpoint handoff between attempt namespaces."}
+      ],
+      "subtasks": [
+        {"id": "T03.1", "description": "Canonicalize the task workspace and reject invalid or missing bindings for implementation work."},
+        {"id": "T03.2", "description": "Freeze route, prompt, package, tool catalog, permissions and workspace before starting the plugin."},
+        {"id": "T03.3", "description": "Use the persisted snapshot for checkpoint resume and all model calls in the run."}
+      ],
+      "tests": [
+        {"description": "Provider and prompt changes during a run affect only the next run.", "kind": "integration"},
+        {"description": "Checkpoint resume preserves the original snapshot id.", "kind": "integration"},
+        {"description": "The run view exposes metadata but never credentials.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "run.started is never emitted before the snapshot is durable.",
+        "No live settings read can change an active run.",
+        "The selected current checkout, not the profile workspaces directory, is the snapshot workspace."
+      ],
+      "depends_on": ["T02"],
+      "estimated_loc": 380
+    },
+    {
+      "id": "T04",
+      "title": "Carry GUI provider and engine selection into the daemon task",
+      "serves": ["client", "settings", "run-snapshot"],
+      "description": "Remove the create-task parameter sink and persist provider/model/engine route preferences through the v1 bridge.",
+      "files": [
+        {"path": "crates/r-code-kernel/src/task.rs", "action": "modify", "what": "Persist an explicit provider-neutral task model route."},
+        {"path": "crates/r-code-runtime/src/services/run_snapshots.rs", "action": "modify", "what": "Freeze HostProvider and harness-managed routes correctly."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Create a task with title, route, preferences and harness selection."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Accept additive route fields in task create/preferences and project them."},
+        {"path": "crates/r-code-store/src/v1/journal.rs", "action": "modify", "what": "Commit task state, route event and selection package pin atomically."},
+        {"path": "src-tauri/src/tauri_commands.rs", "action": "modify", "what": "Forward provider and engine values."},
+        {"path": "src-tauri/src/harness_v1_chat.rs", "action": "modify", "what": "Encode route preferences in daemon task creation."},
+        {"path": "src-tauri/src/harness_v1_routes.rs", "action": "create", "what": "Keep daemon-backed route creation and mutation logic focused."},
+        {"path": "src-tauri/src/lib.rs", "action": "modify", "what": "Register the focused v1 route bridge module."},
+        {"path": "crates/r-code-client/src/lib.rs", "action": "modify", "what": "Expose the compatible v1 task-create fields if the typed client requires them."},
+        {"path": "src-tauri/frontend/src/lib/ipc.ts", "action": "modify", "what": "Send concrete model and inference in the initial create request."},
+        {"path": "src-tauri/frontend/src/components/scenes/HomeScene.tsx", "action": "modify", "what": "Remove legacy post-create model/inference writes."}
+      ],
+      "subtasks": [
+        {"id": "T04.1", "description": "Extend the v1 create request additively without breaking old clients."},
+        {"id": "T04.2", "description": "Validate HostProvider versus CodexAccount route combinations."},
+        {"id": "T04.3", "description": "Return the persisted selection in task projections."}
+      ],
+      "tests": [
+        {"description": "DeepSeek selection survives GUI create, daemon persistence and task reload.", "kind": "integration"},
+        {"description": "Old create requests still use daemon defaults.", "kind": "integration"},
+        {"description": "Invalid provider/engine combinations fail before a run starts.", "kind": "unit"}
+      ],
+      "acceptance_criteria": [
+        "cmd_task_create no longer discards provider_name or agent_engine.",
+        "Task creation is wire-compatible with existing v1 clients.",
+        "The next run snapshot uses the task-bound route."
+      ],
+      "depends_on": ["T03"],
+      "estimated_loc": 260
+    },
+    {
+      "id": "T05",
+      "title": "Preserve canonical transcript roles in ModelBroker",
+      "serves": ["model"],
+      "description": "Project the wire system message into CompletionRequest.system and tool results into provider-compatible user tool-result blocks while keeping assistant tool calls intact.",
+      "files": [
+        {"path": "crates/r-code-harness-protocol/src/services.rs", "action": "modify", "what": "Add the canonical developer role additively."},
+        {"path": "crates/r-code-runtime/src/services/models.rs", "action": "modify", "what": "Correct request projection and provider-aware output limits."},
+        {"path": "plugins/native/src/request_projection.rs", "action": "modify", "what": "Reject unknown roles and keep the canonical transcript stable."},
+        {"path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Propagate transcript projection errors without starting a model request."}
+      ],
+      "subtasks": [
+        {"id": "T05.1", "description": "Extract system blocks into the provider system field without duplicating them as user messages."},
+        {"id": "T05.2", "description": "Map tool results to user messages containing ToolResult blocks."},
+        {"id": "T05.3", "description": "Derive max tokens and inference from the frozen request instead of a hard-coded constant."}
+      ],
+      "tests": [
+        {"description": "Golden requests preserve system, user, assistant tool calls and tool results.", "kind": "unit"},
+        {"description": "DeepSeek/OpenAI/Anthropic fake adapters receive equivalent canonical turns.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "System content is sent exactly once through CompletionRequest.system.",
+        "Tool results are never projected as assistant messages.",
+        "Unknown transcript roles fail closed rather than becoming assistant."
+      ],
+      "depends_on": ["T03"],
+      "estimated_loc": 220
+    },
+    {
+      "id": "T06",
+      "title": "Persist exact PlanRevision approvals",
+      "serves": ["plan", "run-snapshot"],
+      "description": "Promote plan JSON from review-key storage into explicit immutable revisions and persist exact-hash approval records separately from effect approvals.",
+      "files": [
+        {"path": "crates/r-code-kernel/src/plans.rs", "action": "modify", "what": "Add immutable revision identity and approval lifecycle."},
+        {"path": "crates/r-code-store/src/v1/schema.rs", "action": "modify", "what": "Add plan revisions and approvals tables."},
+        {"path": "crates/r-code-store/src/v1/plans.rs", "action": "modify", "what": "Persist plan and approval atomically."},
+        {"path": "crates/r-code-store/src/v1/runs.rs", "action": "modify", "what": "Validate active exact approval before persisting execution or repair snapshots."}
+      ],
+      "subtasks": [
+        {"id": "T06.1", "description": "Canonicalize and hash plan revisions including route, workspace, scopes, checks and WorkUnits."},
+        {"id": "T06.2", "description": "Approve with actor and expected revision CAS; reject stale or superseded revisions."},
+        {"id": "T06.3", "description": "Make the execution snapshot builder require the valid approval record."}
+      ],
+      "tests": [
+        {"description": "Approve, revise and stale-approval behavior is deterministic.", "kind": "unit"},
+        {"description": "Approval and plan revision survive daemon restart.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "Effect approvals and Plan approvals remain separate aggregates.",
+        "Only the exact approved plan hash can be used by an execution snapshot.",
+        "Changing any material plan input supersedes approval."
+      ],
+      "depends_on": ["T01", "T03"],
+      "estimated_loc": 380
+    },
+    {
+      "id": "T07",
+      "title": "Route plan, context, artifact and verification host services",
+      "serves": ["plan", "model"],
+      "description": "Attach existing context, artifact, plan, question, child and verification services to HostRouter instead of advertising unimplemented methods.",
+      "files": [
+        {"path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "Implement the declared host-service routes."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Construct and attach per-run service instances and child supervision."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Compose task-scoped context and artifact roots."},
+        {"path": "crates/r-code-runtime/src/services/context.rs", "action": "modify", "what": "Synchronize canonical model messages into a durable transcript."},
+        {"path": "crates/r-code-runtime/src/services/artifacts.rs", "action": "modify", "what": "Support task-scoped durable artifact stores."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Compose the production services."}
+      ],
+      "subtasks": [
+        {"id": "T07.1", "description": "Route context and artifact reads/writes with task ownership."},
+        {"id": "T07.2", "description": "Route plan publish/update and durable questions."},
+        {"id": "T07.3", "description": "Route verification and attach ChildSupervisor with the parent permission ceiling."}
+      ],
+      "tests": [
+        {"description": "Every service requested by the native manifest is either operational or absent from negotiated grants.", "kind": "integration"},
+        {"description": "Cross-task context/artifact handles and stale child callbacks are rejected.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "The router has no advertised-but-unimplemented native host service.",
+        "All routes preserve run identity, generation fencing and ownership.",
+        "Verification remains host-owned."
+      ],
+      "depends_on": ["T05", "T06"],
+      "estimated_loc": 400
+    },
+    {
+      "id": "T08A",
+      "title": "Run the durable read-only planning backend",
+      "serves": ["plan", "workspace", "run-snapshot"],
+      "description": "Make unapproved code work execute as a read-only Planning Run, publish an immutable PlanRevision and settle in AwaitingPlanApproval.",
+      "files": [
+        {"path": "crates/r-code-kernel/src/task.rs", "action": "modify", "what": "Add AwaitingPlanApproval and Ready transitions."},
+        {"path": "crates/r-code-harness-protocol/src/services.rs", "action": "modify", "what": "Add a typed PlanPublish reply."},
+        {"path": "crates/r-code-harness-sdk/src/lib.rs", "action": "modify", "what": "Expose PlanPublish to harnesses."},
+        {"path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Publish a deterministic PlanDraft in planning mode."},
+        {"path": "crates/r-code-runtime/src/services/tools.rs", "action": "modify", "what": "Create current-checkout read-only planning tools."},
+        {"path": "crates/r-code-runtime/src/services/run_snapshots.rs", "action": "modify", "what": "Freeze the read-only planning tool catalog and force planning posture."},
+        {"path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "Return typed PlanPublish replies for all pre-approval code tasks."},
+        {"path": "crates/r-code-runtime/src/plugins/catalog.rs", "action": "modify", "what": "Bind pre-v1 compatibility to exact trusted built-in package identity."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Force pre-approval code tasks through planning and AwaitingPlanApproval."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Expose plan read and exact approval operations."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Expose additive plan.get and plan.approve daemon RPCs."},
+        {"path": "crates/r-code-store/src/v1/plans.rs", "action": "modify", "what": "Atomically approve/invalidate a plan and update its task state."},
+        {"path": "crates/r-code-store/src/v1/journal.rs", "action": "modify", "what": "Support task-state CAS within plan approval transactions."}
+        ,{"path": "crates/r-code-store/src/v1/plugins.rs", "action": "modify", "what": "Persist host-owned built-in provenance for exact package digests."}
+      ],
+      "subtasks": [
+        {"id": "T08A.1", "description": "Expose only current-checkout read/list/search tools during Planning."},
+        {"id": "T08A.2", "description": "Publish a deterministic plan and transition to AwaitingPlanApproval."},
+        {"id": "T08A.3", "description": "Approve the exact hash and atomically transition to Ready without starting implementation."}
+      ],
+      "tests": [
+        {"description": "Fake Provider PRD planning reaches AwaitingPlanApproval without changing the workspace.", "kind": "e2e"},
+        {"description": "Write/process/child/verification calls are undiscoverable and guessed calls are denied.", "kind": "e2e"},
+        {"description": "Exact approval survives restart; stale approval is rejected.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "No workspace write occurs before exact PlanRevision approval.",
+        "A published PlanDraft settles in AwaitingPlanApproval, not ReviewReady.",
+        "Approval marks Ready atomically and never auto-starts implementation."
+      ],
+      "depends_on": ["T04", "T07"],
+      "estimated_loc": 400
+    },
+    {
+      "id": "T08B",
+      "title": "Project exact plan approval through the desktop P-GATE",
+      "serves": ["plan", "client"],
+      "description": "Route existing desktop Plan views to daemon v1 and prove the complete GUI PRD-to-Ready vertical slice.",
+      "files": [
+        {"path": "src-tauri/src/tauri_commands.rs", "action": "modify", "what": "Route plan get/create/approve through the v1 bridge."},
+        {"path": "src-tauri/src/harness_v1_routes.rs", "action": "modify", "what": "Project daemon plan state into the existing PlanView."},
+        {"path": "src-tauri/frontend/src/lib/ipc.ts", "action": "modify", "what": "Send the exact PlanRevision hash for approval."},
+        {"path": "src-tauri/frontend/src/components/scenes/HomeScene.tsx", "action": "modify", "what": "Remove the obsolete old-store planCreate step."},
+        {"path": "src-tauri/frontend/src/components/plan/PlanPanel.tsx", "action": "modify", "what": "Hide legacy-only actions for daemon v1 immutable plans."}
+      ],
+      "subtasks": [
+        {"id": "T08B.1", "description": "Project PlanRevision and approval state into the existing desktop PlanView."},
+        {"id": "T08B.2", "description": "Approve using plan.id as the exact revision hash and refresh stale plans."},
+        {"id": "T08B.3", "description": "Prove GUI create, planning, approval and Ready replay after daemon restart."}
+      ],
+      "tests": [
+        {"description": "Desktop Plan get/approve uses daemon data and exact hashes.", "kind": "integration"},
+        {"description": "PRD to plan to approval reaches Ready after restart.", "kind": "e2e"}
+      ],
+      "acceptance_criteria": [
+        "The GUI no longer reads or approves the old PlanStore for v1 tasks.",
+        "Approval always carries the exact revision hash.",
+        "P-GATE is deterministic with the fake Provider."
+      ],
+      "depends_on": ["T08A"],
+      "estimated_loc": 320
+    }
+  ],
+  "order": ["T01", "T02", "T03", "T04", "T05", "T06", "T07", "T08A", "T08B"]
+}

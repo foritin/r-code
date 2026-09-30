@@ -5,7 +5,7 @@
 //! send/queue, harness selection, message run and event replay against the
 //! shared daemon with a real third-party harness package.
 
-use r_code_host::harness_v2::HarnessV2Bridge;
+use r_code_host::harness_v1::HarnessV1Bridge;
 use r_code_runtime::{LaunchOptions, ProfileFlavor};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -84,14 +84,14 @@ fn stage_package(temp: &Path, binary: &Path) -> PathBuf {
     source
 }
 
-fn bridge(temp: &Path, ipc: &str) -> HarnessV2Bridge {
+fn bridge(temp: &Path, ipc: &str) -> HarnessV1Bridge {
     let profile = r_code_runtime::RuntimeProfile::resolve(
         &LaunchOptions::new(ProfileFlavor::Development)
             .with_data_root(temp.join("root"))
             .with_ipc_name(ipc),
     )
     .expect("profile");
-    HarnessV2Bridge::new_from_profile(profile, Some(target_binary("r-code-service")))
+    HarnessV1Bridge::new_from_profile(profile, Some(target_binary("r-code-service")))
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn bridge_reports_unavailable_daemons_without_panicking() {
     .expect("profile");
     // Point at a nonexistent binary so no daemon can be spawned; the
     // default locator would otherwise find the workspace build.
-    let bridge = HarnessV2Bridge::new_from_profile(
+    let bridge = HarnessV1Bridge::new_from_profile(
         profile,
         Some(PathBuf::from("Z:/nonexistent/r-code-service.exe")),
     );
@@ -182,7 +182,7 @@ fn bridge_reports_unavailable_daemons_without_panicking() {
         .expect("runtime");
     let result = runtime.block_on(async { bridge.ping().await });
     match result {
-        Err(r_code_host::harness_v2::HarnessV2Error::Daemon(_)) => {}
+        Err(r_code_host::harness_v1::HarnessV1Error::Daemon(_)) => {}
         other => panic!("expected a typed daemon error, got {other:?}"),
     }
     let _ = Duration::from_secs(0);

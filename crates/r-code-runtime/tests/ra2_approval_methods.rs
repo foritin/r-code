@@ -223,7 +223,7 @@ async fn ra2_a2_command_dedup_replays_and_conflicts_are_refused() {
         .register("op-a2", "deploy", "run-t1-1", "t1")
         .await;
 
-    let store = Arc::new(r_code_store::v2::V2Store::open(&profile.database_path()).expect("store"));
+    let store = Arc::new(r_code_store::v1::V1Store::open(&profile.database_path()).expect("store"));
     let handler = CommandDedup::new(
         &profile.profile_id(),
         store,

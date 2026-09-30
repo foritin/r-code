@@ -13,7 +13,7 @@ use r_code_runtime::remote::registry::{DeviceRegistry, ListenerConfig};
 use r_code_runtime::remote::tls::ensure_identity;
 use std::sync::Arc;
 
-struct StoreEvents(Arc<r_code_store::v2::V2Store>);
+struct StoreEvents(Arc<r_code_store::v1::V1Store>);
 
 #[async_trait::async_trait]
 impl ApplicationHandler for StoreEvents {
@@ -50,7 +50,7 @@ async fn fixture(tag: &str) -> (RemoteEndpoint, std::net::SocketAddr) {
         })
         .expect("enable");
     let identity = ensure_identity(&root).expect("identity");
-    let store = Arc::new(r_code_store::v2::V2Store::open(&root.join("j.db")).expect("store"));
+    let store = Arc::new(r_code_store::v1::V1Store::open(&root.join("j.db")).expect("store"));
     let task = TaskState::new(TaskContract {
         task_id: "t1".into(),
         kind: TaskKind::Conversation,

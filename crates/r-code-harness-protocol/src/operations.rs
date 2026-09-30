@@ -61,6 +61,11 @@ pub enum ReplayClass {
     ExternalAck,
     /// Model stream; may be retried only when proven safe for replay.
     ModelStream,
+    /// Outbound network effect (P19A): unlike file effects there is no
+    /// CAS rollback, so a retry may run only behind an EXACT persisted
+    /// effect approval covering the unit's network ceiling; a lost ack
+    /// is indeterminate, never silently retried.
+    NetworkEffect,
 }
 
 impl ReplayClass {
@@ -68,9 +73,10 @@ impl ReplayClass {
     pub fn for_method(method: &str) -> Option<Self> {
         match method {
             "host.model.stream" => Some(ReplayClass::ModelStream),
-            "host.tools.list" | "host.context.read" | "host.artifacts.read" => {
-                Some(ReplayClass::Idempotent)
-            }
+            "host.tools.list"
+            | "host.context.read"
+            | "host.artifacts.read"
+            | "host.process.read" => Some(ReplayClass::Idempotent),
             "host.tools.call" => Some(ReplayClass::FileEffect),
             "host.process.open" | "host.process.write" | "host.process.close" => {
                 Some(ReplayClass::ProcessEffect)

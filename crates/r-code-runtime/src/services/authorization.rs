@@ -7,7 +7,7 @@
 //! effective permissions and the frozen contract version. A plugin service
 //! grant never authorizes a particular side effect.
 
-use r_code_harness_protocol::services::PermissionCeiling;
+use r_code_harness_protocol::services::{NetworkCeiling, PermissionCeiling, WorkUnitEffectClass};
 use std::collections::BTreeMap;
 
 /// Category of action being authorized.
@@ -16,7 +16,79 @@ pub enum ActionCategory {
     ToolCall,
     ProcessLaunch,
     VerificationPreparation,
+    /// P21 dependency preparation: a fetch that writes bytes the host later
+    /// promotes. Its own category because it is the only operation v1 lets use
+    /// the network, and that grant must never be inherited by default.
+    DependencyPreparation,
     ModelRequest,
+}
+
+/// The proof a dependency-preparation run carries for its network ask (P21).
+///
+/// This is a resolved value, never a lookup: authorization stays a pure
+/// decision function, and the runtime resolves it through the existing
+/// effect-approval surface (`StoreEffectApprovals`, keyed by the exact
+/// task/plan-revision/work-unit/effect-class/network/payload columns). An
+/// absent or unmatched proof means no network — there is no implicit allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrepNetworkAuthority {
+    /// The run asks no network: nothing to prove.
+    Offline,
+    /// The run asks this ceiling and no exact approval covers it: refused.
+    Unproven { ceiling: NetworkCeiling },
+    /// An active effect approval for exactly this class and ceiling.
+    Approved {
+        effect_class: WorkUnitEffectClass,
+        ceiling: NetworkCeiling,
+    },
+}
+
+impl PrepNetworkAuthority {
+    /// Whether this proof covers exactly `ceiling` for a preparation run. Only
+    /// a DependencyPreparation approval buys preparation network: a
+    /// workspace-mutation approval for the same ceiling never satisfies it, and
+    /// host-network is unsupported in v1 so nothing can prove it.
+    pub fn proves(&self, ceiling: NetworkCeiling) -> bool {
+        match (self, ceiling) {
+            (Self::Offline, NetworkCeiling::Offline) => true,
+            (
+                Self::Approved {
+                    effect_class,
+                    ceiling: granted,
+                },
+                asked,
+            ) => {
+                *effect_class == WorkUnitEffectClass::DependencyPreparation
+                    && *granted == asked
+                    && !matches!(asked, NetworkCeiling::HostNetwork)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the proof covers a network ceiling v1 can honour at all.
+    pub fn proves_network(&self) -> bool {
+        match self {
+            Self::Approved {
+                effect_class,
+                ceiling,
+            } => {
+                *effect_class == WorkUnitEffectClass::DependencyPreparation
+                    && !ceiling.is_offline()
+                    && !matches!(ceiling, NetworkCeiling::HostNetwork)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the proof names a network ceiling at all.
+    pub fn asks_network(&self) -> bool {
+        match self {
+            Self::Offline => false,
+            Self::Unproven { ceiling } => !ceiling.is_offline(),
+            Self::Approved { ceiling, .. } => !ceiling.is_offline(),
+        }
+    }
 }
 
 /// Resolved shape of the operation about to run.
@@ -29,6 +101,26 @@ pub struct OperationDescriptor {
     pub cwd: Option<String>,
     /// Tool name for tool calls.
     pub tool: Option<String>,
+    /// The network proof of a preparation run. Every other operation defaults
+    /// to [`PrepNetworkAuthority::Offline`], and only
+    /// [`ActionCategory::DependencyPreparation`] reads it.
+    pub prep_network: PrepNetworkAuthority,
+}
+
+impl Default for OperationDescriptor {
+    /// The conservative shape: no executable, no network, nothing proven. A
+    /// caller that assembles a descriptor field-by-field therefore starts with
+    /// zero network authority rather than inheriting one.
+    fn default() -> Self {
+        Self {
+            category: ActionCategory::ModelRequest,
+            executable: None,
+            argv: Vec::new(),
+            cwd: None,
+            tool: None,
+            prep_network: PrepNetworkAuthority::Offline,
+        }
+    }
 }
 
 impl OperationDescriptor {
@@ -39,6 +131,7 @@ impl OperationDescriptor {
             argv,
             cwd,
             tool: Some(tool.to_string()),
+            prep_network: PrepNetworkAuthority::Offline,
         }
     }
 
@@ -49,6 +142,7 @@ impl OperationDescriptor {
             argv,
             cwd,
             tool: None,
+            prep_network: PrepNetworkAuthority::Offline,
         }
     }
 
@@ -63,6 +157,26 @@ impl OperationDescriptor {
             argv,
             cwd,
             tool: None,
+            prep_network: PrepNetworkAuthority::Offline,
+        }
+    }
+
+    /// A dependency-preparation operation with the network proof the runtime
+    /// resolved for it. Without this constructor there is no way to express a
+    /// networked prep run at all, so an unproven fetch has no route.
+    pub fn dependency_preparation(
+        executable: &str,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        network: PrepNetworkAuthority,
+    ) -> Self {
+        Self {
+            category: ActionCategory::DependencyPreparation,
+            executable: Some(executable.to_string()),
+            argv,
+            cwd,
+            tool: None,
+            prep_network: network,
         }
     }
 
@@ -73,6 +187,7 @@ impl OperationDescriptor {
             argv: vec![],
             cwd: None,
             tool: None,
+            prep_network: PrepNetworkAuthority::Offline,
         }
     }
 }
@@ -115,6 +230,8 @@ impl EffectivePermissions {
         }
     }
 
+    /// The widest task authority. It still buys a dependency-preparation run
+    /// no network: that requires an exact effect approval (P21).
     pub fn full() -> Self {
         Self {
             ceiling: PermissionCeiling::Full,
@@ -254,7 +371,9 @@ impl AuthorizationService {
                     }
                 }
             }
-            ActionCategory::ProcessLaunch | ActionCategory::VerificationPreparation => {
+            ActionCategory::ProcessLaunch
+            | ActionCategory::VerificationPreparation
+            | ActionCategory::DependencyPreparation => {
                 if !permissions.allow_processes {
                     return AuthorizationDecision::Denied(DenyReason::ProcessesDisabled);
                 }
@@ -286,6 +405,22 @@ impl AuthorizationService {
                         summary: format!("launch {executable} (profile-gated process)"),
                     };
                 }
+            }
+        }
+        // P21: preparation network is decided here and nowhere else. Task
+        // permissions alone never open it, and a proof that does not name a
+        // supported dependency-preparation ceiling never opens it either: the
+        // default is no network, and an ask without proof stops at approval.
+        if matches!(descriptor.category, ActionCategory::DependencyPreparation) {
+            if permissions.allow_network && !descriptor.prep_network.proves_network() {
+                return AuthorizationDecision::RequiresApproval {
+                    summary: "dependency preparation network fetch requires an exact \
+                              dependency-preparation effect approval"
+                        .into(),
+                };
+            }
+            if !permissions.allow_network && descriptor.prep_network.asks_network() {
+                return AuthorizationDecision::Denied(DenyReason::NetworkDisabled);
             }
         }
         // Workspace containment for writes/paths.
@@ -499,5 +634,80 @@ mod tests {
             &CredentialScope::default(),
         );
         assert!(matches!(question_flip, AuthorizationDecision::Denied(_)));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P28 — the exact Shell network authority. Resolved ONLY from the frozen
+// WorkUnit effect fields plus ONE active exact effect approval; mutable
+// settings are never an input. Offline is the default that needs no proof;
+// any networked ceiling needs an approval for exactly (class, ceiling).
+// ---------------------------------------------------------------------------
+
+/// The exact authority one Shell call may run under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellAuthority {
+    /// The frozen ceiling is Offline: no approval needed, nothing to prove.
+    OfflineExact,
+    /// An active approval exists for exactly (effect class, ceiling).
+    ApprovedExact { ceiling: NetworkCeiling },
+    /// Refused with the machine-checkable reason.
+    Denied { reason: &'static str },
+}
+
+pub const SHELL_DENIED_HOST_NETWORK: &str = "host-network is unsupported in v1";
+pub const SHELL_DENIED_READ_ONLY: &str =
+    "a read-only WorkUnit carries no local effect authority for a shell";
+pub const SHELL_DENIED_READ_ONLY_NETWORK: &str = "a read-only WorkUnit cannot ask for network";
+pub const SHELL_DENIED_NO_EXACT_APPROVAL: &str =
+    "the networked ceiling has no active approval for exactly this class and ceiling";
+pub const SHELL_DENIED_CLASS_MISMATCH: &str = "the active approval names a different effect class";
+
+/// P28.2: select the exact Offline/PublicInternetClient/HostNetwork ceiling
+/// for a Shell call from the frozen unit fields and (at most) one active
+/// approval record — `active_approval` is the (class, ceiling) an exact
+/// six-column store lookup returned, so a stale, foreign, weaker or
+/// otherwise different approval never reaches this function as a match.
+pub fn resolve_shell_authority(
+    effect_class: WorkUnitEffectClass,
+    network: NetworkCeiling,
+    active_approval: Option<(WorkUnitEffectClass, NetworkCeiling)>,
+) -> ShellAuthority {
+    if matches!(network, NetworkCeiling::HostNetwork) {
+        return ShellAuthority::Denied {
+            reason: SHELL_DENIED_HOST_NETWORK,
+        };
+    }
+    if effect_class == WorkUnitEffectClass::ReadOnly {
+        // A shell spawns local effects by nature: a read-only unit carries
+        // no such authority at all, offline or not.
+        return ShellAuthority::Denied {
+            reason: if network.is_offline() {
+                SHELL_DENIED_READ_ONLY
+            } else {
+                SHELL_DENIED_READ_ONLY_NETWORK
+            },
+        };
+    }
+    if network.is_offline() {
+        return ShellAuthority::OfflineExact;
+    }
+    match active_approval {
+        Some((granted_class, granted_ceiling)) => {
+            if granted_class != effect_class {
+                return ShellAuthority::Denied {
+                    reason: SHELL_DENIED_CLASS_MISMATCH,
+                };
+            }
+            if granted_ceiling != network {
+                return ShellAuthority::Denied {
+                    reason: SHELL_DENIED_NO_EXACT_APPROVAL,
+                };
+            }
+            ShellAuthority::ApprovedExact { ceiling: network }
+        }
+        None => ShellAuthority::Denied {
+            reason: SHELL_DENIED_NO_EXACT_APPROVAL,
+        },
     }
 }

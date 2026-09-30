@@ -1,0 +1,75 @@
+{
+  "task_id": "P14",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s14_windows_acl_recovery.rs"
+  ],
+  "tests": {
+    "command": "rtk proxy cargo test -p r-code-runtime --all-features --no-fail-fast -- --test-threads=1 (plus -p r-code-kernel / -p r-code-store / -p r-code-harness-protocol -p r-code-harness-sdk / -p r-code-harness-codex full suites, Store --no-fail-fast; all foreground on the native Windows host)",
+    "total": 945,
+    "passed": 944,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "Declared plan_schema baseline (expects schema 18, current v1 schema reaches 35) — the single pre-existing, task-contract-sanctioned failure carried since the baseline was declared; unchanged by P14 (P14's migration adds a string-id ledger row only, numeric LATEST_SCHEMA_VERSION untouched)."
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-store/src/v1/schema.rs": {
+          "file_loc": 424,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.014
+        },
+        "crates/r-code-store/src/v1/safety.rs": {
+          "file_loc": 466,
+          "max_comment_block": 6,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.091
+        },
+        "crates/r-code-runtime/src/services/sandbox/windows.rs": {
+          "file_loc": 648,
+          "max_comment_block": 7,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.163
+        },
+        "crates/r-code-runtime/src/services/sandbox.rs": {
+          "file_loc": 533,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.248
+        },
+        "crates/r-code-runtime/Cargo.toml": {
+          "file_loc": 79,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.068
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "max_comment_line_len": 120,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "max_file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS. s14_windows_acl_recovery.rs (3 real-Win32 tests on tempdir targets + a real V1Store, all mutating real ACLs with best-effort restore) proves the full P14 matrix: prepared-shape journal discipline and the terminal Conflict state machine; the crash matrix (prepare-crash -> NothingApplied -> conflict 'never-applied'; apply-crash -> AlreadyApplied -> mark applied with the actual bytes -> byte-exact restore; external edit during prepared -> Conflict; external edit after readback -> restore refuses 'acl-changed-since-apply' and the foreign ACE survives) through real drop+reopen store restarts; physical-identity CAS refusal across targets; inherited-only child DACLs never faking a conflict while restore stays byte-CAS; and oldest-first target history whose journaled ActualAfter equals a fresh capture. Totals: Runtime 407/407 (401 baseline + 3 Engineer lib tests [lib 72->75] + 3 s14 — the task brief's '~404' assumed the Engineer's 3 were already inside 401; they were not, actual is 407), Kernel 75/75, Store 416/417 with only the declared plan_schema baseline, protocol+sdk 33/33, codex 13/13; cumulative 944/945/1. workspace --no-run/check/clippy -D warnings/fmt --check all green; quality_check ok with zero violations. Both documented mechanical deviations are judged justified and minimal: (1) services/sandbox.rs gains only the pre-declared #[cfg(windows)] pub mod windows; registration (6 lines incl. doc; without it the declared create cannot compile; P12 services/mod.rs precedent); (2) Cargo.toml adds exactly one windows-sys feature line Win32_Security_Authorization (GetSecurityInfo/SetSecurityInfo/SE_FILE_OBJECT live in that submodule; P15's isolation APIs remain untouched for their own task)."
+}

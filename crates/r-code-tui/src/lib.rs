@@ -1,7 +1,7 @@
 //! r-code-tui 核心状态与事件→widget 映射（pi-alignment PRD §4.1 R-TUI-01/M8-01）。
 //!
-//! T35 起会话编排全部经共享 r-code-service 守护进程（v2 Harness 协议，
-//! [`crate::engine::V2ChatClient`]），不再依赖 r-code-host/Tauri。事件源是
+//! T35 起会话编排全部经共享 r-code-service 守护进程（v1 Harness 协议，
+//! [`crate::engine::V1ChatClient`]），不再依赖 r-code-host/Tauri。事件源是
 //! 守护进程 journal 的 EventEnvelope，TUI 侧投影为 [`TranscriptEvent`]。
 //!
 //! 本模块是**可单测的纯状态机**（不含终端 IO）：`TuiState` 消费 transcript
@@ -41,14 +41,14 @@ pub mod thinking;
 pub mod transcript_view;
 pub mod window;
 
-/// v2 journal 事件的 transcript 投影（EventEnvelope → 行；见
+/// v1 journal 事件的 transcript 投影（EventEnvelope → 行；见
 /// [`engine::transcript_events_of`] / [`engine::project_events`]）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TranscriptEvent {
     /// 用户消息（message_id = journal input.queued 的稳定标识，/fork 消费）。
     User { message_id: String, text: String },
-    /// 助手消息（v2 为整轮文本，无 delta 流）。
+    /// 助手消息（v1 为整轮文本，无 delta 流）。
     Assistant { run_id: String, text: String },
     /// 工具调用（input 为守护进程截断的预览载荷）。
     ToolCall {
@@ -132,11 +132,11 @@ impl TuiState {
         Self::default()
     }
 
-    /// 消费一枚 v2 transcript 事件（实时泵与重建共用落行逻辑）。
+    /// 消费一枚 v1 transcript 事件（实时泵与重建共用落行逻辑）。
     ///
     /// - User：本地路径由发送方 `push_user` 先行追加（泵不投 User），此臂
     ///   仅供重建调用；
-    /// - Assistant：v2 是整轮文本——原位收口单行（与封口帧同语义）；
+    /// - Assistant：v1 是整轮文本——原位收口单行（与封口帧同语义）；
     /// - ToolCall/ToolResult：工具卡 + 错误位回写。
     pub fn apply_transcript_event(&mut self, event: &TranscriptEvent) {
         match event {
@@ -164,7 +164,7 @@ impl TuiState {
     }
 
     /// 运行态投影（run.started → true 并清队列镜像；收敛 → false 并收口
-    /// 未闭合的流式缓冲）。v2 事件泵驱动。
+    /// 未闭合的流式缓冲）。v1 事件泵驱动。
     pub fn mark_running(&mut self, running: bool) {
         if running {
             self.running = true;
@@ -293,7 +293,7 @@ impl TuiState {
         self.view_epoch
     }
 
-    /// 用 v2 journal 投影（[`TranscriptEvent`]）整体重建 transcript 视图
+    /// 用 v1 journal 投影（[`TranscriptEvent`]）整体重建 transcript 视图
     /// （G8：/resume 接续、分支切换后调用）。重建视图与旧 scrollback 内容
     /// 天然重复——代际 +1 让渲染壳层清屏后重排整棵视图树。
     pub fn rebuild_from_events(&mut self, events: &[TranscriptEvent]) {
@@ -347,9 +347,9 @@ impl TuiState {
 
 /// M1-03/R2：把运行失败文案翻译成可操作指引。
 ///
-/// 未配置模型类错误（v2 "unknown model selection"/空 registry）由
+/// 未配置模型类错误（v1 "unknown model selection"/空 registry）由
 /// [`engine::failure_guidance`] 映射 /setup 引导；此处为其余 provider 类
-/// 错误附上 v2 settings 文件路径（profile root 下的 settings.json）。
+/// 错误附上 v1 settings 文件路径（profile root 下的 settings.json）。
 pub fn provider_error_guidance(error: &str, profile_root: &std::path::Path) -> String {
     let provider_related = ["模型服务", "未找到默认", "尚未就绪", "provider"]
         .iter()
@@ -394,7 +394,7 @@ pub fn route_send(running: bool) -> SendRoute {
 
 /// R1/R2：无 provider 配置时的显式引导（不降级、不回放演示）。
 ///
-/// v2 判定走本地 SettingsStore（profile root 的 settings.json + 平台凭据
+/// v1 判定走本地 SettingsStore（profile root 的 settings.json + 平台凭据
 /// 感知的 availability()），不连 daemon——首屏快速路径；密钥可能存放在
 /// OS 凭据库，深校验留给发送路径（无凭据的 provider 发送即报可操作错误）。
 pub fn provider_config_guidance(profile_root: &std::path::Path) -> Option<String> {
@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn onboarding_lines_empty_config_lists_guidance() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let profile_root = dir.path().join("harness-v2");
+        let profile_root = dir.path().join("harness-v1");
         std::fs::create_dir_all(&profile_root).expect("mkdir");
         let lines = onboarding_lines(&profile_root);
         assert!(!lines.is_empty(), "unconfigured must yield onboarding rows");
@@ -501,7 +501,7 @@ mod tests {
         );
         assert!(
             rendered.contains("settings.json"),
-            "onboarding must name the v2 settings file: {rendered}"
+            "onboarding must name the v1 settings file: {rendered}"
         );
         assert!(
             rendered.contains("/setup"),
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn onboarding_lines_configured_is_empty() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let profile_root = dir.path().join("harness-v2");
+        let profile_root = dir.path().join("harness-v1");
         std::fs::create_dir_all(&profile_root).expect("mkdir");
         std::fs::write(
             profile_root.join("settings.json"),
@@ -545,11 +545,11 @@ mod tests {
         );
     }
 
-    /// M1-03.A2：provider 配置类错误附 v2 settings 绝对路径与 /setup 途径；
+    /// M1-03.A2：provider 配置类错误附 v1 settings 绝对路径与 /setup 途径；
     /// 其余错误不追加。
     #[test]
     fn provider_errors_carry_actionable_guidance() {
-        let dir = std::path::Path::new("/tmp/tui-v2-guidance/profile");
+        let dir = std::path::Path::new("/tmp/tui-v1-guidance/profile");
         let provider_error = "未找到默认模型服务，请前往设置完成配置";
         let guided = provider_error_guidance(provider_error, dir);
         assert!(
@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(provider_error_guidance(other, dir), other);
     }
 
-    /// 工具卡错误位：失败结果回写（v2 ToolResult 的 ok 取反）。
+    /// 工具卡错误位：失败结果回写（v1 ToolResult 的 ok 取反）。
     #[test]
     fn tool_card_error_flag_written_back() {
         let mut state = TuiState::new();

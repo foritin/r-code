@@ -1,0 +1,44 @@
+{
+  "task_id": "O00",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/o00_headroom_split.rs"
+  ],
+  "tests": {
+    "command": "rtk proxy cargo test -p r-code-runtime --test o00_headroom_split -- --test-threads=1 (4/4 twice); affected suites single-threaded: conversation_engine 10/10, m03_cancel_race 2/2, m03_execution_pipeline 10/10, m04_review_flow 12/12, m04_review_rpc 1/1; house five-group cumulative --no-fail-fast --test-threads=1 measured TWICE, both reported: 149 result lines / 1131 passed / 1 failed in BOTH runs, the single failure the declared plan_schema.rs:245 baseline (clean_database_and_schema_18_upgrade_reach_latest_complete_schema), ZERO flake. House total 1132/1131/1 (o00_headroom_split's 4 tests enter the denominator; +4 vs the 1128/1127/1 baseline).",
+    "total": 1132,
+    "passed": 1131,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); O00 touches no store code and the red is byte-identical to the pre-task baseline in both runs"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/application.rs": {"file_loc": 1966, "max_comment_block": 11, "long_comment_lines": 0, "comment_ratio": 0.109, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/src/application/review_flow.rs": {"file_loc": 624, "max_comment_block": 1, "long_comment_lines": 0, "comment_ratio": 0.002, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/src/run_manager.rs": {"file_loc": 2251, "max_comment_block": 11, "long_comment_lines": 0, "comment_ratio": 0.057, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/src/run_drive.rs": {"file_loc": 237, "max_comment_block": 3, "long_comment_lines": 0, "comment_ratio": 0.107, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/src/lib.rs": {"file_loc": 22, "max_comment_block": 6, "long_comment_lines": 0, "comment_ratio": 0.375, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/tests/o00_headroom_split.rs": {"file_loc": 552, "max_comment_block": 14, "long_comment_lines": 0, "comment_ratio": 0.12, "max_func_loc": null, "max_nesting": null}
+      },
+      "thresholds": {"file_loc": 2600}
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "summary": "PASS - O00 is pure verbatim code motion with the two declared headroom targets beaten by 4x (634 and 349 code lines under the 2600 gate); all acceptance criteria hold and the house double-run is flake-free at 1132/1131/1."
+}

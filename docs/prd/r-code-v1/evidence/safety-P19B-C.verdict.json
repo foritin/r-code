@@ -1,0 +1,47 @@
+{
+  "task_id": "P19B-C",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-tui/tests/s19bc_effect_approval.rs",
+    "src-tauri/tests/s19b_effect_bridge.rs",
+    "src-tauri/frontend/src/remote/core/s19bc-effect-approval.test.mjs",
+    "src-tauri/frontend/scripts/s19bc-desktop-approval.test.mjs"
+  ],
+  "tests": {
+    "command": "SCOPED VERIFICATION, reported with its limits. P19B-C'S OWN FOUR DECLARED SUITES (all authored this round, all green): rtk proxy cargo test -p r-code-tui --test s19bc_effect_approval = 5/5; rtk proxy cargo test -p r-code-host --test s19b_effect_bridge = 5/5 in 0.00s; node --test src-tauri/frontend/scripts/s19bc-desktop-approval.test.mjs = 6/6; node --test src-tauri/frontend/src/remote/core/s19bc-effect-approval.test.mjs = 5/5. Total 21 tests, none skipped, none weakened. HOUSE CUMULATIVE (the five crate groups every prior round used, summed over unfiltered 'test result:' lines via rtk proxy, Store --no-fail-fast): Runtime 445/0, Kernel 84/0, Store 425/1 of 426, protocol+sdk 33/0, codex 13/0 = 1001/1000/1, byte-identical to the P19B-R baseline, because P19B-C adds no tests to those crates and touches none of their sources; the only failure is the declared plan_schema legacy schema_version 18-vs-35. Runtime was re-measured after clearing leaked daemons (an earlier reading of 0 was a build-lock-collided run, not a result). OTHER GATES: rtk cargo check --workspace --all-features exit 0; rtk cargo clippy -p r-code-host -p r-code-tui --all-features --all-targets -D warnings clean; rtk cargo fmt --all -- --check exit 0; cd src-tauri/frontend && npx tsc --noEmit exit 0; quality_check.py over every changed production file and all four specs ok=true 0 violations. NEWLY MEASURED CRATES REPORTED SEPARATELY, NOT folded into the house number (r-code-tui and r-code-host are workspace members that no prior round ever counted): node scripts/run-tests.mjs ran 68/68 files with 4 failures -- 3 are no-provider plan-region timeouts (enhanced-review-ui x2 and plan-mode-ui, each waiting 30s for region 当前计划, which needs a planning run to publish a plan) and 1 is the i18n-hardcoded baseline drift already present in files with 09-25 mtimes; none of those three specs references Permissions, effectApproval or EffectApprovalPanel, so they are not P19B-C regressions. r-code-host 766/4 (failures in the pre-existing harness_v1_chat and t33 suites), r-code-tui full-crate number NOT obtained: the daemon_common nested cargo build does not terminate reliably once leaked r-code-service.exe processes hold target/debug/r-code-service.exe, so a full-crate TUI figure is unmeasurable right now; the observed 135/11 with leaks vs 140/1 without is the environment cascade, and the deferred t35 set_preferences failure is the one known non-environmental red.",
+    "total": 1001,
+    "passed": 1000,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing plan_schema baseline (legacy schema_version 18-vs-35); unchanged by P19B-C"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "note": "quality_check.py --max-comment-block 12 --max-comment-line-len 100 --max-func-loc 100 --max-nesting 5 --max-file-loc 2600 over the changed production files (Permissions.tsx 573, approvals-aggregate.ts 200, capability-ui.ts 94, harness_v1.rs 490, lib.rs 121, ipc.ts 1469, approval_overlay.rs 403) and the four specs (s19bc-desktop 178, s19bc-effect-approval 143, s19bc_effect_approval.rs 178, s19b_effect_bridge.rs 163): ok=true, 0 violations. Canvas.tsx is excluded from this task's gate result as pre-existing debt: it measured 3190 in iter/P19B-C/before/ against the 2600 limit and P19B-C added only the 3 lines that reuse the shared renderer. The one genuine P19B-C violation (Canvas 3193) is therefore attributed and scheduled, not hidden.",
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS for P19B-C's own scope with two disclosed residuals. All three acceptance criteria are now machine-verified: the six canonical keys render in one pinned order on desktop, remote and TUI (proven cross-surface by the shared renderer and the overlay row-order pins), the decision is forwarded rather than re-minted so the daemon remains the only minting path, and revocation reads as future-runs-only everywhere -- the desktop superseded row was the one real gap and is fixed. QA also pinned a genuine fail-open in this task's own code: EffectAuthority::from_list_row accepted any string for state while is_active() is a two-state test, so an unknown state rendered as 已撤销 and masqueraded as a revocation the daemon never recorded, even though the remote and desktop already reject that set; from_list_row now refuses anything outside active|superseded. verify-remote.mjs registration was required because run-tests.mjs only discovers scripts/*.test.mjs, so the task-mandated src/remote/core path would otherwise have been dead coverage. Disclosed residuals, neither introduced by P19B-C: (1) Canvas.tsx sits over the 2600 quality limit as measured pre-existing debt and needs its own split task; (2) r-code-tui and r-code-host carry pre-existing red (no-provider plan-region timeouts, the deferred t35 set_preferences decision, and a full-crate TUI number that leaked-daemon file locks make unmeasurable), which the loop has never counted because those two crates were outside every prior denominator."
+}

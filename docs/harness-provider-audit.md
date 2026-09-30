@@ -47,12 +47,12 @@ t26 的通过含义是实质性的：真实派生 native 插件二进制，经�
 ### 1.4 CI 门禁真实存在
 
 - `.github/workflows/ci.yml:229` `cargo test --workspace --all-features -- --test-threads=1`
-- `.github/workflows/ci.yml:232` `node scripts/verify-harness-v2.mjs --profile quick`
-- `scripts/verify-harness-v2.mjs:44-90` 四类架构守卫（protocol/kernel/runtime/sdk/两个插件存在；kernel 无 tauri/sqlite/gateway；protocol 中立；native 插件 host-free；T42 旧链路退役断言）
+- `.github/workflows/ci.yml:232` `node scripts/verify-harness-v1.mjs --profile quick`
+- `scripts/verify-harness-v1.mjs:44-90` 四类架构守卫（protocol/kernel/runtime/sdk/两个插件存在；kernel 无 tauri/sqlite/gateway；protocol 中立；native 插件 host-free；T42 旧链路退役断言）
 - `:93` 一致性套件作为硬门禁：`cargo run -p r-code-evals --bin harness-conformance`
 - `crates/r-code-evals/src/harness_conformance.rs:88-237` 五项确定性检查（假完成拒签、陈旧证据拒签、跨 run 句柄拒签、重复副作用重放、已吊销代次拒绝迟到调用）
 
-**注意**：CI 只跑 `--profile quick`。`scripts/verify-harness-v2.mjs:95-109` 的 `full` 档（含 `harness_v2_chat`、t33、t35、t36、打包检查）**不在 CI 中执行**。
+**注意**：CI 只跑 `--profile quick`。`scripts/verify-harness-v1.mjs:95-109` 的 `full` 档（含 `harness_v1_chat`、t33、t35、t36、打包检查）**不在 CI 中执行**。
 
 ---
 
@@ -80,7 +80,7 @@ plugins/native (host.model.stream)
 ```
 
 - 生产注入点：`crates/r-code-runtime/src/bin/r-code-service.rs:520-523`
-  `ModelBroker::new(SettingsBackedResolver::new(SettingsStore::new(profile.harness_v2_root())))`
+  `ModelBroker::new(SettingsBackedResolver::new(SettingsStore::new(profile.harness_v1_root())))`
 - `crates/r-code-runtime/src/services/settings_store.rs:404-422` `SettingsBackedResolver` **每次解析都重建 registry**，所以运行期改设置下一次模型调用即生效，无需重启 daemon
 
 ### 2.3 但 provider 范围有三重约束
@@ -96,7 +96,7 @@ let preset = provider_catalog::find(&entry.selection)?;   // ← 不在目录里
 → **自定义 selection、目录外厂商一律跳过**（`provider_support.rs:12-16` 注释也确认"目录才是唯一事实来源"）。
 
 **约束二：必须有可解析凭据。**
-`settings_store.rs:239-241` —— 无凭据的 entry 直接 `continue`，连 provider 都不构造。凭据来源二选一：平台凭据库（服务名 `"r-code-harness-v2"`，`settings_store.rs:31`）或 `env_var` 环境变量（`:205-212`）。
+`settings_store.rs:239-241` —— 无凭据的 entry 直接 `continue`，连 provider 都不构造。凭据来源二选一：平台凭据库（服务名 `"r-code-harness-v1"`，`settings_store.rs:31`）或 `env_var` 环境变量（`:205-212`）。
 
 **约束三：只有 3 种线路协议。**
 `provider_catalog.rs:34-44` `Protocol` 仅 `AnthropicMessages` / `OpenAiChat` / `OpenAiResponses`。目录里 30 条预设按其 id + 协议映射到 `agent_llm::ProviderConfig` 的 11 个变体（`settings_store.rs:303-388`）。目录自身也标注了未实现项，例如 `:368` Bedrock "需要 SigV4 签名；用长期 API Key 模式才能走现有的 Bearer 分支"。
@@ -141,29 +141,29 @@ native 插件确实以 `role: "tool"` 推入工具结果（`plugins/native/src/r
 
 ### 3.1 两条互不相通的配置通道
 
-| | 桌面 GUI | harness v2 daemon |
+| | 桌面 GUI | harness v1 daemon |
 | --- | --- | --- |
 | 保存入口 | `src-tauri/src/tauri_commands.rs:2147` `cmd_settings_save_provider` | — |
 | 落地实现 | `src-tauri/src/commands.rs:11705` `settings_save_provider` | — |
-| 配置写入 | `commands.rs:11875` `SettingsService::save_global` → `config_dir/config.toml`（`src-tauri/src/settings.rs:371-373`、`:682-711`） | `harness_v2_root/settings.json`（`crates/r-code-runtime/src/services/settings_store.rs:134-151`） |
-| 凭据服务名 | `"r-code"` / `"r-code-dev"`（`src-tauri/src/app_paths.rs:19-20`） | **`"r-code-harness-v2"`**（`settings_store.rs:31`） |
+| 配置写入 | `commands.rs:11875` `SettingsService::save_global` → `config_dir/config.toml`（`src-tauri/src/settings.rs:371-373`、`:682-711`） | `harness_v1_root/settings.json`（`crates/r-code-runtime/src/services/settings_store.rs:134-151`） |
+| 凭据服务名 | `"r-code"` / `"r-code-dev"`（`src-tauri/src/app_paths.rs:19-20`） | **`"r-code-harness-v1"`**（`settings_store.rs:31`） |
 | 读配置 | GUI 进程内 | `r-code-service.rs:520` |
 
-**关键证据**：在 `src-tauri/src/` 全量搜索 `SettingsStore` / `SettingsBackedResolver` / `settings.apply` / `ProviderEntry` —— **零命中**。即桌面端**没有任何路径**把用户在设置页保存的 provider、密钥、默认 selection 写进 daemon 的 `harness_v2_root/settings.json`。
+**关键证据**：在 `src-tauri/src/` 全量搜索 `SettingsStore` / `SettingsBackedResolver` / `settings.apply` / `ProviderEntry` —— **零命中**。即桌面端**没有任何路径**把用户在设置页保存的 provider、密钥、默认 selection 写进 daemon 的 `harness_v1_root/settings.json`。
 
-### 3.2 GUI 聊天已切 v2，但模型选择被显式丢弃
+### 3.2 GUI 聊天已切 v1，但模型选择被显式丢弃
 
-- 聊天命令已改走 v2 投影层：`src-tauri/src/tauri_commands.rs:27-28`（注释 "T42 阶段 1：聊天链路命令改走 v2 daemon 投影层"）、`cmd_task_create` 走 `chat_v2.task_create`
-- 但：`src-tauri/src/harness_v2_chat.rs:104-113` 注释明说 **"provider/agent 参数诚实忽略——v2 默认 pin 内置 native harness，模型选择走 v2 settings 的默认 selection"**，形参 `_provider_name` / `_agent_engine` 带下划线前缀
-- 后果被测试自己承认：`src-tauri/tests/harness_v2_chat.rs:5-6` "无 provider 时 run 诚实失败同样算投影成功"；`:99-102` 断言只要求 "at least one run must reach a terminal projection (assistant reply or honest failure)"
+- 聊天命令已改走 v1 投影层：`src-tauri/src/tauri_commands.rs:27-28`（注释 "T42 阶段 1：聊天链路命令改走 v1 daemon 投影层"）、`cmd_task_create` 走 `chat_v1.task_create`
+- 但：`src-tauri/src/harness_v1_chat.rs:104-113` 注释明说 **"provider/agent 参数诚实忽略——v1 默认 pin 内置 native harness，模型选择走 v1 settings 的默认 selection"**，形参 `_provider_name` / `_agent_engine` 带下划线前缀
+- 后果被测试自己承认：`src-tauri/tests/harness_v1_chat.rs:5-6` "无 provider 时 run 诚实失败同样算投影成功"；`:99-102` 断言只要求 "at least one run must reach a terminal projection (assistant reply or honest failure)"
 
 ### 3.3 TUI 侧反而是通的
 
 - `crates/r-code-tui/src/engine.rs:297-314` `/setup` → 调 daemon 的 `settings.apply`（apiKey 或 envVar 二选一）
 - `crates/r-code-tui/src/lib.rs:397-406` 首屏直接读 `SettingsStore::new(profile_root).load()` 判定是否有可用 provider
-- `crates/r-code-tui/src/engine.rs:129-135`、`harness_client.rs:92-98` 均经 `profile.harness_v2_root()`
+- `crates/r-code-tui/src/engine.rs:129-135`、`harness_client.rs:92-98` 均经 `profile.harness_v1_root()`
 
-→ **当前状态：TUI 执行过 `/setup` 之后，桌面 GUI 的对话才有模型可用；否则 run 会失败。** 这是阶段 1 的已知迁移缺口（`src-tauri/src/harness_v2_chat.rs:10-11` 自述"旧实现原地保留，本期只挂新路径"）。
+→ **当前状态：TUI 执行过 `/setup` 之后，桌面 GUI 的对话才有模型可用；否则 run 会失败。** 这是阶段 1 的已知迁移缺口（`src-tauri/src/harness_v1_chat.rs:10-11` 自述"旧实现原地保留，本期只挂新路径"）。
 
 ---
 
@@ -184,7 +184,7 @@ native 插件确实以 `role: "tool"` 推入工具结果（`plugins/native/src/r
 - **实测**：t15（4/4）、t26（2/2）已在本机实跑，日志留存于 `target/harness-provider-audit-t15-20260913.log`、`target/harness-provider-audit-native-20260913.log`
 - **未验证项（如实标注）**：
   1. 真实厂商 API 端到端调用（无密钥）——含第 2.5 节的工具结果角色疑点
-  2. `verify-harness-v2 --profile full` 全档（CI 只跑 quick）
+  2. `verify-harness-v1 --profile full` 全档（CI 只跑 quick）
   3. 桌面 GUI 在"未执行 TUI `/setup`"之外的使用路径
 
 ## 6. 建议的修复优先级
@@ -192,8 +192,8 @@ native 插件确实以 `role: "tool"` 推入工具结果（`plugins/native/src/r
 | 优先级 | 事项 | 位置 |
 | --- | --- | --- |
 | P0 | 用真实 key 复验多轮工具回传角色映射，若确认则修 `ModelRole::Tool` 的 role 投影 | `models.rs:97-103` |
-| P0 | 打通桌面设置页 → daemon `settings.apply`（或提供一次性导入），否则 GUI 对话无模型可用 | `tauri_commands.rs:2147` / `harness_v2_chat.rs:104-113` |
+| P0 | 打通桌面设置页 → daemon `settings.apply`（或提供一次性导入），否则 GUI 对话无模型可用 | `tauri_commands.rs:2147` / `harness_v1_chat.rs:104-113` |
 | P1 | broker 投影补齐：图片走 artifact 物化、`max_tokens` 走目录、推理旋钮透传、推理/托管工具事件透出 | `models.rs:61-94`、`:248-251` |
 | P1 | `selections_view()` 改为读真实目录，去掉 4 项硬编码探针 | `models.rs:293-310` |
 | P2 | 补齐 Codex 的 `codex.event.next` 宿主实现，或从插件中移除该调用 | `app_server.rs:127-140` / `router.rs:73` |
-| P2 | 把 `verify-harness-v2 --profile full` 纳入 CI | `ci.yml:232` |
+| P2 | 把 `verify-harness-v1 --profile full` 纳入 CI | `ci.yml:232` |

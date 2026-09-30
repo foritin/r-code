@@ -2,7 +2,7 @@
 
 > 状态：`draft`（计划评审中，未开始实施）
 > 发布日期：2026-09-10
-> 前置基线：Harness v2 全闭环（commit `6fbf7fd`）——聊天链路统一为 前端 → r-code-client → r-code-service → Harness 插件。
+> 前置基线：Harness v1 全闭环（commit `6fbf7fd`）——聊天链路统一为 前端 → r-code-client → r-code-service → Harness 插件。
 > 任务权威源：[tasks.json](./tasks.json)；架构说明：[architecture.md](./architecture.md)。
 > **AI 执行**：[worklist.md](./worklist.md)（任务卡/验收/恢复协议）+ `node scripts/verify-remote.mjs`。
 
@@ -28,11 +28,11 @@
 
 ## 2. 现状事实与复用边界
 
-Harness v2 已把“客户端”与“执行面”切开，这是本计划能低成本成立的前提：
+Harness v1 已把“客户端”与“执行面”切开，这是本计划能低成本成立的前提：
 
 - **命令面已中立**：`r-code-service` 的方法为宿主无关的 JSON-RPC（`ApplicationCommand{client_id, command_id, method, params}`），持久去重回执（`CommandDedup`：同 id 重放原结果）。聊天所需方法齐备：`task.create/sendMessage/cancel/list/detail/rename/clone/branches/events`、`models.available`、`settings.get`、`plugins.list`。
 - **事件面已中立**：`task.events`（afterSeq 游标）输出 `EventEnvelope{seq, task_id, run_id, kind, source, payload}`；前端轮询即可投影全部 UI 状态。
-- **客户端**：`r-code-client::DaemonClient`（ensure_daemon 探活拉起 + token 握手 + 帧读写），TUI 的 `engine.rs` 与 GUI 的 `harness_v2_chat.rs` 都是薄客户端，证明“换一个 transport 就能再挂一个客户端”。
+- **客户端**：`r-code-client::DaemonClient`（ensure_daemon 探活拉起 + token 握手 + 帧读写），TUI 的 `engine.rs` 与 GUI 的 `harness_v1_chat.rs` 都是薄客户端，证明“换一个 transport 就能再挂一个客户端”。
 - **唯一的本机约束**：daemon 只绑命名管道（Windows，`share_mode(0)` 独占）/ Unix socket（0600），`ProfileLock` 保证单 owner。**无网络监听、无设备认证、无能力分档**——这是本计划的全部核心新增。
 - **可复用范式**：OAuth device flow 已在 `codex.startLogin {mode:"device"}` 落地（一次性码、短 TTL、新终端确认）；配对 UX 与安全模型照搬。
 - **前端可复用**：GUI 是 React + Tauri WebView；远程控制台是同一套投影/组件 + 一个 WebSocket client（替代 `invoke("cmd_*")`），不重写状态机。
@@ -61,7 +61,7 @@ Harness v2 已把“客户端”与“执行面”切开，这是本计划能低
 1. 桌面端命令/界面：`remote.enablePairing`（仅本机管道可调用）→ daemon 生成一次性 `pair_secret`（≥128 位熵），TTL 120 秒，**不落 journal**，只存内存；同时打开临时发现端口（或复用远程监听口的“配对模式”）。
 2. 桌面显示 QR：内容 `rcode://pair?host=<lan-ip>&port=<n>&tok=<pair_secret>`（mDNS 可选：daemon 广播 `_rcode._tcp.local`，QR 可只带 token）。
 3. 手机 PWA 扫码 → 与 daemon 建立 TLS 连接 → `device.pair {pair_secret, device_name, platform}`。
-4. daemon 校验（一次性、未过期、未用过）→ 生成长期**设备令牌**（每设备独立，存 v2 持久区 `devices/`，复用平台凭据存储加密），返回令牌 + profile 信息；随后 pair_secret 立即失效，发现口关闭。
+4. daemon 校验（一次性、未过期、未用过）→ 生成长期**设备令牌**（每设备独立，存 v1 持久区 `devices/`，复用平台凭据存储加密），返回令牌 + profile 信息；随后 pair_secret 立即失效，发现口关闭。
 5. 之后手机每次连接：mTLS 或 bearer 设备令牌 + `client_id`（= 设备 id，正好复用命令去重的 client 维度）。
 
 手动配对（无摄像头/跨网段）：桌面显示 8 位分组配对码，手机手动输入 host:port + 码，流程相同。
@@ -95,7 +95,7 @@ Harness v2 已把“客户端”与“执行面”切开，这是本计划能低
 - **默认面为零**：不配对就没有任何网络监听；配对码短 TTL、一次性；远程口可一键全局关闭（关闭后所有设备令牌失效）。
 - **传输必加密**：局域网同样要求 TLS（自签证书指纹在配对 QR 里钉死，TOFU 一次）；禁止明文远程口。
 - **最小权限**：远程默认只读；写/审批逐项授权；插件安装/凭据读取永不可远程。
-- **审批权威不破坏**：v2 已有“审批只认宿主创建的 pending op”。远程批准只是新增一个**决策来源**，op 的创建、作用域、单 op 语义不变；批准动作记审计事件（哪个设备、何时）。
+- **审批权威不破坏**：v1 已有“审批只认宿主创建的 pending op”。远程批准只是新增一个**决策来源**，op 的创建、作用域、单 op 语义不变；批准动作记审计事件（哪个设备、何时）。
 - **凭据不出机**：`settings.apply` 不可远程；手机端不接触 provider API key。
 - **会话劫持面**：设备令牌被盗=该设备能力上限内的风险；因此高敏能力默认关 + 可一键吊销 + 批准动作可要求二次确认（桌面通知联动）。
 - 绑定范围：RemoteListener 初始只绑配对时选定的网卡（默认仅局域网私网段），不绑 0.0.0.0。
@@ -108,7 +108,7 @@ Harness v2 已把“客户端”与“执行面”切开，这是本计划能低
 
 ## 4. 分期
 
-- **R0（主链前置：v2 审批通道，3 任务 RA1–RA3）**：远程审批暴露的是一个主链路既有缺口——协议有 `host.approvals.request/reply`、router 有内存 ApprovalRegistry，但 RunManager 目前喂的是 IgnoreQuestions 占位，op 不持久化、不外发事件、无决策方法面。R0 把它补齐：pending op 持久化 + `approval.requested/decided` 事件（RA1）、daemon `approvals.list/decide` 方法（RA2）、RunManager 真实接线并让 TUI 本地审批先绿（RA3）。**这是远程能力 approvals:decide 的硬前置，且独立于远程控制本身就有产品价值**（插件工具授权目前事实上无 UI 闭环）。
+- **R0（主链前置：v1 审批通道，3 任务 RA1–RA3）**：远程审批暴露的是一个主链路既有缺口——协议有 `host.approvals.request/reply`、router 有内存 ApprovalRegistry，但 RunManager 目前喂的是 IgnoreQuestions 占位，op 不持久化、不外发事件、无决策方法面。R0 把它补齐：pending op 持久化 + `approval.requested/decided` 事件（RA1）、daemon `approvals.list/decide` 方法（RA2）、RunManager 真实接线并让 TUI 本地审批先绿（RA3）。**这是远程能力 approvals:decide 的硬前置，且独立于远程控制本身就有产品价值**（插件工具授权目前事实上无 UI 闭环）。
 - **R1（局域网只读 PoC）**：transport 抽象 + TLS/WS listener + 配对码（先手动输入，不做 QR）+ 设备令牌 + 事件推送；PWA 能看任务列表与实时事件。
 - **R2（完整局域网控制）**：QR 配对 + mDNS 发现 + `tasks:write` + 取消；PWA 发送/中止；设备管理（列出/吊销）。
 - **R3（远程审批）**：`approvals:decide` 能力 + 手机审批卡片 + 审计；桌面端能力授予 UI。
@@ -124,7 +124,7 @@ Harness v2 已把“客户端”与“执行面”切开，这是本计划能低
 3. **会话屏**：事件流投影、工具调用卡、排队提示、中止/发送；**远程审批卡是 R3 核心**，但它依赖一个当前尚不存在的前置——daemon 把 `host.approvals` 的 pending op 以外发事件（现状 router 用 IgnoreQuestions 占位、审批事件未接线），该接线显式归入 R12，能力在此之前不得授予；
 4. **设备设置**：三档能力开关、设备吊销、局域网/中继接入。
 
-视觉沿用桌面 obsidian 签名皮肤（#181818/#f4742b、同一间距/字阶/圆角刻度）。待 v2 原型：审批聚合 tab 的双端二次确认态、diff 展开、离线全屏态、Web Push、中继 owner 注册码页。
+视觉沿用桌面 obsidian 签名皮肤（#181818/#f4742b、同一间距/字阶/圆角刻度）。待 v1 原型：审批聚合 tab 的双端二次确认态、diff 展开、离线全屏态、Web Push、中继 owner 注册码页。
 
 ## 5. 测试与验收原则
 
@@ -132,10 +132,10 @@ Harness v2 已把“客户端”与“执行面”切开，这是本计划能低
 - 协议一致性走既有模式：新增方法进 verify 脚本守卫；远程与本机对同一命令的去重行为一致（command_id 跨 transport 重放返回同结果）。
 - 事件可靠性：杀 PWA、断网重连后 afterSeq 游标恢复，不丢不重（seq 单调 + journal 持久）。
 - 平台：Windows/macOS/Linux 三端监听与配对均覆盖；防火墙提示走平台惯例（Windows 首次监听弹系统授权）。
-- 禁 mock 红线延续 Harness v2：传输/配对用真实 TLS 连接测试，证书与令牌用真实生成链。
+- 禁 mock 红线延续 Harness v1：传输/配对用真实 TLS 连接测试，证书与令牌用真实生成链。
 
 ## 6. 文档与归档
 
 - 新增 `docs/support/guides/remote-control.md`（用户向：如何配对、手机使用、安全含义）；
 - 本计划完成后状态与取证进 `progress.md`；若 R5 中继落地，中继运维另出 ops 文档；
-- 不改动 Harness v2 既有协议文档；远程是传输/认证层，插件协议无感知。
+- 不改动 Harness v1 既有协议文档；远程是传输/认证层，插件协议无感知。

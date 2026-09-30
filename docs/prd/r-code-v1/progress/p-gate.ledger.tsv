@@ -1,0 +1,53 @@
+iter	task	phase	tests	quality	pass	note
+0	-	baseline	frontend 330/331; rust 1 existing suite failure	-	-	Existing failures: i18n hardcoded-copy baseline drift; plan_schema expected migration count 18 but baseline has 35
+1	T01	engineer	-	-	-	Added immutable RunSnapshot contracts and V1Store persistence
+1	T01	qa	2502/2507	min3	no	Four T01 failures: provider-specific kernel variant, inference credential smuggling, empty approval refs, unbound new attempts; one known plan_schema baseline failure
+2	T01	engineer	-	-	-	Refined provider-neutral route, credential validation, approval validation, and code-task snapshot gate
+2	T01	qa	642/642	min4	yes	Affected crates, clippy, format, all-target check and quality gate pass; known plan_schema baseline excluded
+2	T01	keep	642/642	min4	yes	Immutable RunSnapshot contracts and insert-only V1Store persistence kept without commit because baseline tree is dirty
+3	T02	engineer	-	-	-	Added revisioned checked atomic settings store and credential-free provider snapshots
+3	T02	qa	649/650	min4	no	Production composition used production credentials in dev; daemon RPCs still lossy and did not expose CAS
+4	T02	engineer	-	-	-	Wired profile-aware composition and strict checked CAS RPCs
+4	T02	qa	653/653	min4	yes	Store, daemon RPC, runtime and T01 regression tests pass; errors are credential-safe
+4	T02	keep	653/653	min4	yes	Revisioned daemon settings and provider snapshot resolution kept
+5	T03	engineer	-	-	-	Persisted pre-dispatch snapshots and added frozen per-run provider routing
+5	T03	qa	392/394	min2	no	Unsafe dev fallback, stale preference overwrite, and shared attempt namespace across different snapshots
+6	T03	engineer	-	-	-	Added StrictDaemon policy, task-state CAS merge, unique attempts and checkpoint handoff
+6	T03	qa	400/400	min4	yes	Strict daemon, concurrent preferences, attempt isolation, checkpoint transfer and regressions pass
+6	T03	keep	400/400	min4	yes	Durable pre-dispatch RunSnapshot freezing kept
+7	T04	engineer	-	-	-	Added explicit task ModelRoute and one-request GUI/daemon creation path
+7	T04	qa	142/145	min2	no	Selection pin not durable, partial preference patches lose updates, v2 alias remains, inline test literals fail compile
+8	T04	engineer	-	-	-	Atomic selection pin and tri-state CAS preference patch implemented
+8	T04	qa	1175/1175	min2	no	Correctness green; initial file-size threshold was below two pre-task baseline files and route code growth needed extraction
+9	T04	engineer	-	-	-	Extracted v1 route/create bridge into focused crate-private module
+9	T04	qa	670/670	min5	yes	Route, Host, frontend, workspace no-run, Clippy and calibrated quality gates pass
+9	T04	keep	670/670	min5	yes	GUI Provider/model/engine route now persists atomically in daemon task creation
+10	T04	engineer	-	-	-	Restored legacy create-without-native compatibility while retaining strict explicit routes
+10	T04	qa	19/19	min5	yes	r08 3/3, T04 7/7, conversation 9/9; cumulative regression repaired
+11	T05	engineer	-	-	-	Added Developer role, fail-closed projection, canonical Provider request roles and inference mapping
+11	T05	qa	88/92	min4	no	Instruction framing, non-text developer blocks and negative temperature required refinement; cumulative r08 regression also visible
+12	T05	engineer	-	-	-	Switched to deterministic JSON instruction frame and strict instruction/inference validation
+12	T05	qa	347/347	min4	yes	Full runtime 248/248, r08 3/3, protocol/native and T01-T04 cumulative gates pass
+12	T05	keep	347/347	min4	yes	Canonical transcript and frozen inference projection kept
+13	T06	engineer	-	-	-	Added immutable PlanRevision, exact approvals, dedicated schema and snapshot gate
+13	T06	qa	688/692	min4	no	Typed first revision, publish idempotency and stored-row integrity required refinement
+14	T06	engineer	-	-	-	Refined lineage, replay, corruption validation and same-task parent foreign key across four rounds
+14	T06	qa	692/692	min4	yes	Kernel 63, Store 381, Runtime 248 and quality gates pass excluding known plan_schema baseline
+14	T06	keep	692/692	min4	yes	Exact immutable PlanRevision approval persistence kept
+15	T07	engineer	-	-	-	Routed operational context/artifact/plan/question services and intersected actual grants
+15	T07	qa	311/313	min4	no	Artifact metadata integrity and pre-insert question ownership required refinement
+16	T07	engineer	-	-	-	Hardened artifact sidecar identity and question preflight ownership
+16	T07	qa	313/313	min4	yes	Runtime 260/260 plus affected kernel/store/protocol/native suites and quality gates pass
+16	T07	keep	313/313	min4	yes	Operational host-service routing and capability intersection kept
+17	T08A	engineer	-	-	-	Implemented read-only planning tools, Native PlanPublish, Awaiting/Ready and exact daemon approval
+17	T08A	qa	7/8	min4	no	Same-id third-party package inherited pre-v1 Native PlanPublish compatibility
+18	T08A	engineer	-	-	-	Bound compatibility elevation to exact persisted trusted built-in package identity
+18	T08A	qa	744/744	min4	yes	P-GATE 8/8; Runtime268; Kernel/Protocol/SDK/Native101; Store375; Clippy and quality pass
+18	T08A	keep	744/744	min4	yes	Strict backend P-GATE and exact approval state machine kept
+19	T08B	engineer	-	-	-	Migrated desktop plan get/create/approve to daemon revision hashes
+19	T08B	qa	119/120	min4	no	Daemon plans still exposed legacy cancel/retry control paths
+20	T08B	engineer	-	-	-	Gated daemon SHA-256 plans to exact approval and read-only Approved views
+20	T08B	qa	120/120	min5	yes	Host bridge, Runtime P-GATE and frontend Plan/Home tests pass
+20	T08B	keep	120/120	min5	yes	Desktop exact-hash P-GATE kept
+21	T08A	engineer	-	-	-	Fixed settled-slot drain race while preserving Pending startup route protection
+21	T08A	qa	7/7	min4	yes	Freeze-gate test updated; targeted conversation 1/1 and p_gate_approval 2/2 repeated three times

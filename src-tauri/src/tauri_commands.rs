@@ -24,8 +24,8 @@ use r_code_host::commands::{
     SubagentSessionMessagePage, SubagentSessionMessagePageRequest, TaskDetail, TaskDetailBatch,
     TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard, WorkspaceForgetResult,
 };
-// T42 阶段 1：聊天链路命令改走 v2 daemon 投影层（前端命令名/参数零改动）。
-use r_code_host::harness_v2_chat::SharedChatV2Bridge;
+// T42 阶段 1：聊天链路命令改走 v1 daemon 投影层（前端命令名/参数零改动）。
+use r_code_host::harness_v1_chat::SharedChatV1Bridge;
 use r_code_host::log_buffer::LogEntry;
 use r_code_host::plan_entry_commands::{PlanEntryOfferView, PlanningStatusView};
 use r_code_host::replay::ReplayEntry;
@@ -251,30 +251,38 @@ pub fn cmd_browser_agent_contract(
 
 /// 任务创建命令。 [doc-09]
 ///
-/// T42 阶段 1：实现切到 v2 daemon 投影层（`harness_v2_chat`）；命令名、
-/// 参数名与返回的 `Task` 形状不变。`workspace_path` 在 v2 语义下诚实忽略
-/// （v2 任务不绑定工作区）；provider/agent 参数同样诚实忽略（v2 默认
-/// pin 内置 native harness）。
+/// T42 阶段 1：实现切到 v1 daemon 投影层（`harness_v1_chat`）；命令名、
+/// 参数名与返回的 `Task` 形状保持兼容；初始 Provider、具体模型、推理参数与
+/// Agent engine 在一次 daemon 创建请求中持久化。
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // flat invoke args mirror the frontend contract
 pub async fn cmd_task_create(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     workspace_path: Option<String>,
     title: String,
     goal: String,
     mode: String,
     provider_name: Option<String>,
     agent_engine: Option<String>,
+    model: Option<String>,
+    inference: Option<InferenceOptions>,
 ) -> Result<Task, CommandError> {
-    let _ = (state, workspace_path);
-    chat_v2
-        .task_create(
+    let prompt = r_code_host::settings::SettingsService::new(state.config_dir.clone())
+        .resolve_agent_prompts(workspace_path.as_deref())
+        .map_err(CommandError::from)?
+        .main_agent;
+    chat_v1
+        .task_create_with_route(
             &title,
             &goal,
             &mode,
+            workspace_path.as_deref(),
+            &prompt,
             provider_name.as_deref(),
             agent_engine.as_deref(),
+            model.as_deref(),
+            inference.as_ref(),
         )
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
@@ -304,16 +312,17 @@ pub async fn cmd_task_prepare(
 
 /// 列出任务命令。
 ///
-/// T42 阶段 1：v2 daemon 投影（v2 无工作区绑定/归档概念，两个参数诚实忽略）。
+/// T42 阶段 1：v1 daemon 投影。工作区元数据随任务返回，列表仍由前端归组；
+/// 归档概念尚未进入 v1。
 #[tauri::command]
 pub async fn cmd_task_list(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     workspace_path: Option<String>,
     include_archived: bool,
 ) -> Result<Vec<Task>, CommandError> {
     let _ = (state, workspace_path, include_archived);
-    chat_v2
+    chat_v1
         .task_list(None, false)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
@@ -345,12 +354,15 @@ pub async fn cmd_task_restore(
 #[tauri::command]
 pub async fn cmd_task_set_agent_engine(
     state: State<'_, CommandState>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
     agent_engine: String,
 ) -> Result<Task, CommandError> {
-    r_code_host::commands::task_set_agent_engine(&state, &task_id, &agent_engine)
+    let _ = state;
+    chat_v1
+        .task_set_agent_engine(&task_id, &agent_engine)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 永久删除已停止的会话；项目目录和工作区文件不在删除范围内。
@@ -397,64 +409,73 @@ pub async fn cmd_task_choose_workspace(
 #[tauri::command]
 pub async fn cmd_task_set_provider(
     state: State<'_, CommandState>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
     provider_name: String,
 ) -> Result<Task, CommandError> {
-    r_code_host::commands::task_set_provider(&state, &task_id, &provider_name)
+    let _ = state;
+    chat_v1
+        .task_set_provider(&task_id, &provider_name)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 切换空闲会话使用的具体模型；下一次运行生效。传 null 表示回退服务默认模型。
 #[tauri::command]
 pub async fn cmd_task_set_model(
     state: State<'_, CommandState>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
     model: Option<String>,
 ) -> Result<Task, CommandError> {
-    r_code_host::commands::task_set_model(&state, &task_id, model.as_deref())
+    let _ = state;
+    chat_v1
+        .task_set_model(&task_id, model.as_deref())
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 修改空闲会话的模型专属推理参数；空字段沿用服务默认值。
 #[tauri::command]
 pub async fn cmd_task_set_inference(
     state: State<'_, CommandState>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
     inference: InferenceOptions,
 ) -> Result<Task, CommandError> {
-    r_code_host::commands::task_set_inference(&state, &task_id, inference)
+    let _ = state;
+    chat_v1
+        .task_set_inference(&task_id, &inference)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 修改会话在列表中显示的名称。
 ///
-/// T42 阶段 1：v2 daemon 投影（task.rename 后回读详情，返回旧 Task 形状）。
+/// T42 阶段 1：v1 daemon 投影（task.rename 后回读详情，返回旧 Task 形状）。
 #[tauri::command]
 pub async fn cmd_task_rename(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
     title: String,
 ) -> Result<Task, CommandError> {
     let _ = state;
-    chat_v2
+    chat_v1
         .task_rename(&task_id, &title)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
-/// T42 阶段 1：克隆会话，走 v2 daemon task.clone，标题追加“（克隆）”。
+/// T42 阶段 1：克隆会话，走 v1 daemon task.clone，标题追加“（克隆）”。
 #[tauri::command]
 pub async fn cmd_task_clone(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
 ) -> Result<Task, CommandError> {
     let _ = state;
-    chat_v2
+    chat_v1
         .task_clone(&task_id)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
@@ -528,21 +549,27 @@ pub async fn cmd_planning_status(
 #[tauri::command]
 pub async fn cmd_plan_get(
     state: State<'_, CommandState>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
 ) -> Result<Option<PlanView>, CommandError> {
-    r_code_host::commands::plan_get(&state, &task_id)
+    let _ = state;
+    chat_v1
+        .plan_get(&task_id)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::from(error.to_string()))
 }
 
 #[tauri::command]
 pub async fn cmd_plan_create(
     state: State<'_, CommandState>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
 ) -> Result<PlanView, CommandError> {
-    r_code_host::commands::plan_create(&state, &task_id)
+    let _ = state;
+    chat_v1
+        .plan_create(&task_id)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::from(error.to_string()))
 }
 
 #[tauri::command]
@@ -570,13 +597,23 @@ pub async fn cmd_plan_retry_continuation(
 #[tauri::command]
 pub async fn cmd_plan_approve(
     state: State<'_, CommandState>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
-    plan_id: String,
+    revision_hash: Option<String>,
+    plan_id: Option<String>,
     expected_revision: u64,
 ) -> Result<PlanView, CommandError> {
-    r_code_host::commands::plan_approve(&state, &task_id, &plan_id, expected_revision)
+    let _ = state;
+    let revision_hash = revision_hash
+        .or(plan_id)
+        .ok_or_else(|| CommandError::from("必须提供 daemon Plan 的 revisionHash"))?;
+    if revision_hash.trim().is_empty() {
+        return Err(CommandError::from("daemon Plan 的 revisionHash 不能为空"));
+    }
+    chat_v1
+        .plan_approve(&task_id, &revision_hash, expected_revision)
         .await
-        .map_err(CommandError::from)
+        .map_err(|error| CommandError::from(error.to_string()))
 }
 
 #[tauri::command]
@@ -704,16 +741,16 @@ pub async fn cmd_task_compact_context(
 
 /// 获取任务详情（含事件、变更、权限、验证）。
 ///
-/// T42 阶段 1：v2 daemon 投影（task.detail + 事件 journal → 11 字段旧形状；
+/// T42 阶段 1：v1 daemon 投影（task.detail + 事件 journal → 11 字段旧形状；
 /// 变更/权限/验证/排队视图为诚实空）。
 #[tauri::command]
 pub async fn cmd_task_detail(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
 ) -> Result<TaskDetail, CommandError> {
     let _ = state;
-    chat_v2
+    chat_v1
         .task_detail(&task_id)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
@@ -721,15 +758,15 @@ pub async fn cmd_task_detail(
 
 /// 批量获取任务详情，避免项目 / 活动页产生 IPC N+1。
 ///
-/// T42 阶段 1：v2 daemon 投影（逐个 detail 聚合，形状与单项完全一致）。
+/// T42 阶段 1：v1 daemon 投影（逐个 detail 聚合，形状与单项完全一致）。
 #[tauri::command]
 pub async fn cmd_task_detail_batch(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_ids: Vec<String>,
 ) -> Result<TaskDetailBatch, CommandError> {
     let _ = state;
-    chat_v2
+    chat_v1
         .task_detail_batch(&task_ids)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
@@ -737,27 +774,33 @@ pub async fn cmd_task_detail_batch(
 
 /// 发送用户消息到 Agent。 [doc-04 §7]
 ///
-/// T42 阶段 1：v2 daemon `task.sendMessage`（自带排队语义，queued 视为成功）。
-/// mode 参数保留旧校验保持错误行为一致；附件参数在 v2 语义下诚实忽略
-/// （v2 sendMessage 为纯文本通道）。
+/// T42 阶段 1：v1 daemon `task.sendMessage`（自带排队语义，queued 视为成功）。
+/// mode 参数保留旧校验保持错误行为一致；附件参数在 v1 语义下诚实忽略
+/// （v1 sendMessage 为纯文本通道）。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // flat invoke args mirror the frontend send contract
 pub async fn cmd_agent_send(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
     message: String,
     mode: Option<String>,
     attachments: Option<Vec<r_code_host::commands::AttachmentInput>>,
     attachment_ids: Option<Vec<String>>,
+    workspace_path: Option<String>,
 ) -> Result<(), CommandError> {
-    let _ = (state, attachments, attachment_ids);
+    let _ = (attachments, attachment_ids);
     if let Some(value) = &mode {
         AgentSendMode::try_from_str(value)
             .ok_or_else(|| format!("invalid agent send mode: {value}"))
             .map_err(CommandError::from)?;
     }
-    chat_v2
-        .agent_send(&task_id, &message)
+    let prompt = r_code_host::settings::SettingsService::new(state.config_dir.clone())
+        .resolve_agent_prompts(workspace_path.as_deref())
+        .map_err(CommandError::from)?
+        .main_agent;
+    chat_v1
+        .agent_send(&task_id, &message, workspace_path.as_deref(), &prompt)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
@@ -800,15 +843,15 @@ pub async fn cmd_agent_attachment_preview(
 
 /// 中止 Agent 运行。
 ///
-/// T42 阶段 1：v2 daemon `task.cancel`。
+/// T42 阶段 1：v1 daemon `task.cancel`。
 #[tauri::command]
 pub async fn cmd_agent_abort(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
 ) -> Result<(), CommandError> {
     let _ = state;
-    chat_v2
+    chat_v1
         .agent_abort(&task_id)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
@@ -1707,16 +1750,16 @@ pub async fn cmd_replay(
 
 /// 读取会话消息序列（Room 时间线数据源）。
 ///
-/// T42 阶段 1：v2 daemon 事件 journal 投影（input.queued→用户消息、
+/// T42 阶段 1：v1 daemon 事件 journal 投影（input.queued→用户消息、
 /// assistant.message→助手消息、tool.call/tool.result→工具条目）。
 #[tauri::command]
 pub async fn cmd_session_messages(
     state: State<'_, CommandState>,
-    chat_v2: State<'_, SharedChatV2Bridge>,
+    chat_v1: State<'_, SharedChatV1Bridge>,
     task_id: String,
 ) -> Result<Vec<SessionMessage>, CommandError> {
     let _ = state;
-    chat_v2
+    chat_v1
         .session_messages(&task_id)
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))

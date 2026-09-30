@@ -22,7 +22,7 @@ fn main() {
             .as_bytes(),
     );
     // 第二帧：追加历史 + live 输入变化。
-    let live2: Vec<String> = vec!["> ask anything".into(), "状态行 v2".into()];
+    let live2: Vec<String> = vec!["> ask anything".into(), "状态行 v1".into()];
     let _ = stdout.write_all(
         renderer
             .frame(&["· 新状态行".to_string()], &live2)

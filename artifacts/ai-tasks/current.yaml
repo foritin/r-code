@@ -50,7 +50,7 @@ remaining_assertions: [RA1.A1, RA1.A2, RA1.A3]
 changed_paths: []
 decisions:
   - DM1: created_seq/decided_seq 冻结为"事件写入前的 journal 水位"（max_event_seq）——append-only 事件无法自引用自身 seq；单调可比，满足 RA2 list 排序需求。
-  - DM2: JournalStore trait 加默认方法 max_event_seq（默认全量读 last），V2Store 用 SELECT MAX(seq) 覆盖，MemoryJournal 覆盖——生产路径一次 SQL。
+  - DM2: JournalStore trait 加默认方法 max_event_seq（默认全量读 last），V1Store 用 SELECT MAX(seq) 覆盖，MemoryJournal 覆盖——生产路径一次 SQL。
   - DM3: ApprovalStore 内部 tokio::sync::Mutex 串行化 register/decide/pending/rebuild；decide 先写 journal 成功再提交内存+watch 发送（决策生效⟹已持久）；并发重复 decided 事件在 rebuild 投影时 first-wins 去重。
   - DM4: t10 契约演进——未登记 op 从"返回 denied 决策"升级为"PROTOCOL_VIOLATION RpcError、不产生事件"（拒绝语义不削弱且更强）；宿主决策路径 set_decision 改为 register+decide。
   - DM5: 等待原语 watch::Sender<Option<DecisionRecord>>——"先注册等待者后决策"与"决策早于等待者"两时序都覆盖。

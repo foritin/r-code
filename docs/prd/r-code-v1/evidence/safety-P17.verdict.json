@@ -1,0 +1,69 @@
+{
+  "task_id": "P17",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s17_linux_seccomp.rs"
+  ],
+  "tests": {
+    "command": "PLATFORM DISCIPLINE (task contract: Windows dev host + native Linux CI; no WSL, no cross-target EXECUTION): linux.rs and s17 are both #![cfg(target_os = \"linux\")] — the Windows gates prove cfg discipline, s17 parse and cross-platform dependency-graph integrity only; s17 (6 authored tests, iteration 1: the ENOSYS-shape escape e2e over a REAL P16 plan with unfiltered controls, raw ctypes per-bit clone/add_key/keyctl/setns probes, ordinary-runtimes threading/fallback e2e, fd non-inheritance, CLOEXEC/8-byte wire-format/attach-before-terminator pins, fail-closed materials and source pins) and the three linux.rs in-source seccomp unit tests EXECUTE ONLY in native Linux CI and are never counted as run locally. ITERATION-2 LOCAL GATES (QA-rerun this round, single-threaded, --no-fail-fast, raw unfiltered test-result sums): rtk cargo check --workspace --all-features green; rtk cargo clippy -p r-code-runtime --lib --tests -- -D warnings green and cargo fmt --all -- --check green; runtime lib 78/78; rtk cargo check -p r-code-runtime --tests green (s17 parses as an empty suite on Windows); full runtime --tests 415 passed across 81 suites with 0 failed, verified twice (passed-sum re-count 415 and an explicit failed-count pass returning suites_ok=81 suites_failed=0 tests_failed=0); quality_check.py ok=true / 0 violations on the three P17 sources (linux.rs file_loc 679, max_comment_block 11). TOTALS carry iteration 1's full local gates: 953/952/1, the ONLY failure the declared pre-existing plan_schema baseline (clean_database_and_schema_18_upgrade_reach_latest_complete_schema: migration-count assertion expects 18, schema now at 35) — P17 changed no store code, so the green subset re-run plus the green workspace check carries the store/harness/kernel results forward unchanged. INDEPENDENT cross-target COMPILE verification (QA-executed this iteration, closing the blind spot that shipped iteration 1's Linux compile error): a scratch crate OUTSIDE the repo (%TEMP%/scratch-p17, deleted after the run) carrying compile_namespace_policy_filter and write_filter_to_memfd copied VERBATIM from the iteration-2 linux.rs, plus the seccompiler::sock_filter size pin, ran `cargo check --target x86_64-unknown-linux-gnu` CLEAN — seccompiler 0.5.0 itself checked under the Linux target (it cannot build on a Windows host at all; only the cfg(target_os = \"linux\") dependency gate keeps the Windows graph green). This is compile-only evidence, honestly distinct from execution; no WSL was used and nothing was executed against the cross target.",
+    "total": 953,
+    "passed": 952,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing plan_schema baseline: migration-count assertion expects 18, schema now at 35; P17 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "Cargo.toml": {
+          "file_loc": 161,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.158,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/Cargo.toml": {
+          "file_loc": 83,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.078,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/sandbox/linux.rs": {
+          "file_loc": 679,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.237,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS — all four iteration-1 defects are fixed and verified by QA code reading plus an independently reproduced cross-target compile check (MaskedEq(bit as u64) tuple form with per-rule value bit at linux.rs:368-369; SEVEN OR-bound per-bit clone rules with debug_assert_eq!(covered_bits, CLONE_NAMESPACE_BITS) at linux.rs:377 so any single namespace bit matches while thread creation stays allowed; the unit-test size pin uses the public re-export seccompiler::sock_filter at linux.rs:547; the memfd name is the NUL-terminated b\"r-code-seccomp\\0\" byte string at linux.rs:416; SeccompConditionSlot is gone, grep count 0), a verbatim-copy scratch crate checked clean against x86_64-unknown-linux-gnu and was deleted, every re-run Windows gate is green (workspace check, clippy -D warnings, fmt, runtime lib 78/78, full runtime 415/415 over 81 suites with 0 failed, s17 parses empty, quality_check ok), and the totals stay 953/952/1 with only the declared plan_schema 18-vs-35 baseline; s17 and the seccomp unit tests now execute only in native Linux CI to pin the ENOSYS wire format end-to-end, with per-run activation still P20-bound."
+}

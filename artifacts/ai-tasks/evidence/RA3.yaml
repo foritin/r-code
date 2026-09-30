@@ -38,4 +38,4 @@ decisions:
 
 known_limitations:
   - PTY 级审批脚本测试（daemon_common staging 审批 fixture）未做——lib 投影单测 + runtime 真进程 e2e 已覆盖状态机与决策链路；PTY 层留待 R0 之外的常规回归。
-  - verify-harness-v2 full 未跑（约 45min 全量）；R0 门禁 7/7 + 相关定向回归绿。用户指示不全量测试；需要时单独跑。
+  - verify-harness-v1 full 未跑（约 45min 全量）；R0 门禁 7/7 + 相关定向回归绿。用户指示不全量测试；需要时单独跑。

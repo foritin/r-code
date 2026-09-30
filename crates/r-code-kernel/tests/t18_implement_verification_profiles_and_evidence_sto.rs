@@ -35,9 +35,12 @@ fn check(check_id: &str) -> CheckDefinition {
 fn host_evidence(check_id: &str, digest: &str, env: &str, passed: bool) -> EvidenceRecord {
     EvidenceRecord {
         evidence_id: format!("ev-{check_id}-{digest}"),
+        task_id: "task-1".into(),
         check_id: check_id.into(),
+        definition_identity: check(check_id).identity(),
         candidate_digest: digest.into(),
         environment: env.into(),
+        environment_fingerprint: format!("environment:{env}"),
         passed,
         host_output: None,
         recorded_by: Provenance::Host,
@@ -160,7 +163,7 @@ fn stale_and_foreign_evidence_is_rejected() {
 }
 
 #[test]
-fn absent_checks_yield_unverified_not_verified() {
+fn plugin_proposal_with_absent_checks_requires_host_verification() {
     // A task whose contract requires two checks but has evidence for one
     // can only finish unverified (the kernel's arbitration, T03/T20).
     let mut state = TaskState::new(TaskContract {
@@ -172,22 +175,30 @@ fn absent_checks_yield_unverified_not_verified() {
         revision: 1,
     });
     state
-        .start_attempt(&Attempt {
-            attempt_id: "a1".into(),
-            task_id: "task-1".into(),
-            branch_id: "b".into(),
-            package: PackageRef {
-                id: HarnessId::new("h"),
-                version: semver::Version::new(1, 0, 0),
-                content_digest: "s".into(),
-            },
-            contract_revision: 1,
-            config_hash: "c".into(),
-            workspace_identity: "w".into(),
-            run_id: "r".into(),
-        })
+        .start_attempt(
+            &Attempt {
+                attempt_id: "a1".into(),
+                task_id: "task-1".into(),
+                branch_id: "b".into(),
+                package: PackageRef {
+                    id: HarnessId::new("h"),
+                    version: semver::Version::new(1, 0, 0),
+                    content_digest: "s".into(),
+                },
+                contract_revision: 1,
+                config_hash: "c".into(),
+                workspace_identity: "w".into(),
+                run_id: "r".into(),
+            }
+            .with_run_snapshot(
+                &RunSnapshotId::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            ),
+        )
         .expect("start");
-    state.set_candidate_digest(Some("digest-a".into())).unwrap();
+    // E05: candidate digests are seeded per unit.
+    state
+        .set_unit_candidate_digest("u1", Some("digest-a".into()))
+        .unwrap();
     // Evidence present only for one of the two required checks.
     state
         .record_evidence(host_evidence(
@@ -209,17 +220,11 @@ fn absent_checks_yield_unverified_not_verified() {
             },
         )
         .expect("proposal");
-    match decision {
-        ProposalDecision::Accept {
-            verdict: TaskVerdict::Unverified { reason },
-        } => {
-            assert!(
-                reason.contains("check:clippy"),
-                "missing check named: {reason}"
-            );
-        }
-        other => panic!("expected unverified, got {other:?}"),
-    }
+    assert!(matches!(
+        decision,
+        ProposalDecision::Repair { feedback }
+            if feedback.contains("host verification")
+    ));
 }
 
 #[test]
@@ -243,12 +248,13 @@ fn acceptance_profiles_are_immutable_and_user_authorized_on_weakening() {
 #[test]
 fn store_round_trips_definitions_and_candidate_evidence() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let store = r_code_store::v2::V2Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
+    let store = r_code_store::v1::V1Store::open(&temp.path().join("tasks.sqlite3")).expect("open");
 
-    let definition = check("check:cargo-test");
-    store
-        .save_check_definition(&definition)
-        .expect("save definition");
+    for definition in [check("check:cargo-test"), check("check:clippy")] {
+        store
+            .save_check_definition(&definition)
+            .expect("save definition");
+    }
 
     store
         .save_evidence(&host_evidence(

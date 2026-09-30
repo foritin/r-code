@@ -18,9 +18,9 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
 
 use crate::commands::CommandState;
-// T42 阶段 1：MCP 工具的聊天执行面切到 v2 daemon 投影层；工具名与返回
+// T42 阶段 1：MCP 工具的聊天执行面切到 v1 daemon 投影层；工具名与返回
 // JSON 形状保持不变（任务创建/发送/中止/详情/会话消息）。
-use crate::harness_v2_chat::ChatV2Bridge;
+use crate::harness_v1_chat::ChatV1Bridge;
 use crate::migration::MigrationManager;
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -82,8 +82,8 @@ pub async fn serve_stdio(data_dir: Option<PathBuf>) -> Result<(), String> {
 pub struct McpService {
     state: CommandState,
     /// T42 阶段 1：聊天执行面（task_create/agent_send/agent_abort/
-    /// task_detail/session_messages）改走 v2 daemon 投影桥。
-    v2: ChatV2Bridge,
+    /// task_detail/session_messages）改走 v1 daemon 投影桥。
+    v1: ChatV1Bridge,
     owned_tasks: Mutex<HashSet<String>>,
 }
 
@@ -136,8 +136,8 @@ impl McpService {
         );
         Ok(Self {
             state,
-            v2: ChatV2Bridge::for_current_app().map_err(|error| {
-                format!("v2 daemon bridge unavailable; MCP startup aborted: {error}")
+            v1: ChatV1Bridge::for_current_app().map_err(|error| {
+                format!("v1 daemon bridge unavailable; MCP startup aborted: {error}")
             })?,
             owned_tasks: Mutex::new(HashSet::new()),
         })
@@ -148,7 +148,7 @@ impl McpService {
         Self {
             state,
             // 测试环境同样只解析 profile（无 IO）；真实连接延迟到命令调用。
-            v2: ChatV2Bridge::for_current_app().expect("v2 chat bridge profile"),
+            v1: ChatV1Bridge::for_current_app().expect("v1 chat bridge profile"),
             owned_tasks: Mutex::new(HashSet::new()),
         }
     }
@@ -238,7 +238,6 @@ impl McpService {
 
         let title = optional_text(arguments, "title", MAX_TITLE_CHARS)
             .unwrap_or_else(|| format!("MCP · {}", compact(&goal, 54)));
-        let provider_name = optional_text(arguments, "provider_name", 100);
         let requested_access = if force_read_only {
             "read_only"
         } else {
@@ -261,22 +260,23 @@ impl McpService {
             _ => return Err("access must be read_only or full_access"),
         };
         // Ask is a hard read-only capability policy; Edit exposes the normal project-scoped tools
-        // and still respects the workspace's persisted approval policy.
-        // T42 阶段 1：v2 daemon task.create（workspace 绑定在 v2 语义下诚实忽略，
-        // 工具执行范围由 daemon 的 workspaces root 决定）。
+        // and still respects the workspace's persisted approval policy. The effective prompt is
+        // resolved at dispatch so project append/override settings also apply to MCP delegation.
+        let prompt = crate::settings::SettingsService::new(self.state.config_dir.clone())
+            .resolve_agent_prompts(Some(&workspace))
+            .map_err(|_| "R-Code prompt settings are unavailable")?
+            .main_agent;
         let task = self
-            .v2
-            .task_create(
-                &title,
-                &goal,
-                mode,
-                provider_name.as_deref(),
-                Some("r_code"),
-            )
+            .v1
+            .task_create(&title, &goal, mode, Some(&workspace), &prompt)
             .await
             .map_err(|_| "R-Code could not create the delegated task")?;
         self.owned_tasks.lock().await.insert(task.id.clone());
-        if let Err(error) = self.v2.agent_send(&task.id, &goal).await {
+        if let Err(error) = self
+            .v1
+            .agent_send(&task.id, &goal, Some(&workspace), &prompt)
+            .await
+        {
             tracing::warn!(task_id = %task.id, "MCP native delegate could not start: {error}");
             return Err(
                 "R-Code Agent is not ready; configure a usable provider in R-Code Settings",
@@ -306,7 +306,7 @@ impl McpService {
     async fn cancel_task(&self, arguments: &Value) -> Result<Value, &'static str> {
         let task_id = required_text(arguments, "task_id", 160)?;
         self.require_owned(&task_id).await?;
-        self.v2
+        self.v1
             .agent_abort(&task_id)
             .await
             .map_err(|_| "R-Code could not cancel this task")?;
@@ -339,7 +339,7 @@ impl McpService {
 
     async fn task_status_payload(&self, task_id: &str) -> Result<Value, &'static str> {
         let detail = self
-            .v2
+            .v1
             .task_detail(task_id)
             .await
             .map_err(|_| "R-Code task is unavailable")?;
@@ -348,7 +348,7 @@ impl McpService {
             TaskState::Exploring | TaskState::InProgress
         ) || detail.runs.iter().any(|run| run.ended_at.is_none());
         let messages = self
-            .v2
+            .v1
             .session_messages(task_id)
             .await
             .map_err(|_| "R-Code task result is unavailable")?;

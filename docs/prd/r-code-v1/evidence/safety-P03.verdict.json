@@ -1,0 +1,56 @@
+{
+  "task_id": "P03",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-harness-protocol/tests/s03_process_read.rs",
+    "crates/r-code-runtime/tests/s03_process_router.rs",
+    "plugins/codex/tests/s03_app_server_read.rs"
+  ],
+  "tests": {
+    "command": "P03 protocol/schema, SDK/router and real Codex stdio suites; full Protocol, SDK, Codex, Evals and packaging suites; full Store with the declared plan_schema baseline skipped; full Runtime and Kernel; workspace all-feature check/no-run; workspace all-feature all-target Clippy -D warnings",
+    "total": 903,
+    "passed": 903,
+    "failed": 0,
+    "regression_green": true,
+    "failed_tests": []
+  },
+  "quality": {
+    "simplicity": 3,
+    "readability": 4,
+    "comment_hygiene": 5,
+    "organization": 4,
+    "style_match": 4,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-harness-protocol/src/services.rs": {"file_loc": 697, "max_comment_block": 6, "long_comment_lines": 0, "comment_ratio": 0.189, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-harness-protocol/src/manifest.rs": {"file_loc": 489, "max_comment_block": 5, "long_comment_lines": 0, "comment_ratio": 0.111, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-harness-protocol/src/rpc.rs": {"file_loc": 241, "max_comment_block": 5, "long_comment_lines": 0, "comment_ratio": 0.116, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-harness-protocol/src/operations.rs": {"file_loc": 235, "max_comment_block": 6, "long_comment_lines": 0, "comment_ratio": 0.25, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-harness-protocol/schema/harness-v1.schema.json": {"file_loc": 164, "max_comment_block": 0, "long_comment_lines": 0, "comment_ratio": 0.0, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-kernel/src/ports.rs": {"file_loc": 244, "max_comment_block": 6, "long_comment_lines": 0, "comment_ratio": 0.135, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-harness-sdk/src/lib.rs": {"file_loc": 756, "max_comment_block": 12, "long_comment_lines": 0, "comment_ratio": 0.078, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/src/plugins/catalog.rs": {"file_loc": 314, "max_comment_block": 6, "long_comment_lines": 0, "comment_ratio": 0.094, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/src/plugins/router.rs": {"file_loc": 1223, "max_comment_block": 9, "long_comment_lines": 0, "comment_ratio": 0.051, "max_func_loc": null, "max_nesting": null},
+        "crates/r-code-runtime/src/run_manager.rs": {"file_loc": 2314, "max_comment_block": 11, "long_comment_lines": 0, "comment_ratio": 0.043, "max_func_loc": null, "max_nesting": null},
+        "plugins/codex/src/app_server.rs": {"file_loc": 255, "max_comment_block": 7, "long_comment_lines": 0, "comment_ratio": 0.09, "max_func_loc": null, "max_nesting": null},
+        "plugins/codex/harness.json": {"file_loc": 44, "max_comment_block": 0, "long_comment_lines": 0, "comment_ratio": 0.0, "max_func_loc": null, "max_nesting": null},
+        "src-tauri/plugins/codex/harness.json": {"file_loc": 44, "max_comment_block": 0, "long_comment_lines": 0, "comment_ratio": 0.0, "max_func_loc": null, "max_nesting": null},
+        "scripts/harness-packaging.test.mjs": {"file_loc": 186, "max_comment_block": 0, "long_comment_lines": 0, "comment_ratio": 0.0, "max_func_loc": null, "max_nesting": null}
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "P03 iteration 2 passes the keep gate after closing the non-empty terminal-without-Exit and missing-exitCode parity defects. API v1.1 remains additive for v1.0 packages, Rust/schema/SDK/router/manifests and packaging agree, ProcessRead is run-scoped and replay-safe with strict corruption bounds, Codex preserves its exact four process services plus required non-process authorities while handling fragmented/multiple NDJSON events, empty pages, stderr, EOF/exit and the 1 MiB partial-line cap, codex.event.next is absent, and all cumulative and workspace quality gates pass."
+}

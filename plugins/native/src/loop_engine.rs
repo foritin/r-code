@@ -6,9 +6,12 @@
 //! model stops calling tools. Cancellation is cooperative between turns.
 
 use crate::request_projection::{
-    project_request, push_assistant, push_tool_result, push_user, ConversationState, WireBlock,
+    project_request, push_assistant, push_tool_result, push_user, ConversationState,
+    ProjectionError, WireBlock,
 };
-use r_code_harness_protocol::services::{ProposalKind, ToolDescriptor};
+use r_code_harness_protocol::services::{
+    PlanPublishRequest, ProposalKind, ToolDescriptor, WorkUnitWire,
+};
 use r_code_harness_sdk::{SdkError, SdkHandle};
 
 /// Loop configuration (strategy defaults preserved from the Native
@@ -27,16 +30,21 @@ pub struct LoopConfig {
     /// system prompt posture.
     #[serde(default)]
     pub task_mode: Option<String>,
+    /// Next task-owned immutable plan revision supplied by the host. It is
+    /// required in plan mode and never guessed by the harness.
+    #[serde(default)]
+    pub plan_revision: Option<u64>,
     pub max_turns: u32,
 }
 
 impl Default for LoopConfig {
     fn default() -> Self {
         Self {
-            system_prompt: "You are a careful coding agent. Use the provided tools.".into(),
+            system_prompt: agent_config::DEFAULT_MAIN_AGENT_PROMPT.to_string(),
             model_selection: None,
             inference: None,
             task_mode: None,
+            plan_revision: None,
             max_turns: 25,
         }
     }
@@ -73,6 +81,24 @@ impl LoopConfig {
             .and_then(|v| v.as_str())
             .filter(|mode| !mode.is_empty())
             .map(str::to_string);
+        config.plan_revision = harness_config
+            .get("planRevision")
+            .and_then(|value| value.as_u64())
+            .filter(|revision| *revision > 0);
+        if let Some(system_prompt) = harness_config
+            .get("systemPrompt")
+            .and_then(|value| value.as_str())
+        {
+            config.system_prompt = system_prompt.to_string();
+        }
+        if let Some(max_turns) = harness_config
+            .get("maxTurns")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+        {
+            config.max_turns = max_turns;
+        }
         config
     }
 
@@ -88,14 +114,10 @@ impl LoopConfig {
                     &self.system_prompt
                 }
             ),
-            Some("ask") => format!(
-                "{}\n\n当前为 Ask 模式：优先回答与解释，必要时用只读工具查证；不做文件修改。",
-                if self.system_prompt.is_empty() {
-                    "You are a careful coding agent."
-                } else {
-                    &self.system_prompt
-                }
-            ),
+            // Ask is enforced by the host's read-only tool capability. Keep
+            // the resolved prompt byte-for-byte so task prompt snapshots and
+            // model requests have the same identity.
+            Some("ask") => self.system_prompt.clone(),
             _ => self.system_prompt.clone(),
         }
     }
@@ -106,8 +128,12 @@ impl LoopConfig {
 pub enum LoopError {
     #[error("sdk failure: {0}")]
     Sdk(String),
+    #[error(transparent)]
+    Projection(#[from] ProjectionError),
     #[error("turn limit reached ({0} turns)")]
     TurnLimit(u32),
+    #[error("plan mode requires a host-provided plan revision")]
+    MissingPlanRevision,
 }
 
 impl From<SdkError> for LoopError {
@@ -156,7 +182,7 @@ pub async fn run_loop(
             &tools,
             config.model_selection.as_deref(),
             config.inference.clone(),
-        );
+        )?;
         let turn = handle.model_stream(request).await?;
         let text = turn.text();
         let calls = turn.tool_calls();
@@ -212,11 +238,30 @@ pub async fn run_loop(
             .map_err(|e| LoopError::Sdk(e.to_string()))?;
     }
 
+    // A plan becomes a completion proposal only after the host validates and
+    // durably publishes its exact revision. A publish failure exits here and
+    // therefore cannot be mistaken for completion.
+    let proposal_kind = match config.task_mode.as_deref() {
+        Some("plan") => {
+            let revision = config.plan_revision.ok_or(LoopError::MissingPlanRevision)?;
+            handle
+                .plan_publish(PlanPublishRequest {
+                    revision,
+                    work_units: plan_work_units(&final_text),
+                })
+                .await
+                .map_err(|error| LoopError::Sdk(error.to_string()))?;
+            ProposalKind::PlanDraft
+        }
+        Some("execution" | "edit" | "auto") => ProposalKind::Implementation,
+        _ => ProposalKind::Reply,
+    };
+
     // Propose completion for host arbitration.
     let decision = handle
         .propose_completion(
             r_code_harness_protocol::services::CompletionProposalRequest {
-                kind: ProposalKind::Reply,
+                kind: proposal_kind,
                 summary: if final_text.is_empty() {
                     "run stopped".into()
                 } else {
@@ -234,4 +279,103 @@ pub async fn run_loop(
         tool_calls_executed: executed,
         proposal_accepted: decision.accepted,
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictPlanDocument {
+    work_units: Vec<StrictWorkUnit>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictWorkUnit {
+    id: String,
+    description: String,
+    #[serde(default)]
+    dependencies: Vec<String>,
+    #[serde(default)]
+    acceptance: Vec<String>,
+    #[serde(default)]
+    read_paths: Vec<String>,
+    #[serde(default)]
+    write_paths: Vec<String>,
+    #[serde(default)]
+    repo_exclusive: bool,
+    #[serde(default)]
+    ephemeral_roots: Vec<String>,
+    /// P19A (API v1.2): effect authority carried verbatim from the
+    /// strict plan document; absent fields stay at the conservative
+    /// ReadOnly/Offline defaults.
+    #[serde(default)]
+    effect_class: r_code_harness_protocol::services::WorkUnitEffectClass,
+    #[serde(default)]
+    network_ceiling: r_code_harness_protocol::services::NetworkCeiling,
+}
+
+/// Parse the documented strict JSON shape when present. Semantic validation
+/// (empty/duplicate ids and dependency integrity) stays host-owned. Free-form
+/// model output becomes one stable unit so identical text produces identical
+/// plan material across retries.
+fn plan_work_units(final_text: &str) -> Vec<WorkUnitWire> {
+    if let Ok(document) = serde_json::from_str::<StrictPlanDocument>(final_text) {
+        return document
+            .work_units
+            .into_iter()
+            .map(|unit| WorkUnitWire {
+                id: unit.id,
+                description: unit.description,
+                dependencies: unit.dependencies,
+                acceptance: unit.acceptance,
+                read_paths: unit.read_paths,
+                write_paths: unit.write_paths,
+                repo_exclusive: unit.repo_exclusive,
+                ephemeral_roots: unit.ephemeral_roots,
+                effect_class: unit.effect_class,
+                network_ceiling: unit.network_ceiling,
+            })
+            .collect();
+    }
+    let digest = r_code_harness_protocol::canonical_input_hash(&serde_json::json!({
+        "finalText": final_text,
+    }));
+    vec![WorkUnitWire {
+        id: format!("plan-{}", &digest[..16]),
+        description: final_text.to_string(),
+        dependencies: Vec::new(),
+        acceptance: Vec::new(),
+        read_paths: Vec::new(),
+        write_paths: Vec::new(),
+        repo_exclusive: false,
+        ephemeral_roots: Vec::new(),
+        effect_class: r_code_harness_protocol::services::WorkUnitEffectClass::ReadOnly,
+        network_ceiling: r_code_harness_protocol::services::NetworkCeiling::Offline,
+    }]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_uses_the_product_owned_main_agent_prompt() {
+        let config = LoopConfig::default();
+        assert_eq!(
+            config.system_prompt,
+            agent_config::DEFAULT_MAIN_AGENT_PROMPT
+        );
+        assert!(config.system_prompt.contains("You are R-Code"));
+    }
+
+    #[test]
+    fn harness_config_can_override_prompt_and_turn_budget() {
+        let config = LoopConfig::from_harness_config(&serde_json::json!({
+            "systemPrompt": "project prompt",
+            "maxTurns": 41,
+            "taskMode": "edit",
+        }));
+        assert_eq!(config.system_prompt, "project prompt");
+        assert_eq!(config.max_turns, 41);
+        assert_eq!(config.task_mode.as_deref(), Some("edit"));
+    }
 }

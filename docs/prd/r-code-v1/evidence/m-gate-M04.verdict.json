@@ -1,0 +1,99 @@
+{
+  "task_id": "M04",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/m04_review_flow.rs",
+    "crates/r-code-runtime/tests/m04_rollback_recovery.rs",
+    "crates/r-code-runtime/tests/m04_review_rpc.rs",
+    "crates/r-code-kernel/tests/m04_review_lifecycle.rs"
+  ],
+  "tests": {
+    "command": "M04 targeted suites; cumulative protocol/kernel/store/runtime/native/evals regressions; workspace all-feature no-run; workspace all-target Clippy -D warnings",
+    "total": 855,
+    "passed": 855,
+    "failed": 0,
+    "regression_green": true,
+    "failed_tests": []
+  },
+  "quality": {
+    "simplicity": 3,
+    "readability": 4,
+    "comment_hygiene": 5,
+    "organization": 3,
+    "style_match": 4,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/review.rs": {
+          "file_loc": 888,
+          "max_comment_block": 9,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.048,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/application.rs": {
+          "file_loc": 2133,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.058,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/bin/r-code-service.rs": {
+          "file_loc": 962,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.064,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-kernel/src/task.rs": {
+          "file_loc": 1585,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.089,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-store/src/v1/mutations.rs": {
+          "file_loc": 788,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.008,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/run_manager.rs": {
+          "file_loc": 2312,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.043,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/workspaces.rs": {
+          "file_loc": 458,
+          "max_comment_block": 7,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.088,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "M04 iteration 2 passes the keep gate. Exact ReviewReady projection, final candidate recapture, physical-identity drift detection, verified acceptance, exact RepairRequired-only Unverified override, complete preflighted CAS rollback, Prepared/Applied/Receipted recovery, durable Conflict handling, authenticated RPC actors and Git-metadata preservation are covered; the sole excluded Rust baseline is the pre-existing plan_schema migration-count assertion."
+}

@@ -1,0 +1,75 @@
+{
+  "task_id": "P15",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s15_windows_appcontainer.rs"
+  ],
+  "tests": {
+    "command": "rtk proxy cargo test -p r-code-runtime --all-features --no-fail-fast -- --test-threads=1 on the native Windows host (the platform for this suite): focused --test s15_windows_appcontainer 5p/0f and --test r00_transport_seam 2p/0f, then the full crate --lib 78p/0f plus --tests 415p/0f cumulative (lib + all integration binaries, every binary 'ok. ... 0 failed'); plus -p r-code-kernel 75p/0f, -p r-code-store --all-features --no-fail-fast 416p/1f (the ONLY failure is the pre-declared plan_schema 18-vs-35 baseline: clean_database_and_schema_18_upgrade_reach_latest_complete_schema), -p r-code-harness-protocol -p r-code-harness-sdk 33p/0f, -p r-code-harness-codex 13p/0f; gates: rtk cargo clippy --workspace --all-features --all-targets -- -D warnings (clean), rtk cargo fmt --all -- --check (clean), rtk cargo test --workspace --all-features --no-run and rtk cargo check --workspace --all-features (clean), quality_check.py on the 4 changed files ok=true/0 violations. Iteration-1 story (same suite) had failed the task with 4 real defects — dead-stack SECURITY_CAPABILITIES scope (win32 87), ancestor-traversal grants on ungrantable C:\\Users plus an unrestored journal row on the error path, the r00_a1 F2-listener regression, and deny targets inside the granted subtree — all fixed by the iteration-2 refine and now re-verified green end-to-end against the REAL lowbox. s08/s10/s11 remain compile-empty on Windows (verified via workspace --no-run); orphaned suspended cmd.exe from spawning runs cleaned with Stop-Process after each run.",
+    "total": 953,
+    "passed": 952,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "Declared plan_schema baseline (expects schema 18, current v1 schema reaches 35) — the single pre-existing, task-contract-sanctioned failure carried since the baseline was declared; unchanged by P15 (Store otherwise 416p/0f)."
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 4,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/sandbox/windows.rs": {
+          "file_loc": 1309,
+          "max_comment_block": 9,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.171,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/process_guard/windows.rs": {
+          "file_loc": 1312,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.308,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/bin/r-code-safety-probe.rs": {
+          "file_loc": 197,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.187,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/Cargo.toml": {
+          "file_loc": 80,
+          "max_comment_block": 2,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.067
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS — P15 now delivers the real Windows AppContainer sandbox on a native host: creation-time Job+SECURITY_CAPABILITIES lowbox (dead-stack scope fixed, NULL capabilities for empty arrays, and the 11-key AppContainer base-environment synthesis for the empirically-bisected ERROR_ENVVAR_NOT_FOUND truth), explicit-subtree-only grants with ancestor-traversal grants removed entirely (the second pinned OS truth: SeChangeNotifyPrivilege carries the lowbox through ungranted ancestors, so shared ancestors like C:\\Users are never ACL-touched), a three-way network probe against a resolved public endpoint with no listener anywhere (F2 pin restored, r00_a1 green), deny targets outside the grant set, keyring sentinel delete_credential, journal reconcile on every grant-loop failure path, and DACL-only restore. QA's two iteration-2 flips were its own tests' staleness, not defects: the ipc denial is now proven locale-independently via the never-localized '(os error 5)' suffix (this host renders Win32 messages in Chinese) and the plan contract was strengthened to assert ZERO traversal grants plus exact grant-set == profile-root-set equality. Only remaining failure across 953 cumulative tests is the pre-declared plan_schema 18-vs-35 baseline; one cosmetic note for a future round: the build_appcontainer_launch_plan doc comment (services/sandbox/windows.rs:703-704) still mentions 'traversal-only grants' that the code below it deliberately no longer mints."
+}

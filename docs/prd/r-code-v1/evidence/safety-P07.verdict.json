@@ -1,0 +1,62 @@
+{
+  "task_id": "P07",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s07_windows_job_proof.rs",
+    "crates/r-code-runtime/src/bin/process-tree-helper.rs"
+  ],
+  "tests": {
+    "command": "focused s07 10/10; neighbours s00 11/11, s04 9/9, s05 12/12, s06 12/12; full Runtime 386/386 across 69 suites (raw unfiltered test-result sums); full Kernel 75/75; harness-protocol + harness-sdk 33/33; codex plugin 13/13; full Store 323/324 with the single failure being the declared pre-existing plan_schema migration-count baseline (expects 18, actual 35, untouched by P07); workspace all-feature check and test --no-run green; workspace all-feature all-target Clippy -D warnings green; cargo fmt --all --check green; quality_check green",
+    "total": 831,
+    "passed": 830,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline: migration-count assertion expects 18, schema now at 35; P07 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 4,
+    "comment_hygiene": 5,
+    "organization": 4,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/process_guard/windows.rs": {
+          "file_loc": 1182,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.297,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/process_supervisor.rs": {
+          "file_loc": 1870,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.038,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "P07 iteration 2 passes the keep gate. Job membership is a property of process creation (JOB_LIST in the same STARTUPINFOEXW as the HANDLE_LIST), provably preceding any user code — the suspended primary is the fresh job's only member before resume; grandchildren and a nested-job-creating descendant stay contained; terminate and daemon death (kernel kill-on-close) sweep the whole tree; full-tree death is proven by an empty member list with PID-reuse-fenced waits (primary handles released via settle so exited members retire). The supervisor seam now completes end-to-end: the journal's tree id and epoch are bound through the new default bind_durable_identity seam, the exact P01 nine-field envelope (digest-committed) is issued only after full-tree death with exited/terminated evidence labels, and both natural and cancelled runs reach Completed with readable redacted tails while unbound direct spawns keep synthesizing ids a supervisor rejects. An incompatible enclosing job refuses as Unsupported, never run-loose. Windows-only, no production service wiring, no V1Store journaling faked."
+}

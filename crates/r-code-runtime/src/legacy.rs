@@ -3,7 +3,7 @@
 //! [`LegacyReader`] never calls the legacy mutating constructors
 //! (`Database::open`, `MigrationManager`, `SettingsService`). The source
 //! SQLite opens with `SQLITE_OPEN_READ_ONLY`; a read transaction is taken
-//! and the database is copied with the online backup API into v2 temporary
+//! and the database is copied with the online backup API into v1 temporary
 //! storage for coherent, WAL-aware querying and export. JSONL exports
 //! freeze byte boundaries and include complete records only. When safe
 //! read-only WAL access is unavailable (live WAL held by a running old
@@ -41,7 +41,7 @@ pub struct LegacyReader;
 
 impl LegacyReader {
     /// Open the source read-only, hold a read transaction, and back it up
-    /// into `destination` (the v2 temporary copy). The source file is never
+    /// into `destination` (the v1 temporary copy). The source file is never
     /// written; normal lock bookkeeping is not product-data migration.
     pub fn backup_readonly(
         source: &Path,

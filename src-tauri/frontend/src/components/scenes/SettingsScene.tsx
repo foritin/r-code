@@ -30,10 +30,10 @@ import {
   settingsSet,
   supportBundleChoose,
   supportPreview,
-  harnessV2PluginsList,
-  harnessV2PluginsInstall,
-  harnessV2PluginsSetEnabled,
-  harnessV2PluginsRemove,
+  harnessV1PluginsList,
+  harnessV1PluginsInstall,
+  harnessV1PluginsSetEnabled,
+  harnessV1PluginsRemove,
   harnessAvailabilityKey,
   type HarnessPluginEntry,
 } from "../../lib/ipc";
@@ -62,6 +62,7 @@ import { clockTime } from "../../lib/format";
 import {
   catalogHostedWebRoutes,
   catalogPresets,
+  forgetSyncedModels,
   loadCatalog,
   presetOf,
   providerLabel,
@@ -195,6 +196,22 @@ function groupByCategory(presets: ProviderPreset[]) {
 }
 
 const ALL_PROTOCOLS: ProviderProtocol[] = ["openai_chat", "anthropic_messages", "openai_responses"];
+const DOMESTIC_CODING_PLAN_IDS = new Set(["zhipu_coding", "kimi_coding"]);
+
+/** 首批免手填模型的国内订阅线路。海外站与按量 API 不在这条产品路径内。 */
+function isDomesticCodingPlan(preset: ProviderPreset | undefined): boolean {
+  return Boolean(preset && DOMESTIC_CODING_PLAN_IDS.has(preset.id));
+}
+
+function codingPlanRouteForProtocol(
+  preset: ProviderPreset | undefined,
+  protocol: ProviderProtocol,
+): { url: string; protocol: ProviderProtocol } | null {
+  if (!isDomesticCodingPlan(preset) || !preset) return null;
+  if (preset.native.includes(protocol)) return { url: preset.base_url, protocol };
+  const candidate = preset.endpoint_candidates.find((entry) => entry.native.includes(protocol));
+  return candidate ? { url: candidate.url, protocol } : null;
+}
 
 /**
  * 新建（还没有后端状态）时下拉框的初值。
@@ -233,7 +250,12 @@ function protocolChoices(
   baseUrl: string,
   current: ProviderProtocol
 ): ProviderProtocol[] {
-  const choices = allowedProtocols(preset, baseUrl) ?? ALL_PROTOCOLS;
+  const choices = isDomesticCodingPlan(preset) && preset
+    ? Array.from(new Set([
+        ...preset.native,
+        ...preset.endpoint_candidates.flatMap((candidate) => candidate.native),
+      ]))
+    : allowedProtocols(preset, baseUrl) ?? ALL_PROTOCOLS;
   // 当前值必须在选项里，否则 <select> 会显示第一项而 state 仍是旧值，
   // 用户看到的和即将提交的对不上。
   return choices.includes(current) ? [...choices] : [...choices, current];
@@ -1014,6 +1036,9 @@ function ProviderSection({
     const preset = presetOf(nextPreset);
     setPresetName(nextPreset);
     setProfileName(nextPreset === CUSTOM_PRESET ? "" : nextPreset);
+    // 草稿切换厂商时不能沿用上一项尚未保存的密钥；自动发现会立即使用当前
+    // 表单密钥，请先清空以避免把 GLM Key 发往 Kimi（或反向）。
+    setKeyInput("");
     setFields({
       base_url: preset?.base_url ?? "",
       model: preset?.model ?? "",
@@ -1084,20 +1109,24 @@ function ProviderSection({
     setModelsMessage(null);
     setModelsError(null);
     setModelsBusy(false);
-  }, [selectedProvider, presetName, fields.base_url, fields.protocol]);
+  }, [selectedProvider, presetName, fields.base_url, fields.protocol, keyInput]);
 
-  // 已保存服务：点开详情即自动同步模型并持久化（手动同步只保留给新建流程）。
+  // 已保存服务：点开详情即自动同步模型并持久化（普通新建服务保留手动同步，
+  // 国内 Coding Plan 在填写密钥后也会自动同步）。
   // 必须等表单同步到所选服务之后再触发（profileName 对齐）：选中后的第一帧
   // 字段仍是上一个服务的旧值，用旧闭包发请求会把结果算错对象。
   // 新鲜度窗口内不重复请求；失败退避 30 秒，避免反复点击/同步失败时打爆接口。
   const lastSyncAttemptRef = useRef<Record<string, number>>({});
   useEffect(() => {
-    if (!selectedProvider || drafting || busy || modelsBusy) return;
+    if (!selectedProvider || drafting || formDirty || busy || modelsBusy) return;
     if (profileName.trim() !== selectedProvider) return;
     if (!providers[selectedProvider]) return;
     if (!providerStatus[selectedProvider]?.ready) return;
     if (!fields.base_url.trim()) return;
-    const cached = syncedModelsFor(selectedProvider);
+    const cached = syncedModelsFor(selectedProvider, {
+      baseUrl: fields.base_url,
+      protocol: fields.protocol,
+    });
     if (cached && Date.now() - cached.at < PROVIDER_SYNC_TTL_MS) return;
     const lastAttempt = lastSyncAttemptRef.current[selectedProvider] ?? 0;
     if (Date.now() - lastAttempt < 30_000) return;
@@ -1105,10 +1134,19 @@ function ProviderSection({
     void fetchModels();
     // fetchModels 每次渲染重建；此 effect 只由下方依赖驱动，按需触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProvider, drafting, busy, modelsBusy, providers, providerStatus, profileName, fields.base_url]);
+  }, [selectedProvider, drafting, formDirty, busy, modelsBusy, providers, providerStatus, profileName, fields.base_url]);
 
   const activePreset = presetOf(presetName);
+  const domesticCodingPlan = isDomesticCodingPlan(activePreset);
   const pendingVars = unresolvedTemplateVars(activePreset, fields.base_url);
+  const selectProtocol = (protocol: ProviderProtocol) => {
+    const route = codingPlanRouteForProtocol(activePreset, protocol);
+    mutateFields((value) => ({
+      ...value,
+      protocol,
+      base_url: route?.url ?? value.base_url,
+    }));
+  };
   const modelChoices = Array.from(
     new Set(
       [
@@ -1137,24 +1175,49 @@ function ProviderSection({
       });
       if (modelRequest.current !== requestId) return;
       setRemoteModels(response.models);
-      if (!fields.model.trim() && response.models[0]) {
-        // 程序化回填（同步结果预选首个模型）：不算用户修改，不打脏标。
-        setFields((current) => ({ ...current, model: response.models[0] }));
+      if (response.models[0]) {
+        const discovered = new Set(response.models);
+        const preferred = activePreset?.models.find((entry) => discovered.has(entry.id))?.id
+          ?? response.models[0];
+        // 国内 Coding Plan 不要求手填模型：当前静态默认已下线时自动切到服务端
+        // 实际返回的首选项。普通 Provider 继续只在模型为空时回填。
+        setFields((current) => {
+          const selected = current.model.trim();
+          if (selected && (!domesticCodingPlan || discovered.has(selected))) return current;
+          return { ...current, model: preferred };
+        });
       }
       // 已保存服务：同步结果持久化（供模型胶囊、图片理解下拉等跨页消费）。
       // 按本次请求的服务名记账，避免选中切换瞬间的过期闭包把清单记到别的服务上。
       const requestedName = profileName.trim();
       if (requestedName && providers[requestedName]) {
-        rememberSyncedModels(requestedName, response.models);
+        rememberSyncedModels(requestedName, response.models, {
+          baseUrl: fields.base_url,
+          protocol: fields.protocol,
+        });
       }
       setModelsMessage(`服务返回 ${response.models.length} 个可用模型`);
     } catch (cause) {
       if (modelRequest.current !== requestId) return;
-      setModelsError(errText(cause));
+      const message = errText(cause);
+      setModelsError(domesticCodingPlan
+        ? `${message.replace(/；仍可手动填写模型/g, "")}；已保留内置模型候选`
+        : message);
     } finally {
       if (modelRequest.current === requestId) setModelsBusy(false);
     }
   };
+
+  // 国内订阅型 Coding Plan：粘贴密钥后自动读取当前协议线路的模型目录。
+  // 使用防抖而不是逐字符请求；线路或密钥变化会由上方 effect 使旧请求失效。
+  useEffect(() => {
+    if (!drafting || !domesticCodingPlan) return;
+    if (!keyInput.trim() || !fields.base_url.trim() || pendingVars.length > 0) return;
+    const timer = window.setTimeout(() => void fetchModels(), 650);
+    return () => window.clearTimeout(timer);
+    // fetchModels 每次渲染重建；这里只应由用户输入和线路选择触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafting, domesticCodingPlan, keyInput, presetName, fields.base_url, fields.protocol]);
 
   // SET-PROV-015 的 UI 前置：行级“测试”复用模型同步通道（providerModels）对已
   // 保存服务做一次轻量探测并计时。apiKey 传 null = 使用已保存凭据，与点开抽屉
@@ -1175,7 +1238,10 @@ function ProviderSection({
         protocol: providerStatus[name]?.effective_protocol ?? profile.protocol ?? "openai_chat",
       });
       if (probeRequest.current !== requestId) return;
-      rememberSyncedModels(name, response.models);
+      rememberSyncedModels(name, response.models, {
+        baseUrl: profile.base_url ?? preset?.base_url ?? "",
+        protocol: providerStatus[name]?.effective_protocol ?? profile.protocol ?? preset?.protocol,
+      });
       setProbe((value) => ({
         ...value,
         [name]: { state: "ok", ms: Math.max(1, Math.round(performance.now() - started)) },
@@ -1218,6 +1284,7 @@ function ProviderSection({
         showReasoning: fields.show_reasoning,
         activate,
       });
+      forgetSyncedModels(name);
       setSelectedProvider(name);
       setDrafting(false);
       setFormDirty(false);
@@ -1238,6 +1305,7 @@ function ProviderSection({
     if (!window.confirm(`删除“${providerLabel(name)}”及其本机凭据？此操作无法撤销。`)) return;
     void run(async () => {
       await settingsDeleteProvider(name);
+      forgetSyncedModels(name);
       if (selectedProvider === name) setSelectedProvider(null);
     }, "配置已删除");
   };
@@ -1637,14 +1705,34 @@ function ProviderSection({
                 />
               </div>
 
+              {domesticCodingPlan && (
+                <div className="provider-form-field provider-form-field-wide">
+                  <label htmlFor="set-plan-protocol">接入协议</label>
+                  <select
+                    id="set-plan-protocol"
+                    className="opt-input"
+                    disabled={busy}
+                    value={fields.protocol}
+                    onChange={(event) => selectProtocol(event.target.value as ProviderProtocol)}
+                  >
+                    {protocolChoices(activePreset, fields.base_url, fields.protocol).map((protocol) => (
+                      <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>
+                    ))}
+                  </select>
+                  <span className="provider-field-meta">自动匹配国内 Coding Plan 官方地址</span>
+                </div>
+              )}
+
               <div className="provider-form-field provider-form-field-wide">
-                <label htmlFor="set-model">模型 <InfoTip label="模型与多模态说明">候选来自预设目录与接口同步；[多模态] 模型可直接接收图片，[文本] 模型不支持图片输入，未标注的模型能力未确认。</InfoTip></label>
+                <label htmlFor="set-model">模型{domesticCodingPlan ? "（自动发现）" : ""} <InfoTip label="模型与多模态说明">候选来自预设目录与接口同步；[多模态] 模型可直接接收图片，[文本] 模型不支持图片输入，未标注的模型能力未确认。</InfoTip></label>
                 <div className="provider-model-input">
-                  {/* 输入框保留自由输入；候选列表改用 Menu 弹层——原生 datalist 只会显示与当前值前缀匹配的选项，预填默认模型后其余候选会被过滤掉。 */}
+                  {/* 普通 Provider 保留自由输入；国内 Coding Plan 只从自动发现/内置候选中选。
+                      候选列表使用 Menu——原生 datalist 会按当前值前缀过滤其它模型。 */}
                   <input id="set-model"
                     className="provider-model-text"
                     value={fields.model}
-                    placeholder="输入或同步模型名称"
+                    readOnly={domesticCodingPlan}
+                    placeholder={domesticCodingPlan ? "填入密钥后自动发现" : "输入或同步模型名称"}
                     onChange={(event) => mutateFields((value) => ({ ...value, model: event.target.value }))}
                   />
                   <div className="provider-model-actions">
@@ -1701,7 +1789,7 @@ function ProviderSection({
                         </>
                       )}
                     </Menu>
-                    {!editing && (
+                    {!editing && !domesticCodingPlan && (
                       <button
                         className={`provider-model-refresh${modelsBusy ? " loading" : ""}`}
                         type="button"
@@ -1715,6 +1803,15 @@ function ProviderSection({
                     )}
                   </div>
                 </div>
+                {domesticCodingPlan && !modelsMessage && !modelsError && (
+                  <span className="provider-field-meta">
+                    {modelsBusy
+                      ? "正在从当前协议线路读取可用模型…"
+                      : keyInput.trim()
+                        ? "密钥或协议变化后会自动刷新模型"
+                        : "填入访问密钥后自动显示当前套餐可用模型"}
+                  </span>
+                )}
                 {modelsMessage && <span className="provider-field-success" role="status">{modelsMessage}</span>}
                 {modelsError && <span className="provider-field-warning" role="alert">{modelsError}</span>}
               </div>
@@ -1776,6 +1873,7 @@ function ProviderSection({
                   <input id="set-base-url"
                     className="opt-input"
                     value={fields.base_url}
+                    readOnly={domesticCodingPlan}
                     placeholder="https://api.example.com/v1"
                     onChange={(event) => mutateFields((value) => ({ ...value, base_url: event.target.value }))}
                   />
@@ -1788,7 +1886,7 @@ function ProviderSection({
                       {pendingVars.map((variable) => `\${${variable.name}}（${variable.label}）`).join("、")}
                     </span>
                   )}
-                  {activePreset && activePreset.endpoint_candidates.length > 0 && (
+                  {activePreset && !domesticCodingPlan && activePreset.endpoint_candidates.length > 0 && (
                     <span className="provider-route-switcher">
                       <span>接口线路</span>
                       <button
@@ -1840,45 +1938,42 @@ function ProviderSection({
                   )}
                 </div>
 
-                <div className="provider-form-field provider-form-field-wide">
-                  <label htmlFor="set-protocol">线路协议 <InfoTip label="线路协议说明">协议决定请求体形状与计费线路：同一厂商的不同入口常是不同协议（如火山 /api/coding 是 Anthropic、/api/coding/v3 是 OpenAI）。切换接口线路时协议会一起切换。</InfoTip></label>
-                  <select id="set-protocol"
-                    className="opt-input"
-                    disabled={busy}
-                    value={fields.protocol}
-                    onChange={(event) =>
-                      mutateFields((value) => ({
-                        ...value,
-                        protocol: event.target.value as ProviderProtocol,
-                      }))
-                    }
-                  >
-                    {protocolChoices(activePreset, fields.base_url, fields.protocol).map((protocol) => (
-                      <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>
-                    ))}
-                  </select>
-                  {deepSeekResponsesModelUnsupported && (
-                    <span className="provider-field-warning" role="alert">
-                      Responses 支持 deepseek-v4-flash（0731）与 deepseek-v4-pro；请使用以上模型。
-                    </span>
-                  )}
-                  {fields.protocol === "openai_responses" && !deepSeekResponsesModelUnsupported && (
-                    <span className="provider-field-meta">
-                      {activePreset && !activePreset.reasoning_replay
-                        ? "该服务不支持加密推理回放"
-                        : "由 Responses 接口发送请求"}
-                    </span>
-                  )}
-                  {!allowedProtocolOptions && activePreset && (
-                    <span className="provider-field-meta">自定义地址，请按接口实现选择协议</span>
-                  )}
-                  {protocolMismatch && allowedProtocolOptions && (
-                    <span className="provider-field-warning" role="alert">
-                      当前地址不支持该协议。可选：
-                      {allowedProtocolOptions.map((protocol) => PROTOCOL_LABELS[protocol]).join(" / ")}
-                    </span>
-                  )}
-                </div>
+                {!domesticCodingPlan && (
+                  <div className="provider-form-field provider-form-field-wide">
+                    <label htmlFor="set-protocol">线路协议 <InfoTip label="线路协议说明">协议决定请求体形状与计费线路：同一厂商的不同入口常是不同协议（如火山 /api/coding 是 Anthropic、/api/coding/v3 是 OpenAI）。切换接口线路时协议会一起切换。</InfoTip></label>
+                    <select id="set-protocol"
+                      className="opt-input"
+                      disabled={busy}
+                      value={fields.protocol}
+                      onChange={(event) => selectProtocol(event.target.value as ProviderProtocol)}
+                    >
+                      {protocolChoices(activePreset, fields.base_url, fields.protocol).map((protocol) => (
+                        <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>
+                      ))}
+                    </select>
+                    {deepSeekResponsesModelUnsupported && (
+                      <span className="provider-field-warning" role="alert">
+                        Responses 支持 deepseek-v4-flash（0731）与 deepseek-v4-pro；请使用以上模型。
+                      </span>
+                    )}
+                    {fields.protocol === "openai_responses" && !deepSeekResponsesModelUnsupported && (
+                      <span className="provider-field-meta">
+                        {activePreset && !activePreset.reasoning_replay
+                          ? "该服务不支持加密推理回放"
+                          : "由 Responses 接口发送请求"}
+                      </span>
+                    )}
+                    {!allowedProtocolOptions && activePreset && (
+                      <span className="provider-field-meta">自定义地址，请按接口实现选择协议</span>
+                    )}
+                    {protocolMismatch && allowedProtocolOptions && (
+                      <span className="provider-field-warning" role="alert">
+                        当前地址不支持该协议。可选：
+                        {allowedProtocolOptions.map((protocol) => PROTOCOL_LABELS[protocol]).join(" / ")}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className="provider-form-field">
                   <label htmlFor="set-max-tokens">每轮最大输出</label>
@@ -3905,7 +4000,7 @@ function LifecycleSection() {
   );
 }
 
-// ---------- Harness v2 插件（共享后台服务）----------
+// ---------- Harness v1 插件（共享后台服务）----------
 
 /** 声明式数据渲染：插件卡片由宿主组件统一呈现，插件不贡献任意 UI。 */
 function HarnessPluginsSection() {
@@ -3918,7 +4013,7 @@ function HarnessPluginsSection() {
   const reload = useCallback(async () => {
     try {
       setError(null);
-      setPlugins(await harnessV2PluginsList());
+      setPlugins(await harnessV1PluginsList());
     } catch (cause) {
       setPlugins(null);
       setError(String(cause));
@@ -3934,7 +4029,7 @@ function HarnessPluginsSection() {
     if (!path || busy) return;
     setBusy(true);
     try {
-      await harnessV2PluginsInstall(path);
+      await harnessV1PluginsInstall(path);
       setInstallPath("");
       await reload();
     } catch (cause) {
@@ -3948,7 +4043,7 @@ function HarnessPluginsSection() {
     async (entry: HarnessPluginEntry, enabled: boolean) => {
       setBusy(true);
       try {
-        await harnessV2PluginsSetEnabled(
+        await harnessV1PluginsSetEnabled(
           entry.manifest.id,
           entry.packageRef.contentDigest,
           enabled,
@@ -3967,7 +4062,7 @@ function HarnessPluginsSection() {
     async (entry: HarnessPluginEntry) => {
       setBusy(true);
       try {
-        await harnessV2PluginsRemove(entry.manifest.id, entry.packageRef.contentDigest);
+        await harnessV1PluginsRemove(entry.manifest.id, entry.packageRef.contentDigest);
         await reload();
       } catch (cause) {
         // 被活动/可恢复 Run pin 住的版本：拒绝移除并保留在列表中。

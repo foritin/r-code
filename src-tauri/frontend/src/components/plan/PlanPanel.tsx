@@ -44,6 +44,7 @@ interface Props {
 }
 
 const MAX_PARALLEL_SUBAGENTS = 3;
+const DAEMON_PLAN_ID_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const ACTIVE_SUBAGENT_STATES = new Set<SubagentStatus>([
   "queued",
   "running",
@@ -72,6 +73,10 @@ const ITEM_STATE_LABEL: Record<PlanItem["state"], string> = {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isDaemonPlanId(planId: string): boolean {
+  return DAEMON_PLAN_ID_PATTERN.test(planId);
 }
 
 function newIdempotencyKey(): string {
@@ -413,7 +418,8 @@ export function PlanPanel({
     () => new Map((view?.items ?? []).map((item) => [item.id, item.title])),
     [view?.items],
   );
-  const cancelArmed = view != null && cancelArmedRevision === view.plan.revision;
+  const daemonPlan = view != null && isDaemonPlanId(view.plan.id);
+  const cancelArmed = !daemonPlan && view != null && cancelArmedRevision === view.plan.revision;
   const panelBodyId = `plan-panel-${task.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-body`;
 
   const toggleSection = (key: string) => {
@@ -435,7 +441,7 @@ export function PlanPanel({
   };
 
   const initialize = async () => {
-    if (busy) return;
+    if (daemonPlan || busy) return;
     setBusy("create");
     setError(null);
     try {
@@ -449,7 +455,7 @@ export function PlanPanel({
   };
 
   const answerSet = async (questionSet: PlanQuestionSet, skipAll: boolean) => {
-    if (busy || !view) return;
+    if (daemonPlan || busy || !view) return;
     let payload: PlanQuestionAnswerInput[] = [];
     if (!skipAll) {
       const missing = questionSet.questions.filter((question) => {
@@ -497,7 +503,7 @@ export function PlanPanel({
   };
 
   const retryContinuation = async (questionSetId: string) => {
-    if (busy) return;
+    if (daemonPlan || busy) return;
     setBusy("retry");
     setError(null);
     try {
@@ -529,7 +535,7 @@ export function PlanPanel({
   };
 
   const repairProjection = async () => {
-    if (!view || busy) return;
+    if (daemonPlan || !view || busy) return;
     setBusy("repair");
     setError(null);
     try {
@@ -543,7 +549,7 @@ export function PlanPanel({
   };
 
   const retryImplementation = async () => {
-    if (!view || busy) return;
+    if (daemonPlan || !view || busy) return;
     setBusy("retryImplementation");
     setError(null);
     try {
@@ -560,7 +566,7 @@ export function PlanPanel({
   };
 
   const prepareCancel = async () => {
-    if (!view || busy || running || cancelArmed) return;
+    if (daemonPlan || !view || busy || running || cancelArmed) return;
     setBusy("cancel");
     setError(null);
     setNotice(null);
@@ -579,7 +585,7 @@ export function PlanPanel({
   };
 
   const cancel = async () => {
-    if (!view || busy || running || !cancelArmed) return;
+    if (daemonPlan || !view || busy || running || !cancelArmed) return;
     setBusy("cancel");
     setError(null);
     try {
@@ -620,10 +626,13 @@ export function PlanPanel({
     );
   }
 
-  const questionSet = view.pending_question_set;
-  const continuationSet = view.continuation_question_set;
+  const questionSet = daemonPlan ? null : view.pending_question_set;
+  const continuationSet = daemonPlan ? null : view.continuation_question_set;
   const implementationReady = view.plan.state === "ready" && view.items.length > 0;
-  const cancellable = !["completed", "cancelled"].includes(view.plan.state);
+  const cancellable = !daemonPlan && !["completed", "cancelled"].includes(view.plan.state);
+  const stateLabel = daemonPlan && view.plan.state === "approved"
+    ? "已批准，等待实施能力"
+    : PLAN_STATE_LABEL[view.plan.state];
   const progressPercent = progress.total > 0 ? Math.round(progress.completed / progress.total * 100) : 0;
 
   return (
@@ -643,7 +652,7 @@ export function PlanPanel({
           <span className="plan-state-diamond" aria-hidden="true" />
           <span className="plan-summary-copy">
             <strong>计划</strong>
-            <small>{PLAN_STATE_LABEL[view.plan.state]} · 修订 {view.plan.revision}</small>
+            <small>{stateLabel} · 修订 {view.plan.revision}</small>
           </span>
           {progress.total > 0 && (
             <span className="plan-summary-progress opt-mono">{progress.completed}/{progress.total} · {progressPercent}%</span>
@@ -668,7 +677,7 @@ export function PlanPanel({
             {view.goal.goal.trim() || task.title.trim() || "未命名计划"}
           </p>
 
-          {view.plan.projection_error && (
+          {!daemonPlan && view.plan.projection_error && (
             <StatusBar
               kind="warn"
               compact
@@ -680,7 +689,7 @@ export function PlanPanel({
           {loadError && <StatusBar kind="error" compact onDismiss={clearLoadError}>{loadError}</StatusBar>}
           {error && <StatusBar kind="error" compact onDismiss={() => setError(null)}>{error}</StatusBar>}
           {notice && <StatusBar kind="info" compact onDismiss={() => setNotice(null)}>{notice}</StatusBar>}
-          {(task.state === "interrupted" || task.state === "review_ready") && progress.inProgress > 0 && !running && (
+          {!daemonPlan && (task.state === "interrupted" || task.state === "review_ready") && progress.inProgress > 0 && !running && (
             <StatusBar
               kind="warn"
               compact
@@ -803,7 +812,7 @@ export function PlanPanel({
             </StatusBar>
           )}
 
-          {view.plan.implementation_dispatch_state === "failed" && (
+          {!daemonPlan && view.plan.implementation_dispatch_state === "failed" && (
             <StatusBar
               kind="error"
               compact
@@ -817,7 +826,7 @@ export function PlanPanel({
             </StatusBar>
           )}
 
-          {retryQuestionSetId && continuationSet?.continuation_state !== "failed" && (
+          {!daemonPlan && retryQuestionSetId && continuationSet?.continuation_state !== "failed" && (
             <button className="plan-retry opt-button" type="button" disabled={busy != null} onClick={() => void retryContinuation(retryQuestionSetId)}>
               <IconRefresh width={13} height={13} />
               {busy === "retry" ? "正在重试续接…" : "重试计划续接"}

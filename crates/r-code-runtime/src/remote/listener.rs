@@ -456,7 +456,7 @@ async fn serve_static_app<W: tokio::io::AsyncWrite + Unpin>(
             writer,
             "404 Not Found",
             "text/plain; charset=utf-8",
-            b"remote app not built: set R_CODE_REMOTE_APP_DIR or stage the build under <harness-v2>/remote-app\n",
+            b"remote app not built: set R_CODE_REMOTE_APP_DIR or stage the build under <harness-v1>/remote-app\n",
         )
         .await;
         return;

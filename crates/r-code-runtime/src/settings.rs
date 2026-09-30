@@ -1,6 +1,6 @@
 //! Host-owned model settings.
 //!
-//! Provider credentials live in the host's credential storage (v2 names);
+//! Provider credentials live in the host's credential storage (v1 names);
 //! this module only projects configuration *shapes* to clients — opaque
 //! selection ids, capability flags and inference defaults. No endpoint,
 //! header or key material is ever serialized for the wire.

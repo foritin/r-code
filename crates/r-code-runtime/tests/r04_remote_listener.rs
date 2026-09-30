@@ -41,7 +41,7 @@ impl ApplicationHandler for EchoFacade {
 struct Fixture {
     registry: Arc<DeviceRegistry>,
     identity: r_code_runtime::remote::tls::Identity,
-    store: Arc<r_code_store::v2::V2Store>,
+    store: Arc<r_code_store::v1::V1Store>,
     dir: tempfile::TempDir,
 }
 
@@ -59,7 +59,7 @@ impl Fixture {
             })
             .expect("enable listener");
         let identity = ensure_identity(&root).expect("identity");
-        let store = Arc::new(r_code_store::v2::V2Store::open(&root.join("j.db")).expect("store"));
+        let store = Arc::new(r_code_store::v1::V1Store::open(&root.join("j.db")).expect("store"));
         Self {
             registry,
             identity,
@@ -271,6 +271,7 @@ async fn r04_a3_capabilities_and_forbidden_methods_are_enforced() {
     hello(&mut ws, &full.record.id, &full.token).await;
     for method in [
         "settings.apply",
+        "safety.quarantine.get",
         "plugins.install",
         "device.revoke",
         "service.shutdown",

@@ -1,0 +1,82 @@
+{
+  "task_id": "P27",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s27_process_effect_recovery.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted from the raw persisted logs. (1) DECLARED SUITE s27_process_effect_recovery = 6 passed / 0 failed, measured three times (initial, post-reshape, post-fmt): one_spawn_with_exact_forward_recovery_and_lost_receipt_convergence (the concurrent second lock holder is refused outright — repo-exclusive; the single user-process run produces the exact 3-entry delta; reserved bytes return to zero at the receipt; the LOST-RECEIPT replay begins with already_journaled=true — the caller knows not to spawn again — and completes with the identical digest; divergent material under the same id is a Conflict); crash_before_complete_quarantines_and_never_reruns (drop-without-complete leaves the operation incomplete; recover_incomplete_effects quarantines it with the recorded reason; a late receipt is InvalidTransition; the tree stays non-liftable; a NEW operation id proceeds forward with a zero-entry delta); startup_recovery_runs_before_write_ingress_in_composition (an incomplete operation seeded in the profile's own store is quarantined by ApplicationService::compose itself, reason startup-recovery-incomplete); cas_material_preserves_later_foreign_edits (after the receipt a user's later foreign edit is the OBSERVED TRUTH of the next begin's before manifest — nothing rolls back — while the receipt's CAS material stays refcount-live); only_current_checkout_write_carries_a_checkout_delta (CurrentCheckoutWrite true; NoWorkspace/ScratchOnly false; the preparation policy excludes the ephemeral overlay); write_ingress_journals_measured_multi_file_deltas (after-bytes of created/edited entries journaled live — deleted entries contribute no blob — with the delta digest returned; the delta files are written AFTER begin, because files that existed at begin are before-blobs the journal correctly refuses to re-kind). Two real envelope defects were caught and fixed by this round: complete never promoted Prepared->Running (receipt refused), and complete journaled only the delta list without per-file after bytes (the CAS-rollback material the fourth test demands). (2) MIGRATED PINS: s22/t14's hidden-until message pins updated to the new envelope-naming refusal; s22 14 passed / t14 7 passed after migration. (3) HOUSE five-group cumulative measured THREE times, all reported: 144 result lines / 1107 passed / 3 failed (baseline + the two message pins above — deterministic, not flakes: each failed in isolation with the stale assertion), then 144 / 1109 / 1 and 144 / 1109 / 1 on the fixed code (baseline only, zero flake members). House is 1110 total / 1109 passed / 1 declared failure — +6 tests (s27) and +1 result line vs P26's 1104/1103/1, zero regressions. (4) OTHER GATES: clippy -p r-code-runtime --all-features --all-targets -D warnings exit 0 (after shaping begin_workspace_effect's ten arguments into EnvelopeContext/EffectIdentity); cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites — the envelope spawns nothing); quality_check.py over the six changed files ok=true 0 violations; daemon hygiene: zero r-code-service/harness-native processes after every gate batch.",
+    "total": 1110,
+    "passed": 1109,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P27 and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 4,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/process_effects.rs": {
+          "file_loc": 668,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.175
+        },
+        "crates/r-code-runtime/src/services/mutations.rs": {
+          "file_loc": 716,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.089
+        },
+        "crates/r-code-runtime/src/services/processes.rs": {
+          "file_loc": 1035,
+          "max_comment_block": 12,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.077
+        },
+        "crates/r-code-runtime/src/services/verification_inputs.rs": {
+          "file_loc": 755,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.148
+        },
+        "crates/r-code-runtime/src/application.rs": {
+          "file_loc": 2568,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.071
+        },
+        "crates/r-code-runtime/tests/s27_process_effect_recovery.rs": {
+          "file_loc": 475,
+          "max_comment_block": 9,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.124
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "Readability 4 rather than 5: process_effects.rs now carries the P26 scanner and the P27 envelope in one 668-loc file, and begin_workspace_effect is a long sequential ceremony (lock, replay-check, capture, journal, CAS, quota, revalidate) that reads linearly but will want splitting when P24B wires it into a launch path. Everything else is 5: the envelope reuses the house vocabulary end to end (P25 rows, P26 scanner, P26A journal, workspace locks) with no parallel machinery. application.rs sits at 2568 loc — 32 lines under the file gate, a recorded pressure point for the next task that touches it."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (lost receipt never repeats the command): the replay begin converges with already_journaled=true — the caller is told NOT to spawn — and completing again replays the identical delta digest; divergent material under the same operation id is a Conflict; a crash before complete is recovered by QUARANTINE at the next boot (compose runs recovery before any write ingress, fail-closed), never by re-execution. Acceptance ② (lease/quarantine lasts through receipt): the repo-exclusive workspace lock is held from begin (the concurrent second holder refused outright) until complete consumes the guard with the receipt durable; the crash-left operation is quarantined, cannot gain a late receipt, and keeps its tree non-liftable — the P25 terminal-state discipline the envelope rides. Acceptance ③ (CAS rollback preserves later edits): every changed file's after bytes are journaled as refcounted delta-blobs at receipt, and a user's later foreign edit is the observed truth of the next begin's frozen manifest — pinned byte-exact, nothing rolls back. P27.1/2/3/4 all proven; the write-capable launch call site (processes.rs CurrentCheckoutWrite arm) now names the envelope and stays hidden until P24B activates it inside this envelope; checkout delta applies to exactly that effect while NoWorkspace/ScratchOnly skip it; checkout-writing preparation scans exclude the ephemeral overlay. Disclosed: no real launch path runs inside the envelope yet (P24B's activation); the envelope's begin is a long linear ceremony recorded as a readability pressure point; s22/t14 message pins migrated with strength kept. House 1110/1109/1 with only the declared plan_schema baseline; two deterministic pin failures on the first run were the migration signal, both suites green after, and the final two runs are baseline-only."
+}

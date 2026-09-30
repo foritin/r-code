@@ -144,7 +144,10 @@ function isLegacyCompanionEnsureMissing(cause: unknown): boolean {
 async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
     if (shouldUseBrowserMock()) {
-      return await browserMockInvoke(command, args) as T;
+      const browserArgs = command === "cmd_plan_approve" && typeof args?.revisionHash === "string"
+        ? { ...args, planId: args.revisionHash }
+        : args;
+      return await browserMockInvoke(command, browserArgs) as T;
     }
     return await invoke<T>(command, args);
   } catch (cause) {
@@ -196,8 +199,19 @@ export const taskCreate = (
   goal: string,
   mode: TaskMode,
   providerName: string | null = null,
-  agentEngine: TaskAgentEngine | null = null
-) => ipc<Task>("cmd_task_create", { workspacePath, title, goal, mode, providerName, agentEngine });
+  agentEngine: TaskAgentEngine | null = null,
+  model: string | null = null,
+  inference: InferenceOptions | null = null,
+) => ipc<Task>("cmd_task_create", {
+  workspacePath,
+  title,
+  goal,
+  mode,
+  providerName,
+  agentEngine,
+  model,
+  inference,
+});
 
 /** Immediately persist a project-scoped empty conversation with server-assigned title/limit. */
 export const projectConversationCreate = (workspacePath: string) =>
@@ -265,7 +279,7 @@ export const planRetryContinuation = (taskId: string, questionSetId: string) =>
   ipc<PlanView>("cmd_plan_retry_continuation", { taskId, questionSetId });
 
 export const planApprove = (taskId: string, planId: string, expectedRevision: number) =>
-  ipc<PlanView>("cmd_plan_approve", { taskId, planId, expectedRevision });
+  ipc<PlanView>("cmd_plan_approve", { taskId, revisionHash: planId, expectedRevision });
 
 export const planRetryImplementation = (taskId: string, planId: string) =>
   ipc<PlanView>("cmd_plan_retry_implementation", { taskId, planId });
@@ -339,12 +353,14 @@ export const agentSend = (
   mode: AgentSendMode = "auto",
   attachments: AttachmentInput[] = [],
   attachmentIds: string[] = [],
+  workspacePath: string | null = null,
 ) => ipc<void>("cmd_agent_send", {
   taskId,
   message,
   mode,
   attachments,
   attachmentIds,
+  workspacePath,
 }).then((result) => {
   invalidateSessionMessages(taskId);
   return result;
@@ -1505,7 +1521,7 @@ export const closePromptDecision = (epoch: number, decision: string, remember: b
 export const lifecycleExplicitQuit = () =>
   ipc<boolean>("cmd_lifecycle_explicit_quit");
 
-// ---- Harness v2（共享后台服务 / 插件管理）----
+// ---- Harness v1（共享后台服务 / 插件管理）----
 export interface HarnessPluginEntry {
   manifest: {
     id: string;
@@ -1535,47 +1551,146 @@ export interface HarnessEventEnvelope {
   payload: Record<string, unknown>;
 }
 
-export const harnessV2Ping = () => ipc<boolean>("cmd_harness_v2_ping");
-export const harnessV2PluginsList = () =>
-  ipc<HarnessPluginEntry[]>("cmd_harness_v2_plugins_list");
-export const harnessV2PluginsInstall = (path: string) =>
+/**
+ * P19B-R/P19B-C 权威授权的逐字投影：六个 camelCase 键，由
+ * `EffectBinding::material` 冻结。三端（桌面 Permissions/Canvas、远端
+ * 投影、TUI 浮层）必须逐字段一致，任何扩展都要改 daemon 侧。
+ */
+export interface EffectApprovalMaterial {
+  taskId: string;
+  planRevision: string;
+  workUnitId: string;
+  effectClass: string;
+  network: string;
+  payloadHash: string;
+}
+
+/** 落库的审批记录视图（逐字段等于 store 记录）。 */
+export interface EffectApprovalView extends EffectApprovalMaterial {
+  approvalId: string;
+  actorId: string;
+  sessionId: string;
+  scope: string;
+  state: "active" | "superseded";
+  createdAtMs: number;
+  supersededAtMs?: number;
+}
+
+export interface EffectApprovalRequestResult {
+  status: "pending" | "granted";
+  request: EffectApprovalMaterial;
+  operationId?: string;
+  approval?: EffectApprovalView;
+}
+
+export interface EffectApprovalPendingRow extends EffectApprovalMaterial {
+  operationId: string;
+  summary: string;
+  createdSeq: number;
+  createdMs: number;
+  ageMs: number;
+}
+
+export interface EffectApprovalListResult {
+  taskId: string;
+  pending: EffectApprovalPendingRow[];
+  approvals: EffectApprovalView[];
+}
+
+export interface EffectApprovalRevokeResult {
+  taskId: string;
+  workUnitId: string;
+  approvalId: string | null;
+  revoked: boolean;
+}
+
+/** `approvals.decide` 的 effect 授权额外回一个 `approval` 键。 */
+export interface HarnessApprovalDecision {
+  decision: "granted" | "denied";
+  approval?: EffectApprovalView;
+}
+
+export const harnessV1Ping = () => ipc<boolean>("cmd_harness_v1_ping");
+export const harnessV1PluginsList = () =>
+  ipc<HarnessPluginEntry[]>("cmd_harness_v1_plugins_list");
+export const harnessV1PluginsInstall = (path: string) =>
   ipc<{ id: string; version: string; contentDigest: string }>(
-    "cmd_harness_v2_plugins_install",
+    "cmd_harness_v1_plugins_install",
     { path },
   );
-export const harnessV2PluginsSetEnabled = (
+export const harnessV1PluginsSetEnabled = (
   id: string,
   digest: string,
   enabled: boolean,
 ) =>
-  ipc<void>("cmd_harness_v2_plugins_set_enabled", {
+  ipc<void>("cmd_harness_v1_plugins_set_enabled", {
     id,
     digest,
     enabled,
   });
-export const harnessV2PluginsRemove = (id: string, digest: string) =>
-  ipc<void>("cmd_harness_v2_plugins_remove", { id, digest });
-export const harnessV2TaskCreate = (
+export const harnessV1PluginsRemove = (id: string, digest: string) =>
+  ipc<void>("cmd_harness_v1_plugins_remove", { id, digest });
+export const harnessV1TaskCreate = (
   taskId: string,
   objective: string,
   kind: string,
   requiredChecks: string[],
 ) =>
-  ipc<HarnessTaskCreated>("cmd_harness_v2_task_create", {
+  ipc<HarnessTaskCreated>("cmd_harness_v1_task_create", {
     taskId,
     objective,
     kind,
     requiredChecks,
   });
-export const harnessV2TaskSelectHarness = (taskId: string, harnessId: string) =>
+export const harnessV1TaskSelectHarness = (taskId: string, harnessId: string) =>
   ipc<{ id: string; version: string; contentDigest: string }>(
-    "cmd_harness_v2_task_select_harness",
+    "cmd_harness_v1_task_select_harness",
     { taskId, harnessId },
   );
-export const harnessV2TaskSend = (taskId: string, text: string) =>
-  ipc<Record<string, unknown>>("cmd_harness_v2_task_send", { taskId, text });
-export const harnessV2TaskEvents = (afterSeq: number) =>
-  ipc<HarnessEventEnvelope[]>("cmd_harness_v2_task_events", { afterSeq });
+export const harnessV1TaskSend = (taskId: string, text: string) =>
+  ipc<Record<string, unknown>>("cmd_harness_v1_task_send", { taskId, text });
+export const harnessV1TaskEvents = (afterSeq: number) =>
+  ipc<HarnessEventEnvelope[]>("cmd_harness_v1_task_events", { afterSeq });
+
+// ---- P19B-C 效果授权：请求 / 清单 / 撤销 / 决策（只走本机 daemon）----
+//
+// 三个 RPC 在 daemon 侧是 local-only（`required_capability` 为 None，远端被
+// 未知方法能力门拒绝），插件 router 完全没有 effect 面。actor 恒为已认证的
+// 连接身份、session 恒为 command id，客户端传的 actorId/sessionId 一律无效。
+export const harnessV1EffectRequest = (
+  taskId: string,
+  workUnitId: string,
+  operationId?: string,
+  runId?: string,
+) =>
+  ipc<EffectApprovalRequestResult>("cmd_harness_v1_effect_request", {
+    taskId,
+    workUnitId,
+    ...(operationId ? { operationId } : {}),
+    ...(runId ? { runId } : {}),
+  });
+
+export const harnessV1EffectList = (taskId: string) =>
+  ipc<EffectApprovalListResult>("cmd_harness_v1_effect_list", { taskId });
+
+export const harnessV1EffectRevoke = (taskId: string, workUnitId: string) =>
+  ipc<EffectApprovalRevokeResult>("cmd_harness_v1_effect_revoke", {
+    taskId,
+    workUnitId,
+  });
+
+/**
+ * 决策仍走既有 `approvals.decide`（bridge 原样转发，不重铸安全边界）；
+ * effect 授权时响应多一个 `approval` 键，就是那唯一一条物化出来的审批。
+ */
+export const harnessV1ApprovalDecide = (
+  operationId: string,
+  decision: "granted" | "denied",
+) =>
+  ipc<HarnessApprovalDecision>("cmd_harness_v1_approval_decide", {
+    operationId,
+    decision,
+  });
 
 /** 供 UI 渲染的可用性文案键（声明式数据 → 宿主组件文案）。 */
 export function harnessAvailabilityKey(

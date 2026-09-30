@@ -1,0 +1,79 @@
+{
+  "task_id": "P13",
+  "iteration": 1,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s13_sandbox_contract.rs",
+    "crates/r-code-runtime/tests/t07_route_native_host_services.rs",
+    "crates/r-code-runtime/tests/s03_process_router.rs"
+  ],
+  "tests": {
+    "command": "Local Windows host, Git Bash, all foreground, --test-threads=1, counts summed over unfiltered 'test result:' lines via the blessed rtk proxy python counter: gate 1 rtk cargo check -p r-code-runtime --tests (clean); focused rtk proxy cargo test -p r-code-runtime --all-features --no-fail-fast --test s00_boot_identity --test s02_quarantine_api --test s03_process_router --test s04_supervisor_contract --test s05_supervisor_faults --test s06_windows_spawn --test s07_windows_job_proof --test s11_macos_tree_proof --test s12_safety_api --test s13_sandbox_contract (82/82; s11 compiles empty on Windows by design) and rtk proxy cargo test -p r-code-store --all-features --no-fail-fast --test s01_process_ownership --test s12_safety_reports (16/16); full rtk proxy cargo test -p r-code-runtime --all-features --no-fail-fast (401/401, final run after the last test-file edit), rtk proxy cargo test -p r-code-kernel --all-features --no-fail-fast (75/75), rtk proxy cargo test -p r-code-store --all-features --no-fail-fast (416 passed / 1 failed = 417 total, the ONLY failure is the declared plan_schema baseline), rtk proxy cargo test -p r-code-harness-protocol -p r-code-harness-sdk --all-features --no-fail-fast (33/33), rtk proxy cargo test -p r-code-harness-codex --all-features --no-fail-fast (13/13); rtk cargo test --workspace --all-features --no-run (Finished, 0 errors); rtk cargo check --workspace --all-features (clean); rtk cargo clippy --workspace --all-features --all-targets -- -D warnings (no issues); rtk cargo fmt --all -- --check (clean); rtk proxy python.exe .agents/skills/swe-loop/tools/quality_check.py on the 4 P13 files (ok, 0 violations). Environment note: the first workspace --no-run attempt aborted with os error 112 (D: disk full at 99%); deleting the regenerable target/debug/incremental cache (327G freed) resolved it and every gate was then re-run to green — no source or test change was involved. Honest scope: every suite above is cross-platform and was fully executed locally on Windows; the s08/s10/s11 platform suites compile empty here and run only in native Linux/macOS CI.",
+    "total": 939,
+    "passed": 938,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "plan_schema::clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "Declared pre-existing baseline (assertion left 35, right 18 at crates/r-code-store/tests/plan_schema.rs:245): the v18-era simulation expects schema 18 while the numeric ledger stands at LATEST_SCHEMA_VERSION=35, so the version-35 row survives the simulated DELETE. Same declared failure as P11/P12; P13 changes no store code (Engineer scope is the four runtime files), so this is not a P13 regression. Measured fresh this iteration: Store 416 passed / 1 failed with --no-fail-fast, exactly the P12 state."
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/sandbox.rs": {
+          "file_loc": 528,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.242,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/bin/r-code-safety-probe.rs": {
+          "file_loc": 185,
+          "max_comment_block": 8,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.156,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/plugins/router.rs": {
+          "file_loc": 1228,
+          "max_comment_block": 9,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.054,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/run_manager.rs": {
+          "file_loc": 2343,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.046,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS — 938/939 cumulative (Runtime 401/401 = 392 P12 baseline + the 9 new s13 tests; Kernel 75/75; Store 416/417 with only the declared plan_schema 18-vs-35 baseline; protocol/sdk 33/33; codex 13/13), quality_pass true with all five axes at 5 and quality_check ok on the four P13 files. s13_sandbox_contract.rs proves P13 with REAL executions: policy_digest determinism and the full validate() rejection matrix, three distinct kebab-case network classes, the real r-code-safety-probe binary spawned against live targets (file actually written outside the allowlist, planted env sentinel named in the leak detail, a live TcpListener that genuinely accepted the forbidden connection, reaped child escape, .git listed and opened, a planted keyring sentinel read back as allowed and cleaned up; version-mismatch/unknown-probe/extra-or-missing target field all exit 2 with the error object, empty probe list exits 0 with empty results), status_from_probes exactly-once-and-passed semantics naming omitted/duplicated/failed ids, the DeterministicFakeSandboxBackend seam (all-pass Activated, one-fail SafeDisabled, policy-digest override, ordered per-probe results), the platform_activation_gate over a real V1Store persisting an idempotent Unsupported head, the router availability gate plus one real host.process.open dispatch denied as PROTOCOL_VIOLATION, and source pins (status_from_probes body touches neither std::env nor env::consts; DeterministicFakeSandboxBackend appears in src/ only at its definition in services/sandbox.rs). Documented mechanical test fixes in QA's write scope (compilation only, zero assertion changes): sandbox_activated: false added to the RouterServiceAvailability literal at crates/r-code-runtime/tests/t07_route_native_host_services.rs:266 (the literal starting at line 256 pre-P13) and to the literal inside the supported_requested_services call at crates/r-code-runtime/tests/s03_process_router.rs:430 (literal body beginning at line 420 pre-P13), both broken by the additive RouterServiceAvailability::sandbox_activated field. Test-side iterations during QA (all inside s13_sandbox_contract.rs, final state green under clippy -D warnings and fmt --check): the SandboxBackend trait import was added for run_probes/policy_digest calls, temporaries were bound before borrowing, V1Store::open received &Path, and the 9-argument strict_targets helper was restructured into a ProbeTargets struct to satisfy clippy::too_many_arguments without an allow attribute."
+}

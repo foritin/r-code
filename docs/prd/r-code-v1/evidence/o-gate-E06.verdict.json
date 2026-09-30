@@ -1,0 +1,47 @@
+{
+  "task_id": "E06",
+  "iteration": 2,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/e06_parallel_dispatch.rs",
+    "crates/r-code-runtime/tests/m03_execution_pipeline.rs (migrated pins)",
+    "crates/r-code-runtime/tests/p_gate_approval.rs (migrated pin)"
+  ],
+  "tests": {
+    "command": "rtk proxy cargo test -p r-code-runtime --test e06_parallel_dispatch -- --test-threads=1: 4/4 after the refine fix (verified 5x: QA twice, refine twice, orchestrator once post-hardening). Migrated suites: m03_execution_pipeline 10/10, p_gate_approval 3/3. Full crates single-threaded: kernel 100 green, store 18 lines/430/1 (declared plan_schema 18-vs-35 red only, baseline pair UNCHANGED - the migration went into the string-keyed ledger, numbered registry untouched), runtime all green. House five-group cumulative --no-fail-fast --test-threads=1: run 1 = 151 lines / 1140 passed / 1 failed (declared plan_schema only); run 2 initially 151/1139/2 - the extra red was e06's own overlap assertion (model.max_active()==2, left:1) flaking once under full-house load (200ms model sleep let the two native spawns serialize; 3x isolated reruns green, deterministic diagnosis); the test sleep was hardened to 1500ms and run 2 REPEATED: 151/1140/1, declared red only. House becomes 1141/1140/1. Both the flake occurrence and the hardening are reported, not hidden.",
+    "total": 1141,
+    "passed": 1140,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, 18-vs-35); E06's work_unit_attempts migration lives in the string-keyed v1_schema_migrations ledger so the numbered registry and this red are byte-identical to the pre-task baseline"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 4,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/run_manager.rs": {"file_loc": 1644, "max_comment_block": 11, "long_comment_lines": 0, "comment_ratio": 0.08},
+        "crates/r-code-runtime/src/parallel.rs": {"file_loc": 1430, "max_comment_block": 10, "long_comment_lines": 0, "comment_ratio": 0.102},
+        "crates/r-code-store/src/v1/attempts.rs": {"file_loc": 303, "max_comment_block": 8, "long_comment_lines": 0, "comment_ratio": 0.106},
+        "crates/r-code-store/src/v1/schema.rs": {"file_loc": 536, "max_comment_block": 9, "long_comment_lines": 0, "comment_ratio": 0.13},
+        "crates/r-code-runtime/tests/e06_parallel_dispatch.rs": {"file_loc": 810, "max_comment_block": 9, "long_comment_lines": 0, "comment_ratio": 0.11},
+        "crates/r-code-runtime/tests/m03_execution_pipeline.rs": {"file_loc": 828, "max_comment_block": 11, "long_comment_lines": 0, "comment_ratio": 0.09},
+        "crates/r-code-runtime/tests/p_gate_approval.rs": {"file_loc": 226, "max_comment_block": 8, "long_comment_lines": 0, "comment_ratio": 0.08}
+      },
+      "thresholds": {"file_loc": 2600}
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "summary": "PASS after one refine round - the QA seed-leak probe caught a deterministic frontier-hold defect (failed settle wedged the task in Running with a leaked InFlight seed); the fix retracts never-started seeds regardless of unit status and re-derives the aggregate, and the dispatcher now holds every contract pin: bound-2 concurrency, durable row before spawn, drift re-block, exactly-once settle, single attribution per completion."
+}

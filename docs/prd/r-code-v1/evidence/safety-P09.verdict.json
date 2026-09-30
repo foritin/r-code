@@ -1,0 +1,61 @@
+{
+  "task_id": "P09",
+  "iteration": 3,
+  "tests_authored": [
+    "crates/r-code-runtime/tests/s09_linux_tree_proof.rs"
+  ],
+  "tests": {
+    "command": "PLATFORM DISCIPLINE (task contract: Windows dev host + native Linux CI; no WSL, no cross-target): s09 is #![cfg(target_os = \"linux\")] with 6 authored tests over REAL pinned /usr/bin/bwrap launches (P16 plan, mounts filled, --setenv values supplied) — now observing the NAMESPACE PID1 handed out via --info-fd: natural lifecycle with setsid + double-fork escapees proving via PID1 pidfd-readable + PID1 /proc-gone-after-monitor-reap, terminate_tree(&mut) through the PID1 pidfd until empty, P09.1 identity discipline (persisted inode is the live sandbox PID1's ns and differs from the supervisor's own; namespace_pid1 != monitor_pid; pidfd-only signalling source pin; supervisor re-export pin incl. wait_pid1_exit/wait_monitor), pidfd-only live signal delivery + two-stage fence pins (wait_pid1_exit first stage, PID1 /proc disappearance second stage, monitor exit never the signal, four explicit pidfd_send_signal args, --die-with-parent/--info-fd amendment exactly once, child-pid handoff, no --unshare from the launcher), group-non-proof heartbeat escapee (leader IS PID1: fresh-escapee branch keeps the verdict false and demands containment; subsumed branch proves exactly at namespace empty + no resurrection), single-namespace-owner pin (plan argv --unshare-pid count == 1, proof module passes no namespace flag). Windows proves cfg discipline + parse only: s09 and every bwrap_proof path EXECUTE ONLY in native Linux CI, never run locally, never counted below — no WSL, no cross-target. Iteration-1 full local gates (declared baseline, raw unfiltered sums, single-threaded, --no-fail-fast): runtime --tests 415/415, Kernel 75/75, Store 416/1 with the ONLY failure the declared pre-existing plan_schema baseline (migration-count assertion expects 18, schema now at 35; P09 changed no store code), harness suites green, workspace check/clippy -D warnings/fmt --check green, quality ok — total 953/952/1. Iteration-2 re-run subset (all foreground): cargo check -p r-code-runtime --lib green; clippy -p r-code-runtime --lib -- -D warnings green; cargo fmt -p r-code-runtime (reformatted QA's own s09) + cargo fmt --all -- --check green; cargo check -p r-code-runtime --tests green (s09 parses, empty on Windows); cargo test -p r-code-runtime --all-features --no-fail-fast -- --test-threads=1 = 415/415; clippy --workspace --all-features --all-targets -- -D warnings green; quality_check.py on the two P09 sources = 1 violation (unix.rs max_comment_block 13 > 12 — the only defect). Iteration-3 (comment-only trim of that doc, pure /// edit in a cfg(target_os = \"linux\") module Windows never compiles; all foreground): quality_check.py same args = ok:true with 0 violations (unix.rs max_comment_block now 12); cargo check -p r-code-runtime --lib green; cargo clippy -p r-code-runtime --lib -- -D warnings green; cargo fmt --all -- --check green. total 953/952/1 unchanged.",
+    "total": 953,
+    "passed": 952,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing plan_schema baseline: migration-count assertion expects 18, schema now at 35; P09 changed no store code"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/process_guard/unix.rs": {
+          "file_loc": 1786,
+          "max_comment_block": 12,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.272,
+          "max_func_loc": null,
+          "max_nesting": null
+        },
+        "crates/r-code-runtime/src/services/process_supervisor.rs": {
+          "file_loc": 2016,
+          "max_comment_block": 11,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.057,
+          "max_func_loc": null,
+          "max_nesting": null
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      }
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "PASS (iteration 3, final) — the four iteration-1 kernel defects are genuinely fixed (identity and proof now observe the bwrap --info-fd-handed NAMESPACE PID1: pidfd readable at exit zombie-included, then PID1 /proc gone after the monitor's bounded reap; terminate SIGKILLs PID1 through its pidfd with --die-with-parent armed; pidfd_signal passes all four syscall args), s09 is flipped to that contract strengthen-only, every Windows gate is green at the declared 953/952/1 with the P20 boundary / P13 non-activation intact, and the Engineer's comment-only trim of the P09 module doc (13 -> 12 lines, now crates/r-code-runtime/src/process_guard/unix.rs:1452-1463) closes the last hard gate: quality_check ok:true with zero violations and comment_hygiene restored to 5."
+}

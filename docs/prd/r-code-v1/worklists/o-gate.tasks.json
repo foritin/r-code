@@ -1,0 +1,356 @@
+{
+  "objective": "Execute approved WorkUnit DAGs with bounded parallelism under grouped path-lease families and supervised native children, complete review with an explicit auditable unverified override, and recover the whole chain after daemon faults.",
+  "end_state": "After exact plan approval, a task dispatches every dependency-ready WorkUnit concurrently up to a configured bound; each in-flight unit holds one durable LeaseFamily covering all its path leases; every native child runs under a ChildSupervisor that can cancel and prove the whole set dead; a task whose failed checks are explicitly overridden lands UnverifiedAccepted with a durable per-override audit row exposed on all four clients; a daemon restart reconciles every in-flight unit exactly once — resume or quarantine, never re-execute, never lose a completion.",
+  "non_goals": [
+    "Git worktrees or any checkout-level isolation between parallel units (INV-10: same-checkout optimistic concurrency only)",
+    "Cross-machine or cross-repository parallelism",
+    "Automatic staging, committing, pushing or ref writes",
+    "Un-sandboxed children of any kind",
+    "Re-planning the DAG while execution is in flight"
+  ],
+  "environment": {
+    "language": "Rust 2021 plus TypeScript frontend",
+    "runtime": "Rust 1.88, Tokio, Tauri 2, Node 20",
+    "package_manager": "cargo and npm",
+    "os": "Windows development host; cross-platform contracts",
+    "test_command": "rtk proxy cargo test --workspace --all-features -- --test-threads=1",
+    "notes": "Continue on the post-P32 tree (house 1128/1127/1; the single declared red is the plan_schema legacy schema_version 18-vs-35 baseline). Snapshots per task, no commits or pushes. The E06/E07/E09-R store migrations will MOVE that baseline number (18 is today's latest_schema; new migrations raise it) — redeclare the new pair in each task's verdict rather than hiding it. E05 changes only the canonical JSON blob inside the existing tasks table (no new table, no schema_version bump); its legacy-row fold is pinned by test because store load_task decodes with a silent .ok() that would otherwise drop old rows. File-gate headroom (quality_check file_loc, code lines): application.rs 2577/2600, run_manager.rs 2477/2600 — both tight, so new logic lands in new modules and every task that touches them carries a stay-under-gate criterion."
+  },
+  "components": [
+    {"id": "composition-split", "name": "Composition headroom", "description": "Carve application.rs and run_manager.rs slices out with pure code motion before the parallel wave grows them."},
+    {"id": "kernel-parallel", "name": "Kernel multi-unit state", "description": "Generalize the task state machine from one in-flight unit to N with per-unit attempt records."},
+    {"id": "dag-parallel", "name": "Parallel WorkUnit dispatch", "description": "Bounded-concurrency scheduler over the approved DAG with drift-aware readiness."},
+    {"id": "lease-family", "name": "LeaseFamily", "description": "Durable per-attempt grouping of all path leases with all-or-nothing acquisition and family-level recovery."},
+    {"id": "child-supervision", "name": "Native ChildSupervisor", "description": "One registry owning every in-flight supervised tree: register, cancel-one, cancel-and-prove-all."},
+    {"id": "override-store", "name": "Override audit records", "description": "Immutable per-override table bound to the exact failed checks, plus a read RPC."},
+    {"id": "override-clients", "name": "Override four-client projection", "description": "Desktop/TUI/MCP/remote render the same canonical material."},
+    {"id": "chain-recovery", "name": "Full-chain fault recovery", "description": "Restart reconciliation of every in-flight attempt: resume-or-quarantine, families and trees follow."}
+  ],
+  "open_questions": [
+    "Bounded concurrency default is 2 (conservative for a dev laptop); revisit if E06's interleaving tests need more headroom to prove the bound."
+  ],
+  "tasks": [
+    {
+      "id": "O00",
+      "title": "Create headroom in application.rs and run_manager.rs",
+      "serves": ["composition-split"],
+      "description": "Pure code motion carving one cohesive slice out of each tight file (both under the 2600 file_loc gate but close), following the effect_approvals precedent with pub use re-exports, so the parallel wave's edits do not push either over the gate.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "crates/r-code-runtime/src/application/review_flow.rs", "action": "create", "what": "Move the review disposition/accept/reject/accept_unverified surface with pub use re-exports."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Delegate to the child module; no behavior change."},
+        {"path": "crates/r-code-runtime/src/run_drive.rs", "action": "create", "what": "Move the per-task drive-loop machinery (RunSlot, drive_loop, queue semantics) with re-exports."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Delegate to the child module; no behavior change."},
+        {"path": "crates/r-code-runtime/src/lib.rs", "action": "modify", "what": "Expose run_drive."}
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/o00_headroom_split.rs"
+      ],
+      "subtasks": [
+        {"id": "O00.1", "description": "Move review disposition, accept/reject and accept_unverified methods plus their private helpers into application/review_flow.rs."},
+        {"id": "O00.2", "description": "Move RunSlot, the drive-loop and the queued-input dispatch machinery into run_drive.rs."},
+        {"id": "O00.3", "description": "Re-export every moved path so all existing consumers compile unchanged."},
+        {"id": "O00.4", "description": "Measure both files with .agents/skills/swe-loop/tools/quality_check.py (the swe-loop file gate): application.rs and run_manager.rs each land at least 150 code lines under 2600."}
+      ],
+      "tests": [
+        {"description": "Every moved path still resolves and review + queue dispatch behave identically after the split.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "Zero behavior change: byte-identical public paths and semantics.",
+        "application.rs and run_manager.rs each have >=150 file_loc headroom under 2600."
+      ],
+      "depends_on": [],
+      "estimated_loc": 220,
+      "suggested_skills": []
+    },
+    {
+      "id": "E05",
+      "title": "Generalize the kernel task state machine for concurrent units",
+      "serves": ["kernel-parallel"],
+      "description": "Today task.rs enforces exactly one in-flight unit: start_execution_attempt requires Ready, verification moves the WHOLE task to Verifying carrying one work_unit_id, candidate/ValidationOutcome/ReviewDisposition are single-slot, and non-writable units cannot start at all. Generalize to N concurrent InProgress units with per-unit outcomes, and decide read-only unit semantics explicitly. The kernel shape change ships in the SAME task as the migration of the entire grep-enumerated consumer ring (git grep candidate_digest / TaskExecution::Verifying / .validation across the workspace) so the workspace stays green at the E05 boundary; runtime dispatch stays single-unit until E06. The harness-protocol wire keeps its task-level candidateDigest aggregates — derived at the RPC boundary from per-unit records, never stored in kernel state. Depends on O00 because the runtime call-site edits land in the carved modules (run_drive.rs/review_flow.rs), not the pre-split monoliths.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "crates/r-code-kernel/src/task.rs", "action": "modify", "what": "N concurrent InProgress units; per-unit candidate/verification/review records; read-only units complete without an attempt; serde legacy-fold for pre-per-unit rows."},
+        {"path": "crates/r-code-kernel/src/tasks.rs", "action": "modify", "what": "create_branch's set_candidate_digest and start_run/reload call sites adapt to per-unit state."},
+        {"path": "crates/r-code-kernel/src/completion.rs", "action": "modify", "what": "Arbitration consumes per-unit outcomes; task-level verdict aggregates."},
+        {"path": "crates/r-code-kernel/src/verification.rs", "action": "modify", "what": "Verification vocabulary carries per-unit outcomes."},
+        {"path": "crates/r-code-kernel/tests/t20_implement_completion_arbitration.rs", "action": "modify", "what": "Migrate single-unit pins to the multi-unit model."},
+        {"path": "crates/r-code-kernel/tests/t03_implement_kernel_domain_and_transitions.rs", "action": "modify", "what": "Migrate state.validation matches to per-unit records."},
+        {"path": "crates/r-code-kernel/tests/t18_implement_verification_profiles_and_evidence_sto.rs", "action": "modify", "what": "Migrate candidate_digest pins."},
+        {"path": "crates/r-code-kernel/tests/t25_implement_terminal_cancellation_and_generation_f.rs", "action": "modify", "what": "Migrate candidate_digest pins."},
+        {"path": "crates/r-code-kernel/tests/m03_execution_lifecycle.rs", "action": "modify", "what": "Migrate begin_verification/validation pins."},
+        {"path": "crates/r-code-kernel/tests/m04_review_lifecycle.rs", "action": "modify", "what": "Migrate candidate_digest/validation assignments and accept pins."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Compile-compat only: adapt the TaskExecution::Verifying { work_unit_id } destructure and latest.validation/.review/.candidate_digest assignments to per-unit records; dispatch stays single-unit."},
+        {"path": "crates/r-code-runtime/src/run_drive.rs", "action": "modify", "what": "Adapt drive-loop variant matches that read the old single-slot verification fields."},
+        {"path": "crates/r-code-runtime/src/application/review_flow.rs", "action": "modify", "what": "Adapt review-disposition matches to per-unit outcomes."},
+        {"path": "crates/r-code-runtime/src/services/review.rs", "action": "modify", "what": "Adapt the review projection: derive the wire's task-level candidateDigest from per-unit records."},
+        {"path": "crates/r-code-runtime/src/services/verification.rs", "action": "modify", "what": "Adapt candidate_digest reads to per-unit records."},
+        {"path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "Adapt execution-state variant matches to the new shapes."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Adapt candidate_digest reads at the RPC boundary."},
+        {"path": "crates/r-code-runtime/tests/t19_implement_host_verification_runner.rs", "action": "modify", "what": "Migrate candidate_digest pins."},
+        {"path": "crates/r-code-runtime/tests/m03_execution_pipeline.rs", "action": "modify", "what": "Migrate state.validation/candidate_digest helpers."},
+        {"path": "crates/r-code-runtime/tests/m04_review_flow.rs", "action": "modify", "what": "Migrate review-state construction helpers."},
+        {"path": "crates/r-code-runtime/tests/m04_review_rpc.rs", "action": "modify", "what": "Migrate review-state construction helpers."},
+        {"path": "crates/r-code-runtime/tests/s20_sandboxed_checks.rs", "action": "modify", "what": "Migrate verifying_state/validation pins."},
+        {"path": "crates/r-code-evals/src/harness_conformance.rs", "action": "modify", "what": "Migrate candidate_digest-bearing struct construction."}
+      ],
+      "test_files": [
+        "crates/r-code-kernel/tests/e05_kernel_concurrent_units.rs"
+      ],
+      "subtasks": [
+        {"id": "E05.1", "description": "Replace the one-InProgress guard and single work_unit_id verification fields with per-unit records: each in-flight unit carries its own candidate digest, verification outcome and failure reason. TaskExecution::Running keeps its {attempt_id, generation} payload unchanged — per-unit records live in a separate TaskState-level map, so Running constructors (e.g. kernel t04) are untouched. The harness-protocol wire keeps its task-level candidateDigest aggregates, derived at the RPC boundary."},
+        {"id": "E05.2", "description": "Task-level transitions become aggregates: ReviewReady only when every unit has a terminal per-unit outcome; a failed unit blocks only its dependents (dependency-aware), not the whole task."},
+        {"id": "E05.3", "description": "Read-only units (no write scope, not repo_exclusive) are completed by the state machine once their dependencies are Completed — no attempt, no child — with a per-unit record saying no-effect completion."},
+        {"id": "E05.4", "description": "accept_verified/accept_unverified keep single-actor explicitness; a task with any un-settled unit refuses both."},
+        {"id": "E05.5", "description": "Same-change migration of the entire grep-enumerated consumer ring (kernel tasks.rs/verification.rs; kernel tests t03/t18/t20/t25/m03/m04; runtime run_manager/run_drive/review_flow/services-review/services-verification/router/r-code-service; runtime tests t19/m03-pipeline/m04-flow/m04-rpc/s20; evals harness_conformance): the workspace gate stays green at the E05 snapshot."},
+        {"id": "E05.6", "description": "Persisted-blob decode compat: the tasks table stores whole-TaskState canonical JSON, so new per-unit fields default on absent and a legacy top-level validation/candidate_digest/review row folds into one per-unit record on load — store load_task decodes with a silent .ok(), so without the fold an old row would silently vanish (pinned by deserializing a legacy JSON literal)."}
+      ],
+      "tests": [
+        {"description": "Two units run concurrently: both InProgress, independent settle, task ReviewReady only after both terminal.", "kind": "integration"},
+        {"description": "One unit failing marks exactly its dependents blocked; the sibling completes and the task aggregates to RepairRequired naming the failed unit.", "kind": "integration"},
+        {"description": "A read-only unit with satisfied dependencies reaches Completed with a no-effect record and never holds the in-progress slots.", "kind": "unit"},
+        {"description": "accept_verified and accept_unverified are refused while any unit is unsettled; the settled-path actor checks stay exact.", "kind": "integration"},
+        {"description": "A legacy single-slot persisted TaskState JSON row decodes and folds into one per-unit record; no legacy row is dropped.", "kind": "unit"}
+      ],
+      "acceptance_criteria": [
+        "The state machine admits N concurrent InProgress units with per-unit outcomes.",
+        "No task-level verdict is computed while any unit is unsettled.",
+        "Read-only units complete without attempts, deterministically.",
+        "r-code-runtime compiles against the per-unit shapes in the same change (no cross-task red).",
+        "A legacy persisted task row (single-slot JSON) decodes and folds into one per-unit record."
+      ],
+      "depends_on": ["O00"],
+      "estimated_loc": 720,
+      "suggested_skills": []
+    },
+    {
+      "id": "E06",
+      "title": "Dispatch dependency-ready WorkUnits concurrently with durable attempt records",
+      "serves": ["dag-parallel"],
+      "description": "Replace run_manager's single-unit selection with a bounded scheduler over the E05 state machine, backed by a new durable per-WorkUnit attempt table: compute the ready set (dependencies Completed AND read-set drift revalidation), dispatch up to the bound, and complete units from their own attempt's durable settle.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "crates/r-code-store/src/v1/schema.rs", "action": "modify", "what": "Add work_unit_attempts table (attempt_id, task, plan_revision, work_unit_id, phase, content digest)."},
+        {"path": "crates/r-code-store/src/v1/attempts.rs", "action": "create", "what": "Attempt repository: prepare (idempotent, replay-converging), transition, list in-flight."},
+        {"path": "crates/r-code-store/src/v1/mod.rs", "action": "modify", "what": "Expose the attempts repository."},
+        {"path": "crates/r-code-runtime/src/parallel.rs", "action": "create", "what": "Ready-set computation (dependencies + drift revalidation) and the bounded dispatcher."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Replace single-unit selection with the dispatcher; per-unit completion bookkeeping."}
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/e06_parallel_dispatch.rs"
+      ],
+      "subtasks": [
+        {"id": "E06.1", "description": "Durable attempt records: attempt_id = attempt-{task}-{plan-revision-short}-{unit-id}; prepare is idempotent (identical replay converges, divergent refuses); every dispatch writes one before any spawn."},
+        {"id": "E06.2", "description": "Ready set = Pending AND dependencies all Completed AND read-set revalidation passes (external edits to a dependency's write scope during flight re-block its dependents; INV-10 drift detection rides the existing P26/P27 revalidate)."},
+        {"id": "E06.3", "description": "Dispatch up to the bound (default 2) concurrently; each attempt gets its own execution RunSnapshot bound to the attempt record."},
+        {"id": "E06.4", "description": "A unit completes only from its own attempt's durable settle; the attempt record settles exactly once (resume-once vocabulary reused)."}
+      ],
+      "tests": [
+        {"description": "A diamond DAG dispatches both arms concurrently and the join only after both complete; the bound is never exceeded.", "kind": "integration"},
+        {"description": "An external edit during flight to a dependency's write scope re-blocks the dependent; the sibling completes.", "kind": "integration"},
+        {"description": "Attempt records are idempotent under replay and each completion attributes to exactly one attempt.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "No unit starts before all its dependencies are Completed and its read set revalidates.",
+        "Concurrency never exceeds the configured bound.",
+        "Every completion is attributed to exactly one durable attempt record (pinned by test).",
+        "run_manager.rs stays under the 2600 file_loc gate (new logic in parallel.rs)."
+      ],
+      "depends_on": ["E05"],
+      "estimated_loc": 400,
+      "suggested_skills": []
+    },
+    {
+      "id": "E07",
+      "title": "Group every attempt's leases into one durable LeaseFamily",
+      "serves": ["lease-family"],
+      "description": "One family per in-flight attempt: all of a unit's path leases acquired atomically (all-or-nothing), the family keyed by the attempt record from E06, and restart recovery that reconciles whole families rather than loose leases.",
+      "building_blocks": ["LeaseFamily"],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "crates/r-code-store/src/v1/schema.rs", "action": "modify", "what": "Add lease_families table keyed by attempt_id."},
+        {"path": "crates/r-code-store/src/v1/mutations.rs", "action": "modify", "what": "Family acquire (all-or-nothing)/release/reconcile; fencing rides the EXISTING workspace ownership epoch — no third epoch currency."},
+        {"path": "crates/r-code-runtime/src/services/mutations.rs", "action": "modify", "what": "MutationExecutor joins its leases into the attempt's family."},
+        {"path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "Family lifecycle driven by the dispatcher around the attempt record."}
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/e07_lease_family.rs"
+      ],
+      "subtasks": [
+        {"id": "E07.1", "description": "Persist families keyed by attempt_id; the family's fencing is the workspace ownership epoch the member leases already carry (derive, never a new counter); acquiring a family acquires every member lease or none."},
+        {"id": "E07.2", "description": "A family release releases exactly its member leases and settles the attempt record; a stale attempt cannot release or extend."},
+        {"id": "E07.3", "description": "Restart reconciliation: a family whose attempt settled releases; one whose attempt is incomplete quarantines with its members fenced."}
+      ],
+      "tests": [
+        {"description": "A family whose second member lease conflicts acquires nothing and the first lease is not held (all-or-nothing).", "kind": "integration"},
+        {"description": "Two tasks' families over disjoint paths coexist; an attempt on the same path from another task is refused by the member lease, not by family cross-talk.", "kind": "integration"},
+        {"description": "Crash between family acquire and settle: restart either resumes-once or quarantines the whole family (pinned: parallel attempts from different tasks never fence each other's families).", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "A family never partially exists.",
+        "Fencing reuses the existing workspace ownership epoch; no third epoch currency exists.",
+        "No lease outlives its family's durable settle or quarantine."
+      ],
+      "depends_on": ["E06"],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    },
+    {
+      "id": "E08",
+      "title": "Supervise every in-flight native child under one ChildSupervisor",
+      "serves": ["child-supervision"],
+      "description": "One registry owning the supervised trees of all in-flight attempts. Registration is explicit at the two seams where tree ids are BORN: plugins/session.rs (the only spawn_plugin call site — the PluginProcess/tree_handle is encapsulated there and must expose the supervised tree id for the owning run) and services/processes.rs (open_profiled returns an operation token; the tree id must be surfaced alongside it from the process_supervisor record). The dispatcher in parallel.rs consumes the surfaced ids; child_supervisor.rs is the registry itself — no journal interception, no second state machine.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "crates/r-code-runtime/src/child_supervisor.rs", "action": "create", "what": "Registry keyed by (attempt_id, tree_id) over supervised-tree handles: register, settle-one, cancel-one, cancel-and-prove-all."},
+        {"path": "crates/r-code-runtime/src/plugins/session.rs", "action": "modify", "what": "Expose the supervised tree id (the PluginProcess/tree_handle held at the spawn_plugin call site) for the owning run."},
+        {"path": "crates/r-code-runtime/src/services/processes.rs", "action": "modify", "what": "Surface the profiled run's tree id alongside the open_profiled operation token."},
+        {"path": "crates/r-code-runtime/src/services/process_supervisor.rs", "action": "modify", "what": "Expose the supervised-run record's tree id for registration."},
+        {"path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "The dispatcher registers each attempt's tree via the surfaced ids and routes cancel through the supervisor."},
+        {"path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Task cancel and shutdown route through cancel-and-prove-all."},
+        {"path": "crates/r-code-runtime/src/lib.rs", "action": "modify", "what": "Expose the module."}
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/e08_child_supervisor.rs"
+      ],
+      "subtasks": [
+        {"id": "E08.1", "description": "Registry over the supervised-tree vocabulary (phases, proofs) keyed by (attempt_id, tree_id); tree ids are surfaced from where they are born (session.rs's spawn_plugin handle; processes.rs/process_supervisor.rs's profiled-run record) and the dispatcher registers each under its owning attempt."},
+        {"id": "E08.2", "description": "cancel-and-prove-all: sweep every registered tree with its per-tree death proof; an unprovable tree quarantines the task and the set is never reported swept."},
+        {"id": "E08.3", "description": "A tree that settles on its own deregisters; a proof naming a tree not in the registry is refused (pinned: every registered tree has exactly one owner attempt)."}
+      ],
+      "tests": [
+        {"description": "Two registered trees: cancel-all proves both dead; one already-settled tree does not block the sweep.", "kind": "e2e"},
+        {"description": "An unprovable tree quarantines the task; a foreign-tree proof is refused.", "kind": "e2e"}
+      ],
+      "acceptance_criteria": [
+        "Every registered tree has exactly one owner attempt (pinned by test).",
+        "Task cancel leaves zero unsupervised children (INV-08).",
+        "Set-wide 'all dead' is only claimed with per-tree proofs."
+      ],
+      "depends_on": ["E06"],
+      "estimated_loc": 480,
+      "suggested_skills": []
+    },
+    {
+      "id": "E09-R",
+      "title": "Persist immutable unverified-override audit records with a read RPC",
+      "serves": ["override-store"],
+      "description": "The existing machinery stays: accept_unverified already refuses check-list mismatches (application.rs sorted-set comparison), the review journal already records actor/session/reason/checks, and review.acceptUnverified is already routed. The delta: a dedicated immutable unverified_overrides table as the single source of truth for override queries, written in the same transaction as the verdict, plus a read/list RPC.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "crates/r-code-store/src/v1/schema.rs", "action": "modify", "what": "Add unverified_overrides table."},
+        {"path": "crates/r-code-store/src/v1/reviews.rs", "action": "create", "what": "Immutable override records (task, override_id, actor/session, reason, exact failed check ids); idempotent replay converges; the existing journal row is the derived projection."},
+        {"path": "crates/r-code-store/src/v1/mod.rs", "action": "modify", "what": "Expose the reviews module."},
+        {"path": "crates/r-code-runtime/src/application/review_flow.rs", "action": "modify", "what": "accept_unverified (moved here by O00) writes the audit row transactionally; add review.overrides.list RPC surface."},
+        {"path": "crates/r-code-runtime/src/bin/r-code-service.rs", "action": "modify", "what": "Route review.overrides.list."}
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/e09r_override_records.rs"
+      ],
+      "subtasks": [
+        {"id": "E09-R.1", "description": "Immutable override rows: one per (task, override_id), actor/session, reason, exact failed check ids; identical replay converges to the first row; a different actor on the same id conflicts."},
+        {"id": "E09-R.2", "description": "The row is written in the same store transaction as the UnverifiedAccepted verdict; no verdict without its row and no row without its verdict."},
+        {"id": "E09-R.3", "description": "review.overrides.list returns the canonical camelCase projection of the rows."}
+      ],
+      "tests": [
+        {"description": "An override lands with exactly one durable row bound to the exact failed checks; replay writes nothing new.", "kind": "integration"},
+        {"description": "A mismatched check list is refused with no row and no verdict (existing refusal kept green).", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "No UnverifiedAccepted without its immutable override row.",
+        "The table is the single query source; the journal row is derived.",
+        "Replay idempotency and actor-conflict refusal are pinned."
+      ],
+      "depends_on": ["O00", "E05"],
+      "estimated_loc": 260,
+      "suggested_skills": []
+    },
+    {
+      "id": "E09-C",
+      "title": "Project the override record to all four clients",
+      "serves": ["override-clients"],
+      "description": "Desktop, TUI, MCP and remote render the same canonical camelCase material from review.overrides.list; capability-missing surfaces hide the control rather than disabling it; a single renderer per client consumes the canonical projection.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "src-tauri/src/harness_v1.rs", "action": "modify", "what": "Desktop command over the RPC."},
+        {"path": "src-tauri/src/lib.rs", "action": "modify", "what": "Register the command in the harness v1 command list."},
+        {"path": "src-tauri/frontend/src/lib/ipc.ts", "action": "modify", "what": "Typed client material."},
+        {"path": "src-tauri/frontend/src/components/room/Permissions.tsx", "action": "modify", "what": "The single desktop renderer (P19B-C precedent)."},
+        {"path": "crates/r-code-tui/src/harness_client.rs", "action": "modify", "what": "TUI overlay reusing the same key order."},
+        {"path": "crates/r-code-mcp/src/lib.rs", "action": "modify", "what": "MCP tool surface over the same RPC."},
+        {"path": "src-tauri/frontend/src/remote/core/approvals-aggregate.ts", "action": "modify", "what": "Remote projection: rows missing canonical keys are dropped, never defaulted."}
+      ],
+      "test_files": [
+        "src-tauri/tests/e09c_override_clients.rs"
+      ],
+      "subtasks": [
+        {"id": "E09-C.1", "description": "Desktop: command + typed ipc + the Permissions renderer consuming the canonical material."},
+        {"id": "E09-C.2", "description": "TUI overlay and MCP tool surface over the same RPC projection."},
+        {"id": "E09-C.3", "description": "Remote: the aggregate drops rows missing any canonical key (fail-closed) and the capability gate hides the control."}
+      ],
+      "tests": [
+        {"description": "All four clients see the identical override record; a malformed row is dropped by the remote projection, not defaulted.", "kind": "integration"},
+        {"description": "A capability-missing client HIDES the override control (element absent, not disabled) and each client wires exactly one renderer to the canonical projection.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "All four clients render the same canonical material.",
+        "Capability-missing surfaces hide, never disable.",
+        "Malformed rows fail closed in every projection."
+      ],
+      "depends_on": ["E09-R"],
+      "estimated_loc": 280,
+      "suggested_skills": []
+    },
+    {
+      "id": "E10",
+      "title": "Recover the full chain after a daemon fault",
+      "serves": ["chain-recovery"],
+      "description": "With N units in flight, a daemon restart reconciles the whole chain from the durable attempt records (work_unit_attempts) and their lease families: each in-flight attempt resolves exactly once — resume-once where its own evidence proves it safe, quarantine where it does not — families follow their attempts, supervised trees follow their proofs, and no completion is lost or duplicated.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": [],
+      "files": [
+        {"path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "Startup reconciliation pass enumerating in-flight attempts from work_unit_attempts."},
+        {"path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Reconcile after effect recovery, before write ingress."},
+        {"path": "crates/r-code-runtime/src/run_drive.rs", "action": "modify", "what": "The drive loop (moved here by O00) consumes reconciliation outcomes before new dispatch."}
+      ],
+      "test_files": [
+        "crates/r-code-runtime/tests/e10_chain_recovery.rs"
+      ],
+      "subtasks": [
+        {"id": "E10.1", "description": "Enumerate in-flight attempts from work_unit_attempts; classify each resume-once or quarantine from its own durable evidence (P25/P27 vocabulary reused, never re-invented)."},
+        {"id": "E10.2", "description": "Families reconcile with their attempts: settled releases, quarantined fences its members."},
+        {"id": "E10.3", "description": "A unit that completed but was not acknowledged before the crash is Completed, never re-executed."},
+        {"id": "E10.4", "description": "Reconciliation runs after recover_incomplete_effects and before any new write ingress; readiness publishes the reconciled count."}
+      ],
+      "tests": [
+        {"description": "Kill with two units in flight: restart resolves each exactly once; the completed-before-crash unit stays Completed.", "kind": "e2e"},
+        {"description": "An attempt whose proof cannot be produced quarantines, fences its family, and blocks only its dependents.", "kind": "e2e"},
+        {"description": "Restart readiness publishes the reconciled attempt count (resume-once plus quarantine) before any new dispatch.", "kind": "integration"}
+      ],
+      "acceptance_criteria": [
+        "Every in-flight attempt resolves to exactly one of resume-once or quarantine.",
+        "No WorkUnit executes twice across a restart.",
+        "No completion is lost across a restart.",
+        "run_drive.rs and run_manager.rs stay under the 2600 file_loc gate."
+      ],
+      "depends_on": ["E07", "E08"],
+      "estimated_loc": 340,
+      "suggested_skills": []
+    }
+  ],
+  "order": ["O00", "E05", "E06", "E07", "E08", "E09-R", "E09-C", "E10"]
+}

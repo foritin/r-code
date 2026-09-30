@@ -1,0 +1,100 @@
+{
+  "task_id": "P24H",
+  "iteration": 1,
+  "tests_authored": [
+    "src-tauri/tests/s24h_sidecars.rs"
+  ],
+  "tests": {
+    "command": "ONE degrade-mode round; every number recounted by script from the raw persisted logs. (1) DECLARED SUITE src-tauri/tests/s24h_sidecars.rs = 4 passed / 0 failed, measured three times (initial, post-fix, post-fmt/final): resolver precedence (explicit wins, no fall-through to sibling for a helper the explicit dir lacks) + never-PATH proven structurally + stable 64-hex digest; tampered-truncated and 128-KiB-garbage-magic helpers refused as Tampered with the floor/magic named, missing refused as Missing; packaged helpers LAUNCH from a staged layout (the safety probe answers an empty request with exit 2 and a versioned JSON error on its stdout reply channel; the guardian's non-Linux empty main exits 0 by design, its real Linux session belonging to s08's native suite); and the standalone arm runs ensure_daemon_with_helpers end to end over a staged layout — the daemon accepts --helper-dir, writes the owner token (pid recorded), serves a client — cleaned up by the owner document's pid. Two real defects were measured and fixed inside the round: the src-tauri test target path overshot the workspace (../../ vs ../), and a dev-mode host check lets tauri-build overwrite real helper artifacts in target/debug with placeholders that a later fresh build does not restore — target_binary now detects a clobbered (<64 KiB) artifact, deletes it to force a relink, and asserts the rebuilt artifact is real. (2) PACKAGING FLOW: node scripts/harness-packaging.test.mjs = 3 passed / 0 failed (the new fourth-flow test pins both scripts staging both helpers with target-triple names, tauri.conf.json and the local-package overlay declaring the identical externalBin set via deepEqual, build.rs knowing both helpers while launching nothing, and the resolver/client plumbing existing). (3) HOST NEIGHBOURS of the client change: harness_v1_chat + t33 + s19b_effect_bridge = 14 passed / 0 failed (no new red in the outside-denominator host suites). (4) FULL RUNTIME+PROTOCOL: 96 result lines / 554 passed / 1 failed — the documented s07 load race (supervisor_completes_windows_backend_runs_with_journal_tree_ids), re-measured alone immediately after: 10 passed / 0 failed; both numbers reported. (5) HOUSE five-group cumulative measured THREE times, all reported: 139 lines / 1080/1 and 139/1080/1 on the pre-comment-trim code, then 139/1079/2 on the FINAL code (the plan_schema baseline + the same s07 member, again green 10/10 in isolation right after) — house stays 1081 total / 1080 passed / 1 declared failure, zero regressions vs P24A (s24h lives in r-code-host, outside the house denominator, consistent with the P22-era convention that host suites are certified separately). (6) OTHER GATES: clippy -p r-code-runtime -p r-code-client -p r-code-host --all-features --all-targets -D warnings exit 0; cargo fmt --all -- --check exit 0; node scripts/check-process-launch-boundary.mjs green (17 owned sites — the resolver resolves, it does not spawn, so the P24A guard needed no change); quality_check.py over all nine changed files + the QA suite ok=true 0 violations after trimming the resolver's module header to the 12-line block limit and wrapping one PRE-EXISTING 101-char comment line in profile.rs (helper_binaries 154 / mod 26 / profile 307 / client 429 / ps1 212 / sh 151 / build.rs 81 / s24h 266 / packaging-test 288 code loc; .mjs comment metrics are tool-blind, verified by eye <= 7 lines). (7) DAEMON HYGIENE: Get-CimInstance for r-code-service.exe / r-code-harness-native.exe after every gate batch: zero processes. (8) CROSS-TARGET HONESTY: the macOS script changes are string-level staging verified by the packaging test; the real macOS packaging flow and the Linux guardian session execute in native CI/release, not on this host.",
+    "total": 1081,
+    "passed": 1080,
+    "failed": 1,
+    "regression_green": true,
+    "failed_tests": [
+      {
+        "name": "clean_database_and_schema_18_upgrade_reach_latest_complete_schema",
+        "error": "declared pre-existing baseline (r-code-store plan_schema.rs:245, legacy schema_version 18-vs-35); not reachable from P24H and unchanged by this task"
+      }
+    ]
+  },
+  "quality": {
+    "simplicity": 5,
+    "readability": 5,
+    "comment_hygiene": 5,
+    "organization": 5,
+    "style_match": 5,
+    "objective": {
+      "ok": true,
+      "violations": [],
+      "per_file": {
+        "crates/r-code-runtime/src/services/helper_binaries.rs": {
+          "file_loc": 154,
+          "max_comment_block": 12,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.283
+        },
+        "crates/r-code-runtime/src/services/mod.rs": {
+          "file_loc": 26,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.13
+        },
+        "crates/r-code-runtime/src/profile.rs": {
+          "file_loc": 307,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.19
+        },
+        "crates/r-code-client/src/lib.rs": {
+          "file_loc": 429,
+          "max_comment_block": 7,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.111
+        },
+        "scripts/build-branded-installer.ps1": {
+          "file_loc": 212,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        },
+        "scripts/manual/package-macos.sh": {
+          "file_loc": 151,
+          "max_comment_block": 3,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.056
+        },
+        "src-tauri/build.rs": {
+          "file_loc": 81,
+          "max_comment_block": 10,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.421
+        },
+        "src-tauri/tests/s24h_sidecars.rs": {
+          "file_loc": 266,
+          "max_comment_block": 9,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.243
+        },
+        "scripts/harness-packaging.test.mjs": {
+          "file_loc": 288,
+          "max_comment_block": 0,
+          "long_comment_lines": 0,
+          "comment_ratio": 0.0
+        }
+      },
+      "thresholds": {
+        "max_comment_block": 12,
+        "long_comment_lines": 0,
+        "max_func_loc": 100,
+        "max_nesting": 5,
+        "file_loc": 2600
+      },
+      "note": "The estimate was 280 lines; ~180 production lines landed across nine files plus a 266-line QA suite. build.rs's 0.421 comment ratio is the pre-existing bilingual header carrying the placeholder/packaging contract; the new lines follow it. The .mjs/.ps1/.sh comment metrics are tool-blind (// and # passes differ); all were verified by eye under the limits. max_func_loc/max_nesting null for .rs as always; reviewed by eye — no function exceeds ~60 lines, nesting <= 4."
+    }
+  },
+  "quality_pass": true,
+  "gate_failures": [],
+  "pass": true,
+  "fixes": [],
+  "summary": "KEEP. Acceptance ① (runtime owns resolution without depending on src-tauri): HelperBinaryResolver lives in r-code-runtime with zero src-tauri dependencies — explicit absolute directory first, else verified siblings of the daemon, never PATH, tampered/missing/unbound refusals, and a digest helper for byte-pinning; the profile carries the binding and the daemon accepts --helper-dir with no daemon-code change. Acceptance ② (both real packaging flows ship helpers): the Windows installer and the macOS script build and stage both helpers with target-triple names beside the daemon, build.rs validates them (and still launches nothing), and both tauri configs declare the identical externalBin set — pinned by a packaging test that fails on any divergence. Acceptance ③ (Tauri and standalone reject missing/tampered helpers): the resolver refuses truncated, garbage-magic and missing helpers as Tampered/Missing (SafeDisabled-shaped refusals, never a PATH fallback), the standalone daemon smoke proves --helper-dir end to end through the real client, and the never-PATH property is proven structurally. Honest disclosures: a dev-mode host check lets tauri-build overwrite real helper artifacts in target/debug with placeholders (packaging mode is unaffected; the QA suite self-heals and the behaviour is recorded); the guardian's real launch session is Linux-native CI territory (s08), with the non-Linux empty-main exit 0 as this host's launch proof; full signature/owner pinning remains P32's release gate with the digest seam in place. House 1081/1080/1 with only the declared plan_schema baseline; the s07 load-race member appeared in two full runs and was green 10/10 in isolation both times, both numbers reported."
+}

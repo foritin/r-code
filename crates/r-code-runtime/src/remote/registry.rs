@@ -1,5 +1,5 @@
 //! Device registry (R01, F4): paired devices persisted at
-//! `<harness-v2>/<profile>/devices/registry.json` with 0600 permissions.
+//! `<harness-v1>/<profile>/devices/registry.json` with 0600 permissions.
 //! Tokens are 32 random bytes shown once at pairing; only their SHA-256
 //! ever touches disk. Revocation is immediate and durable.
 
@@ -75,7 +75,7 @@ pub struct DeviceRegistry {
 }
 
 fn now_rfc3339() -> String {
-    // Profile-local timestamps like the rest of the v2 store (ISO-8601 UTC).
+    // Profile-local timestamps like the rest of the v1 store (ISO-8601 UTC).
     let secs = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -130,9 +130,9 @@ fn write_private(path: &Path, state: &RegistryState) -> Result<(), RegistryError
 }
 
 impl DeviceRegistry {
-    /// Open (or create) the registry under `<harness-v2-root>/devices/`.
-    pub fn open(harness_v2_root: &Path) -> Result<Self, RegistryError> {
-        let path = harness_v2_root.join("devices").join("registry.json");
+    /// Open (or create) the registry under `<harness-v1-root>/devices/`.
+    pub fn open(harness_v1_root: &Path) -> Result<Self, RegistryError> {
+        let path = harness_v1_root.join("devices").join("registry.json");
         let state = match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str::<RegistryState>(&text)
                 .map_err(|e| RegistryError::Io(format!("registry.json invalid: {e}")))?,

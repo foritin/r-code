@@ -1,0 +1,18 @@
+{
+  "schema_version": "ai-worklist-gate.v1",
+  "mode": "check",
+  "document": "docs/support/archive/tui-v1/r-code-cli-prd.md",
+  "freeze": "docs/support/archive/tui-v1/tui-v1-freeze.yaml",
+  "passed": true,
+  "counts": {
+    "requirements": 27,
+    "checklist_tasks": 24,
+    "task_cards": 24,
+    "assertions": 78
+  },
+  "digests": {
+    "normative": "3abba2d2b55957d7fd33561de6cdd959900e50f83972ac6d01b63b446c489a10",
+    "worklist": "438941be5ca464c08c939bacf2d639f3388aed89aca5e25f9ad4bd723a137146"
+  },
+  "issues": []
+}
