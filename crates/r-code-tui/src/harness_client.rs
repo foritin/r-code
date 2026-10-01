@@ -153,6 +153,10 @@ impl HarnessTuiClient {
                     "用法：/plugins use <task-id> <harness-id>".into(),
                 ),
             },
+            "overrides" => match parts.next() {
+                Some(task) => self.review_overrides(Some(task)).await,
+                None => self.review_overrides(None).await,
+            },
             _ => HarnessCommandOutcome::ok(
                 trimmed,
                 vec![
@@ -162,10 +166,75 @@ impl HarnessTuiClient {
                     "/plugins remove <id> <digest>          移除（被运行中任务固定的版本会拒绝）"
                         .into(),
                     "/plugins use <task-id> <harness-id>   为空闲任务选择 Harness".into(),
+                    "/plugins overrides [task-id]          不可变 unverified-override 审计行"
+                        .into(),
                 ],
                 serde_json::json!({"help": true}),
             ),
         }
+    }
+
+    /// E09-C：`review.overrides.list` 的 TUI 覆盖层——审计行的键序与桌面
+    /// `overrideAuthorityRows` 逐字一致，只读。
+    pub async fn review_overrides(&self, task_id: Option<&str>) -> HarnessCommandOutcome {
+        let command = "overrides";
+        let mut client = match self.connect().await {
+            Ok(client) => client,
+            Err(error) => return HarnessCommandOutcome::err(command, error),
+        };
+        let value = match client
+            .call(
+                "review.overrides.list",
+                serde_json::json!({"taskId": task_id}),
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => return HarnessCommandOutcome::err(command, error.to_string()),
+        };
+        let Some(rows) = value.as_array() else {
+            return HarnessCommandOutcome::err(command, "审计行投影不是数组".into());
+        };
+        if rows.is_empty() {
+            return HarnessCommandOutcome::ok(
+                command,
+                vec!["没有 unverified override 审计行".into()],
+                value,
+            );
+        }
+        // canonical 键序：overrideId taskId candidateDigest actorId sessionId
+        // reason checks createdAtMs —— 四端一致。
+        const KEY_ORDER: [&str; 8] = [
+            "overrideId",
+            "taskId",
+            "candidateDigest",
+            "actorId",
+            "sessionId",
+            "reason",
+            "checks",
+            "createdAtMs",
+        ];
+        let mut lines = vec!["unverified override 审计：".to_string()];
+        for row in rows {
+            let rendered = KEY_ORDER
+                .iter()
+                .map(|key| {
+                    let cell = row[*key].clone();
+                    let text = match cell {
+                        serde_json::Value::Array(checks) => checks
+                            .iter()
+                            .filter_map(|check| check.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        other => other.to_string(),
+                    };
+                    format!("{key}: {text}")
+                })
+                .collect::<Vec<_>>()
+                .join(" · ");
+            lines.push(rendered);
+        }
+        HarnessCommandOutcome::ok(command, lines, value)
     }
 
     async fn list(&self) -> HarnessCommandOutcome {

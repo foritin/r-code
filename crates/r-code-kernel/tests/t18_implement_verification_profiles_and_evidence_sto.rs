@@ -173,6 +173,7 @@ fn plugin_proposal_with_absent_checks_requires_host_verification() {
         constraints: vec![],
         required_checks: vec!["check:cargo-test".into(), "check:clippy".into()],
         revision: 1,
+        memory: None,
     });
     state
         .start_attempt(

@@ -79,6 +79,7 @@ fn task_contract() -> TaskContract {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     }
 }
 

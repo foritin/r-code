@@ -25,6 +25,10 @@ pub mod fs_util;
 pub mod harness_v1;
 pub mod harness_v1_chat;
 mod harness_v1_routes;
+
+/// FR-7 desktop-side memory freeze (see harness_v1_routes) — re-exported for
+/// the bin crate command surface.
+pub use harness_v1_routes::frozen_memory_payload;
 pub mod ipc;
 pub mod legacy_memory;
 pub mod lifecycle_commands;
@@ -111,6 +115,11 @@ pub const HARNESS_V1_EFFECT_COMMANDS: [&str; 4] = [
     "cmd_harness_v1_effect_revoke",
     "cmd_harness_v1_approval_decide",
 ];
+
+/// E09-C：unverified-override 审计的桌面命令（只读投影——四端同一份
+/// canonical 材料）。注意：`main.rs` 的 `invoke_handler` 一行注册不在
+/// 本任务文件集内，属已记录的裁量缺口（见 o-gate ledger iter 7）。
+pub const HARNESS_V1_OVERRIDE_COMMANDS: [&str; 1] = ["cmd_harness_v1_overrides_list"];
 
 /// 初始化结构化日志框架。
 ///

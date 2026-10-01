@@ -563,6 +563,30 @@ export function buildTimeline(
             label: "上下文已自动压缩",
             detail: contextCompactionDetail(m.output_json),
           });
+        } else if (m.text === "r_code_context_instructions") {
+          const row = codexContextRow(m.text, safeJsonParse(m.output_json));
+          if (row) {
+            items.push({
+              kind: "context",
+              id: m.id ? `context-${m.id}` : nid("context"),
+              t: lastT,
+              label: row.label,
+              detail: row.detail,
+              collapsible: row.collapsible,
+            });
+          }
+        } else if (m.text === "r_code_context_jit" || m.text === "r_code_context_jit_dropped") {
+          const row = codexContextRow(m.text, safeJsonParse(m.output_json));
+          if (row) {
+            items.push({
+              kind: "context",
+              id: m.id ? `context-${m.id}` : nid("context"),
+              t: lastT,
+              label: row.label,
+              detail: row.detail,
+              collapsible: row.collapsible,
+            });
+          }
         } else if (m.text === "codex_warning" || m.text === "codex_diff") {
           // M2-02：与 live 同一构建规则（codexContextRow）。
           let parsed: unknown = null;
@@ -872,6 +896,15 @@ function isInternalTimelineProtocol(event: string): boolean {
     || event === "subagent_tool_audit";
 }
 
+function safeJsonParse(value: string | null | undefined): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 function contextCompactionDetail(value: string | null | undefined): string | null {
   if (!value) return null;
   try {
@@ -912,6 +945,33 @@ export function codexContextRow(
     const detail = contextCompactionDetail(typeof data === "string" ? data : JSON.stringify(data));
     // Codex thread/compacted 不携带消息计数：降级为固定说明行。
     return { label: "上下文已自动压缩", detail: detail ?? "Codex 已压缩本轮上下文", collapsible: false };
+  }
+  if (event === "r_code_context_instructions") {
+    const injected = typeof obj.injected === "number" ? obj.injected : 0;
+    const bytes = typeof obj.bytes === "number" ? obj.bytes : 0;
+    return {
+      label: `已注入 ${injected} 条项目指令`,
+      detail: `共 ${bytes} 字节；/context 查看来源、预算与跳过/裁剪标注`,
+      collapsible: false,
+    };
+  }
+  if (event === "r_code_context_jit" || event === "r_code_context_jit_dropped") {
+    const applied = typeof obj.applied === "number" ? obj.applied : 0;
+    const paths = Array.isArray(obj.paths)
+      ? (obj.paths as unknown[]).filter((p): p is string => typeof p === "string")
+      : [];
+    if (event === "r_code_context_jit_dropped") {
+      return {
+        label: "子目录指令注入被放弃（超出 JIT 额度）",
+        detail: paths.length > 0 ? paths.join("、") : "候选文件见 /context",
+        collapsible: true,
+      };
+    }
+    return {
+      label: `已注入子目录指令 ${applied} 条`,
+      detail: paths.length > 0 ? paths.join("、") : "",
+      collapsible: true,
+    };
   }
   return null;
 }

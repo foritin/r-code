@@ -129,6 +129,13 @@ impl PluginSession {
         &self.process
     }
 
+    /// The supervised tree this session's process was born under (E08's
+    /// birth seam): the owning run registers exactly this id under its
+    /// attempt in the ChildSupervisor.
+    pub fn supervised_tree_id(&self) -> &str {
+        self.process.tree_id()
+    }
+
     fn ensure_live(&self) -> Result<(), ServiceError> {
         self.guard.check(&r_code_kernel::ports::GenerationToken {
             run_id: self.identity.run_id.clone(),

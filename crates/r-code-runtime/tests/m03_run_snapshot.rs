@@ -74,6 +74,7 @@ fn ready_state(task_id: &str, kind: TaskKind, approval: PlanApprovalRef) -> Task
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     state.execution = TaskExecution::Ready { approval };
     state
@@ -162,6 +163,7 @@ async fn planning_snapshot_remains_planless() {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     let frozen = builder
         .freeze_with_workspace(

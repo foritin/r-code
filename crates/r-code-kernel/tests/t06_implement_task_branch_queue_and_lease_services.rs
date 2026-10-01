@@ -26,6 +26,7 @@ fn contract(task_id: &str) -> TaskContract {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     }
 }
 

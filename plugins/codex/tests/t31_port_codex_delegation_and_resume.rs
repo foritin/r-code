@@ -15,6 +15,7 @@ use r_code_kernel::testing::{
     FakeModelService, FakeProcessService, FakeToolService, MemoryJournal,
 };
 use r_code_runtime::plugins::HostRouter;
+use r_code_runtime::services::children_executor::{ChildCommand, ChildControls};
 use std::sync::Arc;
 
 fn request(method: &str, params: serde_json::Value) -> RpcRequest {
@@ -29,6 +30,7 @@ fn request(method: &str, params: serde_json::Value) -> RpcRequest {
 #[tokio::test]
 async fn codex_delegates_to_native_children_through_generic_interfaces() {
     let supervisor = Arc::new(std::sync::Mutex::new(ChildrenSupervisor::new()));
+    let (commands, mut executor_rx) = tokio::sync::mpsc::unbounded_channel();
     let router = Arc::new(
         HostRouter::new(
             RunIdentity {
@@ -50,7 +52,11 @@ async fn codex_delegates_to_native_children_through_generic_interfaces() {
             Arc::new(MemoryJournal::new()),
             Arc::new(r_code_runtime::plugins::IgnoreQuestions),
         )
-        .with_children(supervisor.clone(), PermissionCeiling::Full),
+        .with_children(Arc::new(ChildControls::new(
+            supervisor.clone(),
+            PermissionCeiling::Full,
+            commands,
+        ))),
     );
 
     // Codex → Native delegation.
@@ -66,6 +72,22 @@ async fn codex_delegates_to_native_children_through_generic_interfaces() {
         .await
         .expect("spawn");
     let child = spawned["child_task_id"].as_str().unwrap().to_string();
+
+    // The test stands in for the executor loop: drain the spawn command and
+    // activate the reserved id (the real loop launches the child run here).
+    match executor_rx.try_recv() {
+        Ok(ChildCommand::Spawn {
+            child_task_id,
+            request,
+        }) => {
+            supervisor
+                .lock()
+                .unwrap()
+                .activate(child_task_id, PermissionCeiling::Full, &request)
+                .expect("activate");
+        }
+        other => panic!("expected a spawn command, got {other:?}"),
+    }
 
     // Per-child cancel works without touching the parent.
     router

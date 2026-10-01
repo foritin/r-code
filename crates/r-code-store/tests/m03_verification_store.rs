@@ -200,6 +200,7 @@ fn execution_snapshot(approval: PlanApprovalRef, work_unit_id: &str) -> RunSnaps
         },
         tool_catalog_sha256: "sha256:tools".into(),
         inference: None,
+        instructions: Default::default(),
     })
     .unwrap()
 }

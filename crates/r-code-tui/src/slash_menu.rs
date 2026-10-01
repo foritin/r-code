@@ -82,6 +82,10 @@ pub const COMMANDS: &[SlashCommand] = &[
         desc: "压缩上下文（可选自定义指令：/compact <指令>）",
     },
     SlashCommand {
+        name: "/context",
+        desc: "查看本次 run 注入的项目指令与记忆摘要",
+    },
+    SlashCommand {
         name: "/clear",
         desc: "清空当前 transcript 视图",
     },
@@ -289,11 +293,12 @@ mod tests {
                 "/export",
                 "/copy",
                 "/compact",
+                "/context",
                 "/clear",
                 "/help",
                 "/quit"
             ],
-            "已实现命令集（M6 收口 + /setup + M8 G7/G9 + G8/G10 + T36 /plugins）"
+            "已实现命令集（M6 收口 + /setup + M8 G7/G9 + G8/G10 + T36 /plugins + M1a /context）"
         );
         for command in COMMANDS {
             assert!(

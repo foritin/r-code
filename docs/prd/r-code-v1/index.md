@@ -25,8 +25,8 @@
 | P-GATE：Provider → 只读规划 → exact-hash 批准 | 已完成 | 9/9 | [任务](./worklists/p-gate.tasks.json) · [ledger](./progress/p-gate.ledger.tsv) |
 | M-GATE：单 WorkUnit 修改 → 检查 → Review → 接受/回滚 | 已完成 | 4/4 | [任务](./worklists/m-gate.tasks.json) · [ledger](./progress/m-gate.ledger.tsv) |
 | Wave 3 本地进程安全边界 | **已完成** | 39/39 KEEP | [任务](./worklists/safety.tasks.json) · [ledger](./progress/safety.ledger.tsv) |
-| 当前任务 | **O-GATE 执行中（O00/E05/E06 KEEP，下一个 E07）** | 3/8 | [任务](./worklists/o-gate.tasks.json) · [ledger](./progress/o-gate.ledger.tsv) |
-| O-GATE：并行 WorkUnit、LeaseFamily、ChildSupervisor | 已拆解定稿（pass 92） | 3/8 | [任务](./worklists/o-gate.tasks.json) |
+| 当前任务 | **O-GATE 全 KEEP（8/8）——F/G/H/I 阻塞于需求恢复（见 current.md §0 的 open question）** | 8/8 | [任务](./worklists/o-gate.tasks.json) · [ledger](./progress/o-gate.ledger.tsv) |
+| O-GATE：并行 WorkUnit、LeaseFamily、ChildSupervisor | 全 KEEP（2026-09-30） | 8/8 | [任务](./worklists/o-gate.tasks.json) |
 | 历史迁移、四客户端一致性、Harness 完整接线、三平台发布 | 未开始 | 0 | §9 后续里程碑 |
 
 当前已机器验收并 KEEP 的执行任务为 **52/52（100%）**：P-GATE 9、M-GATE 4、Safety 39/39（P00–P09+P10–P18+P11R+P19A+P19B-R+P19B-C+P20+P21+P22+P23+P24A+P24B+P24H+P25+P29+P26A+P26+P27+P28+P30+P31+P32）（P08 s08、P09 s09、P10 s10、P11 s11、P16 s16、P17 s17、P18 s18、P23 的 Linux/macOS 臂按合同在原生 Linux/macOS CI 执行）。这个比例只覆盖已经拆成机器任务的三个 tranche，**不是整个产品总完成率**；F/G/H/I 等后续里程碑尚未进入分母。
@@ -225,17 +225,16 @@ flowchart LR
 
 详细依赖、文件范围与验收条件以三个 JSON worklist 为准；Checkbox 是本 PRD 的唯一人工可读完成状态。
 
-### O-GATE（3/8 — 执行中）
+### O-GATE（8/8 — 全 KEEP）
 
 - [x] **O00** Create headroom in application.rs and run_manager.rs（纯代码搬迁 review_flow.rs/run_drive.rs；file_loc 1966/2251，余量 634/349；house 1132/1131/1）
 - [x] **E05** Generalize the kernel task state machine for concurrent units（unit_records/UnitSettlement + 读集 fixpoint + legacy serde fold；23 文件环同任务迁移；house 1137/1136/1）
 - [x] **E06** Dispatch dependency-ready WorkUnits concurrently with durable attempt records（wave 调度 + work_unit_attempts 表 + 漂移复验；QA 种子泄漏探针抓真缺陷后 refine 收口；house 1141/1140/1）
-- [ ] **E06** Dispatch dependency-ready WorkUnits concurrently with durable attempt records（work_unit_attempts 表 + 有界调度 + 读集漂移复验）
-- [ ] **E07** Group every attempt's leases into one durable LeaseFamily（复用 workspace ownership epoch）
-- [ ] **E08** Supervise every in-flight native child under one ChildSupervisor（注册缝=session.rs/processes.rs 出生点）
-- [ ] **E09-R** Persist immutable unverified-override audit records with a read RPC（表为真值、journal 行为派生投影）
-- [ ] **E09-C** Project the override record to all four clients（Desktop/TUI/MCP/remote 同一 canonical 材料）
-- [ ] **E10** Recover the full chain after a daemon fault（resume-once 或 quarantine，绝不重执行）
+- [x] **E07** Group every attempt's leases into one durable LeaseFamily（lease_families 表走 string-keyed 迁移；全有或全无 acquire / release 同事务结算 attempt+members / reconcile 整 family；fencing 派生自成员租约 epoch；house 1146/1147）
+- [x] **E08** Supervise every in-flight native child under one ChildSupervisor（registry keyed by tree id 单 owner；出生缝三面浮出；cancel-and-prove-all 逐树死证、不可证不谎报；house 1151/1152）
+- [x] **E09-R** Persist immutable unverified-override audit records with a read RPC（unverified_overrides 表为真值；行与判定同事务；replay 收敛/异 actor 冲突；review.overrides.list camelCase 投影；house 1155/1156）
+- [x] **E09-C** Project the override record to all four clients（四端同一 canonical 键序；缺能力隐藏而非禁用；远端坏行失败关闭；house 1155/1156 不变）
+- [x] **E10** Recover the full chain after a daemon fault（启动单次 reconcile：Completed 记录→resume-once 绝不重执行；无证明→quarantine+family fenced+仅依赖者受阻；readiness 发布 reconciled 计数；house 1157/1158）
 
 ## 9. 后续里程碑
 

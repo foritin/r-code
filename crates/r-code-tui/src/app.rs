@@ -74,6 +74,8 @@ pub struct RunController {
     /// /compact [prompt]：显式压缩当前会话上下文（G5；宿主
     /// task_compact_context，focus=自定义指令）。返回状态行或错误。
     pub compact_context: Arc<dyn Fn(Option<String>) -> Result<String, String> + Send + Sync>,
+    /// /context：v1 context.current 投影为可读状态行。
+    pub context_current: Arc<dyn Fn() -> Result<String, String> + Send + Sync>,
     /// G8：/tree 打开分支树（None = 宿主侧不可用）。
     pub open_tree: Arc<dyn Fn() -> Option<crate::session_tree::BranchTree> + Send + Sync>,
     /// G8：切换活跃分支（同步；成功后 transcript 已由壳层重建，返回状态行）。
@@ -117,6 +119,7 @@ impl Default for RunController {
             config_dir: std::path::PathBuf::new(),
             persist_default_model: Arc::new(|_| {}),
             compact_context: Arc::new(|_| Err("未装配压缩入口".to_string())),
+            context_current: Arc::new(|| Err("未装配上下文查询入口".to_string())),
             open_tree: Arc::new(|| None),
             switch_branch: Arc::new(|_| Err("未装配分支切换入口".to_string())),
             open_fork: Arc::new(|| None),
@@ -899,6 +902,13 @@ pub async fn run_interactive(
                             .filter(|text| !text.is_empty())
                             .map(str::to_string);
                         match (controller.compact_context)(focus) {
+                            Ok(line) => {
+                                state.lock().unwrap().push_system(line);
+                            }
+                            Err(error) => status = Some(error),
+                        }
+                    } else if trimmed == "/context" {
+                        match (controller.context_current)() {
                             Ok(line) => {
                                 state.lock().unwrap().push_system(line);
                             }

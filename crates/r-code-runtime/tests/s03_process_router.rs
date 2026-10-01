@@ -428,6 +428,7 @@ async fn planning_safe_grants_deny_process_read_and_backend_remains_explicitly_u
     let grants = supported_requested_services(
         &requested,
         RouterServiceAvailability {
+            children: false,
             model_stream: true,
             tools: true,
             context: true,

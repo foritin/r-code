@@ -748,6 +748,23 @@ async fn run_interactive_tui(
     let compact_context: Arc<dyn Fn(Option<String>) -> Result<String, String> + Send + Sync> =
         Arc::new(move |_focus| Ok(r_code_tui::session_ops::compact_unavailable_note().to_string()));
 
+    // FR-1 (M1a-08)：/context——daemon context.current 投影为多行状态文本。
+    let context_engine = engine.clone();
+    let context_current_task = current_task.clone();
+    let context_current: Arc<dyn Fn() -> Result<String, String> + Send + Sync> =
+        Arc::new(move || {
+            let engine = context_engine.clone();
+            let task_id = context_current_task.lock().unwrap().clone();
+            if task_id.is_empty() {
+                return Err("先创建或选择一个会话（/resume）再查看上下文".to_string());
+            }
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(engine.context_current(&task_id))
+            })
+            .map(|view| r_code_tui::session_ops::render_context_view(&view))
+            .map_err(|error| format!("读取上下文失败：{error}"))
+        });
+
     // G8：/tree 分支树（task.branches + 当前任务 = main 分支）。
     let tree_engine = engine.clone();
     let tree_current = current_task.clone();
@@ -1046,6 +1063,7 @@ async fn run_interactive_tui(
         config_dir: profile_root,
         persist_default_model,
         compact_context,
+        context_current,
         open_tree,
         switch_branch,
         open_fork,

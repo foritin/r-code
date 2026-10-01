@@ -98,8 +98,12 @@ async fn implementation_repair_and_plan_draft_plan_while_conversation_stays_a_re
         .iter()
         .all(|request| system_text(request).contains("Plan 模式")));
     assert_eq!(system_text(&requests[3]), "conversation-own-mode");
+    // M1a-11 (D9): the parent planning catalog carries the children tools.
     assert!(requests.iter().all(|request| tool_names(&request.tools)
         == [
+            "children_close",
+            "children_spawn",
+            "children_wait",
             "git_diff",
             "git_log",
             "git_status",

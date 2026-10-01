@@ -57,6 +57,60 @@ pub const SHELL_TOOL: &str = "shell";
 /// P30: the read-only git projections — status/log/diff over the P29
 /// restricted gix reader. There is NO generic git tool: each projection is
 /// its own descriptor with its own bounds, and none of them can write.
+/// FR-8 (M1a-11, D9): the delegation discipline travels in the tool
+/// descriptions (four-element contract placeholder; full polish is M1b).
+const CHILDREN_SPAWN_DESCRIPTION: &str = "Delegate one self-contained task to a child agent that runs with its own session and a read-only tool surface. Provide the objective with (1) what to produce, (2) the output format, (3) which tools/sources to use, (4) the task boundary (what NOT to do). Discipline: never spawn unless the user asked or the plan calls for it; keep critical-path work local; child tasks must be self-contained with disjoint write sets; after delegating, do not redo the child's work and do not reflexively wait — continue your own steps.";
+
+fn text_reply(_tool: &str, text: &str) -> ToolCallReply {
+    ToolCallReply {
+        output: vec![r_code_harness_protocol::services::OutputBlock::Text {
+            text: text.to_string(),
+        }],
+        error: None,
+    }
+}
+
+fn children_tool_descriptors() -> Vec<ToolDescriptor> {
+    vec![
+        ToolDescriptor {
+            name: "children_spawn".into(),
+            description: CHILDREN_SPAWN_DESCRIPTION.into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "objective": {"type": "string", "description": "The self-contained task for the child (four-element delegation contract)."},
+                    "ceiling": {"type": "string", "enum": ["read-only", "approval-required", "full"], "description": "Requested permission ceiling; the parent bounds it."},
+                    "harness": {"type": "string", "description": "Optional harness id; defaults to the parent's."},
+                    "budget_share": {"type": "integer", "description": "Optional budget share in tokens."}
+                },
+                "required": ["objective"]
+            }),
+        },
+        ToolDescriptor {
+            name: "children_wait".into(),
+            description: "Block until one child completes (minutes-scale timeout). Returns the child's report (outcome + summary). Do not wait reflexively — continue your own work while children run.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "child_task_id": {"type": "string"},
+                    "timeout_ms": {"type": "integer", "description": "Optional timeout in milliseconds (default 300000, max 1800000)."}
+                },
+                "required": ["child_task_id"]
+            }),
+        },
+        ToolDescriptor {
+            name: "children_close".into(),
+            description: "Close one child after collecting its report, reclaiming its concurrency slot. Children keep occupying a slot until closed.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "child_task_id": {"type": "string"}
+                },
+                "required": ["child_task_id"]
+            }),
+        },
+    ]
+}
 fn git_read_descriptors() -> Vec<ToolDescriptor> {
     vec![
         ToolDescriptor {
@@ -109,6 +163,17 @@ pub struct PlanningToolService {
     /// P30: the canonical git directory of the bound workspace (None when
     /// unbound): the ONLY input the read-only git projections receive.
     git_dir: Option<PathBuf>,
+    /// FR-1.5 (M1a-07): read-tool hit reporting feeds the JIT injection
+    /// projection. None disables JIT for this surface.
+    jit_tracker: Option<Arc<std::sync::Mutex<crate::services::project_instructions::JitTracker>>>,
+    /// Audit caller identity: "harness-plugin" for main runs,
+    /// "subagent:child-N" for spawned children (the gateway gate keys on
+    /// the subagent: prefix).
+    caller: String,
+    /// FR-8 (M1a-11): host catalog children tools (D9). None on surfaces
+    /// without children (child runs themselves — the structural nesting
+    /// fence — and WorkUnit sub-runs in the first step).
+    child_controls: Option<Arc<crate::services::children_executor::ChildControls>>,
 }
 
 impl PlanningToolService {
@@ -118,6 +183,9 @@ impl PlanningToolService {
                 gateway: None,
                 workspace_guard: None,
                 git_dir: None,
+                jit_tracker: None,
+                caller: "harness-plugin".into(),
+                child_controls: None,
             });
         }
         let guard = PathGuard::new(PathBuf::from(&workspace.canonical_root))
@@ -132,7 +200,159 @@ impl PlanningToolService {
             git_dir: Some(PathBuf::from(&workspace.canonical_root).join(".git")),
             gateway: Some(Arc::new(gateway)),
             workspace_guard: Some(guard),
+            jit_tracker: None,
+            caller: "harness-plugin".into(),
+            child_controls: None,
         })
+    }
+
+    /// Audit caller for gateway executions ("harness-plugin" default).
+    pub fn with_caller(mut self, caller: String) -> Self {
+        self.caller = caller;
+        self
+    }
+
+    /// FR-8 (M1a-11): attach the children controls so the catalog exposes
+    /// children_spawn/wait/close (D9 host catalog tools).
+    pub fn with_child_controls(
+        mut self,
+        controls: Arc<crate::services::children_executor::ChildControls>,
+    ) -> Self {
+        self.child_controls = Some(controls);
+        self
+    }
+
+    /// FR-8 (M1a-11): dispatch the children catalog tools onto the shared
+    /// controls. These are host-run controls; outputs stay bounded JSON.
+    fn children_tool_call(&self, call: &ToolCallRequest) -> ToolCallReply {
+        let Some(controls) = &self.child_controls else {
+            return denied(
+                &call.tool,
+                "children tools are not available on this surface",
+            );
+        };
+        match call.tool.as_str() {
+            "children_spawn" => {
+                let objective = call
+                    .input
+                    .get("objective")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if objective.is_empty() {
+                    return denied(&call.tool, "children_spawn requires a non-empty objective");
+                }
+                let permissions = match call.input.get("ceiling").and_then(|value| value.as_str()) {
+                    None | Some("read-only") | Some("readonly") => {
+                        r_code_harness_protocol::services::PermissionCeiling::ReadOnly
+                    }
+                    Some("approval-required") => {
+                        r_code_harness_protocol::services::PermissionCeiling::ApprovalRequired
+                    }
+                    Some("full") => r_code_harness_protocol::services::PermissionCeiling::Full,
+                    Some(other) => {
+                        return denied(&call.tool, &format!("unknown ceiling {other:?}"))
+                    }
+                };
+                let request = r_code_harness_protocol::services::ChildrenSpawnRequest {
+                    objective,
+                    harness: call
+                        .input
+                        .get("harness")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                    permissions,
+                    budget_share: call.input.get("budget_share").cloned(),
+                };
+                match controls.request_spawn(request) {
+                    Ok(child_task_id) => text_reply(
+                        &call.tool,
+                        &format!("{{\"childTaskId\": \"{child_task_id}\", \"queued\": true}}"),
+                    ),
+                    Err(error) => denied(&call.tool, &error),
+                }
+            }
+            "children_wait" => {
+                let Some(child_task_id) = call
+                    .input
+                    .get("child_task_id")
+                    .and_then(|value| value.as_str())
+                else {
+                    return denied(&call.tool, "children_wait requires child_task_id");
+                };
+                let timeout_ms = call
+                    .input
+                    .get("timeout_ms")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(5 * 60 * 1000)
+                    .clamp(1, 30 * 60 * 1000);
+                let supervisor = Arc::clone(&controls.supervisor);
+                let child_id = child_task_id.to_string();
+                // Blocking on the condvar inside the tool call is the
+                // documented primitive (FR-8.1); the ToolService::call
+                // future runs on the router's runtime without holding any
+                // supervisor lock (wait_child manages its own locking).
+                let outcome = tokio::task::block_in_place(|| {
+                    crate::services::children_executor::wait_child_blocking(
+                        &supervisor,
+                        &child_id,
+                        timeout_ms,
+                    )
+                });
+                match outcome {
+                    Ok(r_code_kernel::children::ChildWait::Completed(report)) => {
+                        let payload = serde_json::json!({
+                            "childTaskId": report.child_task_id,
+                            "outcome": report.outcome,
+                            "summary": report.summary.clone().unwrap_or_default(),
+                        });
+                        text_reply(&call.tool, &payload.to_string())
+                    }
+                    Ok(r_code_kernel::children::ChildWait::Cancelled) => {
+                        denied(&call.tool, &format!("child {child_task_id} was cancelled"))
+                    }
+                    Ok(r_code_kernel::children::ChildWait::Running) => denied(
+                        &call.tool,
+                        &format!("wait for child {child_task_id} timed out without completion"),
+                    ),
+                    Err(error) => denied(&call.tool, &error),
+                }
+            }
+            "children_close" => {
+                let Some(child_task_id) = call
+                    .input
+                    .get("child_task_id")
+                    .and_then(|value| value.as_str())
+                else {
+                    return denied(&call.tool, "children_close requires child_task_id");
+                };
+                let close = controls
+                    .supervisor
+                    .lock()
+                    .map_err(|_| "children supervisor poisoned".to_string())
+                    .and_then(|mut guard| guard.close(child_task_id).map_err(|e| e.to_string()));
+                match close {
+                    Ok(()) => {
+                        controls.notify_slot_changed();
+                        text_reply(
+                            &call.tool,
+                            &format!("{{\"childTaskId\": \"{child_task_id}\", \"closed\": true}}"),
+                        )
+                    }
+                    Err(error) => denied(&call.tool, &error),
+                }
+            }
+            _ => denied(&call.tool, "unknown children tool"),
+        }
+    }
+    /// FR-1.5 (M1a-07): attach the JIT hit tracker.
+    pub fn with_jit_tracker(
+        mut self,
+        tracker: Arc<std::sync::Mutex<crate::services::project_instructions::JitTracker>>,
+    ) -> Self {
+        self.jit_tracker = Some(tracker);
+        self
     }
 }
 
@@ -157,6 +377,12 @@ impl ToolService for PlanningToolService {
         if self.git_dir.is_some() {
             descriptors.extend(git_read_descriptors());
         }
+        // FR-8 (M1a-11, D9): children host catalog tools — they join the
+        // tool catalog (and therefore its frozen digest) only on surfaces
+        // that own children.
+        if self.child_controls.is_some() {
+            descriptors.extend(children_tool_descriptors());
+        }
         Ok(descriptors)
     }
 
@@ -165,6 +391,14 @@ impl ToolService for PlanningToolService {
         token: GenerationToken,
         call: ToolCallRequest,
     ) -> Result<ToolCallReply, ServiceError> {
+        // FR-8 (M1a-11): children tools bypass the planning allowlist —
+        // they are host-run controls, not workspace reads.
+        if matches!(
+            call.tool.as_str(),
+            "children_spawn" | "children_wait" | "children_close"
+        ) {
+            return Ok(self.children_tool_call(&call));
+        }
         if !PLANNING_TOOLS.contains(&call.tool.as_str()) {
             return Ok(denied(
                 &call.tool,
@@ -179,13 +413,35 @@ impl ToolService for PlanningToolService {
         let (Some(gateway), Some(workspace_guard)) = (&self.gateway, &self.workspace_guard) else {
             return Ok(denied(&call.tool, "task has no bound workspace"));
         };
+        // FR-1.5 (M1a-07): report the directory this read tool touched to
+        // the JIT projection layer (the canonical transcript is unaffected).
+        if let Some(tracker) = &self.jit_tracker {
+            if let Some(path) = call.input.get("path").and_then(|value| value.as_str()) {
+                if !path.trim().is_empty() {
+                    let candidate = std::path::Path::new(path);
+                    let hit = if call.tool == "read_file" {
+                        candidate
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default()
+                    } else {
+                        candidate.to_path_buf()
+                    };
+                    if !hit.as_os_str().is_empty() {
+                        if let Ok(mut tracker) = tracker.lock() {
+                            tracker.note_hit_dir(&hit);
+                        }
+                    }
+                }
+            }
+        }
         let outcome = match gateway
             .execute_call_with_access_mode_and_workspace_guard(
                 &format!("task:{}", token.run_id),
                 &token.run_id,
                 &call.tool,
                 call.input,
-                Some("harness-plugin"),
+                Some(self.caller.as_str()),
                 r_code_core::dto::ProjectAccessMode::RiskBased,
                 Some(workspace_guard),
             )

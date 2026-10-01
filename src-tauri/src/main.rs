@@ -887,6 +887,8 @@ fn main() {
             tauri_commands::cmd_agent_attachment_preview,
             tauri_commands::cmd_agent_abort,
             tauri_commands::cmd_agent_abort_subagent,
+            tauri_commands::cmd_context_current,
+            tauri_commands::cmd_context_settings_update,
             tauri_commands::cmd_agent_delegate_codex,
             tauri_commands::cmd_agent_delegate_codex_mcp,
             tauri_commands::cmd_agent_queue_list,

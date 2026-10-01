@@ -35,8 +35,13 @@ fn spawn_request(harness: Option<&str>, permissions: PermissionCeiling) -> Child
 
 fn router_with_children(
     parent_ceiling: PermissionCeiling,
-) -> (Arc<HostRouter>, Arc<std::sync::Mutex<ChildrenSupervisor>>) {
+) -> (
+    Arc<HostRouter>,
+    Arc<std::sync::Mutex<ChildrenSupervisor>>,
+    tokio::sync::mpsc::UnboundedReceiver<r_code_runtime::services::children_executor::ChildCommand>,
+) {
     let supervisor = Arc::new(std::sync::Mutex::new(ChildrenSupervisor::new()));
+    let (commands, executor_rx) = tokio::sync::mpsc::unbounded_channel();
     let router = Arc::new(
         HostRouter::new(
             RunIdentity {
@@ -58,14 +63,45 @@ fn router_with_children(
             Arc::new(MemoryJournal::new()),
             Arc::new(r_code_runtime::plugins::IgnoreQuestions),
         )
-        .with_children(supervisor.clone(), parent_ceiling),
+        .with_children(Arc::new(
+            r_code_runtime::services::children_executor::ChildControls::new(
+                supervisor.clone(),
+                parent_ceiling,
+                commands,
+            ),
+        )),
     );
-    (router, supervisor)
+    (router, supervisor, executor_rx)
+}
+
+/// The test stands in for the executor loop: drain one spawn command and
+/// activate the reserved id (the real loop launches the child run).
+fn activate_spawned(
+    supervisor: &Arc<std::sync::Mutex<ChildrenSupervisor>>,
+    executor_rx: &mut tokio::sync::mpsc::UnboundedReceiver<
+        r_code_runtime::services::children_executor::ChildCommand,
+    >,
+    parent_ceiling: PermissionCeiling,
+) -> String {
+    match executor_rx.try_recv() {
+        Ok(r_code_runtime::services::children_executor::ChildCommand::Spawn {
+            child_task_id,
+            request,
+        }) => {
+            supervisor
+                .lock()
+                .unwrap()
+                .activate(child_task_id.clone(), parent_ceiling, &request)
+                .expect("activate");
+            child_task_id
+        }
+        other => panic!("expected a spawn command, got {other:?}"),
+    }
 }
 
 #[tokio::test]
 async fn native_delegates_to_fixture_children_and_collects_reports() {
-    let (router, supervisor) = router_with_children(PermissionCeiling::Full);
+    let (router, supervisor, mut executor_rx) = router_with_children(PermissionCeiling::Full);
 
     // Spawn a fixture child (the third-party harness by id).
     let spawned: serde_json::Value = router
@@ -83,16 +119,17 @@ async fn native_delegates_to_fixture_children_and_collects_reports() {
         .as_str()
         .expect("child id")
         .to_string();
+    activate_spawned(&supervisor, &mut executor_rx, PermissionCeiling::Full);
 
-    // Waiting before completion reports "not completed yet".
+    // Waiting before completion times out (short timeout; blocking wait).
     let pending = router
         .handle_request(request(
             "host.children.wait",
-            serde_json::json!({"child_task_id": child}),
+            serde_json::json!({"child_task_id": child, "timeout_ms": 50}),
         ))
         .await
         .expect_err("pending");
-    assert!(pending.message.contains("not completed"), "{pending:?}");
+    assert!(pending.message.contains("timed out"), "{pending:?}");
 
     // The child completes with host-arbitrated facts.
     supervisor
@@ -134,6 +171,7 @@ async fn native_delegates_to_fixture_children_and_collects_reports() {
         .await
         .expect("spawn 2");
     let second_id = second["child_task_id"].as_str().unwrap().to_string();
+    activate_spawned(&supervisor, &mut executor_rx, PermissionCeiling::Full);
     router
         .handle_request(request(
             "host.children.cancel",
@@ -146,7 +184,8 @@ async fn native_delegates_to_fixture_children_and_collects_reports() {
 
 #[tokio::test]
 async fn escalation_is_refused_and_bounded_retries_are_strategy_defaults() {
-    let (router, _supervisor) = router_with_children(PermissionCeiling::ApprovalRequired);
+    let (router, _supervisor, _executor_rx) =
+        router_with_children(PermissionCeiling::ApprovalRequired);
     // A Full child under an ApprovalRequired parent: refused before spawn.
     let error = router
         .handle_request(request(

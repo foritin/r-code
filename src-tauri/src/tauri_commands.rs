@@ -272,6 +272,9 @@ pub async fn cmd_task_create(
         .resolve_agent_prompts(workspace_path.as_deref())
         .map_err(CommandError::from)?
         .main_agent;
+    // FR-7: freeze the memory snapshot once here — the desktop owns the
+    // memory DB; the daemon inherits this payload without recomputation.
+    let memory = r_code_host::frozen_memory_payload(&state.db, workspace_path.as_deref());
     chat_v1
         .task_create_with_route(
             &title,
@@ -283,6 +286,7 @@ pub async fn cmd_task_create(
             agent_engine.as_deref(),
             model.as_deref(),
             inference.as_ref(),
+            memory.as_ref(),
         )
         .await
         .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
@@ -880,6 +884,31 @@ pub async fn cmd_agent_delegate_codex(
     r_code_host::commands::agent_delegate_codex(&state, &task_id, &goal, label.as_deref())
         .await
         .map_err(CommandError::from)
+}
+
+/// FR-1 (M1a-08)：/context 面板数据（daemon context.current 透传）。
+#[tauri::command]
+pub async fn cmd_context_current(
+    chat_v1: State<'_, SharedChatV1Bridge>,
+    task_id: String,
+) -> Result<serde_json::Value, CommandError> {
+    chat_v1
+        .context_current(&task_id)
+        .await
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
+}
+
+/// FR-1 (M1a-08)：对本项目开关指令注入。
+#[tauri::command]
+pub async fn cmd_context_settings_update(
+    chat_v1: State<'_, SharedChatV1Bridge>,
+    workspace_path: String,
+    injection_enabled: bool,
+) -> Result<serde_json::Value, CommandError> {
+    chat_v1
+        .context_settings_update(&workspace_path, injection_enabled)
+        .await
+        .map_err(|error| CommandError::plain("DAEMON_UNAVAILABLE", error.to_string()))
 }
 
 /// 以持久 MCP 会话委派 Codex；完成后可保留外部 thread ID 供后续续接。

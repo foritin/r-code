@@ -265,6 +265,104 @@ fn parse_task_preferences_patch(
     })
 }
 
+/// FR-7: desktop-frozen memory handoff params — `memory: {rendered,
+/// entryIds, snapshotHash}`; absent/null means no memory (ownerless paths
+/// like the TUI). Validation caps live on the type.
+fn parse_memory_handoff(
+    params: &serde_json::Value,
+) -> Result<Option<r_code_kernel::task::FrozenMemoryHandoff>, String> {
+    let Some(value) = params.get("memory") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let field = |camel: &str, snake: &str| {
+        value
+            .get(camel)
+            .or_else(|| value.get(snake))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    let rendered = field("rendered", "rendered").ok_or("memory.rendered must be a string")?;
+    let snapshot_hash =
+        field("snapshotHash", "snapshot_hash").ok_or("memory.snapshotHash must be a string")?;
+    let entry_ids = value
+        .get("entryIds")
+        .or_else(|| value.get("entry_ids"))
+        .and_then(|v| v.as_array())
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let handoff = r_code_kernel::task::FrozenMemoryHandoff {
+        rendered,
+        entry_ids,
+        snapshot_hash,
+    };
+    handoff
+        .validate()
+        .map_err(|error| format!("invalid memory handoff: {error}"))?;
+    Ok(Some(handoff))
+}
+
+/// FR-1 (M1a-06): context.settings params — partial update semantics with
+/// the stored record (or defaults) as the base, validated before persist.
+fn parse_context_settings(
+    params: &serde_json::Value,
+    base: r_code_store::v1::ContextSettingsRecord,
+) -> Result<r_code_store::v1::ContextSettingsRecord, String> {
+    let mut record = base;
+    if let Some(value) = params.get("injectionEnabled") {
+        record.injection_enabled = value
+            .as_bool()
+            .ok_or("injectionEnabled must be a boolean")?;
+    }
+    if let Some(value) = params.get("totalBudgetBytes") {
+        record.total_budget_bytes = value
+            .as_u64()
+            .ok_or("totalBudgetBytes must be an integer")?;
+    }
+    if let Some(value) = params.get("jitAllowanceBytes") {
+        record.jit_allowance_bytes = value
+            .as_u64()
+            .ok_or("jitAllowanceBytes must be an integer")?;
+    }
+    if let Some(value) = params.get("fallbackNames") {
+        let names = value
+            .as_array()
+            .ok_or("fallbackNames must be an array of strings")?;
+        record.fallback_names = names
+            .iter()
+            .map(|name| {
+                name.as_str()
+                    .filter(|n| !n.trim().is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| "fallbackNames entries must be non-empty strings".to_string())
+            })
+            .collect::<Result<Vec<String>, String>>()?;
+    }
+    Ok(record)
+}
+
+/// Canonicalize a workspacePath param into the settings key basis.
+fn canonical_workspace_param(params: &serde_json::Value) -> Result<String, String> {
+    let raw = params["workspacePath"]
+        .as_str()
+        .ok_or("missing workspacePath")?;
+    if raw.trim().is_empty() || raw.contains(' ') {
+        return Err("workspacePath must be non-empty".into());
+    }
+    let canonical = std::fs::canonicalize(raw)
+        .map_err(|error| format!("workspacePath cannot be resolved: {error}"))?;
+    if !canonical.is_dir() {
+        return Err("workspacePath must be an existing directory".into());
+    }
+    Ok(canonical.to_string_lossy().to_string())
+}
+
 fn task_kind_from_params(
     params: &serde_json::Value,
 ) -> Result<r_code_kernel::task::TaskKind, String> {
@@ -421,6 +519,7 @@ impl ApplicationHandler for ServiceHandler {
                     title,
                     kind,
                     required_checks,
+                    memory: parse_memory_handoff(&params)?,
                     preferences,
                     harness_id,
                 };
@@ -550,6 +649,17 @@ impl ApplicationHandler for ServiceHandler {
                     .await
                     .map_err(method_error)?;
                 Ok(serde_json::to_value(result).unwrap_or_default())
+            }
+            "review.overrides.list" => {
+                // E09-R: the immutable table is the single query source;
+                // the journal rows are its derived projection.
+                let task_id = params["taskId"].as_str();
+                let overrides = self
+                    .service
+                    .list_unverified_overrides(task_id)
+                    .await
+                    .map_err(method_error)?;
+                Ok(serde_json::to_value(overrides).unwrap_or_default())
             }
             "task.cancel" => {
                 let task_id = params["taskId"].as_str().ok_or("missing taskId")?;
@@ -703,6 +813,48 @@ impl ApplicationHandler for ServiceHandler {
                     .load_checked()
                     .map_err(settings_error)?;
                 Ok(serde_json::to_value(settings).unwrap_or_default())
+            }
+            "context.current" => {
+                let task_id = params["taskId"]
+                    .as_str()
+                    .ok_or("missing taskId")?
+                    .to_string();
+                let view = self
+                    .service
+                    .context_current(&task_id)
+                    .await
+                    .map_err(method_error)?;
+                Ok(serde_json::to_value(view).unwrap_or_default())
+            }
+            "context.settings.update" => {
+                let canonical = canonical_workspace_param(&params)?;
+                let base = self
+                    .service
+                    .context_settings(&canonical)
+                    .unwrap_or_else(r_code_store::v1::ContextSettingsRecord::defaults);
+                let record = parse_context_settings(&params, base)?;
+                self.service
+                    .update_context_settings(&canonical, record)
+                    .map_err(method_error)?;
+                Ok(serde_json::json!({"ok": true}))
+            }
+            "context.settings.get" => {
+                let canonical = canonical_workspace_param(&params)?;
+                let stored = self.service.context_settings(&canonical);
+                let source = if stored.is_some() {
+                    "stored"
+                } else {
+                    "default"
+                };
+                let record =
+                    stored.unwrap_or_else(r_code_store::v1::ContextSettingsRecord::defaults);
+                Ok(serde_json::json!({
+                    "source": source,
+                    "injectionEnabled": record.injection_enabled,
+                    "totalBudgetBytes": record.total_budget_bytes,
+                    "jitAllowanceBytes": record.jit_allowance_bytes,
+                    "fallbackNames": record.fallback_names,
+                }))
             }
             "settings.apply" => {
                 let expected_revision = expected_settings_revision(&params)?;
@@ -1139,6 +1291,59 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_handoff_params_accept_absent_null_and_both_key_styles() {
+        let absent = parse_memory_handoff(&serde_json::json!({})).expect("absent ok");
+        assert!(absent.is_none());
+        let null = parse_memory_handoff(&serde_json::json!({"memory": null})).expect("null ok");
+        assert!(null.is_none());
+
+        let camel = parse_memory_handoff(&serde_json::json!({
+            "memory": {
+                "rendered": "<r_code_memory_snapshot>block</r_code_memory_snapshot>",
+                "entryIds": ["e1", "e2"],
+                "snapshotHash": "hash-1",
+            }
+        }))
+        .expect("camel ok")
+        .expect("some handoff");
+        assert_eq!(camel.entry_ids, vec!["e1".to_string(), "e2".to_string()]);
+        assert_eq!(camel.snapshot_hash, "hash-1");
+
+        let snake = parse_memory_handoff(&serde_json::json!({
+            "memory": {
+                "rendered": "block",
+                "entry_ids": [],
+                "snapshot_hash": "h",
+            }
+        }))
+        .expect("snake ok")
+        .expect("some handoff");
+        assert!(snake.entry_ids.is_empty());
+    }
+
+    #[test]
+    fn memory_handoff_params_reject_invalid_shapes() {
+        let missing_rendered = parse_memory_handoff(&serde_json::json!({
+            "memory": {"snapshotHash": "h"}
+        }));
+        assert!(missing_rendered.is_err());
+
+        let oversized = parse_memory_handoff(&serde_json::json!({
+            "memory": {
+                "rendered": "x".repeat(32_769),
+                "entryIds": [],
+                "snapshotHash": "h",
+            }
+        }));
+        assert!(oversized.is_err());
+
+        let blank_hash = parse_memory_handoff(&serde_json::json!({
+            "memory": {"rendered": "r", "snapshotHash": " "}
+        }));
+        assert!(blank_hash.is_err());
+    }
 
     #[test]
     fn task_preference_patch_preserves_omitted_fields_and_sets_prompt_scope() {

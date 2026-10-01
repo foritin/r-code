@@ -805,6 +805,7 @@ fn verifying_state(task_id: &str, candidate_digest: &str) -> TaskState {
         constraints: vec![],
         required_checks: vec!["check:node".into()],
         revision: 1,
+        memory: None,
     });
     state.start_attempt(&attempt("planning")).unwrap();
     let approval = PlanApprovalRef {

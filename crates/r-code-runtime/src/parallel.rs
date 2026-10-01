@@ -8,6 +8,24 @@
 //! strictly from their own attempt's durable settle. Drift detection rides
 //! the existing P26/P27 vocabulary (`capture_manifest` / `revalidate` /
 //! `delta` plus the journaled mutation history), never a new scanner.
+//!
+//! E07: every attempt's path leases live in ONE durable LeaseFamily keyed
+//! by the attempt id — acquired all-or-nothing when the executor takes
+//! shape, and released by `release_lease_family`, which settles the attempt
+//! row and deactivates exactly its member leases in a single durable step,
+//! so no lease outlives its family's settle.
+//!
+//! E08: each spawned harness registers its supervised tree in the
+//! ChildSupervisor under the owning attempt at the birth seam; the run
+//! closure deregisters after its confirmed kill, and a cancelled wave
+//! sweeps the registry with per-tree proofs, journaling any unprovable
+//! tree instead of assuming the set swept.
+//!
+//! E10: before any wave dispatches — and once at startup, right after
+//! effect recovery — every in-flight attempt resolves from its own durable
+//! evidence to exactly one of resume-once (settled Completed, never
+//! re-executed) or quarantine (settled failed, family fenced, dependents
+//! re-blocked); families follow their attempts.
 
 use crate::plugins::catalog::{Availability, CatalogEntry};
 use crate::plugins::router::{supported_requested_services, RouterServiceAvailability};
@@ -68,6 +86,178 @@ fn dependency_ready(units: &[WorkUnit], unit: &WorkUnit) -> bool {
                 candidate.id == *dependency && candidate.status == WorkUnitStatus::Completed
             })
         })
+}
+
+// ---------------------------------------------------------------------------
+// E10 — whole-chain fault recovery. Every in-flight attempt resolves to
+// exactly one of resume-once or quarantine from its OWN durable evidence
+// (the kernel unit record plus the execution journal); families follow
+// their attempts; no completion is lost and no unit executes twice.
+// ---------------------------------------------------------------------------
+
+impl RunManager {
+    /// Reconcile one task's in-flight attempts under its ACTIVE plan
+    /// revision, BEFORE any new dispatch consumes them (the wave refuses to
+    /// redispatch a settled attempt, so this must land first).
+    ///
+    /// Returns `(resume_once, quarantined)` counts.
+    pub(crate) fn reconcile_task_chain(&self, task_id: &str) -> Result<(usize, usize), String> {
+        let store = &self.store;
+        let Some(approval) = store
+            .load_active_plan_approval(task_id)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok((0, 0));
+        };
+        let revision = approval.plan_revision.as_str().to_string();
+        let in_flight = store
+            .list_in_flight_work_unit_attempts(task_id, &revision)
+            .map_err(|error| error.to_string())?;
+        if in_flight.is_empty() {
+            return Ok((0, 0));
+        }
+        let (mut state, revision_counter) = store
+            .load_task_with_revision(task_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("task {task_id} not found"))?;
+        let journal = store.task_events(task_id);
+        let started_attempts: HashSet<&str> = journal
+            .iter()
+            .filter(|event| event.kind == "execution.started")
+            .filter_map(|event| {
+                event
+                    .payload
+                    .get("attemptId")
+                    .and_then(|value| value.as_str())
+            })
+            .collect();
+        let mut resume_once = 0;
+        let mut quarantined = 0;
+        let mut events = Vec::new();
+        let mut state_dirty = false;
+        for row in in_flight {
+            let attempt_id = row.attempt_id.clone();
+            let unit_id = row.work_unit_id.clone();
+            let record = state.unit_records.get(&unit_id);
+            let completed = record.is_some_and(|record| {
+                matches!(
+                    record.settlement,
+                    r_code_kernel::task::UnitSettlement::Completed
+                        | r_code_kernel::task::UnitSettlement::CompletedWithoutEffect
+                )
+            });
+            let failed = record.is_some_and(|record| {
+                matches!(
+                    record.settlement,
+                    r_code_kernel::task::UnitSettlement::Failed
+                )
+            });
+            if completed {
+                // E10.3: completed before the crash but never acknowledged —
+                // the attempt settles Completed and the unit is never
+                // re-executed.
+                store
+                    .release_lease_family(&attempt_id, &attempt_id, true)
+                    .map_err(|error| error.to_string())?;
+                resume_once += 1;
+                events.push(journal_event(
+                    task_id,
+                    "chain.resume-once",
+                    serde_json::json!({
+                        "attemptId": attempt_id,
+                        "workUnitId": unit_id,
+                        "evidence": "unit-settled-completed",
+                    }),
+                ));
+                continue;
+            }
+            // Everything without terminal per-unit evidence quarantines:
+            // an already-Failed record, a started-but-unsettled unit, or a
+            // never-started one. The attempt settles failed exactly once,
+            // its family's members deactivate (the fence — a late writer's
+            // old epoch is stale), and only this unit's dependents re-block.
+            store
+                .release_lease_family(&attempt_id, &attempt_id, false)
+                .map_err(|error| error.to_string())?;
+            let reason = if failed {
+                "unit settled failed before the crash".to_string()
+            } else if started_attempts.contains(attempt_id.as_str()) {
+                format!("attempt {attempt_id} started but its outcome is unprovable")
+            } else {
+                format!("attempt {attempt_id} never started")
+            };
+            let repair_attempt = if record.is_some() {
+                Some(attempt_id.clone())
+            } else {
+                None
+            };
+            state
+                .require_repair(
+                    Actor::Host,
+                    repair_attempt,
+                    Some(unit_id.clone()),
+                    reason,
+                    false,
+                )
+                .map_err(|error| error.to_string())?;
+            state_dirty = true;
+            quarantined += 1;
+            events.push(journal_event(
+                task_id,
+                "chain.quarantined",
+                serde_json::json!({
+                    "attemptId": attempt_id,
+                    "workUnitId": unit_id,
+                    "reason": "restart-reconciliation",
+                }),
+            ));
+        }
+        if state_dirty || !events.is_empty() {
+            let task_id_owned = task_id.to_string();
+            let mut current_revision = revision_counter;
+            for _ in 0..TASK_CAS_RETRIES {
+                match store.save_task_and_events_if_revision(
+                    &state,
+                    std::mem::take(&mut events),
+                    current_revision,
+                ) {
+                    Ok(_) => break,
+                    Err(r_code_store::v1::V1StoreError::StaleTaskRevision { .. }) => {
+                        let (next_state, next_revision) = store
+                            .load_task_with_revision(&task_id_owned)
+                            .map_err(|error| error.to_string())?
+                            .ok_or_else(|| format!("task {task_id_owned} not found"))?;
+                        state = next_state;
+                        current_revision = next_revision;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+        }
+        Ok((resume_once, quarantined))
+    }
+
+    /// The startup pass (E10.1/E10.4): every task's in-flight attempts
+    /// resolve exactly once, then the surviving lease families reconcile
+    /// whole — settled attempts released, unclassifiable stragglers
+    /// (pre-prepare crashes, superseded revisions) quarantined with their
+    /// members fenced.
+    pub(crate) fn reconcile_in_flight_attempts(&self) -> Result<(usize, usize), String> {
+        let mut resume_once = 0;
+        let mut quarantined = 0;
+        for (state, _) in self.store.list_tasks() {
+            let (resumed, blocked) = self.reconcile_task_chain(&state.contract.task_id)?;
+            resume_once += resumed;
+            quarantined += blocked;
+        }
+        // E10.2: families follow their attempts. Everything the per-task
+        // pass settled already released through its family; what remains
+        // quarantines fenced.
+        self.store
+            .reconcile_lease_families()
+            .map_err(|error| error.to_string())?;
+        Ok((resume_once, quarantined))
+    }
 }
 
 /// Copy the kernel-owned unit statuses onto the wave's working copy.
@@ -356,6 +546,12 @@ impl RunManager {
         input: &InputMessage,
         state: TaskState,
     ) -> Result<(), String> {
+        // E10 (adjudicated placement): the chain reconciliation ran ONCE at
+        // startup, before this manager accepted any write ingress — every
+        // wave therefore dispatches over already-reconciled state, and a
+        // LIVE wave's in-flight attempts are work in progress, never crash
+        // debris. Re-reconciling here would quarantine a concurrent
+        // manager's live attempt (the m03 competing-managers race).
         let selected = self
             .approved_execution_selection(&state)
             .map_err(|error| error.to_string())?;
@@ -411,6 +607,9 @@ impl RunManager {
                 approvals: true,
                 checkpoints: true,
                 completion: true,
+                // FR-8 (M1a): WorkUnit sub-runs carry no children controls
+                // in the first step — the tool surface stays read/write-only.
+                children: false,
                 sandbox_activated,
             },
         );
@@ -821,6 +1020,13 @@ impl RunManager {
             &run_tools,
             self.allow_injected_model_fallback,
         )
+        .with_instruction_settings(crate::services::project_instructions::resolve_settings(
+            self.store.as_ref(),
+            &workspace.canonical_root,
+        ))
+        .with_global_instructions_path(
+            crate::services::project_instructions::global_context_md_path(),
+        )
         .with_effect_approvals(&effect_approvals)
         .freeze_execution_with_workspace(
             &freeze_view,
@@ -839,6 +1045,12 @@ impl RunManager {
         if let Err(error) = ctx.store.save_run_snapshot(&frozen.snapshot) {
             return DispatchOutcome::Deferred(format!("保存执行快照失败：{error}"));
         }
+        crate::services::run_snapshots::record_run_injections(
+            ctx.store,
+            &run_id,
+            &freeze_view,
+            &frozen.snapshot.material().instructions,
+        );
         // E06.1: the durable attempt row exists BEFORE any spawn; its
         // content digest pins the frozen snapshot this dispatch runs with.
         let seed = WorkUnitAttemptSeed {
@@ -1021,7 +1233,9 @@ impl RunManager {
                 // The start is durably attributed; the unit settles failed
                 // without a run (same repair vocabulary as pre-E06).
                 let reason = format!("启动执行 Harness 失败：{error}");
-                let _ = ctx.store.settle_work_unit_attempt(&attempt_id, false);
+                let _ = ctx
+                    .store
+                    .release_lease_family(&attempt_id, &attempt_id, false);
                 if let Err(error) = live.require_repair(
                     Actor::Host,
                     Some(attempt_id.clone()),
@@ -1058,6 +1272,16 @@ impl RunManager {
             let mut slot_guard = slot.lock().await;
             slot_guard.process = Some(session.process().clone());
         }
+        // E08.1: the attempt's supervised tree registers at its birth seam —
+        // the session surfaced the tree id; the dispatcher owns the attempt.
+        // A tree refusing registration means double ownership, an invariant
+        // break the wave must not run over.
+        if let Err(error) = self
+            .child_supervisor
+            .register(&attempt_id, session.process().clone())
+        {
+            return DispatchOutcome::Fatal(error.to_string());
+        }
 
         // E06.3: each attempt gets its OWN execution run. The spawned task
         // drives only the session and always reaps its own process; the
@@ -1069,6 +1293,7 @@ impl RunManager {
         let unit_for_run = unit.clone();
         let tools_for_run = held_tools[&unit.id].clone();
         let router_for_run = router.clone();
+        let supervisor_for_run = self.child_supervisor.clone();
         runs.spawn(async move {
             let outcome = match checkpoint {
                 Some(checkpoint) => session
@@ -1085,6 +1310,13 @@ impl RunManager {
                     .map_err(|error| (error.to_string(), false)),
             };
             let process_terminated = session.process().kill_confirmed().await;
+            // E08.3: a tree that settles on its own (the confirmed kill this
+            // closure always performs) deregisters — the sweep never waits
+            // on a dead tree.
+            if process_terminated {
+                let _ = supervisor_for_run
+                    .settle(&attempt_for_run.attempt_id, session.supervised_tree_id());
+            }
             let outcome = if process_terminated {
                 outcome
             } else {
@@ -1105,9 +1337,10 @@ impl RunManager {
         DispatchOutcome::Started
     }
 
-    /// Settle one completed run (E06.4): the attempt's DURABLE settle first,
-    /// then the kernel transition it alone authorizes. External write drift
-    /// observed here re-blocks dependents instead of overwriting them.
+    /// Settle one completed run (E06.4/E07): the family release settles the
+    /// attempt's DURABLE row and its member leases in one step, then the
+    /// kernel transition it alone authorizes. External write drift observed
+    /// here re-blocks dependents instead of overwriting them.
     async fn settle_unit(
         &self,
         ctx: &WaveCtx<'_>,
@@ -1125,7 +1358,10 @@ impl RunManager {
         }
         // Repair-class run failure: durable settle, then kernel repair.
         if let Err((reason, unavailable)) = &done.outcome {
-            if let Err(error) = ctx.store.settle_work_unit_attempt(&attempt_id, false) {
+            if let Err(error) = ctx
+                .store
+                .release_lease_family(&attempt_id, &attempt_id, false)
+            {
                 return SettleFlow::Fatal(error.to_string());
             }
             let flow = self.fail_unit(
@@ -1140,7 +1376,10 @@ impl RunManager {
             return self.finish_settle(live, ctx, drift, unit, attempt_id, done, flow);
         }
         if done.tool_failed {
-            if let Err(error) = ctx.store.settle_work_unit_attempt(&attempt_id, false) {
+            if let Err(error) = ctx
+                .store
+                .release_lease_family(&attempt_id, &attempt_id, false)
+            {
                 return SettleFlow::Fatal(error.to_string());
             }
             let flow = self.fail_unit(
@@ -1164,7 +1403,10 @@ impl RunManager {
             || proposals[0].kind != r_code_harness_protocol::services::ProposalKind::Implementation
             || proposals[0].candidate_digest.is_some()
         {
-            if let Err(error) = ctx.store.settle_work_unit_attempt(&attempt_id, false) {
+            if let Err(error) = ctx
+                .store
+                .release_lease_family(&attempt_id, &attempt_id, false)
+            {
                 return SettleFlow::Fatal(error.to_string());
             }
             let flow = self.fail_unit(
@@ -1184,7 +1426,10 @@ impl RunManager {
         }) {
             Ok(candidate) => candidate,
             Err(error) => {
-                if let Err(error) = ctx.store.settle_work_unit_attempt(&attempt_id, false) {
+                if let Err(error) = ctx
+                    .store
+                    .release_lease_family(&attempt_id, &attempt_id, false)
+                {
                     return SettleFlow::Fatal(error.to_string());
                 }
                 let flow = self.fail_unit(
@@ -1233,7 +1478,10 @@ impl RunManager {
             Err((reason, unavailable)) => {
                 // E06.4: the unit completes only from its own attempt's
                 // durable settle — settled-failed first, then the kernel.
-                if let Err(error) = ctx.store.settle_work_unit_attempt(&attempt_id, false) {
+                if let Err(error) = ctx
+                    .store
+                    .release_lease_family(&attempt_id, &attempt_id, false)
+                {
                     return SettleFlow::Fatal(error.to_string());
                 }
                 if let Err(error) = live.require_repair(
@@ -1276,7 +1524,10 @@ impl RunManager {
                     .iter()
                     .map(|requirement| requirement.check_id.clone())
                     .collect::<Vec<_>>();
-                if let Err(error) = ctx.store.settle_work_unit_attempt(&attempt_id, true) {
+                if let Err(error) = ctx
+                    .store
+                    .release_lease_family(&attempt_id, &attempt_id, true)
+                {
                     return SettleFlow::Fatal(error.to_string());
                 }
                 if let Err(error) =
@@ -1323,7 +1574,8 @@ impl RunManager {
 
     /// The shared tail of every settle: re-block dependents on external
     /// write drift (E06.2), then release the unit's write lease — an
-    /// unreleasable lease forces repair exactly like the pre-E06 path.
+    /// idempotent success once the family settle released it (E07), and an
+    /// unreleasable member forces repair exactly like the pre-E06 path.
     #[allow(clippy::too_many_arguments)]
     fn finish_settle(
         &self,
@@ -1489,32 +1741,44 @@ impl RunManager {
         for pending in awaiting.drain(..) {
             let _ = ctx
                 .store
-                .settle_work_unit_attempt(&pending.attempt_id, false);
+                .release_lease_family(&pending.attempt_id, &pending.attempt_id, false);
             let _ = pending.execution_tools.release();
+        }
+        // E08: the cancelled wave sweeps every registered supervised tree
+        // with its own death proof; unprovable trees are journaled and stay
+        // registered — the set is never assumed swept.
+        let sweep = self.child_supervisor.cancel_and_prove_all().await;
+        let slot = self.slot_of(task_id).await;
+        let (run_id, attempt_id) = {
+            let slot_guard = slot.lock().await;
+            (slot_guard.run_id.clone(), slot_guard.attempt_id.clone())
+        };
+        let mut cancelled_events = vec![journal_event(
+            task_id,
+            "run.cancelled",
+            serde_json::json!({
+                "runId": run_id,
+                "attemptId": attempt_id,
+                "reason": "user requested cancel",
+            }),
+        )];
+        for (unproven_attempt, unproven_tree) in &sweep.unproven {
+            cancelled_events.push(journal_event(
+                task_id,
+                "child.supervisor-unproven",
+                serde_json::json!({
+                    "attemptId": unproven_attempt,
+                    "treeId": unproven_tree,
+                    "reason": "termination-proof-missing",
+                }),
+            ));
         }
         ctx.transcript
             .truncate_to(ctx.transcript_position)
             .map_err(|_| "取消执行后无法恢复 transcript".to_string())?;
         live.cancel(Actor::Host, 1, "user requested cancel")
             .map_err(|error| error.to_string())?;
-        let slot = self.slot_of(task_id).await;
-        let (run_id, attempt_id) = {
-            let slot_guard = slot.lock().await;
-            (slot_guard.run_id.clone(), slot_guard.attempt_id.clone())
-        };
-        *live = save_run_state(
-            &self.store,
-            live,
-            vec![journal_event(
-                task_id,
-                "run.cancelled",
-                serde_json::json!({
-                    "runId": run_id,
-                    "attemptId": attempt_id,
-                    "reason": "user requested cancel",
-                }),
-            )],
-        )?;
+        *live = save_run_state(&self.store, live, cancelled_events)?;
         self.kernel_tasks
             .acknowledge(task_id, &input.message_id)
             .await

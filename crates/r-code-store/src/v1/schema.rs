@@ -530,6 +530,86 @@ CREATE INDEX IF NOT EXISTS idx_work_unit_attempts_in_flight
 
 INSERT OR IGNORE INTO v1_schema_migrations(migration_id, applied_at_ms)
 VALUES ('work-unit-attempts', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+
+-- Durable lease families (E07). One family per in-flight attempt, keyed by
+-- that attempt's identity: every member lease is acquired in the family's
+-- single all-or-nothing transaction, and none outlives the family's durable
+-- settle or quarantine. Fencing is the workspace lease epoch the members
+-- already carry — the family derives it, never mints a third currency.
+-- The attempt_id key intentionally carries no foreign key into
+-- work_unit_attempts: a family is acquired when its executor takes shape,
+-- which precedes the attempt row's prepare, and restart reconciliation
+-- treats a family without its attempt row as quarantinable, not corrupt.
+CREATE TABLE IF NOT EXISTS lease_families (
+    attempt_id    TEXT PRIMARY KEY,
+    workspace_key TEXT NOT NULL,
+    owner_id      TEXT NOT NULL,
+    state         TEXT NOT NULL CHECK (state IN ('active', 'released', 'quarantined')),
+    created_at_ms INTEGER NOT NULL,
+    settled_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_lease_families_active ON lease_families(state);
+
+CREATE TABLE IF NOT EXISTS lease_family_members (
+    attempt_id TEXT NOT NULL,
+    lease_id   TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, lease_id),
+    FOREIGN KEY (lease_id) REFERENCES path_leases(lease_id)
+);
+
+INSERT OR IGNORE INTO v1_schema_migrations(migration_id, applied_at_ms)
+VALUES ('lease-families', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+
+-- Immutable unverified-override audit rows (E09-R). One row per (task,
+-- override id) written in the SAME transaction as the UnverifiedAccepted
+-- verdict it audits: the table is the single query source for overrides and
+-- the review journal event is its derived projection. Rows carry the exact
+-- failed check ids, never a summary.
+CREATE TABLE IF NOT EXISTS unverified_overrides (
+    override_id      TEXT NOT NULL,
+    task_id          TEXT NOT NULL,
+    candidate_digest TEXT NOT NULL,
+    actor_id         TEXT NOT NULL,
+    session_id       TEXT NOT NULL,
+    reason           TEXT NOT NULL,
+    checks_json      TEXT NOT NULL,
+    created_at_ms    INTEGER NOT NULL,
+    PRIMARY KEY (task_id, override_id)
+);
+CREATE INDEX IF NOT EXISTS idx_unverified_overrides_task
+    ON unverified_overrides(task_id, created_at_ms);
+
+INSERT OR IGNORE INTO v1_schema_migrations(migration_id, applied_at_ms)
+VALUES ('unverified-overrides', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+
+-- M1a-02 (FR-7.2 / FR-1.6): the daemon-side injection ledger. Mirrors the
+-- desktop memory_injections structure with a kind discriminator so memory,
+-- frozen instructions, and JIT injections share one audit surface. The
+-- daemon never writes the desktop r-code.db.
+CREATE TABLE IF NOT EXISTS injections (
+    sequence       INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id         TEXT NOT NULL,
+    kind           TEXT NOT NULL CHECK (kind IN ('memory', 'instruction', 'jit')),
+    snapshot_hash  TEXT NOT NULL,
+    refs_json      TEXT NOT NULL,
+    chars          INTEGER NOT NULL CHECK (chars >= 0),
+    created_at_ms  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_injections_run ON injections(run_id, kind);
+
+INSERT OR IGNORE INTO v1_schema_migrations(migration_id, applied_at_ms)
+VALUES ('injection-ledger', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+
+-- M1a-06 (FR-1 / PRD 8): per-workspace instruction-injection settings.
+-- Stored under the AppData-side daemon data root, keyed like path leases.
+CREATE TABLE IF NOT EXISTS context_settings (
+    workspace_key  TEXT PRIMARY KEY,
+    settings_json  TEXT NOT NULL,
+    updated_at_ms  INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO v1_schema_migrations(migration_id, applied_at_ms)
+VALUES ('context-settings', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
 "#;
 
 pub const V1_SCHEMA_VERSION: &str = "1";

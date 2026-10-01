@@ -33,6 +33,46 @@ impl TaskKind {
     }
 }
 
+/// Frozen memory handoff (FR-7): computed once by the desktop memory owner
+/// when a task is created, then inherited unchanged by every later
+/// attempt/run/steer/repair. The daemon treats `rendered` as an opaque
+/// prompt segment and never recomputes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrozenMemoryHandoff {
+    /// The pre-rendered memory snapshot block exactly as the owner froze it.
+    pub rendered: String,
+    /// Snapshot entry ids (global then project) for audit references.
+    #[serde(default)]
+    pub entry_ids: Vec<String>,
+    /// Owner-computed snapshot hash; children must observe the same value.
+    pub snapshot_hash: String,
+}
+
+impl FrozenMemoryHandoff {
+    /// Wire caps mirror the memory contract budgets (global 4k + project 8k
+    /// chars plus the XML envelope) so a hostile create payload cannot
+    /// balloon the frozen prompt.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.rendered.contains('\0') || self.rendered.chars().count() > 32_768 {
+            return Err(
+                "memory.rendered must contain no NUL and be at most 32768 characters".into(),
+            );
+        }
+        if self.snapshot_hash.trim().is_empty() || self.snapshot_hash.chars().count() > 128 {
+            return Err("memory.snapshotHash must be non-empty and at most 128 characters".into());
+        }
+        if self.entry_ids.len() > 64
+            || self
+                .entry_ids
+                .iter()
+                .any(|id| id.trim().is_empty() || id.chars().count() > 128)
+        {
+            return Err("memory.entryIds must hold at most 64 ids of 1..=128 characters".into());
+        }
+        Ok(())
+    }
+}
+
 /// The frozen agreement between user and system about what "done" means.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskContract {
@@ -45,6 +85,10 @@ pub struct TaskContract {
     /// user-authorized revision.
     #[serde(default)]
     pub required_checks: Vec<String>,
+    /// Desktop-frozen memory snapshot (FR-7). Part of the contract — not a
+    /// preference — so no preferences patch can mutate it mid-task.
+    #[serde(default)]
+    pub memory: Option<FrozenMemoryHandoff>,
     pub revision: u64,
 }
 
@@ -259,6 +303,37 @@ impl RunSnapshotPhase {
     }
 }
 
+/// One planned project-instruction file fact (FR-1). Layer/status strings
+/// mirror the runtime engine's vocabulary; the kernel only carries them for
+/// identity and audit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstructionEntryRef {
+    pub layer: String,
+    pub path: String,
+    pub sha256: String,
+    pub bytes: u64,
+    pub status: String,
+}
+
+/// The frozen project-instruction set attached to a run snapshot (FR-1.5).
+/// Empty sets are skipped in the canonical identity so pre-FR-1 snapshots
+/// and injection-off runs keep byte-stable ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InstructionSetRef {
+    /// Canonical digest over the injected (path, sha) pairs.
+    pub digest: String,
+    /// Rendered block exactly as the harness config carries it.
+    pub rendered: String,
+    #[serde(default)]
+    pub entries: Vec<InstructionEntryRef>,
+}
+
+impl InstructionSetRef {
+    pub fn is_empty(&self) -> bool {
+        self.digest.is_empty()
+    }
+}
+
 /// All material inputs whose identity must not drift during a run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunSnapshotMaterial {
@@ -273,6 +348,8 @@ pub struct RunSnapshotMaterial {
     pub permissions: PermissionSnapshotRef,
     pub harness_package: PackageRef,
     pub tool_catalog_sha256: String,
+    #[serde(default, skip_serializing_if = "InstructionSetRef::is_empty")]
+    pub instructions: InstructionSetRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inference: Option<serde_json::Value>,
 }

@@ -7,6 +7,7 @@
 
 pub mod application;
 pub mod application_receipts;
+pub mod child_supervisor;
 pub mod daemon;
 pub mod ipc;
 pub mod legacy;

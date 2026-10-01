@@ -15,10 +15,12 @@ import {
   harnessV1EffectList,
   harnessV1EffectRequest,
   harnessV1EffectRevoke,
+  harnessV1OverridesList,
   permissionApprove,
   type EffectApprovalMaterial,
   type EffectApprovalPendingRow,
   type EffectApprovalView,
+  type UnverifiedOverrideView,
 } from "../../lib/ipc";
 import {
   canPersistPermissionGrant,
@@ -108,6 +110,24 @@ export function effectGrantUi(readOnly: boolean, hasActive: boolean): EffectGran
     readOnlyBadge: readOnly ? "approvals.effectReadOnly" : null,
     stateLabel: hasActive ? "active" : "pending",
   };
+}
+
+// ---------------------------------------------------------------------------
+// E09-C unverified-override 审计：唯一桌面渲染器（与远端/TUI/MCP 同一键序）
+// ---------------------------------------------------------------------------
+
+/** 审计行的 canonical 键序——四端一致，顺序只在这里排一次。 */
+export const OVERRIDE_MATERIAL_FIELDS: ReadonlyArray<
+  "overrideId" | "taskId" | "candidateDigest" | "actorId" | "sessionId" | "reason"
+> = ["overrideId", "taskId", "candidateDigest", "actorId", "sessionId", "reason"];
+
+/** 一条不可变审计行的展示行 = 六列身份材料 + 精确失败检查 + 落库时刻。 */
+export function overrideAuthorityRows(row: UnverifiedOverrideView): AuthorityRow[] {
+  return [
+    ...OVERRIDE_MATERIAL_FIELDS.map((key) => ({ key, value: row[key] ?? "" })),
+    { key: "checks", value: row.checks.join(", ") },
+    { key: "createdAtMs", value: String(row.createdAtMs) },
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +289,53 @@ function PanelFooter({ note, error }: { note: string | null; error: string | nul
       <PanelNote note={note} />
       <PanelError error={error} />
     </>
+  );
+}
+
+export interface OverrideAuditPanelProps {
+  taskId?: string;
+  /**
+   * 能力缺失时整块**隐藏**（元素缺席，不是禁用）——失败关闭：审计面
+   * 是只读投影，但缺能力的客户端一个字节也不该拿到（E09-C）。
+   */
+  enabled?: boolean;
+}
+
+/**
+ * E09-C：unverified-override 审计覆盖层——桌面唯一渲染器，行序即
+ * `overrideAuthorityRows` 的 canonical 键序。加载失败同样隐藏而非报错
+ * 横幅：审计面缺席不可降级为半开状态。
+ */
+export function OverrideAuditPanel({ taskId, enabled = true }: OverrideAuditPanelProps) {
+  const [rows, setRows] = useState<UnverifiedOverrideView[] | null>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void harnessV1OverridesList(taskId)
+      .then((answer) => {
+        if (!cancelled) setRows(Array.isArray(answer) ? answer : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRows(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId, enabled]);
+
+  if (!enabled || rows === null) return null;
+  if (rows.length === 0) {
+    return <section className="perm-scope opt-help">no unverified overrides</section>;
+  }
+  return (
+    <section className="perm-scope" aria-label="unverified overrides">
+      {rows.map((row) => (
+        <div key={`${row.taskId}/${row.overrideId}`} className="opt-help">
+          {overrideAuthorityRows(row).map((line) => `${line.key}: ${line.value}`).join(" · ")}
+        </div>
+      ))}
+    </section>
   );
 }
 

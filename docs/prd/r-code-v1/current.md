@@ -1,36 +1,37 @@
-# R-Code v1 当前状态：O-GATE 执行中（O00/E05/E06 KEEP，E07 待起步）
+# R-Code v1 当前状态：O-GATE 全 KEEP（8/8），F/G/H/I 待需求恢复（人工 open question）
 
-> 状态：`o-gate executing 3/8，paused at E07`。**O00、E05、E06 已 KEEP**；下一任务 **E07**（LeaseFamily——fencing 复用现有 workspace ownership epoch，绝不第三 epoch 通货）。**E07 的 before 快照已拍（`sandbox/r-code-v1-safety/iter/E07/before/{store,runtime}/` 四文件含 sha256），Engineer 尚未开始——恢复者直接从 Engineer 阶段起步，勿重复拍快照。**
-> 权威合同：[o-gate.tasks.json](./worklists/o-gate.tasks.json)；执行台账：[o-gate.ledger.tsv](./progress/o-gate.ledger.tsv)。
-> 顺序：O00 ✅ → E05 ✅ → E06 ✅ → **E07** → E08 → E09-R → E09-C → E10（E07/E08 依赖 E06；E09-R 依赖 O00+E05；E10 等齐 E07+E08）。
+> 状态：`o-gate complete 8/8；F decomposition BLOCKED on requirement recovery`。**O00、E05、E06、E07、E08、E09-R、E09-C、E10 全 KEEP**（2026-09-30）。O-GATE-CONTINUE.txt 已按指示删除。
+> 权威合同：[o-gate.tasks.json](./worklists/o-gate.tasks.json)（已完成）；执行台账：[o-gate.ledger.tsv](./progress/o-gate.ledger.tsv) iter 1-8。
 
-## 1. 当前基线（2026-09-29，E06 之后，原始日志重数）
+## 0. 阻塞（需人决策）——F/G/H/I 的需求定义缺失
 
-- **House 五组累计 = 1141/1140/1**（151 行 `test result:`）：唯一声明红 = plan_schema 18-vs-35（**基线对未移动**——E06 的 work_unit_attempts 迁移走 string-keyed ledger，编号注册表未动；E07/E09-R 若同走此路则同样无需重声明，走编号注册表则必须重声明新对）。
-- E06 成果：wave 调度器（parallel.rs，#[path] 挂在 run_manager 内，lib.rs 未动）：ready set=Pending+可写+依赖 Completed+P26/P27 漂移复验（依赖写域 delta 对照其 journal 变更，未解释条目=外部编辑→依赖者 re-block）；bound 2；per-unit RunSnapshot 冻结→**durable attempt 行先于任何 spawn**（content=snapshot id）；frontier-hold 种子（真启动前 InFlight 记录保聚合开放）；settle durable-first；中途 settle 记 unit.completed、聚合才 review-ready。run_manager 2253→1644。attempt_id=`attempt-{task}-{rev12}-{unit}` 幂等收敛/分歧 ContentConflict/settle 恰好一次。QA 种子泄漏探针抓到真缺陷（失败 settle 泄漏 InFlight 种子→任务楔死 Running 无 run.failed 无 ack）已 refine 修复（retraction 谓词带 journal 判据 + 幂等 require_repair 重推导聚合）。e06 overlap 断言一次负载 flake 已加固（200ms→1500ms）并两边都报。
-- 全部工作未提交（树上大量未提交改动共存）。
+§9.2-9.5 的 F01–F04 / G01–G06 / H01–H05 / I01–I07 **只有一行主题名**（index.md:244-247），整个仓库（docs、history/、.gstack、artifacts）与全部 git 历史均无任务级定义；四个 F 主题（H0/H1、authority marker、writer freeze、forward-only recovery）在代码与文档中零落点。plan-loop 明令禁止臆造需求（"不得 invent packages/files/APIs；真正的未知记 open_question"）。**恢复路径（三选一，需人拍板）**：① 提供旧 master 的 F/G/H/I worklist 原文；② 指认需求出处（另一仓库/文档）；③ 授权按四主题名做需求再发明（走一轮 PRD 补写而非直接拆任务）。在此之前 F 不开工——这是计划性阻塞，非实现性阻塞。
 
-## 2. 下一手（E07 执行者按序做）
+## 1. 当前基线（2026-09-30，E10 之后，本机双跑）
 
-0. **暂停时点**：E07 before 快照已拍（store/{schema.rs,mutations.rs} + runtime/{mutations.rs,parallel.rs}），Engineer 未动工。恢复者从第 2 步 Engineer 直接开始。
-1. 读 [o-gate.tasks.json](./worklists/o-gate.tasks.json) 任务 E07（E07.1-E07.3：lease_families 表 keyed by attempt_id；全有或全无获取；fencing 复用现有 workspace ownership epoch；family release 恰好结算其 member 与 attempt 记录；重启对账整 family）。
-2. 六步：~~拍 before~~（已完成）→ Engineer → QA `crates/r-code-runtime/tests/e07_lease_family.rs` → 双跑 house → 仪式 → 进 E08。
-3. E07 语义注意：MutationExecutor 的租约加入所属 attempt 的 family（E06 已有 attempt 行可挂）；stale attempt 不能 release/extend；重启时 family 的 attempt 已 settle→release、未完成→quarantine 并 fence members；**不同任务的 family 互不 fence（pinned）**。
-4. 计数纪律不变。
+- **House 六组累计 = 155 行 `test result:` / 1158 / 1157 / 1**：唯一声明红 = plan_schema 18-vs-35（**整个 O-GATE 三个 store 迁移全部走 string-keyed ledger，编号注册表未动，红对自始至终未移动**）。
+- O-GATE 全部成果：kernel 多单元状态机（E05）+ wave 调度器与 work_unit_attempts（E06）+ LeaseFamily 全有或全无/同事务结算/整 family reconcile（E07）+ ChildSupervisor 单 owner 注册表与逐树死证 sweep（E08）+ unverified_overrides 不可变审计表与 review.overrides.list 四端投影（E09-R/C）+ 启动单次全链恢复 resume-once/quarantine（E10，readiness 发布 reconciled 计数）。
+- **已记录待办（后续组合轮认领）**：main.rs invoke_handler 一行注册 `cmd_harness_v1_overrides_list`（E09-C 裁量缺口）；`with_child_supervisor` 装配进 application.rs 的 ManagedProcessService 构造（E08 裁量缺口）。
+- 本机环境注记（非基线机器）：无 rtk/python——cargo 直连（git 依赖 SSH 拉取）、file_loc 以非空物理行等价复算；484 .rs 已规范化 LF；t14a 死 pid 断言按 5s settle 上限加固；git status 对这批文件报 stat 缓存幻影 M——以 `git diff` 为准；外部用户侧 `docs/readme.md` 一行 + `docs/research/` 勿动。
+- 全部工作未提交（树上未提交改动共存）。
+
+## 2. 下一手（阻塞解除后）
+
+1. 需求恢复三选一（见 §0）拍板后，跑 `plan-loop` 产出 `docs/prd/r-code-v1/worklists/f-migration.tasks.json`（validate_plan.py 过门；本机无 python——换台带 python 的机器跑校验，或按 schema 手工对拍并记录）。
+2. 拆解定稿后按 swe-loop 六步逐任务至全 KEEP；计数纪律不变（155/1158/1157/1 起步）。
+3. 之后依次 G（一致性）→ H（四客户端）→ I（发布），每项同样先 plan-loop、同样先解决需求出处。
+4. 顺手活（后续任一组合轮认领）：main.rs invoke_handler 一行注册 `cmd_harness_v1_overrides_list`（E09-C 裁量缺口）；`with_child_supervisor` 装配进 application.rs 的 ManagedProcessService 构造（E08 裁量缺口）。
 
 ## 3. 基线复现
 
 ```powershell
-rtk proxy cargo test -p r-code-runtime -p r-code-harness-protocol -p r-code-harness-sdk -p r-code-kernel -p r-code-store -p r-code-harness-codex --all-features --no-fail-fast   # 151 行 / 1140 / 1
+cargo test -p r-code-runtime -p r-code-harness-protocol -p r-code-harness-sdk -p r-code-kernel -p r-code-store -p r-code-harness-codex --all-features --no-fail-fast   # 155 行 / 1158 / 1157 / 1（本机无 rtk，直连 cargo）
 node scripts/verify-safety-v1.mjs        # 16/19 activated, exit 0
 node scripts/check-process-launch-boundary.mjs   # 17 站点绿
 ```
 
 ## 4. 恢复入口
 
-- O-GATE 执行：`progress/o-gate.ledger.tsv` iter 1-3；evidence `o-gate-{O00,E05,E06}.verdict.json`；`sandbox/r-code-v1-safety/iter/{O00,E05,E06}/`。
-- 拆解坑清单在 `sandbox/r-code-v1-safety/o-gate-plan.md`（E08 出生点缝=session.rs/processes.rs、E09 表为真值 journal 派生、E10 从 work_unit_attempts 枚举）。
+- O-GATE 执行：`progress/o-gate.ledger.tsv` iter 1-8；evidence `sandbox/r-code-v1-safety/iter/{O00,E05,E06,E07,E08,E09R,E09C,E10}/`（本机重建，E07 起含 change.json/verdict.json/evidence house 日志）。
+- E10 关键裁量（ledger iter 8）：链恢复只在启动跑一次（compose，effect 恢复后、写入口前）；每输入/每波重跑会把**活** attempt 误隔离（m03 竞争回归即证明）。
 - Safety：ledger iter 55-68；P23 遗留披露兑现为后续组合轮的活。
-
-
-

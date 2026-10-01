@@ -13,6 +13,7 @@ fn review_ready() -> TaskState {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     state.work_units = vec![WorkUnit {
         id: "unit-1".into(),

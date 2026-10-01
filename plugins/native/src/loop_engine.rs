@@ -34,6 +34,11 @@ pub struct LoopConfig {
     /// required in plan mode and never guessed by the harness.
     #[serde(default)]
     pub plan_revision: Option<u64>,
+    /// FR-1: the frozen project-instruction block from the host. Appended
+    /// verbatim inside effective_system_prompt so the user prompt config
+    /// stays pure; empty means nothing was injected for this run.
+    #[serde(default)]
+    pub instructions: String,
     pub max_turns: u32,
 }
 
@@ -45,6 +50,7 @@ impl Default for LoopConfig {
             inference: None,
             task_mode: None,
             plan_revision: None,
+            instructions: String::new(),
             max_turns: 25,
         }
     }
@@ -91,6 +97,12 @@ impl LoopConfig {
         {
             config.system_prompt = system_prompt.to_string();
         }
+        if let Some(instructions) = harness_config
+            .get("instructions")
+            .and_then(|value| value.as_str())
+        {
+            config.instructions = instructions.to_string();
+        }
         if let Some(max_turns) = harness_config
             .get("maxTurns")
             .and_then(|value| value.as_u64())
@@ -104,7 +116,11 @@ impl LoopConfig {
 
     /// The effective system prompt for the configured task mode.
     pub fn effective_system_prompt(&self) -> String {
-        match self.task_mode.as_deref() {
+        // FR-1: the frozen instruction block appends to the base prompt in
+        // every mode. The block is part of the run snapshot identity (its
+        // digest rides in the harness config), so prompt snapshots and model
+        // requests keep the same identity contract as before.
+        let base = match self.task_mode.as_deref() {
             Some("plan") => format!(
                 "{}\n\n当前为 Plan 模式：先调查再规划。产出分步实施计划（目标、步骤、\
                  涉及文件、风险），未经用户确认不要直接修改文件。",
@@ -114,11 +130,13 @@ impl LoopConfig {
                     &self.system_prompt
                 }
             ),
-            // Ask is enforced by the host's read-only tool capability. Keep
-            // the resolved prompt byte-for-byte so task prompt snapshots and
-            // model requests have the same identity.
-            Some("ask") => self.system_prompt.clone(),
+            // Ask is enforced by the host's read-only tool capability.
             _ => self.system_prompt.clone(),
+        };
+        if self.instructions.trim().is_empty() {
+            base
+        } else {
+            format!("{base}\n\n{}", self.instructions.trim_end())
         }
     }
 }

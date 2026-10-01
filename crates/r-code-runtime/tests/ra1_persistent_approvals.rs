@@ -25,6 +25,7 @@ async fn seeded_store(dir: &TempDir, task_id: &str) -> Arc<V1Store> {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     store.save_task_and_events(&task, vec![]).await.unwrap();
     store

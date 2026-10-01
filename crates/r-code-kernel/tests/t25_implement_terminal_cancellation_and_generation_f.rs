@@ -104,6 +104,7 @@ fn plugins_ignoring_cancellation_still_end_terminal() {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     state
         .start_attempt(&Attempt {
@@ -185,6 +186,7 @@ fn queued_messages_survive_for_the_next_run() {
                 constraints: vec![],
                 required_checks: vec![],
                 revision: 1,
+                memory: None,
             })
             .await
             .expect("create");

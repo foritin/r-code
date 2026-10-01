@@ -5443,6 +5443,7 @@ dependencies = [
  "agent-contract",
  "async-trait",
  "libc",
+ "r-code-client",
  "r-code-core",
  "r-code-gateway",
  "r-code-harness-protocol",

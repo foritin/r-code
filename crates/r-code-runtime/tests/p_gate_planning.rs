@@ -82,6 +82,9 @@ async fn native_prd_planning_reads_only_the_bound_checkout_and_awaits_approval()
     assert_eq!(
         tool_names(&requests[0].tools),
         [
+            "children_close",
+            "children_spawn",
+            "children_wait",
             "git_diff",
             "git_log",
             "git_status",
@@ -154,6 +157,8 @@ async fn planning_tool_catalog_and_execution_share_one_read_only_allowlist() {
         .expect("workspace snapshot");
     let tools = PlanningToolService::from_workspace(&snapshot).expect("bound tools");
     let token = GenerationToken::new("planning", 1);
+    // Bare service (no child controls attached): children tools stay
+    // hidden — only run-wired services expose them (D9).
     assert_eq!(
         tool_names(&tools.list(token.clone()).await.expect("tool list")),
         [

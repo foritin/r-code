@@ -17,6 +17,7 @@ fn contract(checks: &[&str]) -> TaskContract {
         constraints: vec![],
         required_checks: checks.iter().map(|check| check.to_string()).collect(),
         revision: 1,
+        memory: None,
     }
 }
 

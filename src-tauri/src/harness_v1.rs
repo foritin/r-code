@@ -317,6 +317,22 @@ impl HarnessV1Bridge {
             .map_err(|e| HarnessV1Error::Command(e.to_string()))
     }
 
+    /// `review.overrides.list`（E09-C）：不可变 unverified-override 审计行
+    /// 的 canonical camelCase 投影——四端同一份材料，此表是唯一查询源。
+    pub async fn unverified_overrides_list(
+        &self,
+        task_id: Option<&str>,
+    ) -> Result<Value, HarnessV1Error> {
+        self.connect()
+            .await?
+            .call(
+                "review.overrides.list",
+                serde_json::json!({"taskId": task_id}),
+            )
+            .await
+            .map_err(|e| HarnessV1Error::Command(e.to_string()))
+    }
+
     /// `approvals.effect.revoke`：把某个 WorkUnit 的 active 授权置为
     /// superseded。**仅影响未来运行**——已冻结的 RunSnapshot 是不可变行，
     /// 撤销不改写它，只有下一次冻结才重新查阅并失败关闭。幂等：没有
@@ -513,6 +529,18 @@ pub async fn cmd_harness_v1_effect_revoke(
     let bridge = state.lock().await.clone();
     bridge
         .effect_approval_revoke(&task_id, &work_unit_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_harness_v1_overrides_list(
+    state: tauri::State<'_, Arc<Mutex<HarnessV1Bridge>>>,
+    task_id: Option<String>,
+) -> Result<Value, String> {
+    let bridge = state.lock().await.clone();
+    bridge
+        .unverified_overrides_list(task_id.as_deref())
         .await
         .map_err(|e| e.to_string())
 }

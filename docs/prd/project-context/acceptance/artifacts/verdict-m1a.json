@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-10-01T01:35:24.359Z",
+  "milestone": "M1a",
+  "gate": "A 组（注入组）on 臂总 token 较 off 臂下降 >=10% 且完成度均分不降（附录 A.3）",
+  "missingInputs": [
+    "a:baseline-off",
+    "a:baseline-on",
+    "b:baseline-off",
+    "b:baseline-on"
+  ],
+  "humanScoringPending": false,
+  "comparisons": [
+    {
+      "group": "a",
+      "status": "incomplete",
+      "missing": [
+        "baseline-off",
+        "baseline-on"
+      ]
+    },
+    {
+      "group": "b",
+      "status": "incomplete",
+      "missing": [
+        "baseline-off",
+        "baseline-on"
+      ]
+    }
+  ]
+}

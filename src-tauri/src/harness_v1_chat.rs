@@ -153,6 +153,36 @@ impl ChatV1Bridge {
         Ok(project_task_detail(task_id, &detail, &events))
     }
 
+    /// FR-1 (M1a-08)：/context 查询（v1 context.current 原样透传）。
+    pub async fn context_current(
+        &self,
+        task_id: &str,
+    ) -> Result<Value, crate::harness_v1::HarnessV1Error> {
+        self.inner
+            .connect()
+            .await?
+            .call("context.current", json!({"taskId": task_id}))
+            .await
+            .map_err(|e| crate::harness_v1::HarnessV1Error::Command(e.to_string()))
+    }
+
+    /// FR-1 (M1a-08)：对本项目切换指令注入（v1 context.settings.update）。
+    pub async fn context_settings_update(
+        &self,
+        workspace_path: &str,
+        injection_enabled: bool,
+    ) -> Result<Value, crate::harness_v1::HarnessV1Error> {
+        self.inner
+            .connect()
+            .await?
+            .call(
+                "context.settings.update",
+                json!({"workspacePath": workspace_path, "injectionEnabled": injection_enabled}),
+            )
+            .await
+            .map_err(|e| crate::harness_v1::HarnessV1Error::Command(e.to_string()))
+    }
+
     /// `cmd_task_detail_batch`：逐个 detail 聚合（v1 无批量端点）。
     pub async fn task_detail_batch(
         &self,
@@ -419,6 +449,23 @@ fn project_agent_event(envelope: &Value) -> Option<(String, AgentEvent)> {
         },
         "model.usage" => AgentEvent::Usage {
             usage_json: serde_json::to_string(&payload["usage"]).unwrap_or_default(),
+        },
+        // FR-1 (M1a-08): 注入审计行——走 CodexContextEvent 通道（与
+        // r_code_context_compacted 同构），前端时间线渲染为低噪声 context 卡。
+        "context.instructions" => AgentEvent::CodexContextEvent {
+            event: "r_code_context_instructions".into(),
+            data: serde_json::json!({
+                "injected": payload["injected"],
+                "bytes": payload["bytes"],
+            }),
+        },
+        "context.jit" => AgentEvent::CodexContextEvent {
+            event: if payload["reason"] == "jit-allowance-exceeded" {
+                "r_code_context_jit_dropped".into()
+            } else {
+                "r_code_context_jit".into()
+            },
+            data: payload.clone(),
         },
         // input.queued / task.renamed / harness.pinned / harness.progress /
         // task.created / task.preferences / input.delivered：旧频道无对应物。

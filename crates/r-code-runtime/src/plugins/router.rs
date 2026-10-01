@@ -13,7 +13,6 @@
 use r_code_harness_protocol::rpc::{error_code, RpcError, RpcNotification, RpcRequest};
 use r_code_harness_protocol::services::*;
 use r_code_harness_protocol::{ApprovalsRequest, HostService, OperationKey, RunIdentity};
-use r_code_kernel::children::ChildrenSupervisor;
 use r_code_kernel::plans::{PlanRevision, PlanRevisionMaterial};
 use r_code_kernel::ports::{
     GenerationToken, JournalStore, ModelService, ProcessService, RunGuard, ServiceError,
@@ -73,10 +72,11 @@ pub struct HostRouter {
     pub recorded_proposals: Mutex<Vec<CompletionProposalRequest>>,
     /// Host-confirmed immutable plan publications for finalization fencing.
     pub recorded_plan_publications: Mutex<Vec<PlanPublishReply>>,
-    /// Child supervision for host.children (shared with the daemon).
-    pub children: Option<Arc<Mutex<ChildrenSupervisor>>>,
-    /// The parent's permission ceiling bounding spawned children.
-    pub parent_ceiling: PermissionCeiling,
+    /// FR-8 (M1a-10): the executor-backed children controls for
+    /// host.children.* (supervisor + ceiling + command channel).
+    pub child_controls: Option<Arc<crate::services::children_executor::ChildControls>>,
+    /// FR-1.5 (M1a-07): JIT injection source for the model projection.
+    jit_tracker: Option<Arc<Mutex<crate::services::project_instructions::JitTracker>>>,
     transcript: Option<Arc<TranscriptWriter>>,
     artifacts: Option<Arc<ArtifactStore>>,
     v1_store: Option<Arc<V1Store>>,
@@ -104,6 +104,8 @@ pub struct RouterServiceAvailability {
     pub approvals: bool,
     pub checkpoints: bool,
     pub completion: bool,
+    /// FR-8 (M1a-10): children.* services are live for this run.
+    pub children: bool,
     /// P13 activation gate for sandboxed effect services (Process* and
     /// VerificationRun): true ONLY when an exact current
     /// SafetyCapabilityReport evaluated to Activated. Guessed calls stay
@@ -128,10 +130,10 @@ impl RouterServiceAvailability {
             | HostService::ProcessWrite
             | HostService::ProcessClose
             | HostService::VerificationRun => self.sandbox_activated,
-            HostService::PlanUpdate
-            | HostService::ChildrenSpawn
+            HostService::PlanUpdate => false,
+            HostService::ChildrenSpawn
             | HostService::ChildrenWait
-            | HostService::ChildrenCancel => false,
+            | HostService::ChildrenCancel => self.children,
         }
     }
 }
@@ -203,12 +205,12 @@ impl HostRouter {
             host_observations: Mutex::new(Vec::new()),
             recorded_proposals: Mutex::new(Vec::new()),
             recorded_plan_publications: Mutex::new(Vec::new()),
-            children: None,
-            parent_ceiling: PermissionCeiling::Full,
+            child_controls: None,
             transcript: None,
             artifacts: None,
             v1_store: None,
             run_snapshot: None,
+            jit_tracker: None,
             required_checks: Vec::new(),
             plan_publish_enabled: false,
             task_kind: None,
@@ -265,13 +267,30 @@ impl HostRouter {
     }
 
     /// Attach child supervision (the daemon shares one supervisor).
+    /// FR-1.5 (M1a-07): attach the JIT tracker used by the model-stream
+    /// projection.
+    pub fn with_jit_tracker(
+        mut self,
+        tracker: Arc<Mutex<crate::services::project_instructions::JitTracker>>,
+    ) -> Self {
+        self.jit_tracker = Some(tracker);
+        self
+    }
+
     pub fn with_children(
         mut self,
-        supervisor: Arc<Mutex<ChildrenSupervisor>>,
-        parent_ceiling: PermissionCeiling,
+        controls: Arc<crate::services::children_executor::ChildControls>,
     ) -> Self {
-        self.children = Some(supervisor);
-        self.parent_ceiling = parent_ceiling;
+        self.child_controls = Some(controls);
+        self
+    }
+
+    /// FR-8 (M1a-10): Option-taking variant for run paths without children.
+    pub fn with_children_controls(
+        mut self,
+        controls: Option<Arc<crate::services::children_executor::ChildControls>>,
+    ) -> Self {
+        self.child_controls = controls;
         self
     }
 
@@ -437,7 +456,10 @@ impl HostRouter {
             "host.model.stream" => {
                 let model_request: ModelStreamRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                // The canonical transcript syncs the ORIGINAL request; the
+                // JIT projection below is model-visible only (FR-1.5).
                 self.sync_transcript(&model_request)?;
+                let model_request = self.project_jit_instructions(model_request);
                 let mut sink = RouterStreamSink::default();
                 let outcome = self
                     .models
@@ -487,9 +509,26 @@ impl HostRouter {
             "host.context.read" => {
                 let read: ContextReadRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                if read.projection == "instructions" {
+                    // FR-1 (5.2/5.3.1): serve the frozen instruction set
+                    // from the run snapshot; the reserved CatalogSnapshot
+                    // field is filled from the same material.
+                    let snapshot = self.run_snapshot.as_ref().ok_or_else(|| {
+                        RpcError::invalid_params(
+                            "no run snapshot is configured for the instructions projection",
+                        )
+                    })?;
+                    let instructions = &snapshot.material().instructions;
+                    return Ok(serde_json::json!({
+                        "catalog": crate::services::context::CatalogSnapshot::from_instructions(instructions),
+                        "digest": instructions.digest,
+                        "rendered": instructions.rendered,
+                        "entries": instructions.entries,
+                    }));
+                }
                 if read.projection != "transcript" {
                     return Err(RpcError::invalid_params(
-                        "only the transcript context projection is available",
+                        "only the transcript and instructions context projections are available",
                     ));
                 }
                 let transcript = self.task_transcript()?;
@@ -649,14 +688,12 @@ impl HostRouter {
             "host.children.spawn" => {
                 let spawn_request: ChildrenSpawnRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-                let supervisor = self.children.as_ref().ok_or_else(|| {
+                let controls = self.child_controls.as_ref().ok_or_else(|| {
                     RpcError::internal("children supervision not configured for this run")
                 })?;
-                let child_task_id = supervisor
-                    .lock()
-                    .expect("children")
-                    .spawn(self.parent_ceiling, &spawn_request)
-                    .map_err(|e| RpcError::internal(e.to_string()))?;
+                let child_task_id = controls
+                    .request_spawn(spawn_request)
+                    .map_err(RpcError::internal)?;
                 Ok(serde_json::to_value(ChildrenSpawnReply {
                     child_task_id: child_task_id.clone(),
                     child_run_id: child_task_id,
@@ -666,38 +703,55 @@ impl HostRouter {
             "host.children.wait" => {
                 let wait: ChildrenWaitRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-                let supervisor = self.children.as_ref().ok_or_else(|| {
+                let controls = self.child_controls.as_ref().ok_or_else(|| {
                     RpcError::internal("children supervision not configured for this run")
                 })?;
-                let supervisor = supervisor.lock().expect("children");
-                match supervisor.child(&wait.child_task_id) {
-                    None => Err(RpcError::internal(format!(
-                        "unknown child {}",
-                        wait.child_task_id
-                    ))),
-                    Some(child) => match &child.state {
-                        r_code_kernel::children::ChildState::Completed(report) => {
-                            Ok(serde_json::to_value(report).unwrap_or_default())
-                        }
-                        _ => Err(r_code_harness_protocol::rpc::RpcError {
+                // Minutes-scale blocking wait on the supervisor condvar —
+                // no busy polling (FR-8 acceptance e).
+                let timeout_ms = wait
+                    .timeout_ms
+                    .unwrap_or(5 * 60 * 1000)
+                    .clamp(1, 30 * 60 * 1000);
+                let supervisor = Arc::clone(&controls.supervisor);
+                let child_id = wait.child_task_id.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    crate::services::children_executor::wait_child_blocking(
+                        &supervisor,
+                        &child_id,
+                        timeout_ms,
+                    )
+                })
+                .await
+                .map_err(|e| RpcError::internal(format!("wait join failed: {e}")))?
+                .map_err(RpcError::internal)?;
+                match outcome {
+                    r_code_kernel::children::ChildWait::Completed(report) => {
+                        Ok(serde_json::to_value(report).unwrap_or_default())
+                    }
+                    r_code_kernel::children::ChildWait::Cancelled => Err(RpcError::internal(
+                        format!("child {} was cancelled", wait.child_task_id),
+                    )),
+                    r_code_kernel::children::ChildWait::Running => {
+                        Err(r_code_harness_protocol::rpc::RpcError {
                             code: error_code::PROTOCOL_VIOLATION,
-                            message: format!("child {} has not completed yet", wait.child_task_id),
+                            message: format!(
+                                "wait for child {} timed out without completion",
+                                wait.child_task_id
+                            ),
                             data: None,
-                        }),
-                    },
+                        })
+                    }
                 }
             }
             "host.children.cancel" => {
                 let cancel: ChildrenCancelRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-                let supervisor = self.children.as_ref().ok_or_else(|| {
+                let controls = self.child_controls.as_ref().ok_or_else(|| {
                     RpcError::internal("children supervision not configured for this run")
                 })?;
-                supervisor
-                    .lock()
-                    .expect("children")
-                    .cancel_child(&cancel.child_task_id)
-                    .map_err(|e| RpcError::internal(e.to_string()))?;
+                controls
+                    .request_cancel(&cancel.child_task_id)
+                    .map_err(RpcError::internal)?;
                 Ok(serde_json::Value::Null)
             }
             "host.checkpoint.save" => {
@@ -755,6 +809,54 @@ impl HostRouter {
             return Err(run_mismatch("transcript belongs to another task"));
         }
         Ok(transcript)
+    }
+
+    /// FR-1.5 (M1a-07): append the monotone JIT instruction block to the
+    /// request's first system message. Model-visible only — the canonical
+    /// transcript was already synced from the unprojected request.
+    fn project_jit_instructions(&self, mut request: ModelStreamRequest) -> ModelStreamRequest {
+        let Some(tracker) = &self.jit_tracker else {
+            return request;
+        };
+        let (block, audit) = {
+            let Ok(mut tracker) = tracker.lock() else {
+                return request;
+            };
+            (tracker.render_current(), tracker.take_audit_events())
+        };
+        for (kind, payload) in audit {
+            self.observe(&kind, payload);
+        }
+        let Some(block) = block else {
+            return request;
+        };
+        // Ledger the JIT injection (fail-open, same discipline as the
+        // frozen-injection rows).
+        if let Some(store) = &self.v1_store {
+            let record = r_code_store::v1::InjectionRecord {
+                run_id: self.identity.run_id.clone(),
+                kind: r_code_store::v1::InjectionKind::Jit,
+                snapshot_hash: crate::services::artifacts::sha256_hex(block.as_bytes()),
+                refs: Vec::new(),
+                chars: block.chars().count() as u64,
+            };
+            if let Err(error) = store.record_injection(&record) {
+                eprintln!(
+                    "jit injection ledger write failed for {}: {error}",
+                    self.identity.run_id
+                );
+            }
+        }
+        if let Some(message) = request
+            .messages
+            .iter_mut()
+            .find(|message| message.role == r_code_harness_protocol::services::ModelRole::System)
+        {
+            message
+                .content
+                .push(r_code_harness_protocol::services::ContentBlock::Text { text: block });
+        }
+        request
     }
 
     fn sync_transcript(&self, request: &ModelStreamRequest) -> Result<(), RpcError> {

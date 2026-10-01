@@ -147,16 +147,26 @@ impl MutationExecutor {
             "sha256:{}",
             sha256_hex(binding.canonical_root.to_string_lossy().as_bytes())
         );
+        // E07: the executor's lease is acquired as the one-member family of
+        // this attempt — all-or-nothing with the attempt's identity as the
+        // family key, so no lease of the attempt exists outside its family.
         let lease = store
-            .acquire_lease(LeaseRequest {
-                workspace_key,
-                operation_id: format!("lease:{attempt_id}:{}", unit.id),
-                owner_id: attempt_id.clone(),
-                read_paths: unit.read_paths.clone(),
-                write_paths: unit.write_paths.clone(),
-                repo_exclusive: unit.repo_exclusive,
-            })
-            .map_err(|_| MutationExecutionError::Lease)?;
+            .acquire_lease_family(
+                &attempt_id,
+                &[LeaseRequest {
+                    workspace_key,
+                    operation_id: format!("lease:{attempt_id}:{}", unit.id),
+                    owner_id: attempt_id.clone(),
+                    read_paths: unit.read_paths.clone(),
+                    write_paths: unit.write_paths.clone(),
+                    repo_exclusive: unit.repo_exclusive,
+                }],
+            )
+            .map_err(|_| MutationExecutionError::Lease)?
+            .leases
+            .into_iter()
+            .next()
+            .ok_or(MutationExecutionError::Lease)?;
         if !lease.active {
             return Err(MutationExecutionError::Lease);
         }
@@ -183,9 +193,14 @@ impl MutationExecutor {
         self.lease.request.repo_exclusive || !self.write_paths.is_empty()
     }
 
+    /// Release the attempt's member lease through its family (E07): a
+    /// terminal family already released everything (`Ok(true)`); an open
+    /// family releases this member alone — the attempt record stays in
+    /// flight for the dispatcher's durable settle or restart recovery.
     pub fn release(&self) -> Result<bool, MutationExecutionError> {
         self.store
-            .release_lease(
+            .release_lease_family_member(
+                &self.attempt_id,
                 &self.lease.lease_id,
                 &self.attempt_id,
                 self.lease.fencing_epoch,

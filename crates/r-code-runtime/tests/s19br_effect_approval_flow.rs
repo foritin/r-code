@@ -157,6 +157,7 @@ async fn seed_task(store: &V1Store, task_id: &str) {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     store
         .save_task_and_events(&state, vec![])
@@ -367,6 +368,7 @@ fn ready_state(task_id: &str, plan: &PlanRevision) -> TaskState {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     state.execution = TaskExecution::Ready {
         approval: PlanApprovalRef {

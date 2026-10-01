@@ -56,6 +56,7 @@ fn ready_state() -> (TaskState, PlanApprovalRef) {
         constraints: vec![],
         required_checks: vec!["check:test".into()],
         revision: 1,
+        memory: None,
     });
     state.start_attempt(&attempt("planning")).unwrap();
     let approval = approval();

@@ -1,0 +1,21 @@
+{
+  "_comment": "复制为 sandbox/project-context-acceptance/scores/scores-<group>-<arm>.json 后填写。score 取 0/1/2；notes 记一句话依据（引用事件转储或 patch 的关键证据）。",
+  "group": "a",
+  "arm": "off",
+  "scoredBy": "",
+  "scoredAt": "",
+  "scores": [
+    { "taskId": "A-1", "score": null, "notes": "" },
+    { "taskId": "A-2", "score": null, "notes": "" },
+    { "taskId": "A-3", "score": null, "notes": "" },
+    { "taskId": "A-4", "score": null, "notes": "" },
+    { "taskId": "A-5", "score": null, "notes": "" },
+    { "taskId": "A-6", "score": null, "notes": "" },
+    { "taskId": "A-7", "score": null, "notes": "" },
+    { "taskId": "A-8", "score": null, "notes": "" },
+    { "taskId": "A-9", "score": null, "notes": "" },
+    { "taskId": "A-10", "score": null, "notes": "" },
+    { "taskId": "A-11", "score": null, "notes": "" },
+    { "taskId": "A-12", "score": null, "notes": "" }
+  ]
+}

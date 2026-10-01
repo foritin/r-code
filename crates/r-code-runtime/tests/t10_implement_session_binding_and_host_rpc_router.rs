@@ -141,6 +141,7 @@ async fn full_stack_nested_callback_through_real_transport() {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     };
     let input = r_code_harness_protocol::InputMessage {
         message_id: "m1".into(),

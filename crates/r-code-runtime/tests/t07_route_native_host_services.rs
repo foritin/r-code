@@ -103,6 +103,7 @@ fn snapshot(task_id: &str, phase: RunSnapshotPhase, grants: &[HostService]) -> R
         harness_package: package(),
         tool_catalog_sha256: "sha256:tools-r7".into(),
         inference: Some(serde_json::json!({"temperature": 0})),
+        instructions: Default::default(),
     })
     .expect("snapshot")
 }
@@ -115,6 +116,7 @@ async fn save_running_task(store: &V1Store, task_id: &str, kind: TaskKind, id: &
         constraints: vec![],
         required_checks: vec!["check:test".into(), "check:lint".into()],
         revision: 1,
+        memory: None,
     });
     state
         .start_attempt(&Attempt {
@@ -254,6 +256,7 @@ fn native_manifest_grants_are_the_exact_requested_supported_intersection() {
     )
     .expect("parse native manifest");
     let availability = RouterServiceAvailability {
+        children: false,
         model_stream: true,
         tools: true,
         context: true,
@@ -331,6 +334,7 @@ async fn snapshot_router_and_initialize_share_one_exact_grant_set() {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     state.preferences.system_prompt = Some("frozen prompt".into());
     let model: Arc<dyn ModelService> = Arc::new(FakeModelService::default());

@@ -988,7 +988,7 @@ async fn the_spawn_spec_is_durable_before_the_backend_resumes() {
         .await
         .expect("admissible declaration");
     crashed.backend.fault_resume_once();
-    assert!(!crashed.open("run-1").await.is_ok());
+    assert!(crashed.open("run-1").await.is_err());
     let persisted = crashed.journal.persisted();
     assert_eq!(persisted.len(), 1);
     let supervisor = ProcessSupervisor::new(
@@ -1480,7 +1480,7 @@ async fn a_restart_is_fenced_by_epoch_and_never_launches_a_second_tree() {
 async fn a_restart_recovers_a_nonterminal_orphan_instead_of_reattaching() {
     let crashed = Harness::interactive().await;
     crashed.backend.fault_resume_once();
-    assert!(!crashed.open("run-1").await.is_ok());
+    assert!(crashed.open("run-1").await.is_err());
     let persisted = crashed.journal.persisted();
     assert_eq!(persisted.len(), 1);
     let orphan = format!("run-1:{ATTEMPT}:tree-{ATTEMPT}-{EPOCH}-1");

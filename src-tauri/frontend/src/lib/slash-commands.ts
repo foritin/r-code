@@ -91,7 +91,17 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   },
   {
     name: "context",
-    aliases: ["status"],
+    title: "查看上下文注入",
+    description:
+      "显示本次 run 注入的项目指令文件、预算占用、来源（外来/自有/全局/JIT）与记忆注入摘要；跳过/被裁剪条目带标注。",
+    category: "session",
+    kind: "local",
+    locations: ["room"],
+    requiresWorkspace: true,
+    keywords: ["指令", "注入", "AGENTS", "记忆", "预算"],
+  },
+  {
+    name: "status",
     title: "查看当前上下文",
     description: "显示会话、模型、权限、消息与运行状态。",
     category: "session",
@@ -593,7 +603,7 @@ export function workflowPrompt(command: SlashCommandDefinition, args: string): s
       instruction = `结合当前上下文解释${scope ? `“${scope}”` : "当前实现"}：说明执行链路、关键状态、边界条件、失败方式和重要设计取舍。`;
       break;
     case "init":
-      instruction = "检查当前仓库的技术栈、目录、构建与测试入口，然后创建或完善根目录 AGENTS.md。内容只写对后续编码代理真正有帮助、且能从仓库验证的约定；保留已有人工说明。";
+      instruction = "检查当前仓库的技术栈、目录、构建与测试入口，然后整理项目上下文说明。注意：根目录 AGENTS.md 等外来指令文件对 R-Code 只读；引擎化的 /init（写入 .r-code/context.md、提案制审批）上线前，请把产出放到仓库已有说明文件或手动创建 .r-code/context.md，不要改写外来文件。内容只写对后续编码代理真正有帮助、且能从仓库验证的约定；保留已有人工说明。";
       break;
     case "code-review":
       instruction = `只读审查${scope ? `以下范围：${scope}` : "当前工作区变更"}。优先查找正确性问题、回归风险、并发或状态错误、测试缺口和不可维护实现；只报告有证据的问题，按严重度排序，不要修改文件。`;

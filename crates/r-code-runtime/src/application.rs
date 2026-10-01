@@ -5,6 +5,7 @@
 //! task work flows through the same lifecycle API regardless of which
 //! harness (Native, Codex or third-party) a task pins.
 
+pub mod context_view;
 pub mod effect_approvals;
 pub mod review_flow;
 
@@ -103,6 +104,10 @@ pub struct TaskDetailView {
     pub inference: Option<serde_json::Value>,
     pub mode: Option<String>,
     pub workspace_path: Option<String>,
+    /// FR-7: the task-frozen memory handoff projection — same hash the
+    /// daemon PromptSnapshot merged, so desktop Codex delegations reuse the
+    /// frozen snapshot instead of recomputing one.
+    pub memory: Option<TaskMemoryView>,
     pub runs: Vec<TaskRunView>,
     pub usage: TaskUsageView,
 }
@@ -230,6 +235,8 @@ pub struct CreateTaskInput {
     pub title: Option<String>,
     pub kind: TaskKind,
     pub required_checks: Vec<String>,
+    /// Desktop-frozen memory snapshot (FR-7); None on ownerless paths (TUI).
+    pub memory: Option<r_code_kernel::task::FrozenMemoryHandoff>,
     pub preferences: TaskPreferences,
     pub harness_id: Option<String>,
 }
@@ -331,6 +338,15 @@ pub struct TaskUsageView {
     pub output_tokens: u64,
 }
 
+/// FR-7: frozen memory snapshot projection on task.detail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskMemoryView {
+    pub rendered: String,
+    pub snapshot_hash: String,
+    pub entry_ids: Vec<String>,
+}
+
 /// P30 wire projections (camelCase) for the RPC git reads.
 #[derive(serde::Serialize)]
 pub struct GitStatusProjection {
@@ -366,6 +382,9 @@ pub struct ActivationReadiness {
     /// preconditions hold — on this wave's honest Unsupported reports it
     /// is empty on every host, and that is the truthful result.
     pub granted_capabilities: Vec<&'static str>,
+    /// E10: in-flight execution attempts the startup pass reconciled
+    /// (resume-once plus quarantine) — published before any new dispatch.
+    pub reconciled_attempts: usize,
 }
 
 impl ActivationReadiness {
@@ -392,6 +411,7 @@ impl ActivationReadiness {
             recovered: quarantined.is_empty(),
             activation,
             granted_capabilities: granted,
+            reconciled_attempts: 0,
         })
     }
 }
@@ -488,7 +508,7 @@ impl ApplicationService {
         // the activation readiness is evaluated right after it — under the
         // exact platform report, before the service is constructed. On a
         // host whose report is not Activated the granted set is empty.
-        let readiness = ActivationReadiness::evaluate(&store, boot_identity.as_str())
+        let mut readiness = ActivationReadiness::evaluate(&store, boot_identity.as_str())
             .map_err(|error| ApplicationError::Store(format!("effect recovery: {error}")))?;
         let kernel_tasks = Arc::new(KernelTaskService::new(store.clone()));
         let catalog = Arc::new(PluginCatalog::new(profile.plugins_root(), store.clone()));
@@ -528,6 +548,15 @@ impl ApplicationService {
                 artifact_tasks_root.clone(),
             ),
         );
+        // E10: the whole chain reconciles right after effect recovery and
+        // before this service accepts any write ingress — every in-flight
+        // attempt resolves to exactly one of resume-once or quarantine,
+        // families follow their attempts, and the readiness publishes the
+        // reconciled count ahead of any new dispatch.
+        let (resume_once, quarantined_chains) = runs
+            .reconcile_in_flight_attempts()
+            .map_err(|error| ApplicationError::Store(format!("chain reconciliation: {error}")))?;
+        readiness.reconciled_attempts = resume_once + quarantined_chains;
         Ok(Self {
             store,
             kernel_tasks,
@@ -618,6 +647,47 @@ impl ApplicationService {
     /// The settings store.
     pub fn settings(&self) -> &Arc<SettingsStore> {
         &self.settings
+    }
+
+    /// FR-1 (M1a-06): stored instruction settings for a workspace root.
+    pub fn context_settings(
+        &self,
+        canonical_root: &str,
+    ) -> Option<r_code_store::v1::ContextSettingsRecord> {
+        self.store
+            .context_settings(
+                &crate::services::project_instructions::workspace_settings_key(canonical_root),
+            )
+            .ok()
+            .flatten()
+    }
+
+    /// FR-1 (M1a-06): validate and persist instruction settings for a
+    /// workspace root (the desktop settings surface calls this over RPC).
+    pub fn update_context_settings(
+        &self,
+        canonical_root: &str,
+        record: r_code_store::v1::ContextSettingsRecord,
+    ) -> Result<(), ApplicationError> {
+        let settings = crate::services::project_instructions::InstructionSettings {
+            injection_enabled: record.injection_enabled,
+            total_budget_bytes: record.total_budget_bytes as usize,
+            jit_allowance_bytes: record.jit_allowance_bytes as usize,
+            fallback_names: if record.fallback_names.is_empty() {
+                crate::services::project_instructions::InstructionSettings::default().fallback_names
+            } else {
+                record.fallback_names.clone()
+            },
+        };
+        settings.validate().map_err(|error| {
+            ApplicationError::Task(format!("invalid context settings: {error}"))
+        })?;
+        self.store
+            .save_context_settings(
+                &crate::services::project_instructions::workspace_settings_key(canonical_root),
+                &record,
+            )
+            .map_err(|error| ApplicationError::Store(error.to_string()))
     }
 
     /// The shared approval store (pending-op index over the journal).
@@ -903,6 +973,7 @@ impl ApplicationService {
             constraints: vec![],
             required_checks,
             revision: 1,
+            memory: None,
         };
         let state = self
             .kernel_tasks
@@ -1026,7 +1097,7 @@ impl ApplicationService {
             if invalidate {
                 state
                     .invalidate_plan(Actor::Host)
-                    .map_err(|error| ApplicationError::Task(error.to_string()))?;
+                    .map_err(|error| ApplicationError::Store(error.to_string()))?;
                 events.push(plan_invalidated_event(task_id, "harness-changed"));
             }
             let saved = if invalidate {
@@ -1816,6 +1887,11 @@ impl ApplicationService {
             inference: state.preferences.inference.clone(),
             mode: state.preferences.mode.clone(),
             workspace_path: state.preferences.workspace_path.clone(),
+            memory: state.contract.memory.as_ref().map(|memory| TaskMemoryView {
+                rendered: memory.rendered.clone(),
+                snapshot_hash: memory.snapshot_hash.clone(),
+                entry_ids: memory.entry_ids.clone(),
+            }),
             runs,
             usage,
         })
@@ -1850,6 +1926,7 @@ fn create_task_state(input: CreateTaskInput, preferences: TaskPreferences) -> Ta
         objective: input.objective,
         constraints: vec![],
         required_checks: input.required_checks,
+        memory: input.memory,
         revision: 1,
     };
     let mut state = TaskState::new(contract);

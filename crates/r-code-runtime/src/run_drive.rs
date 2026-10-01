@@ -89,6 +89,13 @@ impl RunManager {
     }
 
     pub(crate) async fn prepare_for_new_input(&self, task_id: &str) -> Result<(), RunError> {
+        // E10 (adjudicated placement): chain reconciliation runs ONCE at
+        // startup — after effect recovery, before this service accepts any
+        // write ingress — so every drive loop this manager spawns dispatches
+        // over already-reconciled state. Re-running it per input here would
+        // quarantine a LIVE wave's in-flight attempts (the m03 competing
+        // managers race pins exactly that), so the loop consumes the
+        // outcome instead of recomputing it.
         for _ in 0..TASK_CAS_RETRIES {
             let (mut state, revision) = self
                 .store

@@ -121,6 +121,7 @@ pub struct ManagedProcessService {
     profile_effects: Mutex<HashMap<String, String>>,
     next_handle: AtomicU64,
     binding: Option<ProcessSupervisorBinding>,
+    child_supervisor: Option<Arc<crate::child_supervisor::ChildSupervisor>>,
 }
 
 impl ManagedProcessService {
@@ -170,7 +171,30 @@ impl ManagedProcessService {
             profile_effects: Mutex::new(HashMap::new()),
             next_handle: AtomicU64::new(1),
             binding,
+            child_supervisor: None,
         }
+    }
+
+    /// Attach the ChildSupervisor registry (E08): every profiled run's tree
+    /// registers at its birth seam inside `open_profiled` and settles in
+    /// `close_confirmed`.
+    pub fn with_child_supervisor(
+        mut self,
+        supervisor: Arc<crate::child_supervisor::ChildSupervisor>,
+    ) -> Self {
+        self.child_supervisor = Some(supervisor);
+        self
+    }
+
+    /// The supervised tree id an `open_profiled` operation token names
+    /// (E08): the token stays opaque, the tree id is surfaced alongside it
+    /// for registration rather than parsed out of the handle.
+    pub async fn tree_of(&self, handle: &str) -> Option<String> {
+        self.processes
+            .lock()
+            .await
+            .get(handle)
+            .map(|process| process.tree_id.clone())
     }
 
     /// Register the executable a profile name resolves to (host-resolved,
@@ -329,6 +353,19 @@ impl ManagedProcessService {
         }
         let tree_id = record.tree_id.clone();
         let handle = format!("{}:{}:{}", token.run_id, binding.attempt_id, tree_id);
+        // E08 birth seam: the profiled run's tree registers under its owning
+        // attempt the moment its record lands, so the registry's sweep owns
+        // it even if the opening run never closes it explicitly.
+        if let Some(supervisor) = &self.child_supervisor {
+            let _ = supervisor.register(
+                &binding.attempt_id,
+                Arc::new(crate::child_supervisor::ProfiledTreeChild::new(
+                    tree_id.clone(),
+                    binding.backend.clone(),
+                    run.tree().clone(),
+                )),
+            );
+        }
         self.processes.lock().await.insert(
             handle.clone(),
             ManagedProcess {
@@ -522,6 +559,11 @@ impl ManagedProcessService {
                 next.proof = Some(proof);
             },
         )?;
+        // E08: the tree settled with its own accepted proof — deregister it
+        // from the ChildSupervisor so the sweep never waits on a dead tree.
+        if let Some(supervisor) = &self.child_supervisor {
+            let _ = supervisor.settle(&process.attempt_id, &process.tree_id);
+        }
         Ok(exit)
     }
 

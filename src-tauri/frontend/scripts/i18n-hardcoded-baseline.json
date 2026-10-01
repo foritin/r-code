@@ -107,6 +107,10 @@
     "count": 132,
     "sha256": "5a77287214f214d3234802f0105452ba8d9caab9f4aa449e1950ba136551759d"
   },
+  "src/components/room/ContextPanel.tsx": {
+    "count": 19,
+    "sha256": "28496532664a9edb3df2ecfb03f40bbfd4adcb3cef85a5e4ee2deac7a5848968"
+  },
   "src/components/room/EnhancedReviewPanel.tsx": {
     "count": 119,
     "sha256": "c3a93ff6efe9277f1d8ffc8a3a24940197720c4f08e7d8c866208f8a08ad35e0"
@@ -124,8 +128,8 @@
     "sha256": "bcd43e68f02489cfda2e18b17c7881f9a98aa750d6bd24a55f70305d9131d4ce"
   },
   "src/components/room/Permissions.tsx": {
-    "count": 5,
-    "sha256": "c1c49012b89c2d96a796794cb5c68e42863d43023e81d2b4d41b6e147445921d"
+    "count": 8,
+    "sha256": "69bc559e40dee9b6b0acfba9c43702fd2c78e189be98f4bf6b7b9e8603f8f0ab"
   },
   "src/components/room/PlanEntryDialog.tsx": {
     "count": 10,
@@ -152,8 +156,8 @@
     "sha256": "347ca859e4dcdc9f5a634474f9c51139648600c5bce569f1f7587a24936c669f"
   },
   "src/components/room/Timeline.tsx": {
-    "count": 105,
-    "sha256": "1eab3f9a4504b5965118bf7bc049276860223f39f969e5a42433788e0e40bde8"
+    "count": 109,
+    "sha256": "213719da834289422a8440f67b58146f1648b3d2356d8652d282479cc7894566"
   },
   "src/components/room/TimelineActivity.tsx": {
     "count": 38,
@@ -224,16 +228,16 @@
     "sha256": "4203729cd9351e58468445a7c7b2b660b0ce3d13f67e0792ff6846f2c29da074"
   },
   "src/components/scenes/SettingsScene.tsx": {
-    "count": 521,
-    "sha256": "b608c41ae0fe47de510b547c90eb83e64fa9dcd34eb7e97b68c42606f01eed7f"
+    "count": 534,
+    "sha256": "1d28370069db03fd1d88c94c5289e1136c0274dd9f74807f6f0e4e5d819bb2f9"
   },
   "src/components/scenes/SubagentProvidersPanel.tsx": {
     "count": 94,
     "sha256": "3ccd937affa762e9db99d203a7fdcea866a768f0cfff24fb53b0537a007bad19"
   },
   "src/components/settings/GuideSheet.tsx": {
-    "count": 64,
-    "sha256": "a8a0989cb7fc2897397fa1c6b1c2e1051389d6893e85190149ff50747f436066"
+    "count": 62,
+    "sha256": "df40e13c99afe9199568488fe49fe1189384f675676b01ffd9eca6bae286956f"
   },
   "src/components/settings/NativeNotificationSettings.tsx": {
     "count": 7,

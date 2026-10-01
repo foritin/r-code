@@ -15604,6 +15604,17 @@ risks or unresolved questions. Omit tool-call chronology and do not say the repo
     )
 }
 
+/// FR-7.3: real memory context for Codex delegations. The desktop owns
+/// the memory DB, so the delegation site renders the snapshot for the
+/// task workspace directly; off/unavailable yields None and the delegation
+/// proceeds without a memory block (fail-open).
+fn codex_delegation_memory_context(state: &CommandState, workspace_path: &str) -> Option<String> {
+    MemoryStore::new(&state.db)
+        .load_snapshot(Some(workspace_path))
+        .ok()?
+        .rendered_prompt()
+}
+
 fn build_codex_delegation_prompt(
     goal: &str,
     permissions: CodexDelegationPermissions,
@@ -19408,7 +19419,7 @@ pub async fn agent_delegate_codex(
             &goal,
             permissions,
             &subagent_prompt,
-            None,
+            codex_delegation_memory_context(state, workspace_path).as_deref(),
             crate::rtk::RtkManager::from_config_dir(state.config_dir.clone()).command_hint(),
         ),
         cli.path,
@@ -19590,7 +19601,7 @@ pub async fn agent_delegate_codex_mcp(
             &goal,
             permissions,
             &subagent_prompt,
-            None,
+            codex_delegation_memory_context(state, workspace_path).as_deref(),
             crate::rtk::RtkManager::from_config_dir(state.config_dir.clone()).command_hint(),
         ),
         cli.path,

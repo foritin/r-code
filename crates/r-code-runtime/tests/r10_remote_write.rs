@@ -152,6 +152,7 @@ async fn fixture(tag: &str) -> Fixture {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     store
         .save_task_and_events(&seed, vec![])

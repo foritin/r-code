@@ -1610,6 +1610,28 @@ export interface HarnessApprovalDecision {
   approval?: EffectApprovalView;
 }
 
+/**
+ * E09-C：不可变 unverified-override 审计行的 canonical camelCase 投影
+ * （逐字段等于 store 记录）。四端（桌面、TUI、MCP、远端）同一份材料。
+ */
+export interface UnverifiedOverrideView {
+  overrideId: string;
+  taskId: string;
+  candidateDigest: string;
+  actorId: string;
+  sessionId: string;
+  reason: string;
+  checks: string[];
+  createdAtMs: number;
+}
+
+/** `review.overrides.list`：审计表是唯一查询源，journal 行是派生投影。 */
+export const harnessV1OverridesList = (taskId?: string) =>
+  ipc<UnverifiedOverrideView[]>(
+    "cmd_harness_v1_overrides_list",
+    taskId === undefined ? {} : { taskId },
+  );
+
 export const harnessV1Ping = () => ipc<boolean>("cmd_harness_v1_ping");
 export const harnessV1PluginsList = () =>
   ipc<HarnessPluginEntry[]>("cmd_harness_v1_plugins_list");
@@ -1706,3 +1728,33 @@ export function harnessAvailabilityKey(
   if (reason && reason.startsWith("MissingEntrypoint")) return "harness.missingEntrypoint";
   return "harness.unavailable";
 }
+
+/** FR-1 (M1a-08)：/context 面板数据——最近一次 run 的注入状态。 */
+export interface ContextInstructionEntryView {
+  layer: "global" | "repo-foreign" | "repo-own" | "subdir" | string;
+  path: string;
+  sha256: string;
+  bytes: number;
+  status: string;
+}
+
+export interface ContextCurrentView {
+  taskId: string;
+  runId: string | null;
+  injectionEnabled: boolean;
+  memory: { snapshotHash: string; entryCount: number; chars: number } | null;
+  instructions: ContextInstructionEntryView[];
+  instructionsDigest: string;
+  instructionsBytes: number;
+  totalBudgetBytes: number;
+  jitAllowanceBytes: number;
+  jitBatches: { applied: number; bytes: number; paths: string[] }[];
+}
+
+export const contextCurrent = async (taskId: string) =>
+  ipc<ContextCurrentView>("cmd_context_current", { taskId });
+
+export const contextSettingsUpdate = async (
+  workspacePath: string,
+  injectionEnabled: boolean,
+) => ipc<{ ok: boolean }>("cmd_context_settings_update", { workspacePath, injectionEnabled });

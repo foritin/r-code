@@ -304,7 +304,7 @@ fn chat_bridge_maps_r_code_and_codex_to_their_owned_routes() {
         .expect("runtime");
     runtime.block_on(async {
         bridge
-            .task_create("bootstrap", "start daemon", "ask", None, "prompt")
+            .task_create("bootstrap", "start daemon", "ask", None, "prompt", None)
             .await
             .expect("bootstrap task");
         let mut client = raw_client(&profile).await;
@@ -340,6 +340,7 @@ fn chat_bridge_maps_r_code_and_codex_to_their_owned_routes() {
                 Some("r_code"),
                 Some("deepseek-concrete"),
                 Some(&agent_contract::InferenceOptions::default()),
+                None,
             )
             .await
             .expect("create R-Code route");
@@ -364,6 +365,7 @@ fn chat_bridge_maps_r_code_and_codex_to_their_owned_routes() {
                 None,
                 Some("codex"),
                 Some("gpt-codex"),
+                None,
                 None,
             )
             .await
@@ -410,7 +412,7 @@ fn desktop_p_gate_projects_approves_and_replays_the_exact_daemon_plan() {
     let (task_id, final_revision_hash, final_items) = runtime.block_on(async {
         let (origin, provider) = spawn_plan_provider(2).await;
         bridge
-            .task_create("bootstrap", "start daemon", "ask", None, "prompt")
+            .task_create("bootstrap", "start daemon", "ask", None, "prompt", None)
             .await
             .expect("bootstrap task");
         let mut client = raw_client(&profile).await;
@@ -439,6 +441,7 @@ fn desktop_p_gate_projects_approves_and_replays_the_exact_daemon_plan() {
                 Some("deepseek"),
                 Some("r_code"),
                 Some("deepseek-chat"),
+                None,
                 None,
             )
             .await
@@ -526,7 +529,7 @@ fn desktop_p_gate_projects_approves_and_replays_the_exact_daemon_plan() {
             .to_string()
             .contains("stale plan identity"));
         let other = bridge
-            .task_create("Other task", "Other task", "plan", None, "prompt")
+            .task_create("Other task", "Other task", "plan", None, "prompt", None)
             .await
             .expect("other task");
         assert!(bridge
@@ -687,6 +690,7 @@ fn chat_projection_end_to_end_against_real_daemon() {
                 "ask",
                 None,
                 "test system prompt",
+                None,
             )
             .await
             .expect("task_create");

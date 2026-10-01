@@ -58,6 +58,7 @@ async fn fixture(tag: &str) -> (RemoteEndpoint, std::net::SocketAddr) {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     });
     store
         .save_task_and_events(&task, vec![])

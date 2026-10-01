@@ -324,6 +324,23 @@ pub struct CatalogSnapshot {
     pub mcp_servers: Vec<String>,
 }
 
+impl CatalogSnapshot {
+    /// FR-1 (5.3.1): fill the reserved instructions catalog from a frozen
+    /// instruction set — injected file paths, audit view.
+    pub fn from_instructions(set: &r_code_kernel::task::InstructionSetRef) -> Self {
+        Self {
+            instructions: set
+                .entries
+                .iter()
+                .filter(|entry| entry.status == "injected")
+                .map(|entry| entry.path.clone())
+                .collect(),
+            skills: Vec::new(),
+            mcp_servers: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

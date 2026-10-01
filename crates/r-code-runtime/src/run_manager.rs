@@ -105,6 +105,9 @@ pub struct RunManager {
     context_registry: ContextRegistry,
     transcripts: Mutex<HashMap<String, Arc<TranscriptWriter>>>,
     pub(crate) slots: Mutex<HashMap<String, Arc<Mutex<RunSlot>>>>,
+    /// E08: the one registry owning every in-flight supervised tree; task
+    /// cancel sweeps it with per-tree proofs.
+    pub(crate) child_supervisor: Arc<crate::child_supervisor::ChildSupervisor>,
 }
 
 impl RunManager {
@@ -202,6 +205,7 @@ impl RunManager {
             context_registry: ContextRegistry::new(),
             transcripts: Mutex::new(HashMap::new()),
             slots: Mutex::new(HashMap::new()),
+            child_supervisor: crate::child_supervisor::ChildSupervisor::new(),
         })
     }
 
@@ -564,7 +568,11 @@ impl RunManager {
     }
 
     /// Execute exactly one run for one input.
-    pub(crate) async fn run_one(&self, task_id: &str, input: &InputMessage) -> Result<(), String> {
+    pub(crate) async fn run_one(
+        self: &Arc<Self>,
+        task_id: &str,
+        input: &InputMessage,
+    ) -> Result<(), String> {
         self.prepare_for_new_input(task_id)
             .await
             .map_err(|error| error.to_string())?;
@@ -684,6 +692,9 @@ impl RunManager {
                 approvals: true,
                 checkpoints: true,
                 completion: true,
+                // FR-8 (M1a-10): children.* live for the parent run; child
+                // tasks themselves are denied structurally (no controls).
+                children: !task_id.contains("-child-"),
                 sandbox_activated,
             },
         );
@@ -695,9 +706,6 @@ impl RunManager {
                     | r_code_harness_protocol::HostService::ProcessWrite
                     | r_code_harness_protocol::HostService::ProcessClose
                     | r_code_harness_protocol::HostService::PlanUpdate
-                    | r_code_harness_protocol::HostService::ChildrenSpawn
-                    | r_code_harness_protocol::HostService::ChildrenWait
-                    | r_code_harness_protocol::HostService::ChildrenCancel
                     | r_code_harness_protocol::HostService::VerificationRun
             )) || sandbox_activated
         );
@@ -712,21 +720,70 @@ impl RunManager {
                 .map_err(|error| format!("无法读取开发工具目录：{error}"))?;
         }
         let workspace = resolve_workspace_snapshot(&state)?;
-        let run_tools: Arc<dyn r_code_kernel::ports::ToolService> = Arc::new(
-            PlanningToolService::from_workspace(&workspace)
-                .map_err(|error| format!("无法构造只读规划工具：{error}"))?,
+        let instruction_settings = crate::services::project_instructions::resolve_settings(
+            self.store.as_ref(),
+            &workspace.canonical_root,
         );
+        // FR-8 (M1a-10): per-run children executor. Child tasks (id pattern
+        // "{parent}-child-N") never get controls — nesting closes here.
+        let child_controls = if task_id.contains("-child-") {
+            None
+        } else {
+            Some(self.start_children_executor(
+                task_id,
+                state.contract.memory.clone(),
+                state.preferences.workspace_path.clone(),
+                r_code_harness_protocol::services::PermissionCeiling::Full,
+            ))
+        };
+        // Child runs audit as subagent:<protocol-id> so the gateway's
+        // subagent gate + allowlist apply (FR-8 acceptance b).
+        let tool_caller = task_id
+            .rsplit_once("-child-")
+            .map(|(_, suffix)| format!("subagent:child-{suffix}"))
+            .unwrap_or_else(|| "harness-plugin".to_string());
+        // FR-1.5 (M1a-07): the shared JIT tracker — read tools report hit
+        // directories, the model-stream projection drains instruction
+        // blocks (model-visible only; unbound runs never report hits).
+        let jit_tracker = Arc::new(std::sync::Mutex::new(
+            crate::services::project_instructions::JitTracker::new(
+                std::path::PathBuf::from(&workspace.canonical_root),
+                instruction_settings.clone(),
+            ),
+        ));
+        let planning_service = PlanningToolService::from_workspace(&workspace)
+            .map_err(|error| format!("无法构造只读规划工具：{error}"))?
+            .with_jit_tracker(jit_tracker.clone())
+            .with_caller(tool_caller);
+        let planning_service = match &child_controls {
+            Some(controls) => planning_service.with_child_controls(Arc::clone(controls)),
+            None => planning_service,
+        };
+        let run_tools: Arc<dyn r_code_kernel::ports::ToolService> = Arc::new(planning_service);
         let frozen = RunSnapshotBuilder::new(
             &self.settings,
             &self.injected_models,
             &run_tools,
             self.allow_injected_model_fallback,
         )
+        .with_instruction_settings(instruction_settings)
+        .with_global_instructions_path(
+            crate::services::project_instructions::global_context_md_path(),
+        )
         .freeze_with_workspace(&state, &package, &grants, guard.as_ref(), workspace)
         .await?;
+        if let Ok(mut tracker) = jit_tracker.lock() {
+            tracker.seed_from_frozen(&frozen.snapshot.material().instructions);
+        }
         self.store
             .save_run_snapshot(&frozen.snapshot)
             .map_err(|error| format!("保存运行快照失败：{error}"))?;
+        crate::services::run_snapshots::record_run_injections(
+            self.store.as_ref(),
+            &run_id,
+            &state,
+            &frozen.snapshot.material().instructions,
+        );
         let snapshot_suffix = frozen
             .snapshot
             .id()
@@ -765,21 +822,38 @@ impl RunManager {
             .await?;
 
         state.start_attempt(&attempt).map_err(|e| e.to_string())?;
-        state = save_run_state(
-            &self.store,
-            &state,
-            vec![journal_event(
+        let mut started_events = vec![journal_event(
+            task_id,
+            "run.started",
+            serde_json::json!({
+                "runId": identity.run_id,
+                "attemptId": identity.attempt_id,
+                "harness": package.id.0,
+                "packageDigest": package.content_digest,
+                "snapshotId": frozen.snapshot.id().as_str(),
+            }),
+        )];
+        // FR-1.7: one low-noise session note — injected N project
+        // instructions for this run (skipped/trimmed facts live in /context).
+        let instructions = &frozen.snapshot.material().instructions;
+        if !instructions.is_empty() {
+            let injected = instructions
+                .entries
+                .iter()
+                .filter(|entry| entry.status == "injected")
+                .count();
+            started_events.push(journal_event(
                 task_id,
-                "run.started",
+                "context.instructions",
                 serde_json::json!({
                     "runId": identity.run_id,
-                    "attemptId": identity.attempt_id,
-                    "harness": package.id.0,
-                    "packageDigest": package.content_digest,
-                    "snapshotId": frozen.snapshot.id().as_str(),
+                    "injected": injected,
+                    "bytes": instructions.rendered.len(),
+                    "digest": instructions.digest,
                 }),
-            )],
-        )?;
+            ));
+        }
+        state = save_run_state(&self.store, &state, started_events)?;
         let slot = self.slot_of(task_id).await;
         {
             let mut slot_guard = slot.lock().await;
@@ -810,6 +884,8 @@ impl RunManager {
             .with_transcript(transcript.clone())
             .with_artifacts(artifacts)
             .with_v1_store(self.store.clone())
+            .with_jit_tracker(jit_tracker)
+            .with_children_controls(child_controls)
             .with_plan_publication(
                 frozen.snapshot.clone(),
                 state.contract.kind,
@@ -1246,6 +1322,13 @@ impl RunManager {
 
     // -- cancel ------------------------------------------------------------
 
+    /// E08: sweep every registered supervised tree with per-tree proofs —
+    /// the shutdown path's cancel-and-prove-all. Proven trees deregister;
+    /// unprovable ones stay registered and are reported, never assumed dead.
+    pub async fn sweep_supervised_children(&self) -> crate::child_supervisor::SupervisorSweep {
+        self.child_supervisor.cancel_and_prove_all().await
+    }
+
     /// Cancel the active run of a task (no-op when idle).
     pub async fn cancel(&self, task_id: &str) -> Result<bool, RunError> {
         let task = self
@@ -1284,6 +1367,12 @@ impl RunManager {
             return Ok(false);
         };
         guard.revoke();
+        // E08: task cancel routes through cancel-and-prove-all — every
+        // registered supervised tree is swept with its OWN death proof. An
+        // unprovable tree keeps the set unswept, exactly like the slot's own
+        // unconfirmed process below: the cancelled settle never lands over
+        // an unproven child (INV-08).
+        let sweep = self.child_supervisor.cancel_and_prove_all().await;
         let terminated = if let Some(process) = process {
             // A busy Harness can be waiting on a host model callback and be
             // unable to service its own graceful cancel RPC. Revocation is
@@ -1297,6 +1386,7 @@ impl RunManager {
         } else {
             false
         };
+        let terminated = terminated && sweep.all_dead();
         if terminated && task.contract.kind == TaskKind::Conversation {
             let drive = {
                 let mut slot_guard = slot.lock().await;

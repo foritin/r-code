@@ -211,6 +211,7 @@ async fn native_binary_edits_a_real_fixture_through_public_host_apis() {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     };
     let input = r_code_harness_protocol::InputMessage {
         message_id: "m1".into(),

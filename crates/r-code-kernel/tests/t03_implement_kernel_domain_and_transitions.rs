@@ -15,6 +15,7 @@ fn contract(kind: TaskKind) -> TaskContract {
         constraints: vec![],
         required_checks: vec!["check:cargo-test".into()],
         revision: 4,
+        memory: None,
     }
 }
 
@@ -76,6 +77,7 @@ fn snapshot_material(phase: RunSnapshotPhase) -> RunSnapshotMaterial {
         },
         tool_catalog_sha256: "sha256:tools".into(),
         inference: Some(serde_json::json!({"temperature": 0, "max_tokens": 4096})),
+        instructions: Default::default(),
     }
 }
 

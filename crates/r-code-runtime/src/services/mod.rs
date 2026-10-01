@@ -4,6 +4,7 @@
 
 pub mod artifacts;
 pub mod authorization;
+pub mod children_executor;
 pub mod codex_cli;
 pub mod context;
 pub mod execution;
@@ -16,6 +17,7 @@ pub mod process_effects;
 pub mod process_profiles;
 pub mod process_supervisor;
 pub mod processes;
+pub mod project_instructions;
 pub mod provider_catalog;
 pub mod provider_support;
 pub mod review;

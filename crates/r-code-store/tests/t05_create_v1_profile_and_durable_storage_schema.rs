@@ -20,6 +20,7 @@ fn task_state(task_id: &str, revision: u64) -> TaskState {
         constraints: vec![],
         required_checks: vec![],
         revision,
+        memory: None,
     })
 }
 
@@ -72,6 +73,7 @@ fn planning_snapshot() -> RunSnapshot {
         },
         tool_catalog_sha256: "sha256:tools".into(),
         inference: Some(serde_json::json!({"temperature": 0})),
+        instructions: Default::default(),
     })
     .expect("snapshot")
 }

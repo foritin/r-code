@@ -26,6 +26,7 @@ async fn review_override_rpc_uses_authenticated_client_not_caller_actor_field() 
         constraints: vec![],
         required_checks: vec!["check:required".into()],
         revision: 1,
+        memory: None,
     });
     state.work_units = vec![WorkUnit {
         id: "unit-1".into(),

@@ -28,9 +28,23 @@ const locales = JSON.parse(
 function extract(block) {
   const from = source.indexOf(block);
   assert.notEqual(from, -1, `missing ${block} in Permissions.tsx`);
-  const to = source.indexOf("\n// ---", from);
-  assert.notEqual(to, -1, `unterminated ${block} block`);
-  return source.slice(from, to);
+  // Section banners come in pairs (banner + underline). Interleaved
+  // sections (the E09-C override renderer sits between effect blocks)
+  // must not truncate the extraction: end at the second banner line.
+  const banner = "\n// ----";
+  let cursor = source.indexOf(banner, from);
+  let seen = 0;
+  let end = -1;
+  while (cursor !== -1) {
+    seen += 1;
+    if (seen === 2) {
+      end = cursor;
+      break;
+    }
+    cursor = source.indexOf(banner, cursor + banner.length);
+  }
+  assert.notEqual(end, -1, `unterminated ${block} block`);
+  return source.slice(from, end);
 }
 
 async function loadRenderer() {

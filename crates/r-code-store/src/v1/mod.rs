@@ -4,6 +4,8 @@
 
 pub mod application_commands;
 pub mod attempts;
+pub mod context_settings;
+pub mod injections;
 pub mod journal;
 pub mod mutations;
 pub mod operations;
@@ -11,6 +13,7 @@ pub mod plans;
 pub mod plugins;
 pub mod process_effects;
 pub mod questions;
+pub mod reviews;
 pub mod runs;
 pub mod safety;
 pub mod schema;
@@ -21,6 +24,8 @@ pub use application_commands::CommandReceiptState;
 pub use attempts::{
     WorkUnitAttemptError, WorkUnitAttemptPhase, WorkUnitAttemptRecord, WorkUnitAttemptSeed,
 };
+pub use context_settings::ContextSettingsRecord;
+pub use injections::{InjectionKind, InjectionRecord, InjectionRecordView};
 pub use journal::{LeaseAcquisition, V1Store, V1StoreError};
 pub use mutations::{
     LeaseGrant, LeaseMode, LeaseRequest, MutationError, MutationFile, MutationOperation,
@@ -30,6 +35,9 @@ pub use plugins::{PluginCatalogRecord, PluginPinRecord};
 pub use process_effects::{
     EffectArtifactRef, ProcessEffectError, ProcessEffectPrepare, ProcessEffectRecord,
     ProcessEffectState,
+};
+pub use reviews::{
+    OverrideCommitError, UnverifiedOverrideError, UnverifiedOverrideRecord, UnverifiedOverrideSeed,
 };
 pub use safety::{SafetyReportRecord, SafetyReportStatus};
 pub use tasks::{rebuild_queue, TaskBranch};

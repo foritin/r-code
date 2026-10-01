@@ -98,7 +98,17 @@ async fn owner_identity_uses_start_time_not_bare_pids() {
     guard.terminate();
     let _ = child.wait().await;
     drop(guard);
-    assert!(!is_process_alive(pid));
+    // Process-object teardown is not instantaneous on every Windows build
+    // (a terminated pid stays openable until the last reference drops), so
+    // poll within the same 5s settle cap the termination proof below uses.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while is_process_alive(pid) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        !is_process_alive(pid),
+        "pid {pid} still openable past the settle cap"
+    );
     assert!(confirm_termination(&[pid], Duration::from_secs(5))
         .await
         .into_proof());

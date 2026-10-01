@@ -22,6 +22,8 @@ export interface AggregationState {
   effectApprovals: EffectApprovalView[];
   /** P19B-C：本任务仍可决策的 effect 待决请求。 */
   effectPending: EffectApprovalPending[];
+  /** E09-C：不可变 unverified-override 审计行（canonical 投影）。 */
+  unverifiedOverrides: UnverifiedOverrideRow[];
 }
 
 export const emptyAggregation: AggregationState = {
@@ -29,6 +31,7 @@ export const emptyAggregation: AggregationState = {
   lastSeq: 0,
   effectApprovals: [],
   effectPending: [],
+  unverifiedOverrides: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -144,6 +147,75 @@ function projectPending(value: unknown): EffectApprovalPending | null {
   const material = projectMaterial(row);
   if (!material || typeof row.operationId !== "string") return null;
   return { ...material, operationId: row.operationId };
+}
+
+// ---------------------------------------------------------------------------
+// E09-C unverified-override 审计投影（与桌面/TUI/MCP 同一 canonical 键序）
+// ---------------------------------------------------------------------------
+
+/** 审计行的 canonical 键序——四端一致，与桌面 `OVERRIDE_MATERIAL_FIELDS` 逐字对齐。 */
+export const OVERRIDE_MATERIAL_FIELDS = [
+  "overrideId",
+  "taskId",
+  "candidateDigest",
+  "actorId",
+  "sessionId",
+  "reason",
+] as const;
+
+export type OverrideMaterialKey = (typeof OVERRIDE_MATERIAL_FIELDS)[number];
+
+export type OverrideMaterial = Record<OverrideMaterialKey, string>;
+
+/** 一条不可变审计行 = 六列身份材料 + 精确失败检查 + 落库时刻。 */
+export type UnverifiedOverrideRow = OverrideMaterial & {
+  checks: string[];
+  createdAtMs: number;
+};
+
+/**
+ * `review.overrides.list` 响应 → 投影。坏行一律丢弃（缺任何 canonical 键
+ * 即不是权威行），绝不补默认值伪造出看似有效的审计——失败关闭（E09-C）。
+ */
+export function projectUnverifiedOverrides(
+  state: AggregationState,
+  answer: unknown,
+): AggregationState {
+  const rows = Array.isArray(answer) ? answer : [];
+  const next = rows
+    .map(projectOverrideRow)
+    .filter((row): row is UnverifiedOverrideRow => row !== null);
+  return { ...state, unverifiedOverrides: next };
+}
+
+/** 一条审计行的展示行 = 六列材料 + 精确失败检查 + 落库时刻（与桌面同序）。 */
+export function overrideAuthorityRows(
+  row: UnverifiedOverrideRow,
+): Array<{ key: string; value: string }> {
+  return [
+    ...OVERRIDE_MATERIAL_FIELDS.map((key) => ({ key, value: row[key] })),
+    { key: "checks", value: row.checks.join(", ") },
+    { key: "createdAtMs", value: String(row.createdAtMs) },
+  ];
+}
+
+function projectOverrideRow(value: unknown): UnverifiedOverrideRow | null {
+  if (typeof value !== "object" || value === null) return null;
+  const row = value as Record<string, unknown>;
+  const material = {} as OverrideMaterial;
+  for (const key of OVERRIDE_MATERIAL_FIELDS) {
+    const cell = row[key];
+    if (typeof cell !== "string" || cell === "") return null;
+    material[key] = cell;
+  }
+  if (!Array.isArray(row.checks) || row.checks.length === 0) return null;
+  if (row.checks.some((check) => typeof check !== "string")) return null;
+  if (typeof row.createdAtMs !== "number") return null;
+  return {
+    ...material,
+    checks: row.checks as string[],
+    createdAtMs: row.createdAtMs,
+  };
 }
 
 

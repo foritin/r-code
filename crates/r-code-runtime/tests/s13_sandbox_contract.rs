@@ -777,6 +777,7 @@ async fn router_gate_hides_effect_services_until_activated_and_denies_guessed_op
     ];
 
     let closed = RouterServiceAvailability {
+        children: false,
         tools: true,
         ..Default::default()
     };
@@ -784,6 +785,7 @@ async fn router_gate_hides_effect_services_until_activated_and_denies_guessed_op
     assert_eq!(grants, vec![HostService::ToolsList]);
 
     let opened = RouterServiceAvailability {
+        children: false,
         tools: true,
         sandbox_activated: true,
         ..Default::default()

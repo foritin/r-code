@@ -122,6 +122,7 @@ mod tests {
             constraints: vec![],
             required_checks: vec![],
             revision: 1,
+            memory: None,
         });
         let messages: Vec<r_code_harness_protocol::InputMessage> = (1..=3)
             .map(|seq| r_code_harness_protocol::InputMessage {

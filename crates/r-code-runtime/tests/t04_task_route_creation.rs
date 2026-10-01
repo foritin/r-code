@@ -496,6 +496,7 @@ fn task_state(task_id: &str) -> TaskState {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     })
 }
 
@@ -594,6 +595,7 @@ async fn idle_harness_change_replaces_selection_pin_and_active_rejection_preserv
             title: None,
             kind: TaskKind::Conversation,
             required_checks: vec![],
+            memory: None,
             preferences: TaskPreferences::default(),
             harness_id: Some("native.r-code".into()),
         })

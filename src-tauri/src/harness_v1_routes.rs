@@ -13,6 +13,33 @@ use serde_json::{json, Value};
 
 use crate::harness_v1_chat::{project_task, ChatV1Bridge};
 
+/// FR-7: freeze the desktop-owned memory snapshot once, at task creation.
+/// Fail-open by design: any error, disabled feature, or missing snapshot
+/// yields no payload — memory must never block task creation.
+pub fn frozen_memory_payload(
+    db: &r_code_store::Database,
+    workspace_path: Option<&str>,
+) -> Option<Value> {
+    let loaded = r_code_store::MemoryStore::new(db)
+        .load_snapshot(workspace_path)
+        .ok()?;
+    let r_code_core::MemorySnapshotLoadOutcome::Ready { snapshot } = loaded.outcome else {
+        return None;
+    };
+    let rendered = r_code_store::render_snapshot(&snapshot)?;
+    let entry_ids: Vec<String> = snapshot
+        .global_entries
+        .iter()
+        .chain(&snapshot.project_entries)
+        .map(|entry| entry.entry_id.clone())
+        .collect();
+    Some(json!({
+        "rendered": rendered,
+        "entryIds": entry_ids,
+        "snapshotHash": snapshot.snapshot_hash,
+    }))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DaemonPlanView {
@@ -63,6 +90,7 @@ impl ChatV1Bridge {
         mode: &str,
         workspace_path: Option<&str>,
         system_prompt: &str,
+        memory: Option<Value>,
     ) -> Result<Task, crate::harness_v1::HarnessV1Error> {
         self.task_create_with_route(
             title,
@@ -74,6 +102,7 @@ impl ChatV1Bridge {
             None,
             None,
             None,
+            memory.as_ref(),
         )
         .await
     }
@@ -91,6 +120,7 @@ impl ChatV1Bridge {
         agent_engine: Option<&str>,
         model: Option<&str>,
         inference: Option<&InferenceOptions>,
+        memory: Option<&Value>,
     ) -> Result<Task, crate::harness_v1::HarnessV1Error> {
         let mode = TaskMode::try_from_str(mode.trim()).ok_or_else(|| {
             crate::harness_v1::HarnessV1Error::Command(format!("invalid task mode: {mode}"))
@@ -116,6 +146,9 @@ impl ChatV1Bridge {
             "systemPrompt": system_prompt,
             "inference": inference,
         });
+        if let Some(memory) = memory {
+            params["memory"] = memory.clone();
+        }
         if let Some(engine) = engine {
             let (harness_id, model_route) = match engine {
                 AgentEngine::RCode => (

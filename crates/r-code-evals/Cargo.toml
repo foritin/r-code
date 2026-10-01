@@ -14,6 +14,7 @@ r-code-gateway = { path = "../r-code-gateway" }
 r-code-kernel = { path = "../r-code-kernel" }
 r-code-runtime = { path = "../r-code-runtime" }
 r-code-harness-protocol = { path = "../r-code-harness-protocol" }
+r-code-client = { path = "../r-code-client" }
 agent-contract = { path = "../../vendor/agent-contracts/crates/agent-contract" }
 
 tokio = { workspace = true }

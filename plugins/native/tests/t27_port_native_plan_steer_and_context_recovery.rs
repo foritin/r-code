@@ -167,6 +167,7 @@ fn contract() -> r_code_kernel::task::TaskContract {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     }
 }
 

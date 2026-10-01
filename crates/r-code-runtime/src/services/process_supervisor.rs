@@ -1048,6 +1048,12 @@ impl SupervisedRun {
     pub fn record(&self) -> &SupervisorRecord {
         &self.record
     }
+
+    /// The durable tree id this run's record carries — the identity the
+    /// ChildSupervisor registers the run under (E08).
+    pub fn tree_id(&self) -> &str {
+        &self.record.tree_id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

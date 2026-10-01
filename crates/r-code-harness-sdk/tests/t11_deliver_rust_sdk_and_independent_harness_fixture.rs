@@ -157,6 +157,7 @@ async fn third_party_fixture_installs_and_runs_through_public_paths() {
         constraints: vec![],
         required_checks: vec![],
         revision: 1,
+        memory: None,
     };
     let input = r_code_harness_protocol::InputMessage {
         message_id: "m1".into(),

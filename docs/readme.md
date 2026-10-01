@@ -6,6 +6,10 @@
 
 | 文档 | 用途 |
 | --- | --- |
+| [大型项目上下文服务调研](./research/large-project-context-strategies.md) | 2026-09 调研：AGENTS.md 生态、检索范式之争、上下文工程与 R-Code 落地建议 |
+| [巨仓/多人增补调研](./research/team-scale-context-strategies.md) | 2026-09 增补：社区方案、团队治理、monorepo 实践 |
+| [压缩与子代理调研](./research/compaction-and-subagent-best-practices.md) | 2026-09 增补：上下文压缩分层方案与子代理协作共识（R1–R3 蓝图） |
+| [项目上下文引擎 PRD](./prd/project-context/prd.md) | `ready-for-review`：AGENTS.md 读取引擎、`/init` 引擎化、压缩引擎（R1）、记忆/子代理接线（R2/R3）、ast-grep 不变量与多人协作层；依据[大型项目调研](./research/large-project-context-strategies.md)、[巨仓/多人增补调研](./research/team-scale-context-strategies.md)、[压缩与子代理调研](./research/compaction-and-subagent-best-practices.md) |
 | [远程控制（草案）](./prd/remote-control/plan.md) | `draft`：扫码配对、局域网 PWA 控制、设备能力分档、可选公网中继 |
 | [R-Code v1 统一架构与实施 PRD](./prd/r-code-v1/index.md) | 当前执行入口、真实进度、Provider/Plan/执行/验证/安全边界与恢复协议 |
 | [Harness v1 参考](./prd/pluggable-harness/architecture.md) | 已落地的插件架构、[协议](./prd/pluggable-harness/protocol-v1.md)与[开发指南](./prd/pluggable-harness/plugin-author-guide.md)；原 PRD 已归档 |

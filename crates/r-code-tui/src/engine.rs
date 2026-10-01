@@ -156,6 +156,12 @@ impl V1ChatClient {
 
     /// RA3：daemon 审批决策（`approvals.decide`；审计身份=本连接 client
     /// id，服务端强制）。approve=false 落 denied。
+    /// FR-1 (M1a-08)：/context——v1 context.current 原样取回。
+    pub async fn context_current(&self, task_id: &str) -> Result<serde_json::Value, String> {
+        self.call("context.current", serde_json::json!({"taskId": task_id}))
+            .await
+    }
+
     pub async fn decide_approval(&self, op_id: &str, approve: bool) -> Result<(), String> {
         self.call(
             "approvals.decide",
@@ -529,9 +535,11 @@ pub fn project_events(state: &mut crate::TuiState, events: &[EventEnvelope]) {
             }
             "approval.decided" => {
                 // 决策（或超时拒绝）落地：浮层消失，超时给用户可见注记。
-                if state.take_pending_approval().is_some()
-                    && event.payload.get("decidedBy").and_then(|v| v.as_str()) == Some("<timeout>")
-                {
+                // take 有副作用（清浮层），不能放进 match guard。
+                let decided = state.take_pending_approval().is_some();
+                let timed_out =
+                    event.payload.get("decidedBy").and_then(|v| v.as_str()) == Some("<timeout>");
+                if decided && timed_out {
                     state.push_system("审批已超时自动拒绝".to_string());
                 }
             }

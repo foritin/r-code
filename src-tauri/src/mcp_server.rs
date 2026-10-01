@@ -266,9 +266,13 @@ impl McpService {
             .resolve_agent_prompts(Some(&workspace))
             .map_err(|_| "R-Code prompt settings are unavailable")?
             .main_agent;
+        // FR-7: the MCP server runs in the desktop process, so it can freeze
+        // the memory snapshot for delegated tasks exactly like the GUI path.
+        let memory =
+            crate::harness_v1_routes::frozen_memory_payload(&self.state.db, Some(&workspace));
         let task = self
             .v1
-            .task_create(&title, &goal, mode, Some(&workspace), &prompt)
+            .task_create(&title, &goal, mode, Some(&workspace), &prompt, memory)
             .await
             .map_err(|_| "R-Code could not create the delegated task")?;
         self.owned_tasks.lock().await.insert(task.id.clone());

@@ -104,6 +104,7 @@ fn snapshot(task_id: &str, phase: RunSnapshotPhase, marker: &str) -> RunSnapshot
         },
         tool_catalog_sha256: format!("sha256:tools-{marker}"),
         inference: Some(serde_json::json!({"temperature": 0})),
+        instructions: Default::default(),
     })
     .expect("valid snapshot")
 }

@@ -35,6 +35,64 @@ pub struct LeaseGrant {
     pub active: bool,
 }
 
+/// Lifecycle state of one lease family (E07).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseFamilyState {
+    Active,
+    Released,
+    Quarantined,
+}
+
+impl LeaseFamilyState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Released => "released",
+            Self::Quarantined => "quarantined",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "active" => Some(Self::Active),
+            "released" => Some(Self::Released),
+            "quarantined" => Some(Self::Quarantined),
+            _ => None,
+        }
+    }
+}
+
+/// One durable lease family: the attempt it belongs to, its terminal state,
+/// and its member grants (E07). The family carries no epoch of its own —
+/// fencing is the workspace lease epoch the members already hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseFamilyGrant {
+    pub attempt_id: String,
+    pub workspace_key: String,
+    pub owner_id: String,
+    pub state: LeaseFamilyState,
+    pub created_at_ms: i64,
+    pub settled_at_ms: Option<i64>,
+    pub leases: Vec<LeaseGrant>,
+}
+
+/// What restart reconciliation resolved one family to (E07.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseFamilyReconciliation {
+    pub attempt_id: String,
+    pub outcome: LeaseFamilyOutcome,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseFamilyOutcome {
+    /// The family's attempt had settled; the family released its members.
+    Released,
+    /// The family's attempt was incomplete; the family quarantined with its
+    /// members fenced.
+    Quarantined,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MutationState {
@@ -101,6 +159,12 @@ pub enum MutationError {
     LeaseInactive,
     #[error("lease owner or fencing epoch is stale")]
     StaleLease,
+    #[error("attempt {0} is already settled; a stale attempt cannot release or extend its family")]
+    StaleAttempt(String),
+    #[error("lease family members must share one workspace and be owned by their attempt")]
+    FamilyScopeMismatch,
+    #[error("lease family {0} was not found")]
+    FamilyNotFound(String),
     #[error("workspace {workspace_key} is quarantined by an unproved writer")]
     WorkspaceQuarantined { workspace_key: String },
     #[error("operation was not found")]
@@ -447,6 +511,448 @@ impl V1Store {
             })
             .collect()
     }
+}
+
+// ---------------------------------------------------------------------------
+// E07 — durable lease families. One family per in-flight attempt, keyed by
+// that attempt's identity: acquisition is all-or-nothing over the member
+// leases, release settles the attempt record together with exactly its
+// members, and restart reconciliation resolves every active family whole —
+// released when its attempt settled, quarantined with its members fenced
+// when it did not. Fencing reuses the workspace lease epoch the members
+// already carry; the family never mints a third epoch currency.
+// ---------------------------------------------------------------------------
+
+impl V1Store {
+    /// Acquire one attempt's family: every member lease lands in a single
+    /// all-or-nothing transaction (E07.1), so a partially-acquirable set
+    /// acquires nothing. A byte-identical replay converges on the existing
+    /// active family; a terminal family refuses — replay never resurrects,
+    /// and a settled attempt cannot extend its family.
+    ///
+    /// Members are exempt from conflicting with each other (one attempt owns
+    /// them all) while each still conflicts normally against every other
+    /// active lease: an attempt on a held path is refused by that member
+    /// lease, never by family cross-talk.
+    pub fn acquire_lease_family(
+        &self,
+        attempt_id: &str,
+        requests: &[LeaseRequest],
+    ) -> Result<LeaseFamilyGrant, MutationError> {
+        let attempt_id = attempt_id.trim();
+        if attempt_id.is_empty() {
+            return Err(MutationError::EmptyField("attempt_id"));
+        }
+        let mut members: Vec<LeaseRequest> = Vec::with_capacity(requests.len());
+        for request in requests {
+            let request = normalize_request(request.clone())?;
+            if request.owner_id != attempt_id {
+                return Err(MutationError::FamilyScopeMismatch);
+            }
+            if let Some(first) = members.first() {
+                if request.workspace_key != first.workspace_key {
+                    return Err(MutationError::FamilyScopeMismatch);
+                }
+            }
+            members.push(request);
+        }
+        if members.is_empty() {
+            return Err(MutationError::EmptyLease);
+        }
+        let mut operation_ids = BTreeSet::new();
+        for request in &members {
+            if !operation_ids.insert(request.operation_id.clone()) {
+                return Err(MutationError::OperationConflict);
+            }
+        }
+        members.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
+        let workspace_key = members[0].workspace_key.clone();
+
+        let mut connection = self.connection();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if members
+            .iter()
+            .any(|request| request.repo_exclusive || !request.write_paths.is_empty())
+        {
+            let legacy_barrier: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM writer_barriers WHERE workspace_key = ?1)",
+                params![workspace_key],
+                |row| row.get(0),
+            )?;
+            let unproved_tree = workspace_has_unproved_process_tree(&transaction, &workspace_key)
+                .map_err(|error| MutationError::Sqlite(error.to_string()))?;
+            if legacy_barrier || unproved_tree {
+                return Err(MutationError::WorkspaceQuarantined { workspace_key });
+            }
+        }
+        if let Some(family) = load_family(&transaction, attempt_id)? {
+            if family.state != LeaseFamilyState::Active {
+                return Err(MutationError::StaleAttempt(attempt_id.to_string()));
+            }
+            if family_member_requests(&family) == members {
+                transaction.commit()?;
+                return Ok(family);
+            }
+            return Err(MutationError::OperationConflict);
+        }
+        // A lease already holding a member's operation id is adopted — the
+        // legacy upgrade path for attempts that predate families — provided
+        // it is the identical request and still active.
+        let mut adopted: Vec<LeaseGrant> = Vec::new();
+        for request in &members {
+            if let Some(grant) =
+                grant_for_operation(&transaction, &request.workspace_key, &request.operation_id)?
+            {
+                if grant.request != *request {
+                    return Err(MutationError::OperationConflict);
+                }
+                if !grant.active {
+                    return Err(MutationError::StaleLease);
+                }
+                adopted.push(grant);
+            }
+        }
+        let adopted_ids: BTreeSet<&str> = adopted
+            .iter()
+            .map(|grant| grant.lease_id.as_str())
+            .collect();
+        for active in active_grants(&transaction, &workspace_key)? {
+            if adopted_ids.contains(active.lease_id.as_str()) {
+                continue;
+            }
+            if members
+                .iter()
+                .any(|request| scopes_conflict(request, &active.request))
+            {
+                return Err(MutationError::LeaseConflict {
+                    holder: active.lease_id,
+                });
+            }
+        }
+        let now = now_ms();
+        transaction.execute(
+            "INSERT INTO lease_families(attempt_id, workspace_key, owner_id, state, created_at_ms)
+             VALUES (?1, ?2, ?3, 'active', ?4)",
+            params![attempt_id, workspace_key, attempt_id, now],
+        )?;
+        let mut grants = Vec::with_capacity(members.len());
+        for request in members {
+            if let Some(grant) = adopted
+                .iter()
+                .find(|grant| grant.request == request)
+                .cloned()
+            {
+                transaction.execute(
+                    "INSERT INTO lease_family_members(attempt_id, lease_id) VALUES (?1, ?2)",
+                    params![attempt_id, grant.lease_id],
+                )?;
+                grants.push(grant);
+                continue;
+            }
+            let epoch = next_epoch(&transaction, &request.workspace_key)?;
+            let lease_id = format!("lease:{}", uuid::Uuid::new_v4());
+            let request_json = serde_json::to_string(&request)
+                .map_err(|error| MutationError::Serialization(error.to_string()))?;
+            let request_hash = r_code_harness_protocol::canonical_input_hash(
+                &serde_json::to_value(&request)
+                    .map_err(|error| MutationError::Serialization(error.to_string()))?,
+            );
+            transaction.execute(
+                "INSERT INTO path_leases(lease_id, workspace_key, operation_id, owner_id,
+                 fencing_epoch, request_hash, request_json, active, acquired_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+                params![
+                    lease_id,
+                    request.workspace_key,
+                    request.operation_id,
+                    request.owner_id,
+                    epoch,
+                    request_hash,
+                    request_json,
+                    now
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO lease_family_members(attempt_id, lease_id) VALUES (?1, ?2)",
+                params![attempt_id, lease_id],
+            )?;
+            grants.push(LeaseGrant {
+                lease_id,
+                request,
+                fencing_epoch: epoch,
+                active: true,
+            });
+        }
+        transaction.commit()?;
+        Ok(LeaseFamilyGrant {
+            attempt_id: attempt_id.to_string(),
+            workspace_key,
+            owner_id: attempt_id.to_string(),
+            state: LeaseFamilyState::Active,
+            created_at_ms: now,
+            settled_at_ms: None,
+            leases: grants,
+        })
+    }
+
+    /// Release one attempt's family (E07.2): exactly its member leases
+    /// deactivate and its attempt record settles in the same durable step.
+    /// A family whose attempt already settled refuses — a stale attempt can
+    /// neither release nor extend. Releasing a terminal family is a no-op
+    /// returning `Ok(false)`: no lease of the attempt remains either way.
+    pub fn release_lease_family(
+        &self,
+        attempt_id: &str,
+        owner_id: &str,
+        completed: bool,
+    ) -> Result<bool, MutationError> {
+        let mut connection = self.connection();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let family = load_family(&transaction, attempt_id)?
+            .ok_or_else(|| MutationError::FamilyNotFound(attempt_id.to_string()))?;
+        if family.state != LeaseFamilyState::Active {
+            transaction.commit()?;
+            return Ok(false);
+        }
+        if family.owner_id != owner_id {
+            return Err(MutationError::StaleLease);
+        }
+        settle_family_attempt(&transaction, attempt_id, completed)?;
+        let released = deactivate_family_members(&transaction, &family)?;
+        transaction.execute(
+            "UPDATE lease_families SET state = 'released', settled_at_ms = ?2
+             WHERE attempt_id = ?1 AND state = 'active'",
+            params![attempt_id, now_ms()],
+        )?;
+        transaction.commit()?;
+        Ok(released)
+    }
+
+    /// Release ONE member lease while leaving the family open (E07): the
+    /// dispatcher's fatal and cancel paths keep the attempt record in flight
+    /// for restart recovery, so they release the member alone. A terminal
+    /// family reports already-done (`Ok(true)`) — no lease of the attempt
+    /// remains, whatever released it.
+    pub fn release_lease_family_member(
+        &self,
+        attempt_id: &str,
+        lease_id: &str,
+        owner_id: &str,
+        fencing_epoch: u64,
+    ) -> Result<bool, MutationError> {
+        let mut connection = self.connection();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: Option<String> = transaction
+            .query_row(
+                "SELECT state FROM lease_families WHERE attempt_id = ?1",
+                params![attempt_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if state.as_deref() != Some(LeaseFamilyState::Active.as_str()) && state.is_some() {
+            transaction.commit()?;
+            return Ok(true);
+        }
+        let grant = grant_by_id(&transaction, lease_id)?.ok_or(MutationError::LeaseNotFound)?;
+        validate_grant_owner(&grant, owner_id, fencing_epoch)?;
+        if !grant.active {
+            transaction.commit()?;
+            return Ok(false);
+        }
+        transaction.execute(
+            "UPDATE path_leases SET active = 0, released_at_ms = ?1 WHERE lease_id = ?2",
+            params![now_ms(), lease_id],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    /// Restart reconciliation for every active family (E07.3): a family whose
+    /// attempt settled releases; one whose attempt is incomplete — or whose
+    /// attempt row never landed — quarantines with its members fenced. Each
+    /// family resolves from its own durable evidence alone, so families of
+    /// different attempts never fence each other's members.
+    pub fn reconcile_lease_families(
+        &self,
+    ) -> Result<Vec<LeaseFamilyReconciliation>, MutationError> {
+        let mut connection = self.connection();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ids = active_family_ids(&transaction)?;
+        let mut reconciled = Vec::with_capacity(ids.len());
+        for attempt_id in ids {
+            let family = load_family(&transaction, &attempt_id)?
+                .ok_or_else(|| MutationError::FamilyNotFound(attempt_id.clone()))?;
+            let phase: Option<String> = transaction
+                .query_row(
+                    "SELECT phase FROM work_unit_attempts WHERE attempt_id = ?1",
+                    params![attempt_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let settled = matches!(
+                phase.as_deref(),
+                Some("settled-completed") | Some("settled-failed")
+            );
+            deactivate_family_members(&transaction, &family)?;
+            let (state, outcome) = if settled {
+                ("released", LeaseFamilyOutcome::Released)
+            } else {
+                ("quarantined", LeaseFamilyOutcome::Quarantined)
+            };
+            let detail = match phase.as_deref() {
+                Some(phase) => format!("attempt phase {phase}"),
+                None => "attempt row never landed".to_string(),
+            };
+            transaction.execute(
+                "UPDATE lease_families SET state = ?2, settled_at_ms = ?3
+                 WHERE attempt_id = ?1 AND state = 'active'",
+                params![attempt_id, state, now_ms()],
+            )?;
+            reconciled.push(LeaseFamilyReconciliation {
+                attempt_id,
+                outcome,
+                detail,
+            });
+        }
+        transaction.commit()?;
+        Ok(reconciled)
+    }
+
+    /// One family by attempt id.
+    pub fn load_lease_family(
+        &self,
+        attempt_id: &str,
+    ) -> Result<Option<LeaseFamilyGrant>, MutationError> {
+        load_family(&self.connection(), attempt_id)
+    }
+}
+
+fn load_family(
+    connection: &Connection,
+    attempt_id: &str,
+) -> Result<Option<LeaseFamilyGrant>, MutationError> {
+    let row: Option<(String, String, String, i64, Option<i64>)> = connection
+        .query_row(
+            "SELECT workspace_key, owner_id, state, created_at_ms, settled_at_ms
+             FROM lease_families WHERE attempt_id = ?1",
+            params![attempt_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((workspace_key, owner_id, state, created_at_ms, settled_at_ms)) = row else {
+        return Ok(None);
+    };
+    let state = LeaseFamilyState::from_str(&state).ok_or_else(|| {
+        MutationError::Serialization(format!("unknown lease family state: {state}"))
+    })?;
+    let mut statement =
+        connection.prepare("SELECT lease_id FROM lease_family_members WHERE attempt_id = ?1")?;
+    let lease_ids = statement
+        .query_map(params![attempt_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut leases = Vec::with_capacity(lease_ids.len());
+    for lease_id in lease_ids {
+        leases.push(grant_by_id(connection, &lease_id)?.ok_or(MutationError::LeaseNotFound)?);
+    }
+    Ok(Some(LeaseFamilyGrant {
+        attempt_id: attempt_id.to_string(),
+        workspace_key,
+        owner_id,
+        state,
+        created_at_ms,
+        settled_at_ms,
+        leases,
+    }))
+}
+
+fn active_family_ids(connection: &Connection) -> Result<Vec<String>, MutationError> {
+    let mut statement = connection.prepare(
+        "SELECT attempt_id FROM lease_families WHERE state = 'active'
+         ORDER BY created_at_ms, attempt_id",
+    )?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
+}
+
+/// The family's member requests in the replay-comparison order.
+fn family_member_requests(family: &LeaseFamilyGrant) -> Vec<LeaseRequest> {
+    let mut requests: Vec<LeaseRequest> = family
+        .leases
+        .iter()
+        .map(|grant| grant.request.clone())
+        .collect();
+    requests.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
+    requests
+}
+
+/// Settle the family's attempt record, or refuse when the attempt already
+/// settled (E07.2: a stale attempt cannot release). A family whose attempt
+/// row never landed has no record to settle.
+fn settle_family_attempt(
+    transaction: &Connection,
+    attempt_id: &str,
+    completed: bool,
+) -> Result<(), MutationError> {
+    let phase: Option<String> = transaction
+        .query_row(
+            "SELECT phase FROM work_unit_attempts WHERE attempt_id = ?1",
+            params![attempt_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(phase) = phase else {
+        return Ok(());
+    };
+    if phase.starts_with("settled-") {
+        return Err(MutationError::StaleAttempt(attempt_id.to_string()));
+    }
+    let next = if completed {
+        "settled-completed"
+    } else {
+        "settled-failed"
+    };
+    let now = now_ms();
+    let changed = transaction.execute(
+        "UPDATE work_unit_attempts
+         SET phase = ?2, updated_at_ms = ?3, settled_at_ms = ?3
+         WHERE attempt_id = ?1 AND phase IN ('prepared', 'dispatched')",
+        params![attempt_id, next, now],
+    )?;
+    if changed != 1 {
+        return Err(MutationError::OperationConflict);
+    }
+    Ok(())
+}
+
+/// Deactivate exactly this family's active member leases.
+fn deactivate_family_members(
+    transaction: &Connection,
+    family: &LeaseFamilyGrant,
+) -> Result<bool, MutationError> {
+    let now = now_ms();
+    let mut released_any = false;
+    for grant in &family.leases {
+        if !grant.active {
+            continue;
+        }
+        transaction.execute(
+            "UPDATE path_leases SET active = 0, released_at_ms = ?1
+             WHERE lease_id = ?2 AND active = 1",
+            params![now, grant.lease_id],
+        )?;
+        released_any = true;
+    }
+    Ok(released_any)
 }
 
 fn normalize_request(mut request: LeaseRequest) -> Result<LeaseRequest, MutationError> {

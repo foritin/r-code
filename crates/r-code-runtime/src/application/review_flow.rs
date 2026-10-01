@@ -429,7 +429,19 @@ impl ApplicationService {
             candidate_digest: input.context.candidate_digest.clone(),
             paths: Vec::new(),
         };
-        self.save_review_action(
+        // E09-R: the immutable audit row is keyed by this action and commits
+        // with the verdict in one transaction — the exact failed check ids,
+        // never a summary.
+        let override_seed = r_code_store::v1::UnverifiedOverrideSeed {
+            override_id: input.context.action_id.clone(),
+            task_id: task_id.to_string(),
+            candidate_digest: input.context.candidate_digest.clone(),
+            actor_id: input.context.actor_id.clone(),
+            session_id: input.context.session_id.clone(),
+            reason: input.reason.clone(),
+            checks: input.checks.clone(),
+        };
+        self.save_review_action_ext(
             &state,
             revision,
             "review.unverified-accepted",
@@ -438,6 +450,7 @@ impl ApplicationService {
             Some(&input.reason),
             &input.checks,
             &result,
+            Some(&override_seed),
         )?;
         Ok(result)
     }
@@ -591,33 +604,86 @@ impl ApplicationService {
         checks: &[String],
         result: &ReviewActionResult,
     ) -> Result<u64, ApplicationError> {
-        match self.store.save_task_and_events_if_revision(
+        self.save_review_action_ext(
             state,
-            vec![r_code_kernel::ports::JournalEvent {
-                seq: 0,
-                task_id: state.contract.task_id.clone(),
-                kind: kind.to_string(),
-                payload: serde_json::json!({
-                    "actionId": context.action_id,
-                    "requestHash": request_hash,
-                    "actorId": context.actor_id,
-                    "sessionId": context.session_id,
-                    "reason": reason,
-                    "candidateDigest": context.candidate_digest,
-                    "checks": checks,
-                    "result": result,
-                }),
-            }],
             revision,
-        ) {
+            kind,
+            context,
+            request_hash,
+            reason,
+            checks,
+            result,
+            None,
+        )
+    }
+
+    /// The durable step of one review action. With an override seed the
+    /// audit row commits in the SAME transaction as the verdict (E09-R.2):
+    /// no UnverifiedAccepted without its row, no row without its verdict.
+    /// The stale-revision replay arm then only converges once the row
+    /// exists — the row IS the proof the earlier attempt committed.
+    #[allow(clippy::too_many_arguments)]
+    fn save_review_action_ext(
+        &self,
+        state: &TaskState,
+        revision: u64,
+        kind: &str,
+        context: &ReviewActionContext,
+        request_hash: &str,
+        reason: Option<&str>,
+        checks: &[String],
+        result: &ReviewActionResult,
+        override_seed: Option<&r_code_store::v1::UnverifiedOverrideSeed>,
+    ) -> Result<u64, ApplicationError> {
+        let event = r_code_kernel::ports::JournalEvent {
+            seq: 0,
+            task_id: state.contract.task_id.clone(),
+            kind: kind.to_string(),
+            payload: serde_json::json!({
+                "actionId": context.action_id,
+                "requestHash": request_hash,
+                "actorId": context.actor_id,
+                "sessionId": context.session_id,
+                "reason": reason,
+                "candidateDigest": context.candidate_digest,
+                "checks": checks,
+                "result": result,
+            }),
+        };
+        let saved: Result<u64, r_code_store::v1::OverrideCommitError> = match override_seed {
+            Some(seed) => self
+                .store
+                .save_task_events_and_unverified_override_if_revision(
+                    state,
+                    vec![event],
+                    revision,
+                    seed,
+                )
+                .map(|(revision, _)| revision),
+            None => self
+                .store
+                .save_task_and_events_if_revision(state, vec![event], revision)
+                .map_err(r_code_store::v1::OverrideCommitError::Store),
+        };
+        match saved {
             Ok(revision) => Ok(revision),
-            Err(r_code_store::v1::V1StoreError::StaleTaskRevision { .. })
-                if kind != "review.rejecting" =>
-            {
+            Err(r_code_store::v1::OverrideCommitError::Store(
+                r_code_store::v1::V1StoreError::StaleTaskRevision { .. },
+            )) if kind != "review.rejecting" => {
                 if self
                     .review_replay(&state.contract.task_id, &context.action_id, request_hash)?
                     .as_ref()
                     == Some(result)
+                    && match override_seed {
+                        None => true,
+                        // A replayed override counts only when its durable
+                        // audit row exists (it committed with the verdict).
+                        Some(seed) => self
+                            .store
+                            .load_unverified_override(&seed.task_id, &seed.override_id)
+                            .map_err(|error| ApplicationError::Store(error.to_string()))?
+                            .is_some(),
+                    }
                 {
                     return self
                         .store
@@ -632,5 +698,16 @@ impl ApplicationService {
             }
             Err(error) => Err(ApplicationError::Store(error.to_string())),
         }
+    }
+
+    /// The canonical override audit projection (E09-R.3): the immutable
+    /// table is the single query source; the journal rows are derived.
+    pub async fn list_unverified_overrides(
+        &self,
+        task_id: Option<&str>,
+    ) -> Result<Vec<r_code_store::v1::UnverifiedOverrideRecord>, ApplicationError> {
+        self.store
+            .list_unverified_overrides(task_id)
+            .map_err(|error| ApplicationError::Store(error.to_string()))
     }
 }

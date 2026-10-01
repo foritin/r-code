@@ -97,6 +97,7 @@ import {
   codexImageCapability,
   imageCapabilityFor,
 } from "./model-capabilities";
+import { ContextPanel } from "./ContextPanel";
 import { SlashCommandMenu } from "../SlashCommandMenu";
 import {
   SLASH_COMMANDS,
@@ -279,6 +280,7 @@ export function Composer({
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [permissionMenuRequest, setPermissionMenuRequest] = useState(0);
+  const [contextPanelRequest, setContextPanelRequest] = useState(0);
   const [codexPreferences, setCodexPreferences] = useState<CodexCliPreferences | null>(null);
   const [sendMode, setSendMode] = useAgentSendModePreference();
   const [inputHistory, setInputHistory] = useState<string[]>([]);
@@ -672,7 +674,7 @@ export function Composer({
         await Promise.all([refreshTasks(), refreshDetail(taskId)]);
         setNotice(`会话已重命名为“${parsed.args.trim()}”。`);
         return;
-      case "context": {
+      case "status": {
         const messages = await sessionMessages(taskId);
         const messageCount = messages.filter((item) => item.kind === "message").length;
         const activeAgents = (useTasksStore.getState().details[taskId]?.runs ?? [])
@@ -730,6 +732,9 @@ export function Composer({
         return;
       case "model":
         setModelMenuRequest((value) => value + 1);
+        return;
+      case "context":
+        setContextPanelRequest((value) => value + 1);
         return;
       case "search":
         setSearchOpen(true);
@@ -1357,6 +1362,13 @@ export function Composer({
         <StatusBar kind="info" compact onDismiss={() => setNotice(null)}>
           {notice}
         </StatusBar>
+      )}
+      {contextPanelRequest > 0 && (
+        <ContextPanel
+          taskId={taskId}
+          workspacePath={workspacePath ?? null}
+          onClose={() => setContextPanelRequest(0)}
+        />
       )}
       {slashOpen && (
         <SlashCommandMenu

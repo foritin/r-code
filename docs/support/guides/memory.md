@@ -37,30 +37,32 @@ R-Code 的演进记忆是单机、单用户的产品能力。它把稳定偏好�
 
 ```mermaid
 sequenceDiagram
-    participant Run as 主 Agent Run
+    participant Desktop as 桌面（记忆属主）
+    participant Run as 主 Agent Run（daemon）
     participant Store as MemoryStore
     participant Worker as Reviewer Worker
     participant LLM as Reviewer Provider
     participant UI as 记忆管理页
 
-    Store->>Run: 冻结全局 + 项目记忆快照
-    Run->>Run: 同一快照传给主 Agent 与其子代理
+    Desktop->>Desktop: task 创建时冻结全局 + 项目记忆快照一次
+    Desktop->>Run: 冻结结果随 TaskContract 交接（正文 + entry ID + 快照 hash）
+    Run->>Run: 同一快照传给主 Agent 与其子代理（契约继承，不重算）
     Run-->>Store: 成功后提交可见用户/助手文本
     Store->>Store: 脱敏、截断、检查触发边界
     Store-->>Worker: 持久化排队任务
     Worker->>LLM: 非流式、无工具的结构化总结请求
     LLM-->>Worker: JSON proposals
-    Worker->>Store: 严格解析、作用域/容量/版本/敏感信息校验
+    Worker-->>Store: 严格解析、作用域/容量/版本/敏感信息校验
     alt 项目 proposal
         Store->>Store: 自动写入该项目记忆
     else 全局 proposal
         Store-->>UI: 生成待审批候选
-        UI->>Store: 用户编辑并批准或拒绝
+        UI-->>Store: 用户编辑并批准或拒绝
     end
     Store->>Store: 清除已消费的临时轮次正文
 ```
 
-每个 Run 使用开始时冻结的快照，因此运行途中修改记忆不会让主 Agent 与子代理看到不同版本。下一次 Run 才会读取新版本。注入账本只保存 entry ID、版本、字符数与快照 hash，不复制正文。
+冻结发生在任务创建时：桌面（记忆 DB 属主）读取一次快照，把渲染正文、entry ID 列表与快照 hash 放进任务契约，之后所有 attempt/run/steer/repair 继承同一份，不再重算。因此运行途中修改记忆不会让主 Agent 与子代理看到不同版本；下一次**创建任务**才会读取新版本。Codex 桌面委派（`codex exec` / `codex mcp-server` 子代理）在委派时由记忆属主渲染当时快照并注入委派 prompt；TUI 直连创建的任务首期不带记忆注入（无桌面属主在场）。harness-v1 运行的注入记账落在 daemon 侧 `injections` 账本（kind=`memory`，保存 entry ID、字符数与快照 hash，不复制正文）；桌面旧表 `memory_injections` 仅保留历史结构。
 
 ## Reviewer 的安全边界
 
@@ -83,7 +85,7 @@ Reviewer 请求满足以下约束：
 - `memory_review_turns`：短期、已脱敏的 Reviewer 输入缓冲；
 - `memory_review_jobs` / `memory_review_outcomes`：任务状态与确定性处理结果；
 - `memory_candidates`：等待用户审批的全局候选；
-- `memory_injections`：Run 使用过的冻结快照引用。
+- `memory_injections`：历史注入引用表；harness-v1 运行的注入账本现由 daemon 侧 V1Store `injections` 表承担（`kind` 区分 memory / instruction / jit）。
 
 单分支最多保留 80 个尚未消费的轮次，每段可见文本最多 8,000 字符。成功、取消、配置/项目模式失效或容量淘汰都会把临时正文置空；失败与崩溃中断会保留脱敏缓冲，直到用户重试或取消。应用启动时，遗留的 `running` 复盘会转换为 `interrupted`，不会永久显示为运行中。
 

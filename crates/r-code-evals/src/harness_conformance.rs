@@ -79,6 +79,7 @@ fn contract() -> TaskContract {
         constraints: vec![],
         required_checks: vec!["check:required".into()],
         revision: 1,
+        memory: None,
     }
 }
 

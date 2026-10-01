@@ -265,6 +265,7 @@ fn verifying_state(task_id: &str, candidate_digest: &str) -> TaskState {
         constraints: vec![],
         required_checks: vec![CHECK_ID.into()],
         revision: 1,
+        memory: None,
     });
     state.start_attempt(&attempt("planning")).expect("planning");
     let approval = PlanApprovalRef {
@@ -310,6 +311,7 @@ async fn escalate_plan(store: &V1Store, task_id: &str) -> WorkUnitWire {
         constraints: vec![],
         required_checks: vec![CHECK_ID.into()],
         revision: 1,
+        memory: None,
     });
     store
         .save_task_and_events(&seed, vec![])

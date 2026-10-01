@@ -496,6 +496,7 @@ impl ApprovalStore {
                 constraints: vec![],
                 required_checks: vec![],
                 revision: 1,
+                memory: None,
             }),
         };
         let event = JournalEvent {
