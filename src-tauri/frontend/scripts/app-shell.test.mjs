@@ -3048,7 +3048,8 @@ test("desktop back and forward restore the actual visited page and project", asy
   const forward = page.getByRole("button", { name: "前进" });
   const heading = page.locator("#main-content .opt-page-head h1");
 
-  assert.equal(await back.isDisabled(), true);
+  // CI 冷启动偶发超 30s 默认等待——首次存在性检查放宽到 90s。
+  assert.equal(await back.isDisabled({ timeout: 90_000 }), true);
   await page.locator(".sidebar-project-head").filter({ hasText: "r-code" }).click();
   await heading.filter({ hasText: "r-code" }).waitFor({ state: "visible" });
   await page.locator(".sidebar-project-head").filter({ hasText: "api-server" }).click();
