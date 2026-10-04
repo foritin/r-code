@@ -108,7 +108,7 @@ async fn full_stack_nested_callback_through_real_transport() {
             bind_harness_launch_config, register_child_process_requirement, HarnessLaunchConfig,
         };
         register_child_process_requirement(
-            Path::new(env!("CARGO_BIN_EXE_harness-test-helper")),
+            std::path::Path::new(env!("CARGO_BIN_EXE_harness-test-helper")),
             true,
         );
         let mut launch_config = HarnessLaunchConfig::host_default();
