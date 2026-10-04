@@ -200,7 +200,7 @@ async fn wait_for_event(
                     .iter()
                     .rev()
                     .take(6)
-                    .map(|e| (e.kind.clone(), e.payload.clone()))
+                    .map(|e| (e.kind, e.payload.clone()))
                     .collect::<Vec<_>>()
             );
         }
