@@ -165,6 +165,7 @@ fn compose_argv(
     argv
 }
 
+#[derive(Debug)]
 struct LaunchOutcome {
     status: std::process::ExitStatus,
     stdout: String,
@@ -590,7 +591,7 @@ fn ordinary_runtimes_and_thread_creation_work_inside_the_filtered_sandbox() {
     let python_threading = format!(
         r#"
 import threading
-path = {thread_file!r}
+path = {thread_file:?}
 lock = threading.Lock()
 def work(i):
     with lock:

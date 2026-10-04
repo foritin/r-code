@@ -433,7 +433,9 @@ pub fn available_bytes(root: &Path) -> Result<u64, EffectQuotaError> {
             return Err(EffectQuotaError::Io(format!("statvfs failed for {path}")));
         }
         let stats = unsafe { buffer.assume_init() };
-        Ok(stats.f_bavail * stats.f_frsize)
+        // statvfs 字段宽度平台各异（macOS f_bavail 是 u32）——u64::from 统一加宽
+        // 且不算 cast（unecessary_cast 不再适用）。
+        Ok(u64::from(stats.f_bavail) * u64::from(stats.f_frsize))
     }
 }
 

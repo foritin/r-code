@@ -1285,12 +1285,12 @@ fn guardian_session<R: std::io::Read, W: std::io::Write>(commands: &mut R, repli
                 // tree it did not acknowledge.
                 kill_group(identity.group_pid as i32, libc::SIGKILL);
                 let _ = workload.wait();
-                return GUARDIAN_EXIT_PROTOCOL;
+                GUARDIAN_EXIT_PROTOCOL
             }
             // Reaping the released workload is intended to block: the
             // guardian's lifetime doubles as zombie hygiene.
             let _ = workload.wait();
-            return GUARDIAN_EXIT_RELEASED;
+            GUARDIAN_EXIT_RELEASED
         }
         // A repeat Release/SpawnRequest or any other frame before the
         // ack is a protocol violation: fail closed.
@@ -1303,19 +1303,19 @@ fn guardian_session<R: std::io::Read, W: std::io::Write>(commands: &mut R, repli
             );
             kill_group(identity.group_pid as i32, libc::SIGKILL);
             let _ = workload.wait();
-            return GUARDIAN_EXIT_PROTOCOL;
+            GUARDIAN_EXIT_PROTOCOL
         }
         // EOF BEFORE release (daemon death or dropped gate): the gate
         // must never open — kill the still-stopped group.
         Ok(None) => {
             kill_group(identity.group_pid as i32, libc::SIGKILL);
             let _ = workload.wait();
-            return GUARDIAN_EXIT_DAEMON_EOF;
+            GUARDIAN_EXIT_DAEMON_EOF
         }
         Err(_) => {
             kill_group(identity.group_pid as i32, libc::SIGKILL);
             let _ = workload.wait();
-            return GUARDIAN_EXIT_PROTOCOL;
+            GUARDIAN_EXIT_PROTOCOL
         }
     }
 }
