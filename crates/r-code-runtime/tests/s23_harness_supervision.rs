@@ -281,6 +281,7 @@ async fn immediate_grandchild_dies_with_the_windows_tree() {
 
 /// Every `ping.exe` on the box, as tasklist reports it (CSV, locale-safe: only
 /// lines whose image name matches are parsed, so an INFO banner never counts).
+#[cfg(windows)]
 fn listed_ping_pids() -> Vec<u32> {
     let output = Command::new("tasklist")
         .args(["/FO", "CSV", "/NH", "/FI", "IMAGENAME eq ping.exe"])
@@ -295,6 +296,7 @@ fn listed_ping_pids() -> Vec<u32> {
 }
 
 /// Wait until a ping spawned inside the launched tree is (or is not) visible.
+#[cfg(windows)]
 fn wait_for_ping_pid(tree_pid: &u32, want: bool) -> Option<u32> {
     let _ = tree_pid;
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -314,6 +316,7 @@ fn wait_for_ping_pid(tree_pid: &u32, want: bool) -> Option<u32> {
     }
 }
 
+#[cfg(windows)]
 fn ping_pid_alive(pid: u32) -> bool {
     listed_ping_pids().contains(&pid)
 }

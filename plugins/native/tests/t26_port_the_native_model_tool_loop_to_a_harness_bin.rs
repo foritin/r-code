@@ -2,6 +2,13 @@
 //!
 //! The Native binary performs real fixture editing through public host
 //! APIs; dependency guards reject Gateway/store/runtime/Tauri imports.
+//!
+//! macOS 安全门（child-process safety）：裸 PluginSession 直连 spawn 在
+//! macOS 被三道门依次拒绝（未声明→未激活→无真实 seatbelt 包裹）——这是
+//! 策略而非缺陷；等价的 native 二进制端到端覆盖由 r-code-runtime 应用栈
+//! 用例（a04/a13 等，带 containment 的完整启动链）在 macOS 上运行。
+
+#![cfg(not(target_os = "macos"))]
 
 use r_code_gateway::gateway::ToolGateway;
 use r_code_gateway::tools::{CreateFileTool, ReadFileTool};
@@ -47,10 +54,6 @@ fn native_binary() -> PathBuf {
         .join("../../target/debug")
         .join(exe);
     assert!(path.is_file(), "missing {}", path.display());
-    // macOS 安全门：测试直连 spawn 真实 native 二进制——以 SingleProcess
-    // 声明入场（测试二进制自身不 fork 恶意镜像；生产声明走包安装链）。
-    #[cfg(target_os = "macos")]
-    r_code_runtime::plugins::transport::register_child_process_requirement(&path, true);
     path
 }
 

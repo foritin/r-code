@@ -228,46 +228,7 @@ pub fn shutdown_daemon(env: &DaemonEnv) {
         .unwrap_or(false)
     };
     if graceful {
-        // shutdown 是 notify 不是 join：等端点真正关闭再返回，否则后续
-        // 重启用例的新 daemon 会输掉所有权竞争（慢 runner 上 300ms 不够，
-        // p_gate 重启测试曾因此在 20s 预算内都起不来）。用真实 owner token
-        // 探测：连接成功 = 还活着；owner.json 消失或连接失败 = 已退出。
-        let endpoint = profile.ipc_endpoint();
-        let profile_id = profile.profile_id();
-        let root = profile.harness_v1_root();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while std::time::Instant::now() < deadline {
-            let alive = {
-                let endpoint = endpoint.clone();
-                let profile_id = profile_id.clone();
-                let root = root.clone();
-                std::thread::spawn(move || {
-                    tokio::runtime::Runtime::new()
-                        .map(|runtime| {
-                            runtime.block_on(async {
-                                let Some(info) = r_code_client::read_owner_token(&root) else {
-                                    return false;
-                                };
-                                r_code_client::DaemonClient::connect(
-                                    &endpoint,
-                                    &profile_id,
-                                    &info.token,
-                                    "test-teardown",
-                                )
-                                .await
-                                .is_ok()
-                            })
-                        })
-                        .unwrap_or(true)
-                })
-                .join()
-                .unwrap_or(true)
-            };
-            if !alive {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
+        wait_for_daemon_exit(&profile);
         return;
     }
     // 硬杀兜底。
@@ -282,5 +243,49 @@ pub fn shutdown_daemon(env: &DaemonEnv) {
             .output();
         #[cfg(unix)]
         let _ = Command::new("kill").arg(pid.to_string()).output();
+        // SIGTERM/taskkill 之后同样要等退出：垂死的 daemon 仍握着 flock，
+        // 紧随其后的重启候选会输掉所有权竞争（两个候选烧完就永远起不来）。
+        wait_for_daemon_exit(&profile);
+    }
+}
+
+/// 等待端点真正关闭：用真实 owner token 探测，连接成功 = 还活着；
+/// owner.json 消失或连接失败 = 已退出。上限 15s。
+fn wait_for_daemon_exit(profile: &r_code_runtime::RuntimeProfile) {
+    let endpoint = profile.ipc_endpoint();
+    let profile_id = profile.profile_id();
+    let root = profile.harness_v1_root();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        let alive = {
+            let endpoint = endpoint.clone();
+            let profile_id = profile_id.clone();
+            let root = root.clone();
+            std::thread::spawn(move || {
+                tokio::runtime::Runtime::new()
+                    .map(|runtime| {
+                        runtime.block_on(async {
+                            let Some(info) = r_code_client::read_owner_token(&root) else {
+                                return false;
+                            };
+                            r_code_client::DaemonClient::connect(
+                                &endpoint,
+                                &profile_id,
+                                &info.token,
+                                "test-teardown",
+                            )
+                            .await
+                            .is_ok()
+                        })
+                    })
+                    .unwrap_or(true)
+            })
+            .join()
+            .unwrap_or(true)
+        };
+        if !alive {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
 }
