@@ -138,7 +138,8 @@ fn stage_harness(resources: &Path, id: &str, host_model: bool) {
             "id": id,
             "version": "1.0.0",
             "apiMajor": 1,
-            "apiMinor": 0,
+            "apiMinor": 3,
+            "requiresSingleProcess": true,
             "displayName": id,
             "supportedPlatforms": [{
                 "platform": platform,

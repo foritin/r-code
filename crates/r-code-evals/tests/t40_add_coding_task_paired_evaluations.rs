@@ -34,7 +34,7 @@ async fn paired_runs_separate_faults_from_outcomes() {
         source.join("harness.json"),
         serde_json::json!({
             "schema_version": "1", "id": "repair-harness.example", "version": "1.0.0",
-            "apiMajor": 1, "apiMinor": 0, "displayName": "repair",
+            "apiMajor": 1, "apiMinor": 3, "requiresSingleProcess": true, "displayName": "repair",
             "supportedPlatforms": [{"platform": platform, "executable": format!("bin/{executable}")}],
             "requestedHostServices": ["host.model.stream", "host.tools.list", "host.tools.call",
                 "host.checkpoint.save", "host.completion.propose"],

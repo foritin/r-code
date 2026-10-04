@@ -248,7 +248,8 @@ pub fn stage_native(root: &Path, id: &str, version: &str, requests_plan_publish:
             "id": id,
             "version": version,
             "apiMajor": 1,
-            "apiMinor": 0,
+            "apiMinor": 3,
+            "requiresSingleProcess": true,
             "displayName": id,
             "supportedPlatforms": [{
                 "platform": platform,

@@ -21,7 +21,8 @@ fn manifest_json(executable: &str) -> String {
         "id": "example.harness",
         "version": "1.2.3",
         "apiMajor": 1,
-        "apiMinor": 0,
+        "apiMinor": 3,
+        "requiresSingleProcess": true,
         "displayName": "Example Harness",
         "supportedPlatforms": [
             {"platform": platform, "executable": executable, "argv": ["--serve"]}

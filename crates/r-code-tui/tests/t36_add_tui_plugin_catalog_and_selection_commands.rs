@@ -61,7 +61,7 @@ fn stage_package(temp: &Path, name: &str, binary: &Path, harness_id: &str) -> Pa
             "schema_version": "1",
             "id": harness_id,
             "version": "1.0.0",
-            "apiMajor": 1, "apiMinor": 0,
+            "apiMajor": 1, "apiMinor": 3, "requiresSingleProcess": true,
             "displayName": name,
             "supportedPlatforms": [{"platform": platform, "executable": format!("bin/{executable}")}],
             "requestedHostServices": ["host.model.stream", "host.tools.list", "host.tools.call",

@@ -47,7 +47,8 @@ fn stage_approval_fixture(temp: &Path) -> PathBuf {
             "id": "fixture.approval",
             "version": "1.0.0",
             "apiMajor": 1,
-            "apiMinor": 0,
+            "apiMinor": 3,
+            "requiresSingleProcess": true,
             "displayName": "Approval Fixture",
             "supportedPlatforms": [{"platform": platform, "executable": "bin/harness-test-helper", "argv": ["approval"]}],
             "requestedHostServices": [

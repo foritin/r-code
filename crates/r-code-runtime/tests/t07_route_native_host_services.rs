@@ -191,7 +191,8 @@ fn stage_blocking_question_harness(root: &Path) -> PathBuf {
             "id": "fixture.blocking-question",
             "version": "1.0.0",
             "apiMajor": 1,
-            "apiMinor": 0,
+            "apiMinor": 3,
+            "requiresSingleProcess": true,
             "displayName": "Blocking question fixture",
             "supportedPlatforms": [{
                 "platform": platform,

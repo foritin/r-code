@@ -71,7 +71,7 @@ fn stage_package(temp: &Path, binary: &Path) -> PathBuf {
             "schema_version": "1",
             "id": "repair-harness.example",
             "version": "1.0.0",
-            "apiMajor": 1, "apiMinor": 0,
+            "apiMajor": 1, "apiMinor": 3, "requiresSingleProcess": true,
             "displayName": "repair",
             "supportedPlatforms": [{"platform": platform, "executable": format!("bin/{executable}")}],
             "requestedHostServices": ["host.model.stream", "host.tools.list", "host.tools.call",

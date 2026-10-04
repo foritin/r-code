@@ -163,7 +163,8 @@ fn stage_native(temp: &Path) -> PathBuf {
             "id": "native.r-code",
             "version": "1.0.0",
             "apiMajor": 1,
-            "apiMinor": 0,
+            "apiMinor": 3,
+            "requiresSingleProcess": true,
             "displayName": "Native",
             "supportedPlatforms": [{"platform": platform, "executable": "bin/r-code-harness-native"}],
             "requestedHostServices": [

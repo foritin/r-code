@@ -243,7 +243,8 @@ fn stage_codex_harness(root: &Path) -> PathBuf {
             "id": "codex.r-code",
             "version": "1.0.0",
             "apiMajor": 1,
-            "apiMinor": 0,
+            "apiMinor": 3,
+            "requiresSingleProcess": true,
             "displayName": "Codex",
             "supportedPlatforms": [{
                 "platform": platform,
