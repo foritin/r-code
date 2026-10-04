@@ -161,24 +161,25 @@ mod tests {
         let hub = FanoutHub::new();
         // A subscriber that never drains (its receiver lives but fills up).
         let (_slow_id, _slow_rx) = hub.subscribe();
-        // A fast one that keeps draining concurrently.
+        // A fast one that we drain inline, slice by slice — 不再依赖 spawned
+        // drainer 的调度时机（重负载 runner 上它可能整个 burst 都没被调度，
+        // fast 通道同样溢出被误丢，计数归零）。
         let (fast_id, mut fast_rx) = hub.subscribe();
-        let drainer = tokio::spawn(async move { while fast_rx.recv().await.is_some() {} });
 
-        // Overfill the slow consumer's channel (capacity 1000).
-        let burst: Vec<EventEnvelope> = (1..=SUBSCRIBER_CHANNEL_CAPACITY as u64 + 5)
-            .map(envelope)
-            .collect();
-        hub.publish(&burst);
-        // Give the drainer a beat to catch up.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let burst_total = SUBSCRIBER_CHANNEL_CAPACITY as u64 + 5;
+        for chunk_start in (0..burst_total).step_by(64) {
+            let chunk: Vec<EventEnvelope> = (chunk_start..(chunk_start + 64).min(burst_total))
+                .map(envelope)
+                .collect();
+            hub.publish(&chunk);
+            while fast_rx.try_recv().is_ok() {}
+        }
 
         // The slow one is gone; the fast one still receives fresh events.
         assert_eq!(hub.subscriber_count(), 1, "slow consumer dropped");
         hub.publish(&[envelope(9_999)]);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        while fast_rx.try_recv().is_ok() {}
         assert_eq!(hub.subscriber_count(), 1, "fast consumer stays live");
         hub.unsubscribe(fast_id);
-        drainer.abort();
     }
 }
