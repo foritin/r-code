@@ -19930,7 +19930,8 @@ mod tests {
 
     // Windows 进程启动和管道握手在全量并行测试下会争抢调度资源。真实 App Server
     // 不受测试夹具限制；这里只串行化两个进程级回归，避免测试之间互相放大抖动。
-    #[cfg(windows)]
+    // 锁本身全平台存在：5 个使用它的契约测试跨平台编译（fixture 内部再按
+    // 平台分派），unix 上只是空串行化。
     static CODEX_APP_SERVER_SHIM_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     #[cfg(windows)]
     const CODEX_APP_SERVER_FIXTURE_TIMEOUT: Duration = Duration::from_secs(30);

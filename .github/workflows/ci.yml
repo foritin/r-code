@@ -21,6 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          # harness-plugins 前端契约测试会真实 cargo build r-code-harness-admin，
+          # 需要私有 agent-contracts 子模块。
+          token: ${{ secrets.PAT_TOKEN }}
+          submodules: recursive
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:

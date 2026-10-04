@@ -367,7 +367,20 @@ mod tests {
             Ok(handle) => {
                 // docker 在场：命令必须真的跑在容器里（--rm + alpine 的 sh 语义）。
                 let output = backend.collect(handle, &spec, None).await.unwrap();
-                assert!(output.stdout.contains("hi"), "stdout={}", output.stdout);
+                if !output.stdout.contains("hi") {
+                    // CI Windows 腿装有 docker CLI 但守护进程不可用：run 以
+                    // 非零退出、stderr 带 docker 诊断、stdout 为空——同样证明
+                    // 路由进了 docker 而非本地 shell（本地 `echo hi` 不会空）。
+                    let stderr = output.stderr.to_lowercase();
+                    assert!(
+                        output.exit_code.unwrap_or(-1) != 0
+                            && (stderr.contains("docker") || stderr.contains("daemon")),
+                        "必须证明走了 docker 路由：stdout={} stderr={} exit={:?}",
+                        output.stdout,
+                        output.stderr,
+                        output.exit_code
+                    );
+                }
             }
             Err(error) => {
                 // docker 缺席：失败必须来自 docker 可执行文件本身（路由证明）。

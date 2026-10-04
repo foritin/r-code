@@ -575,7 +575,7 @@ mod tests {
         let fd = write_filter_to_memfd(&program).expect("memfd transport");
         let mut bytes = Vec::new();
         use std::io::Read;
-        let mut file = unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd) };
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.read_to_end(&mut bytes).expect("read back");
         assert_eq!(bytes.len(), program.len() * 8);
         // SAFETY-free drop: File closes the fd exactly once.

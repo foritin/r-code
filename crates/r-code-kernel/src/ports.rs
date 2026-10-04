@@ -5,6 +5,10 @@
 //! All effectful calls carry a [`GenerationToken`] so stale work from revoked
 //! generations is rejected before reaching a service.
 
+// clippy 1.99 对 async_trait 展开生成的 boxing 方法报 double_must_use
+// （方法与其返回的 BoxFuture 同时标 must_use）——宏输出不可控，模块级豁免。
+#![allow(clippy::double_must_use)]
+
 use crate::task::{Attempt, OperationReceipt, TaskContract, TaskState};
 use async_trait::async_trait;
 use r_code_harness_protocol::{

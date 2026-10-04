@@ -220,7 +220,8 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   }), true);
 
   const panel = page.getByRole("region", { name: "当前计划" });
-  await panel.waitFor({ state: "visible" });
+  // CI 冷启动慢（曾超默认 30s），放宽到 60s。
+  await panel.waitFor({ state: "visible", timeout: 60_000 });
   assert.equal(await page.getByTestId("workbench-panel").getAttribute("data-workbench-section"), "plan");
   assert.equal(await page.getByRole("tab").filter({ hasText: "计划" }).getAttribute("aria-selected"), "true");
   assert.equal(await page.locator(".convo > .plan-panel").count(), 0, "the full Plan must not occupy the conversation column");

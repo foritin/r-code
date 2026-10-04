@@ -865,9 +865,9 @@ test("CI authenticates every private agent-contracts checkout and covers Linux",
 
   const submoduleInitializers = workflow.match(/submodules: recursive/g) ?? [];
   const privateTokens = workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? [];
-  // 7 处：test×3 腿、clippy、audit、deny、remote-guards（守卫脚本真实编译
-  // r-code-runtime，也需要私有 agent-contracts 子模块）。
-  assert.equal(submoduleInitializers.length, 7);
+  // 8 处：test×3 腿、clippy、audit、deny、remote-guards、frontend——守卫脚本与
+  // harness-plugins 前端契约测试都会真实编译 Rust 目标，需要私有子模块。
+  assert.equal(submoduleInitializers.length, 8);
   assert.equal(privateTokens.length, submoduleInitializers.length);
   assert.match(
     workflow,

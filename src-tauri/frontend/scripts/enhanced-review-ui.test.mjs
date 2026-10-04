@@ -92,7 +92,8 @@ async function openEnhancedReview(page) {
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
   const plan = page.getByRole("region", { name: "当前计划" });
-  await plan.waitFor({ state: "visible" });
+  // CI 冷启动慢（曾超默认 30s），放宽到 60s。
+  await plan.waitFor({ state: "visible", timeout: 60_000 });
   await page.getByText("在整理计划前还需要你确认两项边界", { exact: false }).waitFor();
   const questions = page.getByRole("group", { name: "计划需要你的回答" });
   await questions.getByLabel(/聚焦核心流程/).check();
