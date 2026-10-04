@@ -359,6 +359,23 @@ async fn snapshot_router_and_initialize_share_one_exact_grant_set() {
         host_api: ApiVersion::new(1, 0),
         granted_services: grants.clone(),
     };
+    // macOS 安全门：测试 fixture 按 SingleProcess 声明 + 绑定已激活安全报告
+    // （无 workspace no-fork 档位；helper 只走 stdio IPC）。
+    #[cfg(target_os = "macos")]
+    {
+        use r_code_runtime::plugins::transport::{
+            bind_harness_launch_config, register_child_process_requirement, HarnessLaunchConfig,
+        };
+        register_child_process_requirement(
+            Path::new(env!("CARGO_BIN_EXE_harness-test-helper")),
+            true,
+        );
+        let mut launch_config = HarnessLaunchConfig::host_default();
+        launch_config.activation = r_code_runtime::services::sandbox::SafetyActivation::Activated {
+            report_id: "runtime-fixture-tests".into(),
+        };
+        bind_harness_launch_config(launch_config);
+    }
     let session = PluginSession::start(
         Path::new(env!("CARGO_BIN_EXE_harness-test-helper")),
         &["serve".into()],

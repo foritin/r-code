@@ -127,13 +127,21 @@ async fn third_party_fixture_installs_and_runs_through_public_paths() {
             HostService::CompletionPropose,
         ],
     };
-    // macOS 安全门：测试自控的 fixture 二进制按 SingleProcess 声明入场
-    // （fixture 不 fork；第三方未声明 harness 默认 SafeDisabled 是策略）。
+    // macOS 安全门：测试自控的 fixture 二进制按 SingleProcess 声明入场，
+    // 并为本次 boot 绑定已激活的安全报告（无 workspace 的 no-fork 档位）。
+    // fixture 只走 stdio IPC，deny-default 档位即可承载。
     #[cfg(target_os = "macos")]
-    r_code_runtime::plugins::transport::register_child_process_requirement(
-        &installed.executable,
-        true,
-    );
+    {
+        use r_code_runtime::plugins::transport::{
+            bind_harness_launch_config, register_child_process_requirement, HarnessLaunchConfig,
+        };
+        register_child_process_requirement(&installed.executable, true);
+        let mut config = HarnessLaunchConfig::host_default();
+        config.activation = r_code_runtime::services::sandbox::SafetyActivation::Activated {
+            report_id: "t11-third-party-fixture".into(),
+        };
+        bind_harness_launch_config(config);
+    }
     let session = PluginSession::start(
         &installed.executable,
         &installed.argv,
