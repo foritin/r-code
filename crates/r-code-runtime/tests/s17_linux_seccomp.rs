@@ -393,7 +393,7 @@ for name, bit in [("clone_newuser", 0x10000000), ("clone_newnet", 0x40000000),
 fn parse_probe_lines(stdout: &str) -> BTreeMap<String, (i64, i64)> {
     let mut parsed = BTreeMap::new();
     for line in stdout.lines() {
-        let mut parts = line.trim().split_whitespace();
+        let mut parts = line.split_whitespace();
         let (Some(name), Some(ret), Some(errno)) = (parts.next(), parts.next(), parts.next())
         else {
             continue;

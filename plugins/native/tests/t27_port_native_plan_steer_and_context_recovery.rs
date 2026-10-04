@@ -39,6 +39,9 @@ fn native_binary() -> std::path::PathBuf {
         .join("../../target/debug")
         .join(exe);
     assert!(path.is_file());
+    // macOS 安全门：测试直连 spawn 真实 native 二进制——以 SingleProcess 声明入场。
+    #[cfg(target_os = "macos")]
+    r_code_runtime::plugins::transport::register_child_process_requirement(&path, true);
     path
 }
 

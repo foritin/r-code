@@ -47,6 +47,10 @@ fn native_binary() -> PathBuf {
         .join("../../target/debug")
         .join(exe);
     assert!(path.is_file(), "missing {}", path.display());
+    // macOS 安全门：测试直连 spawn 真实 native 二进制——以 SingleProcess
+    // 声明入场（测试二进制自身不 fork 恶意镜像；生产声明走包安装链）。
+    #[cfg(target_os = "macos")]
+    r_code_runtime::plugins::transport::register_child_process_requirement(&path, true);
     path
 }
 
