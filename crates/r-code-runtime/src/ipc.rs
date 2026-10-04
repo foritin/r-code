@@ -98,6 +98,18 @@ impl IpcListener {
     pub fn bind(path: &std::path::Path) -> io::Result<Self> {
         // Remove a stale socket only when nothing can accept on it; binding
         // over a live socket fails, which is exactly the protection wanted.
+        // （此前只写了注释没做清除——daemon 崩溃/被杀后残留的 socket 文件
+        // 让重启 bind 直接 EADDRINUSE，CI 的重启用例由此稳定失败。）
+        if path.exists() {
+            let live = std::os::unix::net::UnixStream::connect(path).is_ok();
+            if live {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "socket path is served by a live listener",
+                ));
+            }
+            std::fs::remove_file(path)?;
+        }
         let listener = tokio::net::UnixListener::bind(path)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;

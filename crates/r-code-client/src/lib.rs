@@ -416,7 +416,7 @@ pub async fn ensure_daemon_with_helpers(
                 command
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
-                    .stderr(stderr_child.unwrap_or_else(|| std::process::Stdio::null()));
+                    .stderr(stderr_child.unwrap_or_else(std::process::Stdio::null));
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;
