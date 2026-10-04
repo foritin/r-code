@@ -285,9 +285,10 @@ fn write_network_and_user_home_reads_are_denied() {
         return;
     };
     let leak = base.path().join("leak.txt");
+    let leak_text = leak.display().to_string();
 
     let script = format!(
-        "if echo p18 > '{leak}'; then echo WRITE-OK; else echo WRITE-DENIED; fi; \
+        "if echo p18 > '{leak_text}'; then echo WRITE-OK; else echo WRITE-DENIED; fi; \
          if read -r line < /private/etc/hosts; then echo ETC-READ-OK; else echo ETC-READ-DENIED; fi",
     );
     let (status, stdout, stderr) = launch_under_seatbelt(&profile, &harness, &["-c", &script], &[]);

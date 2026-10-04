@@ -561,11 +561,8 @@ fn ordinary_runtimes_and_thread_creation_work_inside_the_filtered_sandbox() {
 
     // A plain shell round trip under the filter.
     let echo_file = format!("{scratch_text}/echo.txt");
-    let sh_workload = [
-        "/usr/bin/sh",
-        "-c",
-        format!("echo ok > '{echo_file}'").as_str(),
-    ];
+    let echo_redirect = format!("echo ok > '{echo_file}'");
+    let sh_workload = ["/usr/bin/sh", "-c", echo_redirect.as_str()];
     let argv = compose_argv(&plan, Some(SECCOMP_CHILD_FD), &values, &sh_workload);
     let Some(outcome) = launch_or_env_record(&argv, Some(fresh_filter_fd()), false, "sh echo")
     else {
