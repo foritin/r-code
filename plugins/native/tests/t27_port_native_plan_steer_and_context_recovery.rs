@@ -3,6 +3,12 @@
 //! Restart and accepted-steer scenarios run through the executable plugin:
 //! a checkpointed conversation resumes after a restart, replayed inputs
 //! drive new turns, and an accepted steer lands in the persisted state.
+//!
+//! macOS 安全门：与 t26 同因——裸 PluginSession 直连 spawn 被 child-process
+//! 安全门拒绝（策略而非缺陷）；等价覆盖由 r-code-runtime 应用栈用例在
+//! macOS 上运行。checkpoint/resume 的跨平台内核语义另由 t24/t25 覆盖。
+
+#![cfg(not(target_os = "macos"))]
 
 use r_code_gateway::gateway::ToolGateway;
 use r_code_gateway::tools::ReadFileTool;

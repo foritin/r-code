@@ -504,7 +504,9 @@ pub fn verify_installed_helpers(
         let native = if cfg!(windows) {
             bytes.starts_with(b"MZ")
         } else if cfg!(target_os = "linux") {
-            bytes[..5] == [0x7f, b'E', b'L', b'F']
+            // ELF 魔数是 4 字节；此前 [..5] 对 4 字节数组比较恒为 false，
+            // Linux 上任何合法 ELF 都进不了安装校验。
+            bytes[..4] == [0x7f, b'E', b'L', b'F']
         } else {
             true // macOS: Mach-O variants — the packaging pipeline signs; magic check stays permissive
         };
