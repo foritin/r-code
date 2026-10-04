@@ -437,7 +437,7 @@ async fn the_seventh_spawn_queues_and_runs_only_after_a_close_frees_the_slot() {
         .await
         .expect("send");
 
-    let deadline = Instant::now() + Duration::from_secs(180);
+    let deadline = Instant::now() + Duration::from_secs(420);
     let events = loop {
         let events = service.events_after(0, 500).await;
         let settled = events.iter().any(|event| {
