@@ -53,16 +53,16 @@ fn tempdir_profile(
     network: SandboxNetworkClass,
 ) -> SandboxProfileMaterial {
     for root in ["read", "write", "scratch", "cache"] {
-        make_dir(&base.path().join(root));
+        make_dir(&base.join(root));
     }
-    write_file(&base.path().join("read/source.txt"), "p16-read-root");
-    write_file(&base.path().join("cache/registry.bin"), "p16-cache-root");
+    write_file(&base.join("read/source.txt"), "p16-read-root");
+    write_file(&base.join("cache/registry.bin"), "p16-cache-root");
     SandboxProfileMaterial {
-        read_roots: vec![base.path().join("read").to_string_lossy().into_owned()],
-        write_roots: vec![base.path().join("write").to_string_lossy().into_owned()],
-        scratch_root: base.path().join("scratch").to_string_lossy().into_owned(),
+        read_roots: vec![base.join("read").to_string_lossy().into_owned()],
+        write_roots: vec![base.join("write").to_string_lossy().into_owned()],
+        scratch_root: base.join("scratch").to_string_lossy().into_owned(),
         toolchain_roots,
-        cache_roots: vec![base.path().join("cache").to_string_lossy().into_owned()],
+        cache_roots: vec![base.join("cache").to_string_lossy().into_owned()],
         git_hidden: true,
         inherited_fds: vec![0, 1, 2],
         environment_allowlist: vec!["PATH".into(), "RC16_E2E_TOKEN".into()],
@@ -702,7 +702,11 @@ fn profile_refusals_precede_any_binary_trust() {
     ));
 
     let mut git_scratch = profile.clone();
-    git_scratch.scratch_root = base.path().join("scratch/.git").to_string_lossy().into_owned();
+    git_scratch.scratch_root = base
+        .path()
+        .join("scratch/.git")
+        .to_string_lossy()
+        .into_owned();
     assert!(matches!(
         build_bwrap_launch_plan(&git_scratch, &missing, "boot-p16"),
         Err(BwrapPlanError::InvalidProfile(reason)) if reason.contains(".git")

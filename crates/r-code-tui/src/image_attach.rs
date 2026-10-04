@@ -281,6 +281,8 @@ pub fn read_clipboard_image() -> Result<Option<PendingImage>, String> {
 }
 
 /// PNG 字节（已编码）的预览：解码后按 RGBA 渲染（DIB 路径复用）。
+/// 生产者仅 Windows 剪贴板路径——unix 上无调用方，测试仍直接使用。
+#[cfg_attr(not(windows), allow(dead_code))]
 fn preview_lines_bytes(png: &[u8], _width: u32, _height: u32) -> Vec<String> {
     match image::load_from_memory(png) {
         Ok(decoded) => preview_lines(&decoded.to_rgba8()),
@@ -298,7 +300,8 @@ fn clipboard_name(extension: &str) -> String {
 
 /// CF_DIB/CF_DIBV5 → RGBA（BI_RGB 24/32bpp；bottom-up 翻转；32bpp 的全零
 /// alpha 通道按不透明处理——大量 DIB 生产者不写 alpha）。
-/// 纯函数可单测（不依赖 Windows）。
+/// 纯函数可单测（不依赖 Windows）；调用方在 Windows 剪贴板路径。
+#[cfg_attr(not(windows), allow(dead_code))]
 fn dib_to_rgba(dib: &[u8]) -> Result<(image::RgbaImage, u32, u32), String> {
     if dib.len() < 40 {
         return Err("剪贴板图片数据不完整".to_string());
