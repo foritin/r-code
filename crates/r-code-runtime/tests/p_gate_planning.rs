@@ -1,4 +1,8 @@
 //! P-GATE — deterministic Native planning over the current checkout.
+//! macOS：daemon→native harness 链路依赖平台安全激活报告（P13），本 wave
+//! 报告后端固定 none-this-wave/Unsupported——链路在 macOS 按设计拒绝启动；
+//! 端到端用例由 linux/windows 腿运行，P13 报告落地后移除此门。
+#![cfg(not(target_os = "macos"))]
 
 mod p_gate_support;
 

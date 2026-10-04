@@ -1,4 +1,9 @@
 //! M1a-10/11 (FR-8 step one): the children executor end to end — the parent
+//! macOS：daemon→native harness 链路依赖平台安全激活报告（P13），本 wave
+//! 报告后端固定 none-this-wave/Unsupported——链路在 macOS 按设计拒绝启动；
+//! 端到端用例由 linux/windows 腿运行，P13 报告落地后移除此门。
+#![cfg(not(target_os = "macos"))]
+
 //! model spawns a scout through the children_spawn catalog tool, the child
 //! runs as a REAL task through the standard drive machinery (own session,
 //! journal, ledger), children_wait blocks on the condvar and returns the
