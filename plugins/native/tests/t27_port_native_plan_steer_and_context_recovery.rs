@@ -80,6 +80,7 @@ impl ModelService for TextModel {
             stream_id,
             finish_reason: Some("end_turn".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

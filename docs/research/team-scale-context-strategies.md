@@ -71,7 +71,7 @@
 - spec-kit constitution 的 CLI 优先原则："Every library exposes functionality via CLI; text in/out; support JSON + human-readable formats"——一切能力可被 agent 与 CI 验证。
 - 增量验证：airflow `breeze ci selective-check --commit-ref`（changed files → 测试子集）写进 AGENTS.md，等于把 affected 检测做成 agent 可调用的一行命令。
 
-## 4. 对 r-code 的优化点映射（已并入 [project-context plan](../prd/project-context/plan.md)）
+## 4. 对 r-code 的优化点映射（已并入 [project-context plan](../support/archive/prd/project-context/prd.md)）
 
 1. 不变量引擎具体化为 **ast-grep 进程内嵌**（Rust crate）；
 2. /init 生成段采用 **managed block 标记**（airflow/Turborepo 模式）+ 命令版本对齐；

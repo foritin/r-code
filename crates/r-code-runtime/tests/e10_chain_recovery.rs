@@ -87,6 +87,7 @@ impl ModelService for WaveModel {
             stream_id: stream_id.into(),
             finish_reason: Some("done".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

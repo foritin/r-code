@@ -1,6 +1,6 @@
 # AI 长任务执行产物
 
-远程控制（docs/prd/remote-control/worklist.md）的连续执行状态：
+远程控制（docs/support/archive/prd/remote-control/worklist.md）的连续执行状态：
 
 - `current.yaml` —— 当前任务包（唯一单项恢复状态），从 skill 模板生成
 - `evidence/<task-id>.yaml` —— 任务通过后的证据归档

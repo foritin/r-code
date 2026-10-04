@@ -9,10 +9,12 @@
 | [大型项目上下文服务调研](./research/large-project-context-strategies.md) | 2026-09 调研：AGENTS.md 生态、检索范式之争、上下文工程与 R-Code 落地建议 |
 | [巨仓/多人增补调研](./research/team-scale-context-strategies.md) | 2026-09 增补：社区方案、团队治理、monorepo 实践 |
 | [压缩与子代理调研](./research/compaction-and-subagent-best-practices.md) | 2026-09 增补：上下文压缩分层方案与子代理协作共识（R1–R3 蓝图） |
-| [项目上下文引擎 PRD](./prd/project-context/prd.md) | `ready-for-review`：AGENTS.md 读取引擎、`/init` 引擎化、压缩引擎（R1）、记忆/子代理接线（R2/R3）、ast-grep 不变量与多人协作层；依据[大型项目调研](./research/large-project-context-strategies.md)、[巨仓/多人增补调研](./research/team-scale-context-strategies.md)、[压缩与子代理调研](./research/compaction-and-subagent-best-practices.md) |
-| [远程控制（草案）](./prd/remote-control/plan.md) | `draft`：扫码配对、局域网 PWA 控制、设备能力分档、可选公网中继 |
-| [R-Code v1 统一架构与实施 PRD](./prd/r-code-v1/index.md) | 当前执行入口、真实进度、Provider/Plan/执行/验证/安全边界与恢复协议 |
-| [Harness v1 参考](./prd/pluggable-harness/architecture.md) | 已落地的插件架构、[协议](./prd/pluggable-harness/protocol-v1.md)与[开发指南](./prd/pluggable-harness/plugin-author-guide.md)；原 PRD 已归档 |
+| [项目上下文引擎 PRD](./support/archive/prd/project-context/prd.md) | 已归档（M1a 引擎落地）：AGENTS.md 读取引擎、`/init` 引擎化、压缩引擎、记忆/子代理接线、ast-grep 不变量与多人协作层；依据[大型项目调研](./research/large-project-context-strategies.md)、[巨仓/多人增补调研](./research/team-scale-context-strategies.md)、[压缩与子代理调研](./research/compaction-and-subagent-best-practices.md) |
+| [Agent Loop 韧性 PRD](./support/archive/prd/agent-loop-resilience/prd.md) | 已归档（`implemented` v2.1）：A00–A15 任务（[worklist.json](./support/archive/prd/agent-loop-resilience/worklist.json)）覆盖流完成性、重放、预算接力、队列/重启恢复、幂等栅栏、工具并行与取消/steer 修复 |
+| [执行波次租约生命周期 PRD](./support/archive/prd/execution-wave-leases/prd.md) | 已归档（`implemented` L01–L08）：parallel.rs 租约族八项缺陷修复——含取消先杀后放租的安全项 |
+| [R-Code v1 统一架构与实施 PRD](./support/archive/prd/r-code-v1/index.md) | 已归档：统一执行入口、Provider/Plan/执行/验证/安全边界与恢复协议；P-GATE 9/9、M-GATE 4/4 |
+| [远程控制（草案）](./support/archive/prd/remote-control/plan.md) | 已归档（`draft`）：扫码配对、局域网 PWA 控制、设备能力分档、可选公网中继 |
+| [Harness v1 参考](./support/harness/architecture.md) | 已落地的插件架构、[协议](./support/harness/protocol-v1.md)与[开发指南](./support/harness/plugin-author-guide.md)；原 PRD 已归档 |
 | [重构前架构基线](./support/archive/architecture-before-pluggable-harness.md) | 已归档的现有实现说明，用于代码取证与迁移对照 |
 | [联网工具与 MCP](./support/guides/mcp.md) | 原生联网、MCP 管理、Registry、安全确认、跨平台启动和故障恢复 |
 | [演进记忆](./support/guides/memory.md) | 全局/项目作用域、自动触发、Reviewer、审批、注入、持久化与隐私边界 |
@@ -28,9 +30,11 @@
 
 ## 当前实施合同
 
+当前没有进行中的实施合同；新的计划放入 [`prd/`](./prd/README.md) 工作区。
+
 | 文档 | 状态 |
 | --- | --- |
-| [R-Code v1 统一架构与实施](./prd/r-code-v1/index.md) | **进行中**：P-GATE 9/9、M-GATE 4/4、Safety 5/39 KEEP；当前 P05 为未验收 WIP。Harness v1 的历史 T00–T42 已实施证据见[归档进度](./support/archive/pluggable-harness-prd/progress.md) |
+| [R-Code v1 统一架构与实施](./support/archive/prd/r-code-v1/index.md) | 已归档：P-GATE 9/9、M-GATE 4/4、Safety 5/39 KEEP。Harness v1 的历史 T00–T42 已实施证据见[归档进度](./support/archive/pluggable-harness-prd/progress.md) |
 
 ## 旧链路退役（T42）
 

@@ -1,0 +1,54 @@
+schema_version: ai-worklist-freeze.v1
+skill_contract:
+  name: prd-to-ai-worklist
+  version: 1.1.0
+
+status: frozen
+source_document: docs/support/archive/prd/r-code-v1/index.md
+
+normative_input:
+  files:
+    - docs/support/archive/prd/r-code-v1/index.md
+    - docs/support/archive/prd/r-code-v1/worklists/p-gate.tasks.json
+    - docs/support/archive/prd/r-code-v1/worklists/m-gate.tasks.json
+    - docs/support/archive/prd/r-code-v1/worklists/safety.tasks.json
+  digest_algorithm: sha256
+  normalization: ai-worklist-norm.v1
+  digest: a83b54e068bb5e78022022115627323565d5301e1d03260f0db711140ed05bcb
+
+worklist:
+  current_machine_task_count: 52
+  kept_task_count: 18
+  active_task: P05
+  digest_algorithm: sha256
+  normalization: ai-worklist-contract-norm.v1
+  digest: 0e1382ef7017e500f550a9aa7a04cc646e998bd468ea058779c33acf76f21f2f
+
+verification_harness:
+  cumulative_test: "rtk cargo test --workspace --all-features -- --test-threads=1"
+  static_gate: "rtk cargo clippy --workspace --all-features --all-targets -- -D warnings"
+  task_records: docs/support/archive/prd/r-code-v1/progress/
+  note: P05 and later tasks use task-specific QA tests plus the cumulative gate; required assertion absence is failure.
+
+completion_gate:
+  passed: true
+  blocking_issues: 0
+  major_issues: 0
+  report: 52 machine tasks have unique IDs and acyclic validated worklists; completed status is evidence-backed; P05 is explicitly WIP and first ready task.
+  report_path: docs/support/archive/prd/r-code-v1/document-gate.json
+
+volatile_fields_excluded:
+  - index.md VOLATILE block
+  - checkbox_state
+  - progress_counts
+  - current.md
+  - progress/
+  - evidence/
+  - run_metadata
+
+material_change_triggers:
+  - normative_requirement_changed
+  - repository_fact_invalidates_task
+  - blocking_or_major_gate_failure
+  - state_or_evidence_contradiction
+  - explicit_scope_change

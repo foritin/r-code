@@ -1,6 +1,6 @@
 # R-Code 架构与实现细节
 
-> 归档说明（2026-09-09）：本文保留可插拔 Harness 重构前的实现基线，原位置为 `docs/architecture.md`。后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md)；归档不表示该新架构已经实现。除本说明与相对链接外，原有实现描述保留。
+> 归档说明（2026-09-09）：本文保留可插拔 Harness 重构前的实现基线，原位置为 `docs/architecture.md`。后续方案见 [可插拔 Harness PRD](../harness/plan.md)；归档不表示该新架构已经实现。除本说明与相对链接外，原有实现描述保留。
 
 本文描述当前代码的实际结构，而不是历史设计目标。它面向维护者、评审者和需要扩展 R-Code 的开发者；发布操作另见 [RELEASING.md](../operations/releasing.md)。
 

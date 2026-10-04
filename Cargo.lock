@@ -5507,6 +5507,7 @@ dependencies = [
  "agent-config",
  "async-trait",
  "base64 0.22.1",
+ "futures",
  "r-code-gateway",
  "r-code-harness-protocol",
  "r-code-harness-sdk",

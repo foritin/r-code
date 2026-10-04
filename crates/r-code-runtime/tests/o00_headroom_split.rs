@@ -187,6 +187,7 @@ impl ModelService for ReviewModel {
             stream_id: stream_id.into(),
             finish_reason: Some("done".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }
@@ -481,6 +482,7 @@ impl ModelService for EchoModel {
             stream_id: "echo".into(),
             finish_reason: Some("end_turn".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

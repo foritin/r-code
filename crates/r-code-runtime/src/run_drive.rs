@@ -181,7 +181,14 @@ impl RunManager {
             if let Err(error) = outcome {
                 self.record_failure(&task_id, &input, &error, slot).await;
                 self.release_slot(slot).await;
-                break;
+                // A09：失败后走既有 settled 判定继续派发队列剩余输入（失败
+                // 输入已被 record_failure acknowledge 消费）；任何提前退出都
+                // 必须在锁内清 drive token——send 在 run_one 已返回而任务尚未
+                // 标记 finished 的窗口内会误判 loop 存活而滞留队列。
+                if self.pause_dispatch_if_settled(&task_id, slot).await {
+                    break;
+                }
+                continue;
             }
             // Release the run registration on both paths. Failure records
             // must inspect ownership before this local identity is cleared.
@@ -242,6 +249,29 @@ impl RunManager {
         let mut slot_guard = slot.lock().await;
         let task_id = slot_guard.task_id.clone()?;
         let input = self.kernel_tasks.poll(&task_id).await;
+        // A10：poll 空且本进程尚未重播种过——把 store 侧重建的未投递输入灌回
+        // （G12：daemon 重启后内存队列起空，崩溃时滞留的输入此前永不派发）。
+        if input.is_none() {
+            let needs_reseed = !self.reseeded.lock().expect("reseeded").contains(&task_id);
+            if needs_reseed {
+                self.reseeded
+                    .lock()
+                    .expect("reseeded")
+                    .insert(task_id.clone());
+                let undelivered = r_code_store::v1::rebuild_queue(&self.store, &task_id).1;
+                if !undelivered.is_empty() {
+                    self.kernel_tasks.reseed(&task_id, undelivered).await;
+                    drop(slot_guard);
+                    let slot_guard = slot.lock().await;
+                    let task_id = slot_guard.task_id.clone()?;
+                    return self
+                        .kernel_tasks
+                        .poll(&task_id)
+                        .await
+                        .map(|input| (task_id, input));
+                }
+            }
+        }
         if input.is_none() {
             slot_guard.drive = None;
             slot_guard.run_id = None;

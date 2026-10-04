@@ -9,15 +9,16 @@
 | [`guides/`](./guides/) | MCP、演进记忆、Plan 模式等专题指南 | 解释当前能力，若与测试代码冲突以测试代码为准 |
 | [`operations/`](./operations/) | 安装/备份/恢复与发布手册 | 用户和发布维护者的操作入口 |
 | [`platform/`](./platform/) | macOS 等真机验证清单 | 不能由其他平台 fixture 冒充通过 |
+| [`harness/`](./harness/) | 已落地的 Harness v1 插件架构、协议与开发指南 | 活的参考文档；若与协议代码冲突以代码为准 |
 | [`contracts/`](./contracts/) | 已完成 revision 的冻结 PRD/freeze | 历史实施合同，不是本轮待办状态源 |
 | [`ui-reference/legacy/`](./ui-reference/legacy/) | 旧亮/暗 UI 截图 | 仅供视觉追溯，不证明当前实现 |
-| [`archive/`](./archive/) | 一次性方案、实验基线、历史原型和阶段决策 | 不作为当前产品要求或未完成 Checklist |
+| [`archive/`](./archive/) | 一次性方案、实验基线、历史原型、阶段决策与已实施 PRD | 不作为当前产品要求或未完成 Checklist |
 
 当前活跃入口：
 
 - [文档导航](../readme.md) / [English](../readme.en.md)
-- [当前 PRD 索引](../prd/index.md)
-- [可插拔 Harness 重构计划](../prd/pluggable-harness/plan.md)
+- [PRD 工作区](../prd/README.md)（当前无进行中计划）
+- [Harness v1 参考](./harness/architecture.md)
 
 实现取证与历史方案：
 
@@ -40,6 +41,12 @@
 | `docs/archive/**` | `docs/support/archive/**` |
 | `docs/architecture.md` | `docs/support/archive/architecture-before-pluggable-harness.md` |
 | `docs/tui-v1/**` | `docs/support/archive/tui-v1/**` |
+| `docs/prd/r-code-v1/**` | `docs/support/archive/prd/r-code-v1/**` |
+| `docs/prd/remote-control/**` | `docs/support/archive/prd/remote-control/**` |
+| `docs/prd/project-context/**` | `docs/support/archive/prd/project-context/**` |
+| `docs/prd/agent-loop-resilience/**` | `docs/support/archive/prd/agent-loop-resilience/**` |
+| `docs/prd/execution-wave-leases/**` | `docs/support/archive/prd/execution-wave-leases/**` |
+| `docs/prd/pluggable-harness/**` | `docs/support/harness/**` |
 
 2026-09-09 的顶层整理保留了归档前的未提交内容。旧 TUI PRD 的规范／任务正文、digest、完成状态和历史 evidence 路径不改写；freeze 仅调整位置元数据。新基准运行写入 `artifacts/metrics/tui-v1/`，不覆盖归档报告。
 

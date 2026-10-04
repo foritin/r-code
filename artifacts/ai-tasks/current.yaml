@@ -4,10 +4,10 @@ task_id: RA1
 status: active
 
 source:
-  document: docs/prd/remote-control/worklist.md
+  document: docs/support/archive/prd/remote-control/worklist.md
   refs:
-    - docs/prd/remote-control/worklist.md#RA1-审批-pending-op-持久化与事件外发
-    - docs/prd/remote-control/architecture.md#6-命令与事件复用既有协议
+    - docs/support/archive/prd/remote-control/worklist.md#RA1-审批-pending-op-持久化与事件外发
+    - docs/support/archive/prd/remote-control/architecture.md#6-命令与事件复用既有协议
 
 objective: 审批 pending op 持久化与事件外发——journal 出现 approval.requested/decided；阻塞中的插件调用在决策（或超时拒绝）后继续；daemon 重启后未决 op 从事件重建。
 depends_on: []

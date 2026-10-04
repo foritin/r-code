@@ -50,6 +50,7 @@ impl ModelService for BlockingModel {
             stream_id: "cancel-race".into(),
             finish_reason: Some("done".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

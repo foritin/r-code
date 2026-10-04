@@ -6,8 +6,8 @@ The top level of `docs/` contains navigation, active plans in `prd/`, and suppor
 
 | Document | Purpose |
 | --- | --- |
-| [R-Code v1 unified architecture and implementation PRD](./prd/r-code-v1/index.md) | Active execution entry, evidence-backed progress, provider/planning/execution/safety boundaries, and recovery protocol (Chinese) |
-| [Harness v1 reference](./prd/pluggable-harness/architecture.md) | Implemented plugin architecture, [protocol](./prd/pluggable-harness/protocol-v1.md), and [author guide](./prd/pluggable-harness/plugin-author-guide.md); the original PRD is archived |
+| [R-Code v1 unified architecture and implementation PRD](./support/archive/prd/r-code-v1/index.md) | Archived: unified execution entry, evidence-backed progress, provider/planning/execution/safety boundaries, and recovery protocol (Chinese) |
+| [Harness v1 reference](./support/harness/architecture.md) | Implemented plugin architecture, [protocol](./support/harness/protocol-v1.md), and [author guide](./support/harness/plugin-author-guide.md); the original PRD is archived |
 | [Pre-refactor architecture baseline](./support/archive/architecture-before-pluggable-harness.md) | Archived implementation reference for migration and code investigation (Chinese) |
 | [Web tools and MCP](./support/guides/mcp.md) | Native web access, MCP management, Registry, security confirmation, cross-platform startup, and failure recovery (Chinese) |
 | [Evolution memory](./support/guides/memory.md) | Global/project scope, automatic triggers, Reviewer, approval, injection, persistence, and privacy boundaries (Chinese) |
@@ -21,16 +21,13 @@ The top level of `docs/` contains navigation, active plans in `prd/`, and suppor
 | [Privacy Notice](../PRIVACY.md) | Data flows for local storage, model providers, Codex, updates, and support bundles |
 | [English README](../README.md) / [简体中文 README](../README.zh-CN.md) | Product overview, quick development, validation commands, and repository navigation |
 
-## Active Implementation Contract
-
-| Document | Status |
-| --- | --- |
-| [R-Code v1 unified implementation](./prd/r-code-v1/index.md) | In progress: P-GATE 9/9, M-GATE 4/4, Safety 5/39 kept; P05 is unverified WIP. Historical Harness T00–T42 evidence is preserved in the [archive](./support/archive/pluggable-harness-prd/progress.md). |
-
 ## Historical Implementation Contracts
 
+There is no active implementation contract right now; new plans start in the [`prd/`](./prd/README.md) workspace.
+
 | Document | Status |
 | --- | --- |
+| [R-Code v1 unified implementation](./support/archive/prd/r-code-v1/index.md) | Archived: P-GATE 9/9, M-GATE 4/4, Safety 5/39 kept. Historical Harness T00–T42 evidence is preserved in the [archive](./support/archive/pluggable-harness-prd/progress.md). |
 | [Pi-alignment + TUI plan](./support/archive/pi-alignment/pi-alignment-and-tui-prd.md) | Archived; original status belongs to its historical revision, not the active worklist |
 | [TUI v1 / R-Code CLI plan](./support/archive/tui-v1/r-code-cli-prd.md) | Archived with its research, prototype, and freeze; normative digests and historical evidence are preserved |
 | [Historical Codex rich-interaction contract](./support/contracts/codex-rich-interaction-prd.md) | Its `38/38` evidence applies to a specific 2026-08-25 revision; the current dirty `dev` must be revalidated by M0-02 |

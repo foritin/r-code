@@ -9,8 +9,8 @@
 
 | 文档 | 归档原因 |
 | --- | --- |
-| [可插拔 Harness PRD](./pluggable-harness-prd/README.md) | 原计划、任务、评审、进度与 E2E 规划已完成历史职责；后续统一执行依据为 [R-Code v1 PRD](../../prd/r-code-v1/index.md) |
-| [重构前架构基线](./architecture-before-pluggable-harness.md) | 2026-09-09 按文档整理决策归档，保留当时实际实现；后续方案见 [可插拔 Harness PRD](../../prd/pluggable-harness/plan.md) |
+| [可插拔 Harness PRD](./pluggable-harness-prd/README.md) | 原计划、任务、评审、进度与 E2E 规划已完成历史职责；后续统一执行依据为 [R-Code v1 PRD](./prd/r-code-v1/index.md) |
+| [重构前架构基线](./architecture-before-pluggable-harness.md) | 2026-09-09 按文档整理决策归档，保留当时实际实现；后续方案见 [可插拔 Harness PRD](../harness/plan.md) |
 | [DeepSeek 前缀缓存 PRD](./deepseek-prefix-cache.md) | 分阶段方案已实施并完成主要验收，保留设计与例外记录 |
 | [DeepSeek 缓存基线](./deepseek-cache-baseline.md) | 一次性真实 API 测量已完成，保留发布门槛证据 |
 | [DeepSeek Harness 可借鉴性评估](./deepseek-harness.md) | 调研与差距分析已完成，相关能力已落地 |
@@ -29,6 +29,20 @@
 | [设置体验与图片理解实施方案](./implementation/settings-ux-and-image-understanding.md) | 实施方案已由当前设置 UI、测试和维护文档承接 |
 | [广度编排与思考效率工作清单](./implementation/breadth-orchestration-and-thinking-efficiency.md) | 未进入当前产品执行链的阶段性草案，连同固化文件保留 |
 | [广度工作清单固化记录](./implementation/breadth-orchestration-freeze.yaml) | 与上项配套的历史 draft，不作为当前固化状态 |
+
+## 已实施 PRD（2026-10-04 归档）
+
+五个 PRD 计划目录从 `docs/prd/` 整体迁入 [`prd/`](./prd/)，`docs/prd/` 清空为后续新计划的工作区：
+
+| 计划 | 归档原因 |
+| --- | --- |
+| [R-Code v1 统一架构与实施](./prd/r-code-v1/index.md) | P-GATE 9/9、M-GATE 4/4、Safety 5/39 KEEP；当前执行入口职责已由代码与维护文档承接 |
+| [远程控制](./prd/remote-control/index.md) | 独立产品域，实现/放行状态见其 worklist；不再作为当前待办状态源 |
+| [项目上下文引擎](./prd/project-context/prd.md) | M1a 项目上下文引擎已落地（O-GATE KEEP 成果入库），验收证据随目录保留 |
+| [Agent Loop 韧性](./prd/agent-loop-resilience/prd.md) | `implemented`（v2.1）：A00–A15 机器任务落地，覆盖流完成性、重放、预算接力、队列/重启恢复、幂等栅栏、工具并行与取消/steer |
+| [执行波次租约生命周期](./prd/execution-wave-leases/prd.md) | `implemented`（L01–L08）：取消先杀后放租、非 Started 退出零泄漏、CAS 调和保事件、瞬时扫描失败 defer |
+
+原 `docs/prd/pluggable-harness/` 参考集（架构、协议、开发指南）为活文档，未归档，迁至 [`docs/support/harness/`](../harness/)。
 
 ## 历史原型
 

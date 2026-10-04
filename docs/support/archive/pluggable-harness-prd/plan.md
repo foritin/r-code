@@ -305,7 +305,7 @@ LOC 是规划估算，不包括大量机械移动；T06a、T26、T29、T30、T33
 当前计划校验：
 
 ```text
-python .agents/skills/plan-loop/tools/validate_plan.py --tasks docs/prd/pluggable-harness/tasks.json
+python .agents/skills/plan-loop/tools/validate_plan.py --tasks docs/support/harness/tasks.json
 ```
 
 ## 10. 评审与执行约定

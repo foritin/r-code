@@ -5,7 +5,7 @@
 //!   cancel`, `shutdown`) through [`HarnessHandlers`];
 //! - calls host services through the typed [`SdkHandle`] client with
 //!   attempt-stable operation keys;
-//! - consumes model/process streams via correlated notifications;
+//! - model/process results arrive as single aggregated RPC replies;
 //! - observes cancellation through a cooperative flag + notifier.
 //!
 //! The SDK depends only on the public protocol; it never links host
@@ -16,7 +16,7 @@ use r_code_harness_protocol::rpc::{
     RpcResponse, MAX_FRAME_BYTES,
 };
 use r_code_harness_protocol::services::*;
-use r_code_harness_protocol::{EventKind, HarnessEventParams, StreamEvent};
+use r_code_harness_protocol::{EventKind, HarnessEventParams};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
@@ -30,6 +30,9 @@ pub struct ModelStreamOutcome {
     pub stream_id: String,
     pub finish_reason: Option<String>,
     pub usage: r_code_harness_protocol::ModelUsage,
+    /// A14：本轮流式输出的推理文本聚合（推理模型；普通流为 None）。
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 /// The loop-facing turn result: outcome + the assistant's wire turn.
@@ -181,7 +184,6 @@ struct Shared {
     outbound: mpsc::UnboundedSender<Vec<u8>>,
     cancelled: AtomicBool,
     cancel_notify: Notify,
-    streams: Mutex<HashMap<String, mpsc::UnboundedSender<StreamEvent>>>,
     harness_config: Mutex<serde_json::Value>,
 }
 
@@ -216,14 +218,28 @@ impl SdkHandle {
             self.shared.pending.lock().await.remove(&id);
             return Err(SdkError::Closed("writer stopped".into()));
         }
-        match tokio::time::timeout(timeout, rx).await {
-            Err(_) => {
+        // A07：等待期取消可中断（此前只在发送前查一次，之后等满超时）。
+        // 取消优先于响应：已取消 run 的迟到响应本就应丢弃。
+        if self.shared.cancelled.load(Ordering::SeqCst) {
+            self.shared.pending.lock().await.remove(&id);
+            return Err(SdkError::Cancelled);
+        }
+        let mut cancel_wait = std::pin::pin!(self.shared.cancel_notify.notified());
+        tokio::select! {
+            biased;
+            _ = &mut cancel_wait => {
                 self.shared.pending.lock().await.remove(&id);
-                Err(SdkError::Timeout("host response"))
+                Err(SdkError::Cancelled)
             }
-            Ok(Err(_)) => Err(SdkError::Closed("reader stopped".into())),
-            Ok(Ok(Ok(value))) => Ok(value),
-            Ok(Ok(Err(error))) => Err(error.into()),
+            outcome = tokio::time::timeout(timeout, rx) => match outcome {
+                Err(_) => {
+                    self.shared.pending.lock().await.remove(&id);
+                    Err(SdkError::Timeout("host response"))
+                }
+                Ok(Err(_)) => Err(SdkError::Closed("reader stopped".into())),
+                Ok(Ok(Ok(value))) => Ok(value),
+                Ok(Ok(Err(error))) => Err(error.into()),
+            }
         }
     }
 
@@ -473,10 +489,14 @@ impl SdkHandle {
 
     /// Wait until cancellation is requested.
     pub async fn wait_for_cancel(&self) {
+        // A07：先注册再查标志——notify_waiters 不留 permit，check-then-register
+        // 会丢掉注册前一刻的取消（取消是一次性事件，丢了就永远等）。
+        let notified = self.shared.cancel_notify.notified();
+        tokio::pin!(notified);
         if self.is_cancelled() {
             return;
         }
-        self.shared.cancel_notify.notified().await;
+        notified.await;
     }
 
     /// The harness configuration passed at initialize.
@@ -610,7 +630,7 @@ pub async fn serve_with_limits<H: HarnessHandlers>(
     let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     // Writer: one frame per line, flushed immediately.
-    let writer_task = tokio::spawn(async move {
+    let mut writer_task = tokio::spawn(async move {
         let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
         while let Some(frame) = outbound_rx.recv().await {
             if stdout.write_all(&frame).await.is_err() {
@@ -628,7 +648,6 @@ pub async fn serve_with_limits<H: HarnessHandlers>(
         outbound: outbound_tx,
         cancelled: AtomicBool::new(false),
         cancel_notify: Notify::new(),
-        streams: Mutex::new(HashMap::new()),
         harness_config: Mutex::new(serde_json::Value::Null),
     });
     let handle = SdkHandle {
@@ -645,6 +664,16 @@ pub async fn serve_with_limits<H: HarnessHandlers>(
             .await
             .map_err(|e| SdkError::Fault(e.to_string()))?;
         if n == 0 {
+            // A07：stdin EOF 即宿主已走——置取消、唤醒等待者、排空全部挂起
+            // host_call（此前它们会等满各自超时，最长 300s）。
+            shared.cancelled.store(true, Ordering::SeqCst);
+            shared.cancel_notify.notify_waiters();
+            let mut pending = shared.pending.lock().await;
+            for (_, sender) in pending.drain() {
+                let _ = sender.send(Err(RpcError::internal(String::from(
+                    "reader stopped (stdin EOF)",
+                ))));
+            }
             break;
         }
         if line.len() > max_frame {
@@ -667,7 +696,7 @@ pub async fn serve_with_limits<H: HarnessHandlers>(
                 let handlers = handlers.clone();
                 let handle = handle.clone();
                 let reply_tx = reply_tx.clone();
-                tokio::spawn(async move {
+                let dispatch_task = tokio::spawn(async move {
                     let outcome = dispatch_request(&handlers, handle, request).await;
                     let response = match outcome {
                         Ok(result) => RpcResponse {
@@ -688,26 +717,35 @@ pub async fn serve_with_limits<H: HarnessHandlers>(
                     }
                 });
                 if is_shutdown {
+                    // A07：等派发任务把 shutdown 响应帧入队后再退出循环，
+                    // writer 正常排空而非 abort（ack 不再丢失）。JoinError
+                    // 仅在派发任务 panic 时出现——那时 ack 已无从谈起，
+                    // 循环照常退出。
+                    let _ = dispatch_task.await;
                     break;
                 }
             }
             RpcMessage::Notification(notification) => {
                 if notification.method == "harness.steer" {
-                    if let Some(params) = notification.params {
-                        if let Ok(steer) = serde_json::from_value::<HarnessSteerParams>(params) {
-                            handlers.on_steer(handle.clone(), steer).await;
+                    // A07：steer 派发到独立任务——serve loop 绝不内联等待插件
+                    // handler（否则 Response 分发与事件转发全部停摆，与
+                    // session 侧跨 await 的 state 锁叠加成互等死锁）。
+                    let params = notification.params.unwrap_or(serde_json::Value::Null);
+                    match serde_json::from_value::<HarnessSteerParams>(params) {
+                        Ok(steer) => {
+                            let handlers = handlers.clone();
+                            let handle = handle.clone();
+                            tokio::spawn(async move {
+                                handlers.on_steer(handle, steer).await;
+                            });
                         }
-                    }
-                } else if notification.method == "stream.event" {
-                    if let Some(params) = notification.params {
-                        if let Ok(event) = serde_json::from_value::<StreamEvent>(params) {
-                            let streams = shared.streams.lock().await;
-                            if let Some(sender) = streams.get(&event.stream_id) {
-                                let _ = sender.send(event);
-                            }
+                        Err(error) => {
+                            eprintln!("malformed harness.steer params dropped: {error}");
                         }
                     }
                 }
+                // A07：stream.event 注册表从未被订阅（死代码），与其文档假象
+                // 一并移除——model_stream 是单次 RPC 聚合，无增量通道。
             }
             RpcMessage::Response(response) => {
                 if let RpcId::Number(id) = response.id {
@@ -724,6 +762,11 @@ pub async fn serve_with_limits<H: HarnessHandlers>(
             }
         }
     }
+    // A07：给 writer 一个有界排空窗口（让已入队响应帧写出）再兜底 abort。
+    // 不能无限等待：共享 Arc<Shared> 仍持有 outbound 发送端，通道不会自然
+    // 关闭，无限 await 会挂死（实测教训）。
+    drop(outbound_clone(&shared));
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer_task).await;
     writer_task.abort();
     Ok(())
 }
@@ -768,11 +811,9 @@ async fn dispatch_request(
             Ok(result)
         }
         "harness.cancel" => {
-            let parsed: HarnessCancelParams =
-                serde_json::from_value(params).unwrap_or(HarnessCancelParams {
-                    identity: empty_identity(),
-                    reason: None,
-                });
+            // A07：与其他方法一致——坏参数显式报错，不再合成空身份静默通过。
+            let parsed: HarnessCancelParams = serde_json::from_value(params)
+                .map_err(|e| RpcError::invalid_params(e.to_string()))?;
             handle.shared.cancelled.store(true, Ordering::SeqCst);
             handle.shared.cancel_notify.notify_waiters();
             let result = handlers.on_cancel(parsed.reason).await;
@@ -780,16 +821,6 @@ async fn dispatch_request(
         }
         "shutdown" => Ok(serde_json::Value::Null),
         other => Err(RpcError::method_not_found(other)),
-    }
-}
-
-fn empty_identity() -> r_code_harness_protocol::RunIdentity {
-    r_code_harness_protocol::RunIdentity {
-        task_id: String::new(),
-        branch_id: String::new(),
-        run_id: String::new(),
-        attempt_id: String::new(),
-        generation: 0,
     }
 }
 

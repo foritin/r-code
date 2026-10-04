@@ -40,7 +40,7 @@ regressions:
 changed_paths:
   - crates/r-code-relay/src/e2ee.rs（E2eeStream 泛型化 <S: AsyncRead+AsyncWrite+Unpin>；connect_device_stream 公开入口）
   - crates/r-code-relay/src/lib.rs（owner.bind.ack v1.1 + generation 守卫 retire；vk Copy 化）
-  - docs/prd/remote-control/relay-interface.md（v1.1：owner.bind.ack 时序化）
+  - docs/support/archive/prd/remote-control/relay-interface.md（v1.1：owner.bind.ack 时序化）
   - crates/r-code-runtime/tests/r19_relay_path.rs (new：duplex E2EE 桥 + 纵深吊销)
   - src-tauri/frontend/src/remote/core/connection-strategy.ts (new) + r19-connection-strategy.test.mjs (new)
   - scripts/verify-remote.mjs (R19.A1–A3 registered)

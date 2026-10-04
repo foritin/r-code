@@ -68,6 +68,8 @@ pub struct HostRouter {
     /// drains and persists to the journal as host-provenance events
     /// (assistant turns, tool calls, model usage).
     pub host_observations: Mutex<Vec<(String, serde_json::Value)>>,
+    /// A12：per-key 进程内互斥（同 attempt 域），幂等栅栏的预留语义。
+    key_locks: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Completion proposals recorded from the plugin (arbitrated in T20).
     pub recorded_proposals: Mutex<Vec<CompletionProposalRequest>>,
     /// Host-confirmed immutable plan publications for finalization fencing.
@@ -203,6 +205,7 @@ impl HostRouter {
             approvals: Arc::new(ApprovalStore::new(store, DEFAULT_DECISION_TIMEOUT)),
             observed_events: Mutex::new(Vec::new()),
             host_observations: Mutex::new(Vec::new()),
+            key_locks: tokio::sync::Mutex::new(HashMap::new()),
             recorded_proposals: Mutex::new(Vec::new()),
             recorded_plan_publications: Mutex::new(Vec::new()),
             child_controls: None,
@@ -461,11 +464,30 @@ impl HostRouter {
                 self.sync_transcript(&model_request)?;
                 let model_request = self.project_jit_instructions(model_request);
                 let mut sink = RouterStreamSink::default();
-                let outcome = self
-                    .models
-                    .stream(token, model_request, &mut sink)
-                    .await
-                    .map_err(service_error)?;
+                let outcome = match self.models.stream(token, model_request, &mut sink).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        // A05：失败 run 的部分文本保全——从错误消息提取（A02
+                        // 已内嵌，4KB 截断），以 assistant.partial 观察落 journal。
+                        let message = error.to_string();
+                        let partial = message
+                            .split("partial output: ")
+                            .nth(1)
+                            .map(|tail| tail.to_string())
+                            .unwrap_or_default();
+                        if !partial.is_empty() {
+                            self.observe(
+                                "assistant.partial",
+                                serde_json::json!({
+                                    "runId": self.identity.run_id,
+                                    "text": partial,
+                                    "partial": true,
+                                }),
+                            );
+                        }
+                        return Err(service_error(error));
+                    }
+                };
                 // Project the stream into the assistant turn the plugin's
                 // loop consumes: text + complete tool calls.
                 let assistant = sink.assistant_turn();
@@ -482,6 +504,19 @@ impl HostRouter {
                             .join("")
                     })
                     .unwrap_or_default();
+                // A14：推理文本保全——整段聚合（无逐 token 通道），时序在
+                // assistant.message 之前；TUI 渲染为折叠思考过程。
+                if let Some(reasoning) = outcome.reasoning.as_deref() {
+                    if !reasoning.is_empty() {
+                        self.observe(
+                            "assistant.reasoning",
+                            serde_json::json!({
+                                "runId": self.identity.run_id,
+                                "text": reasoning,
+                            }),
+                        );
+                    }
+                }
                 if !turn_text.is_empty() {
                     self.observe(
                         "assistant.message",
@@ -757,8 +792,51 @@ impl HostRouter {
             "host.checkpoint.save" => {
                 let save: CheckpointSaveRequest = serde_json::from_value(params)
                     .map_err(|e| RpcError::invalid_params(e.to_string()))?;
-                let state = base64_decode(&save.state_base64)
-                    .map_err(|e| RpcError::invalid_params(format!("bad base64: {e}")))?;
+                // A15（DEC-1 策略 b+a）：显式体量上限——与 RPC 帧上限耦合
+                // （1MB 帧 - base64 膨胀 ≈ 768KB 原始状态）。超限时宿主侧单调
+                // 截断最老 tool result 后重存一次；仍超则显式失败（G13 悬崖
+                // 从无声变有声）。
+                const MAX_CHECKPOINT_STATE_BYTES: usize = 768 * 1024;
+                let decoded_len = save.state_base64.len() / 4 * 3;
+                let mut state = if decoded_len > MAX_CHECKPOINT_STATE_BYTES {
+                    let mut state = base64_decode(&save.state_base64)
+                        .map_err(|e| RpcError::invalid_params(format!("bad base64: {e}")))?;
+                    state = truncate_oldest_tool_results(&state, MAX_CHECKPOINT_STATE_BYTES);
+                    let re_encoded_len = base64_encode_for_len_check(&state);
+                    if re_encoded_len / 4 * 3 > MAX_CHECKPOINT_STATE_BYTES {
+                        return Err(RpcError::invalid_params(format!(
+                            "checkpoint state exceeds {} bytes even after truncation;                              split the conversation or start a new session",
+                            MAX_CHECKPOINT_STATE_BYTES
+                        )));
+                    }
+                    self.observe(
+                        "checkpoint.truncated",
+                        serde_json::json!({
+                            "runId": self.identity.run_id,
+                            "bytesBefore": decoded_len,
+                            "bytesAfter": state.len(),
+                        }),
+                    );
+                    state
+                } else {
+                    base64_decode(&save.state_base64)
+                        .map_err(|e| RpcError::invalid_params(format!("bad base64: {e}")))?
+                };
+                let _ = &mut state;
+                // 计数器只在首次保存前播种一次：resume 复用同一 attempt 时
+                // 新 router 的计数器从 0 重来，会与存量 checkpoint 撞
+                // (attempt_id, revision) 唯一约束——此前该失败被 `let _ =`
+                // 吞掉，A 系列传播 checkpoint 失败后显性化（t27 重启用例）。
+                if self.checkpoint_revision.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                    if let Some(latest) = self
+                        .store
+                        .load_latest_checkpoint(&self.identity.attempt_id)
+                        .await
+                    {
+                        self.checkpoint_revision
+                            .store(latest.revision, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
                 let revision = self.next_checkpoint_revision();
                 let artifact = self
                     .store
@@ -1090,6 +1168,18 @@ impl HostRouter {
         }
     }
 
+    /// A12：取（或创建）per-key 互斥句柄。
+    async fn key_lock(
+        &self,
+        key: &r_code_harness_protocol::OperationKey,
+    ) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.key_locks.lock().await;
+        locks
+            .entry(format!("{}:{}", self.identity.attempt_id, key.0))
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
     /// Record a host-side observation for journal persistence.
     fn observe(&self, kind: &str, payload: serde_json::Value) {
         self.host_observations
@@ -1133,6 +1223,35 @@ impl HostRouter {
                 })
             }
             r_code_harness_protocol::ReplayDecision::Fresh => {
+                // A12：per-key 进程内互斥——同键并发在此串行化，后到者在锁内
+                // 重读收据（命中 Fresh 才放行），消除 check-then-act 双执行。
+                let key_guard = self.key_lock(&key).await;
+                let _key_scope = key_guard.lock().await;
+                // 重读：锁的前持有者可能已写下收据。
+                let reread = self
+                    .store
+                    .load_receipt(&self.identity.attempt_id, &key)
+                    .await
+                    .map(receipt_to_record);
+                match r_code_harness_protocol::replay_decision(reread.as_ref(), method, &hash) {
+                    r_code_harness_protocol::ReplayDecision::ReplayReceipt { result } => {
+                        return Ok(result)
+                    }
+                    r_code_harness_protocol::ReplayDecision::ConflictingInput {
+                        recorded,
+                        incoming,
+                    } => {
+                        return Err(RpcError {
+                            code: error_code::PROTOCOL_VIOLATION,
+                            message: format!(
+                                "operation key {} reused with different input ({recorded} vs {incoming})",
+                                key.0
+                            ),
+                            data: None,
+                        })
+                    }
+                    _ => {}
+                }
                 // Persist the intent before the effect.
                 self.store
                     .save_receipt(r_code_kernel::task::OperationReceipt {
@@ -1146,7 +1265,27 @@ impl HostRouter {
                     })
                     .await
                     .map_err(service_error)?;
-                let result = execute().await?;
+                let result = match execute().await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // A12：效果未完成——写 Rejected 终态，键保持可重试；
+                        // 此前滞留的 Indeterminate 会让重试落入 Reconcile 的
+                        // PROTOCOL_VIOLATION，一次瞬时错误永久砖死该键。
+                        let _ = self
+                            .store
+                            .save_receipt(r_code_kernel::task::OperationReceipt {
+                                attempt_id: self.identity.attempt_id.clone(),
+                                operation_key: key,
+                                method: method.to_string(),
+                                input_hash: hash,
+                                outcome: r_code_kernel::task::ReceiptOutcome::Rejected {
+                                    reason: error.message.clone(),
+                                },
+                            })
+                            .await;
+                        return Err(error);
+                    }
+                };
                 self.store
                     .save_receipt(r_code_kernel::task::OperationReceipt {
                         attempt_id: self.identity.attempt_id.clone(),
@@ -1164,6 +1303,21 @@ impl HostRouter {
             r_code_harness_protocol::ReplayDecision::Reconcile { class: _ }
                 if method == "host.tools.call" =>
             {
+                // A12：Reconcile 重执行同样要过 per-key 锁——并发场景下，
+                // 锁前持有者完成后此处应重读到 Completed 走重放而非再执行。
+                let key_guard = self.key_lock(&key).await;
+                let _key_scope = key_guard.lock().await;
+                let reread = self
+                    .store
+                    .load_receipt(&self.identity.attempt_id, &key)
+                    .await
+                    .map(receipt_to_record);
+                match r_code_harness_protocol::replay_decision(reread.as_ref(), method, &hash) {
+                    r_code_harness_protocol::ReplayDecision::ReplayReceipt { result } => {
+                        return Ok(result)
+                    }
+                    _ => {}
+                }
                 let result = execute().await?;
                 self.store
                     .save_receipt(r_code_kernel::task::OperationReceipt {
@@ -1196,6 +1350,74 @@ fn request_params(request: &RpcRequest) -> serde_json::Value {
 }
 
 /// View a kernel receipt as a protocol operation record for replay decisions.
+/// A15：单调截断最老 tool result——解析 JSON，把最老的 tool-result
+/// output_text 替换为占位（保留 call id + 前 200 字符），循环直到低于
+/// 预算。截断只减不增（前缀缓存纪律）；无法解析时原样返回（上游完成性
+/// 校验会另行把关）。
+fn truncate_oldest_tool_results(state: &[u8], budget: usize) -> Vec<u8> {
+    let mut value: serde_json::Value = match serde_json::from_slice(state) {
+        Ok(value) => value,
+        Err(_) => return state.to_vec(),
+    };
+    const PLACEHOLDER_MARK: &str = "[truncated by checkpoint budget]";
+    loop {
+        if state_len(&value) <= budget {
+            break;
+        }
+        // 找最老的未截断 tool-result 块并替换。
+        let mut replaced = false;
+        if let Some(messages) = value
+            .get_mut("messages")
+            .and_then(|messages| messages.as_array_mut())
+        {
+            'outer: for message in messages.iter_mut() {
+                let blocks = match message.get_mut("blocks").and_then(|b| b.as_array_mut()) {
+                    Some(blocks) => blocks,
+                    None => continue,
+                };
+                for block in blocks.iter_mut() {
+                    let is_tool_result =
+                        block.get("type").and_then(|t| t.as_str()) == Some("tool-result");
+                    let already = block
+                        .get("output_text")
+                        .and_then(|t| t.as_str())
+                        .is_some_and(|t| t.contains(PLACEHOLDER_MARK));
+                    if is_tool_result && !already {
+                        if let Some(text) = block
+                            .get("output_text")
+                            .and_then(|t| t.as_str())
+                            .map(str::to_string)
+                        {
+                            let head: String = text.chars().take(200).collect();
+                            block["output_text"] =
+                                serde_json::json!(format!("{head}{PLACEHOLDER_MARK}"));
+                            replaced = true;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+        if !replaced {
+            break;
+        }
+    }
+    serde_json::to_vec(&value).unwrap_or_else(|_| state.to_vec())
+}
+
+fn state_len(value: &serde_json::Value) -> usize {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn base64_encode_for_len_check(state: &[u8]) -> usize {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .encode(state)
+        .len()
+}
+
 fn receipt_to_record(
     receipt: r_code_kernel::task::OperationReceipt,
 ) -> r_code_harness_protocol::OperationRecord {
@@ -1462,3 +1684,258 @@ impl r_code_kernel::ports::StreamSink for RouterStreamSink {
 
 /// Default per-call deadline used by the router for service calls.
 pub const SERVICE_CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[cfg(test)]
+mod a12_fence_tests {
+    use super::*;
+    use r_code_kernel::testing::{
+        FakeModelService, FakeProcessService, FakeToolService, MemoryJournal,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn router() -> HostRouter {
+        HostRouter::new(
+            RunIdentity {
+                task_id: "t".into(),
+                branch_id: "b".into(),
+                run_id: "run-a12".into(),
+                attempt_id: "attempt-a12".into(),
+                generation: 1,
+            },
+            RunGuard::new("run-a12", 1),
+            vec![],
+            Arc::new(FakeToolService::default()),
+            Arc::new(FakeModelService::default()),
+            Arc::new(FakeProcessService::default()),
+            Arc::new(MemoryJournal::new()),
+            Arc::new(IgnoreQuestions),
+        )
+    }
+
+    #[tokio::test]
+    async fn a12_same_key_concurrent_single_execution() {
+        let router = std::sync::Arc::new(router());
+        let executions = Arc::new(AtomicUsize::new(0));
+        let key = OperationKey("op-1".into());
+        let params = serde_json::json!({"n": 1});
+        let run = |router: std::sync::Arc<HostRouter>, executions: Arc<AtomicUsize>| {
+            let router = router.clone();
+            let key = key.clone();
+            let params = params.clone();
+            async move {
+                router
+                    .deduplicated(Some(key), "host.tools.call", &params, move || {
+                        let executions = executions.clone();
+                        async move {
+                            executions.fetch_add(1, Ordering::SeqCst);
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            Ok::<_, RpcError>(serde_json::json!({"ok": true}))
+                        }
+                    })
+                    .await
+            }
+        };
+        let (a, b) = tokio::join!(
+            run(router.clone(), executions.clone()),
+            run(router.clone(), executions.clone())
+        );
+        assert!(a.is_ok() && b.is_ok());
+        assert_eq!(
+            executions.load(Ordering::SeqCst),
+            1,
+            "same-key concurrency must single-execute behind the reservation"
+        );
+        assert_eq!(a.unwrap(), b.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a12_effect_failure_key_stays_retryable() {
+        let router = router();
+        let key = OperationKey("op-flaky".into());
+        let params = serde_json::json!({"n": 2});
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let first = router
+            .deduplicated(Some(key.clone()), "host.tools.call", &params, || {
+                let attempts = attempts.clone();
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err::<serde_json::Value, RpcError>(RpcError {
+                        code: error_code::INTERNAL,
+                        message: "transient".into(),
+                        data: None,
+                    })
+                }
+            })
+            .await;
+        assert!(first.is_err(), "first attempt fails");
+        let second = router
+            .deduplicated(Some(key), "host.tools.call", &params, || {
+                let attempts = attempts.clone();
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Ok::<serde_json::Value, RpcError>(serde_json::json!({"recovered": true}))
+                }
+            })
+            .await;
+        assert_eq!(
+            second.expect("retry executes again"),
+            serde_json::json!({"recovered": true})
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[cfg(test)]
+mod a15_checkpoint_tests {
+    use super::*;
+
+    fn state_with_tool_results(sizes: &[usize]) -> Vec<u8> {
+        let messages: Vec<serde_json::Value> = sizes
+            .iter()
+            .enumerate()
+            .map(|(index, size)| {
+                serde_json::json!({
+                    "role": "tool",
+                    "blocks": [{
+                        "type": "tool-result",
+                        "call_id": format!("call-{index}"),
+                        "output_text": "x".repeat(*size),
+                    }],
+                })
+            })
+            .collect();
+        serde_json::to_vec(&serde_json::json!({"messages": messages})).unwrap()
+    }
+
+    #[test]
+    fn a15_under_bound_untouched() {
+        let state = state_with_tool_results(&[100]);
+        assert_eq!(truncate_oldest_tool_results(&state, 768 * 1024), state);
+    }
+
+    #[test]
+    fn a15_over_bound_truncates_oldest_monotonically() {
+        let state = state_with_tool_results(&[400_000, 400_000]);
+        let budget = 450 * 1024;
+        let truncated = truncate_oldest_tool_results(&state, budget);
+        assert!(
+            truncated.len() < state.len(),
+            "truncation must shrink the state"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&truncated).unwrap();
+        let texts: Vec<&str> = value["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["blocks"][0]["output_text"].as_str().unwrap())
+            .collect();
+        assert!(
+            texts[0].contains("[truncated by checkpoint budget]"),
+            "oldest truncated with marker: {}...",
+            &texts[0][..texts[0].len().min(80)]
+        );
+        assert_eq!(texts[1].len(), 400_000, "newest result left intact");
+        // 单调：再次截断不再变化。
+        let again = truncate_oldest_tool_results(&truncated, budget);
+        assert_eq!(again, truncated, "truncation is monotonic");
+    }
+}
+
+#[cfg(test)]
+mod a15_checkpoint_router_test {
+    use super::*;
+    use base64::Engine as _;
+    use r_code_harness_protocol::rpc::RpcRequest;
+    use r_code_kernel::testing::{
+        FakeModelService, FakeProcessService, FakeToolService, MemoryJournal,
+    };
+
+    fn router() -> HostRouter {
+        HostRouter::new(
+            RunIdentity {
+                task_id: "t".into(),
+                branch_id: "b".into(),
+                run_id: "run-a15".into(),
+                attempt_id: "attempt-a15".into(),
+                generation: 1,
+            },
+            RunGuard::new("run-a15", 1),
+            vec![HostService::CheckpointSave],
+            Arc::new(FakeToolService::default()),
+            Arc::new(FakeModelService::default()),
+            Arc::new(FakeProcessService::default()),
+            Arc::new(MemoryJournal::new()),
+            Arc::new(IgnoreQuestions),
+        )
+    }
+
+    fn save_request(state_json: &serde_json::Value) -> RpcRequest {
+        let bytes = serde_json::to_vec(state_json).unwrap();
+        RpcRequest {
+            jsonrpc: "2.0".into(),
+            id: r_code_harness_protocol::rpc::RpcId::Number(1),
+            method: "host.checkpoint.save".into(),
+            params: Some(serde_json::json!({
+                "state_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+                "consumed_input_seq": 0,
+            })),
+        }
+    }
+
+    fn tool_result_message(call: &str, size: usize) -> serde_json::Value {
+        serde_json::json!({
+            "role": "tool",
+            "blocks": [{
+                "type": "tool-result",
+                "call_id": call,
+                "output_text": "x".repeat(size),
+            }],
+        })
+    }
+
+    #[tokio::test]
+    async fn a15_router_truncates_oversized_checkpoint_and_notes() {
+        let router = router();
+        let state = serde_json::json!({
+            "messages": [
+                tool_result_message("old", 770_000),
+                tool_result_message("new", 40_000),
+            ],
+        });
+        let reply = router
+            .handle_request(save_request(&state))
+            .await
+            .expect("oversized checkpoint truncates instead of failing");
+        assert!(reply.get("checkpoint").is_some(), "reply: {reply}");
+        // journal 里有截断记录。
+        let observations = router.host_observations.lock().expect("observations");
+        assert!(
+            observations
+                .iter()
+                .any(|(kind, _)| kind == "checkpoint.truncated"),
+            "truncation journaled: {:?}",
+            observations.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn a15_router_rejects_pathological_state_loudly() {
+        let router = router();
+        // 无 tool-result 可截的单条巨型载荷：显式失败而非静默。
+        let state = serde_json::json!({
+            "messages": [{
+                "role": "user",
+                "blocks": [{"type": "text", "text": "u".repeat(768 * 1024)}],
+            }],
+        });
+        let error = router
+            .handle_request(save_request(&state))
+            .await
+            .expect_err("pathological state fails loudly");
+        assert!(
+            error.message.contains("exceeds"),
+            "error message: {}",
+            error.message
+        );
+    }
+}

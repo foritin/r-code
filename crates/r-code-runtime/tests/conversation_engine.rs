@@ -151,6 +151,7 @@ impl ModelService for EchoModel {
                 output_tokens: Some(5),
                 cost_micros: None,
             },
+            reasoning: None,
         })
     }
 }
@@ -201,6 +202,7 @@ impl ModelService for RecordingModel {
             stream_id: "recording".into(),
             finish_reason: Some("end_turn".into()),
             usage,
+            reasoning: None,
         })
     }
 }

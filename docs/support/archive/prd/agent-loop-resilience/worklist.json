@@ -1,0 +1,517 @@
+{
+  "objective": "Make the native agent loop survive expected adversity: no run may end in fake success after a dropped model stream, ignored finish_reason, or cancellation; transient sampling failures replay in place; turn budget relays instead of failing; the per-task queue survives run failure and daemon restart; tool calls run behind an atomic idempotency fence and may execute in parallel.",
+  "end_state": "All A00–A15 tasks landed with machine acceptance green: a TCP drop mid-stream either replays to a complete answer or fails the run visibly — never a truncated 'success'; max_tokens output continues once then degrades with an explicit marker; a 30+-turn task chains runs via InputKind::Continuation without user-visible error; a failed run does not stall the task queue and daemon restart reseeds undelivered inputs; cancellation produces run.cancelled with no completion proposal; oversized checkpoints truncate monotonically instead of failing silently; concurrent tool calls with the same operation key cannot double-execute and a failed effect leaves its key retryable.",
+  "non_goals": [
+    "Context compaction engine (owned by project-context PRD FR-6; interface contract only)",
+    "Input-level failure redelivery (rejected in review R2; stream-level replay covers transients)",
+    "Execution-wave lease lifecycle defects in parallel.rs (DEC-2: separate workstream; registered as observation item 9 — do NOT fix here)",
+    "Codex harness route (ModelRoute::HarnessManaged bypasses the host broker)",
+    "Plugin process reuse / keep-alive across runs",
+    "Live token-by-token streaming to frontends (no channel exists; aggregated observations only)"
+  ],
+  "decisions": [
+    { "id": "DEC-1", "question": "G13 checkpoint cliff strategy", "adopted": "b+a: router explicit bound + host-side monotonic truncation now (A15 active); compaction engine takes over long-term when it lands", "flip_point": "A15 truncation threshold and policy live entirely in router.rs host.checkpoint.save branch — switching to strategy (a) later = delete the truncation retry and keep the loud failure; switching to (c) = replace the branch with chunked writes", "decided_by": "default recommendation (user questions unanswered 2026-10-02); overridable without re-review" },
+    { "id": "DEC-2", "question": "parallel.rs lease defect family", "adopted": "separate workstream; out of scope here (observation item 9 records all 8 findings with line refs)", "flip_point": "if pulled into this worklist later, add tasks A16+ following observation item 9's list; nothing in A00-A15 depends on them", "decided_by": "default recommendation; overridable" },
+    { "id": "DEC-3", "question": "unknown finish_reason values", "adopted": "fail-open: treat as complete + tracing warn; known-abnormal set is closed (None / stream_idle_timeout / api_error: prefix)", "flip_point": "single match arm in models.rs completeness classifier (A02.1); flipping to fail-closed = move unknown-Other arm into the incomplete set; tests a02_unknown_reason_fail_open pins current choice", "decided_by": "default recommendation; overridable" },
+    { "id": "DEC-4", "question": "relay instruction form and budget sizing", "adopted": "relay instruction = plain user-side input push (protocol untouched, TUI labels it system-continuation); maxTotalTurns=200, segment max_turns=25", "flip_point": "form: A11 enqueue call site + optional WireMessage role projection in request_projection.rs; sizing: two constants (settings defaults in settings_store.rs A11/A03 entries)", "decided_by": "default recommendation; overridable" }
+  ],
+  "environment": {
+    "workspace_root": "repo root (all paths in this file are repo-relative; use forward slashes)",
+    "shell": "Windows Git Bash; Rust toolchain via cargo",
+    "entry_points": [
+      "plugins/native/src/loop_engine.rs (loop)",
+      "plugins/native/src/session.rs (plugin session handlers)",
+      "plugins/native/src/request_projection.rs (conversation state wire format)",
+      "crates/r-code-runtime/src/services/models.rs (broker, host.model.stream)",
+      "crates/r-code-runtime/src/run_drive.rs (per-task dispatch)",
+      "crates/r-code-runtime/src/run_manager.rs (run lifecycle, relay injection)",
+      "crates/r-code-runtime/src/plugins/router.rs (RPC boundary + idempotency fence)",
+      "crates/r-code-runtime/src/services/settings_store.rs (settings plumbing)",
+      "crates/r-code-harness-sdk/src/lib.rs (plugin-side SDK serve loop)",
+      "crates/r-code-harness-protocol/src/services.rs (wire types incl. InputKind, stop_reason additions)",
+      "crates/r-code-kernel/src/tasks.rs (durable input queue)",
+      "crates/r-code-store/src/v1/journal.rs (receipt persistence)",
+      "crates/r-code-tui/src/display.rs (transcript rendering)",
+      "vendor/agent-contracts/crates/agent-llm/src/{openai,responses,anthropic}.rs (SSE parsers)"
+    ],
+    "commands": {
+      "build_all": "cargo build --workspace",
+      "test_all": "cargo test --workspace",
+      "test_one": "cargo test -p <package> --test <test-file-stem> -- --nocapture",
+      "test_single_case": "cargo test -p <package> --test <test-file-stem> <case-name> -- --nocapture",
+      "test_inline_unit": "cargo test -p <package> --lib <module-path>::<test-name>",
+      "fmt": "cargo fmt --all",
+      "lint": "cargo clippy --workspace --all-targets",
+      "packages": {
+        "crates/r-code-runtime": "r-code-runtime",
+        "crates/r-code-kernel": "r-code-kernel",
+        "crates/r-code-harness-sdk": "r-code-harness-sdk",
+        "crates/r-code-harness-protocol": "r-code-harness-protocol",
+        "crates/r-code-store": "r-code-store",
+        "crates/r-code-tui": "r-code-tui",
+        "plugins/native": "r-code-native-harness (verify exact name with: cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' or read plugins/native/Cargo.toml)",
+        "vendor/agent-contracts/crates/agent-llm": "agent-llm"
+      }
+    },
+    "gates": "M0 fixtures -> M1 silent-truncation-zero -> M2 failure-recoverable -> M3 throughput-and-observability; merge one task at a time, keep workspace green at every task boundary"
+  },
+  "agent_rules": {
+    "anchor_resolution": "Every file entry carries `anchors`: symbol names with line numbers AS OF 2026-10-02. Lines WILL drift as earlier tasks land. Resolve by SYMBOL NAME first (grep for the fn/const/enum), use the line number only as a hint. Never treat a stale line number as an error.",
+    "deviation_protocol": "If an anchor symbol cannot be found: (1) git log -S '<symbol>' --oneline | head to see if it moved/renamed; (2) implement at the nearest semantically-equivalent location listed for the task; (3) append one line to docs/support/archive/prd/agent-loop-resilience/progress.md under Deviations describing old->new anchor. Do NOT stop, do NOT ask, do NOT redesign.",
+    "scope_freeze": "Tasks implement exactly what their `what`/`description` say. Bugs found along the way that are NOT in this worklist get one line appended to progress.md under 'Found, not in scope' and are otherwise left untouched. Exception: a blocker that makes the task's own acceptance impossible -> implement the minimal fix and record it as a deviation.",
+    "decisions_final": "DEC-1..DEC-4 are settled (see `decisions`). Their flip points are data/code locations, not re-openable questions. If implementation seems to conflict with a DEC, follow the DEC and record the tension in progress.md.",
+    "test_conventions": "New integration tests live at the test_files path with #[tokio::test] / plain #[test] as appropriate, reusing `mod common;` for the A00 fixture inside r-code-runtime tests. Inline unit tests go in the same file's #[cfg(test)] module. Every acceptance_criteria entry maps to at least one named test; prefix test names with the task id (e.g. a02_incomplete_stream_returns_error_not_ok).",
+    "progress_tracking": "After finishing each task: append to docs/support/archive/prd/agent-loop-resilience/progress.md — task id, status (done/partial), tests added (names), deviations (if any), and run `cargo test -p <pkg> --test <stem>` output summary (pass count). Partial is allowed only when a dependency task is itself partial.",
+    "vendor_policy": "vendor/agent-contracts is a vendored fork already carrying local patches (see docs referencing deepseek-prefix-cache.md in code comments). Editing it in place is established practice; keep changes minimal and commented in the same style."
+  },
+  "components": [
+    { "id": "chaos-fixtures", "name": "Chaos test fixtures", "description": "Fault-injecting scripted provider (mid-stream drop, EOF, idle timeout, 429+Retry-After, 5xx, 400 overflow, max_tokens, double Stop) usable at broker unit level and e2e harness level. Prerequisite for every M1+ acceptance." },
+    { "id": "stream-contract", "name": "Stream completeness contract", "description": "finish_reason produced faithfully (agent-llm), enforced (broker), consumed (loop): no incomplete stream can surface as a successful turn." },
+    { "id": "sampling-recovery", "name": "Sampling replay and degradation", "description": "Frozen-request replay for retryable stream failures; max_tokens continuation; overflow guidance; partial-text preservation." },
+    { "id": "tool-failure-continuity", "name": "Tool failure continuity", "description": "A failed host tool RPC becomes a synthetic error tool result instead of aborting the run." },
+    { "id": "cancel-lifecycle", "name": "Cancellation and lifecycle correctness", "description": "Cancel never falls through to completion; fail-fast validation; checkpoint/result encoding failures propagate; post-success telemetry cannot fail a run." },
+    { "id": "sdk-serve", "name": "SDK serve loop and cancellation", "description": "Steer dispatched off the serve loop; lost-wakeup fix; EOF drains pending host_calls; shutdown drains writer." },
+    { "id": "steer-interleave", "name": "Steer interleaving", "description": "Native session state lock no longer spans run_loop; steers land between turns." },
+    { "id": "queue-recovery", "name": "Queue recovery", "description": "Drive loop continues past run failure; drive-token clearing invariant; daemon-start reseeding; acknowledge persist-first ordering; seq-ordered delivery." },
+    { "id": "turn-relay", "name": "Turn budget relay", "description": "budget_reached outcome + Reply proposal + host-injected InputKind::Continuation + maxTotalTurns guard + run.chained journal." },
+    { "id": "idempotency-fence", "name": "Atomic idempotency fence", "description": "Reservation semantics for operation receipts; Rejected terminal on effect failure; store errors no longer masked as None. Prerequisite for tool parallelism." },
+    { "id": "tool-parallelism", "name": "Parallel tool execution", "description": "join_all with per-turn cap, order-preserving result reinsertion, parallelTools rollback switch." },
+    { "id": "reasoning-observability", "name": "Reasoning preservation", "description": "ReasoningDelta aggregated per turn into an assistant.reasoning observation." },
+    { "id": "checkpoint-budget", "name": "Checkpoint size budget", "description": "Explicit state bound on host.checkpoint.save with oldest-tool-result truncation (DEC-1 strategy b+a)." }
+  ],
+  "tasks": [
+    {
+      "id": "A00",
+      "title": "Chaos fixtures: fault-injecting ScriptedProvider",
+      "serves": ["chaos-fixtures"],
+      "description": "Extend the existing ScriptedProvider pattern (crates/r-code-runtime/tests/t15_expose_model_providers_through_a_broker.rs:21) into a shared fixture with scripted fault points: (1) mid-stream drop / (2) clean EOF without Stop / (3) idle-timeout-shaped stall / (4) 429 with Retry-After surfaced in the error string / (5) 5xx / (6) 400 context-overflow marker / (7) max_tokens finish / (8) double Stop. Faults selectable per call; invocation counting so replay tests assert attempt counts. Installable as host provider for full harness runs via the same registration path t15 uses (see t15's broker() helper at line 96).",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-runtime"],
+      "files": [
+        { "path": "crates/r-code-runtime/tests/common/mod.rs", "action": "create", "what": "Shared chaos provider: pub enum ChaosFault {DropMidStream, EofWithoutStop, IdleStall, Rate429After(String), Server5xx, Overflow400, MaxTokens, DoubleStop}; pub struct ChaosProvider{script: Mutex<Vec<ChaosFault>>, calls: AtomicUsize, sink_control...} implementing LlmProvider; each fault produces the corresponding ProviderEvent sequence/error; plus pub fn chaos_broker(provider) helper mirroring t15's broker().", "anchors": ["t15 ScriptedProvider impl LlmProvider (tests/t15_...:26)", "ModelBroker::for_resolver (services/models.rs:92)"] },
+        { "path": "crates/r-code-runtime/tests/a00_chaos_fixtures.rs", "action": "create", "what": "One smoke test per fault point through the broker, asserting raw pre-fix behavior (pins the baseline), plus invocation counter assertions.", "anchors": [] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a00_chaos_fixtures.rs"],
+      "subtasks": [
+        { "id": "A00.1", "description": "Fault enum + scripting + counting, unit-covered." },
+        { "id": "A00.2", "description": "Broker installation helper + per-fault smoke tests." }
+      ],
+      "tests": ["a00_drop_mid_stream_raw_behavior", "a00_eof_without_stop_raw_behavior", "a00_idle_stall_raw_behavior", "a00_rate429_raw_behavior", "a00_5xx_raw_behavior", "a00_overflow400_raw_behavior", "a00_max_tokens_raw_behavior", "a00_double_stop_raw_behavior"],
+      "acceptance_criteria": [
+        "Each of the 8 fault points, installed at the broker, produces its scripted outcome and increments the invocation counter.",
+        "Fixture importable via `mod common;` from sibling tests in the same package."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a00_chaos_fixtures -- --nocapture"],
+      "depends_on": [],
+      "estimated_loc": 220,
+      "suggested_skills": []
+    },
+    {
+      "id": "A01",
+      "title": "agent-llm: transport errors emit explicit Stop (align with anthropic parser)",
+      "serves": ["stream-contract"],
+      "description": "Anthropic parser already converts SseChunkError::Transport into Stop{Other(\"api_error: stream transport error: …\")} (anthropic.rs:868-877). Align openai and responses parsers: replace silent `return Vec::new()` on Transport (openai.rs:1266-1270, responses.rs:992) with the same once-guarded Stop emission. Add pub(crate) fn is_abnormal_stop(reason: &str) -> bool recognizing STREAM_IDLE_TIMEOUT_REASON and the api_error: prefix, exported for A02 use (make it pub if cross-crate needed).",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["vendor/agent-contracts (agent-llm)"],
+      "files": [
+        { "path": "vendor/agent-contracts/crates/agent-llm/src/openai.rs", "action": "modify", "what": "Transport arm -> api_error Stop (respect existing `stopped` once-guard around line 1255-1270); add is_abnormal_stop helper next to STREAM_IDLE_TIMEOUT_REASON (line 49); inline #[cfg(test)] tests for all four completion shapes.", "anchors": ["STREAM_IDLE_TIMEOUT_REASON (line 49)", "SseChunkError::Transport arm in parse loop (~line 1266)", "existing #[cfg(test)] module at file tail"] },
+        { "path": "vendor/agent-contracts/crates/agent-llm/src/responses.rs", "action": "modify", "what": "Same Transport-arm change at its parse loop (~line 975-995); reuse helper.", "anchors": ["Err(SseChunkError::IdleTimeout) arm (~line 975)", "Err(SseChunkError::Transport(_)) => return Vec::new() (~line 992)"] },
+        { "path": "vendor/agent-contracts/crates/agent-llm/src/anthropic.rs", "action": "modify", "what": "No behavior change; route its api_error marker through the shared helper for one source of truth (~line 868-877).", "anchors": ["api_error: stream transport error format site (~line 873)"] }
+      ],
+      "test_files": [],
+      "subtasks": [
+        { "id": "A01.1", "description": "Transport Stop emission in both parsers with once-guard." },
+        { "id": "A01.2", "description": "is_abnormal_stop helper + per-parser Stop-always-emitted unit tests (finish_reason chunk, [DONE] fallback, transport drop, idle timeout)." }
+      ],
+      "tests": ["a01_openai_normal_finish_emits_stop", "a01_openai_done_fallback_emits_stop", "a01_openai_transport_drop_emits_api_error_stop_once", "a01_responses_transport_drop_emits_stop", "a01_is_abnormal_stop_classifies_known_markers"],
+      "acceptance_criteria": [
+        "No silent Vec::new() on Transport remains in any parser (grep SseChunkError::Transport).",
+        "All four completion shapes unit-tested for openai + responses; anthropic tests unchanged and green."
+      ],
+      "verify": ["cargo test -p agent-llm --lib", "grep -n 'Vec::new()' vendor/agent-contracts/crates/agent-llm/src/openai.rs | (verify none adjacent to Transport)"],
+      "depends_on": [],
+      "estimated_loc": 80,
+      "suggested_skills": []
+    },
+    {
+      "id": "A02",
+      "title": "Broker: completeness validation + stream protocol hygiene",
+      "serves": ["stream-contract"],
+      "description": "In crates/r-code-runtime/src/services/models.rs stream() (fn stream at line 269): (1) completeness classification after the event loop — finish_reason in {end_turn,tool_use,stop_sequence,max_tokens} complete (max_tokens flagged); None or abnormal markers (agent-llm is_abnormal_stop) -> ServiceError embedding partial text (capped 4KB) instead of Ok; unknown Other values -> fail-open + tracing::warn (DEC-3). (2) Seven hygiene fixes in the same function: deadline Instant computed BEFORE provider.stream() and that await wrapped in timeout_at (currently after, line 283-287); deadline_ms<=0 clamped to 1s min (line ~290); timeout-path Failed increments sequence first (line ~303); break immediately after emitting done:true (line ~369); stream_id gains per-call discriminator (uuid or atomic counter, line 289); usage_log pushed on EVERY exit path via scope guard (currently only after normal break, line 384-390); delete false 'retries happen only for…' doc claim (line 7-8). Router side: host.model.stream error branch observes assistant.partial before returning the RPC error.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-runtime"],
+      "files": [
+        { "path": "crates/r-code-runtime/src/services/models.rs", "action": "modify", "what": "Completeness classifier (new fn classify_finish), partial-text capture from sink, scope-guard UsageRecorder, seven hygiene edits, doc fix.", "anchors": ["async fn stream (line 269)", "let stream_id = format!(\"model-{}-{}\" (line 289)", "let deadline = ... unwrap_or(Duration::from_secs(300)) (line ~287-291)", "Err(_) => { sink.send(...Failed...) } (line ~303-315)", "Ok(None) => break (line ~339)", "let done = matches!(payload, StreamPayload::Finish (line ~369)", "usage_log.lock().await.push (line ~384)", "module doc '//!' header (line 7-8)"] },
+        { "path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "In host.model.stream arm (line 456): on models.stream Err, observe('assistant.partial', {runId, text: partial-from-error, partial: true}) before map_err(service_error).", "anchors": ["\"host.model.stream\" => (line 456)", "self.observe(\"assistant.message\" site (line ~482)"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a02_broker_stream_contract.rs"],
+      "subtasks": [
+        { "id": "A02.1", "description": "classify_finish + fail-open for unknown values + partial capture + router assistant.partial." },
+        { "id": "A02.2", "description": "Deadline pre-position + clamp + timeout sequence + done-break + stream_id discriminator." },
+        { "id": "A02.3", "description": "Usage scope guard + module doc fix." }
+      ],
+      "tests": ["a02_incomplete_stream_returns_error_not_ok", "a02_idle_timeout_classified_incomplete", "a02_api_error_stop_classified_incomplete", "a02_max_tokens_ok_flagged_truncated", "a02_unknown_reason_fail_open", "a02_connect_hang_hits_deadline", "a02_deadline_zero_clamped", "a02_timeout_failed_sequence_increments", "a02_done_is_last_event", "a02_stream_id_unique_per_turn", "a02_usage_recorded_on_error_paths", "a02_partial_text_capped_4kb"],
+      "acceptance_criteria": [
+        "No code path returns Ok(outcome) with finish_reason None or an abnormal marker.",
+        "Every non-happy exit appends a UsageRecord (assert broker.usage_records()).",
+        "Each hygiene behavior covered by a named test."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a02_broker_stream_contract -- --nocapture"],
+      "depends_on": ["A00", "A01"],
+      "estimated_loc": 200,
+      "suggested_skills": []
+    },
+    {
+      "id": "A03",
+      "title": "Loop: finish consumption + frozen-request sampling replay",
+      "serves": ["sampling-recovery", "stream-contract"],
+      "description": "In plugins/native/src/loop_engine.rs run_loop (line 173): (1) consume finish_reason — end_turn/stop_sequence normal; truncated(max_tokens) defers to A05 continuation (land the branch point now, minimal marker behavior if A05 not yet landed); on model_stream Err classify retryable -> replay SAME ModelStreamRequest via new helper retry_model_stream: backoff 1s/2s/4s, Retry-After parsed from error text capped 60s, attempts = config.stream_replay_attempts (default 3); denylist (context-length keywords, 401/403/invalid api key, content policy) never replays -> propagate to A05 degradation point. Failed turn must NOT push_assistant nor checkpoint. (2) End-gating: `calls.is_empty()` ends the run ONLY when finish was normal (loop_engine.rs:217 area). (3) Replay emits handle.emit_event(Progress, {\"streamRetry\": \"n/N\"}). (4) LoopConfig gains stream_replay_attempts parsed from harness_config.streamReplayAttempts; settings_store default 3 wired through run_snapshots harness_config assembly (find where harness_config is built: run_manager.rs DEFAULT_HARNESS_CONFIG area / run_snapshots.rs planning_harness_config).",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["plugins/native", "crates/r-code-runtime"],
+      "files": [
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "retry_model_stream helper + classification + end-gating + Progress emission + LoopConfig field.", "anchors": ["pub async fn run_loop (line 173)", "let turn = handle.model_stream(request).await? (line 204)", "if calls.is_empty() (line 217)", "impl Default for LoopConfig (line 45)", "from_harness_config (line 61)"] },
+        { "path": "crates/r-code-runtime/src/services/settings_store.rs", "action": "modify", "what": "streamReplayAttempts global setting (default 3, range 0-10) following existing settings patterns in this file.", "anchors": ["existing setting getters/setters in settings_store.rs"] },
+        { "path": "crates/r-code-runtime/src/services/run_snapshots.rs", "action": "modify", "what": "Pass streamReplayAttempts into harness_config document where LoopConfig is seeded (locate harness_config assembly; planning_harness_config fn).", "anchors": ["pub fn planning_harness_config (run_snapshots.rs)", "harness_config json! assembly in run_manager.rs (~line 350)"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a03_silent_truncation_zero.rs"],
+      "subtasks": [
+        { "id": "A03.1", "description": "Retryable classification + bounded replay + Retry-After honor + counter assertions." },
+        { "id": "A03.2", "description": "Denylist + degradation handoff point + failed-turn state exclusion." },
+        { "id": "A03.3", "description": "Config plumbing (settings -> harness_config -> LoopConfig)." }
+      ],
+      "tests": ["a03_drop_then_recover_full_text", "a03_replay_exhausted_fails_visibly", "a03_retry_after_wait_honored", "a03_overflow_zero_replays", "a03_no_tool_calls_but_truncated_does_not_end_run"],
+      "acceptance_criteria": [
+        "Chaos DropMidStream then clean stream -> complete text; no partial assistant message in state; no duplicate assistant.message observation.",
+        "Replays bounded by config; denylist errors make exactly one model invocation.",
+        "Pre-fix fake-success baseline (pinned in A00) now yields exactly two outcomes: recovered or visible failure."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a03_silent_truncation_zero -- --nocapture"],
+      "depends_on": ["A00", "A02"],
+      "estimated_loc": 180,
+      "suggested_skills": []
+    },
+    {
+      "id": "A04",
+      "title": "Loop: failed tool RPC becomes synthetic error result",
+      "serves": ["tool-failure-continuity"],
+      "description": "loop_engine.rs:226-250: on tools_call Err, render 'error: {e}' and push_tool_result for that call, continue batch and turn — mirroring the existing reply.error handling in the same loop. R3 downgrade note: failed-run in-memory state was never persisted (no checkpoint on failed run), so this is turn-preservation, not corruption repair.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["plugins/native"],
+      "files": [
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Replace `?` on tools_call with match: Ok(reply) -> existing render; Err(e) -> synthetic 'error: {e}' result; executed += 1 either way.", "anchors": ["let reply = handle.tools_call(name, input.clone(), Some(&operation_key)).await .map_err(...)? (line 228-231)", "let output = match reply.error (line 244)"] }
+      ],
+      "test_files": ["plugins/native/tests/a04_tool_failure_continues.rs"],
+      "subtasks": [
+        { "id": "A04.1", "description": "Synthetic error path + batch continuation + turn checkpoint." }
+      ],
+      "tests": ["a04_tool_rpc_failure_continues_run_and_pairs_results"],
+      "acceptance_criteria": [
+        "No tools_call error aborts the run; every pushed ToolCall in ConversationState has a paired ToolResult after the turn."
+      ],
+      "verify": ["cargo test -p r-code-native-harness --test a04_tool_failure_continues -- --nocapture (confirm package name from plugins/native/Cargo.toml)"],
+      "depends_on": ["A03"],
+      "estimated_loc": 40,
+      "suggested_skills": []
+    },
+    {
+      "id": "A05",
+      "title": "Loop: max_tokens continuation, overflow guidance, partial preservation",
+      "serves": ["sampling-recovery"],
+      "description": "loop_engine.rs + run_manager.rs: (1) truncated finish -> push partial assistant text, append continuation instruction ('继续，从你断开处接着写') as user input, resample once; second truncation -> concatenate + append '[回答因长度上限被截断]' and proceed normally. Always on, no config. (2) Overflow degradation at A03's denylist exit: run fails with guidance copy '对话已超过模型上下文窗口；请 /compact 或新开会话'; run_manager.record_failure journals errorClass: transient|deterministic|cancelled (deterministic for overflow/auth/policy keyword match; transient for 5xx/429/timeout/stream keywords; default deterministic). (3) assistant.partial from A02's router observation reaches the failure card (journal render path already exists; verify event lands and TUI can show it).",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["plugins/native", "crates/r-code-runtime"],
+      "files": [
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Truncated-finish continuation branch (replaces A03's placeholder) + double-truncation marker.", "anchors": ["A03's truncation branch point", "push_user / push_assistant (request_projection.rs:119,147)"] },
+        { "path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "record_failure (line 422): classify error string -> errorClass field in run.failed journal event payload.", "anchors": ["pub(crate) async fn record_failure (line 422)", "journal_event helper"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a05_finish_degradation.rs"],
+      "subtasks": [
+        { "id": "A05.1", "description": "max_tokens continuation + marker." },
+        { "id": "A05.2", "description": "Overflow guidance + errorClass + partial card." }
+      ],
+      "tests": ["a05_max_tokens_continuation_concatenates", "a05_double_truncation_marks_and_completes", "a05_overflow_fails_with_guidance_and_class", "a05_partial_preserved_in_journal"],
+      "acceptance_criteria": [
+        "max_tokens never silently ends a run mid-thought; overflow failures carry guidance + errorClass; partial output visible in journal."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a05_finish_degradation -- --nocapture"],
+      "depends_on": ["A03"],
+      "estimated_loc": 150,
+      "suggested_skills": []
+    },
+    {
+      "id": "A06",
+      "title": "Cancellation and lifecycle correctness in the native plugin",
+      "serves": ["cancel-lifecycle"],
+      "description": "loop_engine.rs + session.rs + run_manager.rs + protocol: (1) is_cancelled -> LoopResult{stop_reason:\"cancelled\"} (new field/enum on LoopResult, wire-compatible serde default 'end'); NEVER fall through to plan_publish/propose_completion (loop_engine.rs:189-192 break -> dedicated return; skip the proposal block lines 259-293). (2) Fail-fast: cancellation checked before push_user/tools_list (before line 179); plan mode validates plan_revision before first model call when task_mode==plan (move check from line 264 to loop top); session.rs rejects missing/non-string contract.objective with SdkError::Fault (session.rs:50-55 unwrap_or(\"\") -> ok_or_else Fault). (3) Propagation: final-text-only checkpoint errors propagate via ? replacing let _ = (loop_engine.rs:221-223); serde encode failures -> Fault at 4 sites (loop_engine.rs to_vec x2 lines ~221,252; session.rs to_value on_start ~line 71 / on_resume ~line 97); post-success emit_event logs-only (session.rs:62-70 remove ?); steer holds state lock across save_checkpoint (session.rs:104-110 reorder drop(state) after save). Host: run_manager handles stop_reason==cancelled -> journal run.cancelled, no completion arbitration.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["plugins/native", "crates/r-code-runtime"],
+      "files": [
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Cancelled outcome + skip-proposal return path + pre-loop checks + encode propagation.", "anchors": ["if handle.is_cancelled() { break; } (line 189-192)", "push_user(state, user_input) (line 179)", "let revision = config.plan_revision.ok_or (line 264)", "proposal_kind match (line 262)", "LoopResult struct (line 165)"] },
+        { "path": "plugins/native/src/session.rs", "action": "modify", "what": "objective Fault; emit_event log-only; encode Fault; steer lock ordering.", "anchors": ["on_start objective unwrap_or(\"\") (line 50-55)", "emit_event(...).await? (line 62-70)", "serde_json::to_value(&result).unwrap_or_default() (line 71)", "on_steer drop(state) before save (line 104-110)"] },
+        { "path": "crates/r-code-harness-protocol/src/services.rs", "action": "modify", "what": "Document stop_reason wire values (end|budget_reached|cancelled) alongside existing doc comments; add serde default so old checkpoints/results deserialize.", "anchors": ["InputKind enum (line 123)"] },
+        { "path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "After session.start/resume returns: read stop_reason from result JSON; cancelled -> journal run.cancelled + skip completion arbitration + task stays sendable.", "anchors": ["session.start(...).await outcome handling (~line 970-990)", "completion arbitration call sites"] }
+      ],
+      "test_files": ["plugins/native/tests/a06_cancel_lifecycle.rs"],
+      "subtasks": [
+        { "id": "A06.1", "description": "Cancelled outcome end-to-end (plugin return + host journal)." },
+        { "id": "A06.2", "description": "Three fail-fast validations." },
+        { "id": "A06.3", "description": "Four propagation fixes + steer persistence ordering." }
+      ],
+      "tests": ["a06_cancel_no_proposal_no_plan_publish", "a06_cancel_state_unchanged", "a06_plan_mode_missing_revision_fails_before_first_call", "a06_missing_objective_immediate_fault", "a06_checkpoint_save_failure_visible", "a06_post_success_emit_event_does_not_fail_run", "a06_concurrent_steers_persist_in_order"],
+      "acceptance_criteria": [
+        "A cancelled run never reaches plan_publish or completion arbitration; journal has run.cancelled.",
+        "Zero model invocations for invalid configs (missing revision in plan mode; missing objective).",
+        "No unwrap_or_default empty-payload persistence remains in plugins/native (grep)."
+      ],
+      "verify": ["cargo test -p r-code-native-harness --test a06_cancel_lifecycle -- --nocapture", "grep -rn 'unwrap_or_default' plugins/native/src/ | (only allowed sites remain)"],
+      "depends_on": ["A03"],
+      "estimated_loc": 220,
+      "suggested_skills": []
+    },
+    {
+      "id": "A07",
+      "title": "SDK serve loop: steer off-loop, cancellation wakeup, EOF/shutdown drain",
+      "serves": ["sdk-serve"],
+      "description": "crates/r-code-harness-sdk/src/lib.rs: (1) harness.steer notification dispatched via tokio::spawn; parse failure logged via eprintln/tracing not silent (line 697-699). (2) wait_for_cancel: pin Notified BEFORE flag check (line 474-479). (3) EOF (n==0, line 646-649): store cancelled, notify_waiters, drain shared.pending sending Err to each waiter. (4) host_call: tokio::select cancel_notify vs timeout(rx) (line 219 area). (5) shutdown: await the spawned shutdown dispatch task then graceful writer drain instead of writer_task.abort() (line 690-692). (6) harness.cancel params parse failure -> RpcError::invalid_params (unwrap_or at line 771-775). (7) Remove or wire the dead Shared.streams registry; correct model_stream doc (line 290). Production note: EOF/cancel fixes are live on ordinary aborts today; steer items are contract repairs ahead of wiring (R4: no production steer caller).",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-harness-sdk"],
+      "files": [
+        { "path": "crates/r-code-harness-sdk/src/lib.rs", "action": "modify", "what": "Seven changes as listed; streams registry removed with its fan-out branch; doc corrected.", "anchors": ["harness.steer if let Ok(...) handlers.on_steer(...).await (line 697-699)", "pub async fn wait_for_cancel (line 474)", "if n == 0 { break; } (line 646-649)", "pub async fn host_call ... match tokio::time::timeout(timeout, rx) (line 219)", "if is_shutdown { ... break; } (line 690-692)", "HarnessCancelParams unwrap_or (line 771-775)", "pub struct Shared { streams: ... } (search 'streams')"] }
+      ],
+      "test_files": ["crates/r-code-harness-sdk/tests/a07_sdk_cancel_serve.rs"],
+      "subtasks": [
+        { "id": "A07.1", "description": "Steer spawn + parse-failure surfacing." },
+        { "id": "A07.2", "description": "wait_for_cancel pin + EOF drain + host_call select." },
+        { "id": "A07.3", "description": "Shutdown drain + cancel params validation + dead registry removal." }
+      ],
+      "tests": ["a07_slow_steer_does_not_stall_responses", "a07_cancel_wakeup_no_lost_notify", "a07_eof_fails_inflight_host_calls_fast", "a07_shutdown_ack_delivered"],
+      "acceptance_criteria": [
+        "Serve loop never awaits plugin handler logic inline; in-flight host_calls fail fast on EOF/cancel; no dead registry remains; existing sdk tests stay green."
+      ],
+      "verify": ["cargo test -p r-code-harness-sdk -- --nocapture"],
+      "depends_on": [],
+      "estimated_loc": 140,
+      "suggested_skills": []
+    },
+    {
+      "id": "A08",
+      "title": "Native session: state lock no longer spans run_loop",
+      "serves": ["steer-interleave"],
+      "description": "plugins/native/src/session.rs on_start (line 56-59) / on_resume (line 90-92) hold the state mutex across the entire run_loop await. Restructure: clone state under lock, hand the owned copy to run_loop with a per-turn merge callback (loop engine calls back between turns to fold steer-pushed messages under the lock), write final state back under lock after the loop. on_steer unchanged (pushes under lock). Combined with A06's lock-across-save ordering this gives steers a well-defined between-turns landing zone.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["plugins/native"],
+      "files": [
+        { "path": "plugins/native/src/session.rs", "action": "modify", "what": "Clone-out/merge-back ownership; run_loop signature gains a merge hook (FnMut(&ConversationState)->ConversationState or closure over Arc<Mutex<ConversationState>>).", "anchors": ["let mut state = self.state.lock().await (on_start line 56 / on_resume line 91)", "async fn on_steer (line 102)"] },
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "run_loop takes merge callback; invoked before projecting each turn's request.", "anchors": ["pub async fn run_loop signature (line 173)", "project_request call site (line 197)"] }
+      ],
+      "test_files": ["plugins/native/tests/a08_steer_interleave.rs"],
+      "subtasks": [
+        { "id": "A08.1", "description": "Lock scope restructure + per-turn merge." },
+        { "id": "A08.2", "description": "Steer visible in next turn's projection while a slow stream is in flight." }
+      ],
+      "tests": ["a08_steer_lands_between_turns_during_slow_stream"],
+      "acceptance_criteria": [
+        "No handler holds the session state mutex across a run_loop await (code inspection + tokio console-style timeout guard test)."
+      ],
+      "verify": ["cargo test -p r-code-native-harness --test a08_steer_interleave -- --nocapture"],
+      "depends_on": ["A06", "A07"],
+      "estimated_loc": 90,
+      "suggested_skills": []
+    },
+    {
+      "id": "A09",
+      "title": "Drive loop: continue past run failure + drive-token invariant",
+      "serves": ["queue-recovery"],
+      "description": "crates/r-code-runtime/src/run_drive.rs: (1) drive_loop Err arm (line 180-186): record_failure -> release_slot -> fall through to the existing pause_dispatch_if_settled decision (remove break). (2) Token invariant: extract fn clear_run_handles(slot: &mut RunSlot) (per R3 finding, de-duplicating next_input's inline block at line 246-253) and ensure every exit path sets slot.drive=None under the slot lock (next_input line 245-246 and pause_dispatch line 213-214 already do; the removed break was the gap).",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-runtime"],
+      "files": [
+        { "path": "crates/r-code-runtime/src/run_drive.rs", "action": "modify", "what": "Err arm continuation + clear_run_handles helper + token invariant on all exits.", "anchors": ["if let Err(error) = outcome { ... break; } (line 180-186)", "release_slot (line 227)", "next_input clearing block (line 244-254)", "pause_dispatch_if_settled (line 195)"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a09_queue_stall.rs"],
+      "subtasks": [
+        { "id": "A09.1", "description": "Break->continue + pause-decision reuse." },
+        { "id": "A09.2", "description": "Helper extraction + send-vs-exit interleaving test." }
+      ],
+      "tests": ["a09_failure_does_not_stall_queue", "a09_send_during_failure_dispatches_without_resend"],
+      "acceptance_criteria": [
+        "A failed run never leaves the queue undeliverable; slot.drive is None whenever the dispatch task has exited."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a09_queue_stall -- --nocapture"],
+      "depends_on": [],
+      "estimated_loc": 60,
+      "suggested_skills": []
+    },
+    {
+      "id": "A10",
+      "title": "Queue durability: boot reseeding, acknowledge ordering, delivery order",
+      "serves": ["queue-recovery"],
+      "description": "Fixes G12 + production-live write-ordering (R4): (1) Boot reseeding — application.rs constructs KernelTaskService::new (line 513) with empty maps; reload (tasks.rs:463) has zero production callers. Add a startup pass (or lazy on-first-poll inside TaskService): for each task with undelivered inputs (store rebuild_queue), reseed the in-memory queue, skipping inputs that already have a completed run in the journal (duplicate-run guard via task_events scan for run.completed referencing the message — use existing journal query helpers). (2) acknowledge persist-first: tasks.rs:399-402 mutates in_flight/delivered before save — reorder so the durable input.delivered save succeeds first; on save failure restore in_flight (retryable) instead of NotInFlight-dead. (3) Delivery order: pending sorted by input_seq — sorted insert on the enqueue push path (tasks.rs:321-327 area) and sort at rebuild_from tail. Kernel latent items (steer write-order, receipt race, create_branch id checks, reload pins) stay out (DEC-2-adjacent, observation item 11).",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-runtime", "crates/r-code-kernel"],
+      "files": [
+        { "path": "crates/r-code-runtime/src/application.rs", "action": "modify", "what": "Startup reseed pass after KernelTaskService construction (bounded per task, tracing summary log).", "anchors": ["let kernel_tasks = Arc::new(KernelTaskService::new(store.clone())) (line 513)"] },
+        { "path": "crates/r-code-kernel/src/tasks.rs", "action": "modify", "what": "acknowledge persist-first + restore-on-failure; sorted pending (push path + rebuild_from).", "anchors": ["pub async fn acknowledge (line 383)", "in_flight clearing + delivered.insert (line 399-402)", "queue.pending.push_back in allocate/persist path (line ~321-327)", "rebuild_from 'input.queued' arm (line 50-57)"] }
+      ],
+      "test_files": ["crates/r-code-kernel/tests/a10_boot_reseed_and_order.rs", "crates/r-code-runtime/tests/a10_restart_delivery.rs"],
+      "subtasks": [
+        { "id": "A10.1", "description": "Reseed + completed-run skip guard." },
+        { "id": "A10.2", "description": "acknowledge ordering + retry-ability." },
+        { "id": "A10.3", "description": "input_seq ordering at both sites." }
+      ],
+      "tests": ["a10_acknowledge_save_failure_retryable", "a10_rebuild_delivers_in_seq_order", "a10_restart_reseeds_undelivered", "a10_restart_skips_completed_inputs"],
+      "acceptance_criteria": [
+        "No undelivered input strands across daemon restart; executed-but-unacked inputs not re-executed; delivery order equals send order under concurrent enqueue."
+      ],
+      "verify": ["cargo test -p r-code-kernel --test a10_boot_reseed_and_order -- --nocapture", "cargo test -p r-code-runtime --test a10_restart_delivery -- --nocapture"],
+      "depends_on": ["A00"],
+      "estimated_loc": 160,
+      "suggested_skills": []
+    },
+    {
+      "id": "A11",
+      "title": "Turn budget relay: budget_reached -> Continuation chaining",
+      "serves": ["turn-relay"],
+      "description": "FR-4 over existing machinery, zero new storage (DEC-4: plain-input form): (1) loop_engine.rs:193-195 — max_turns exceeded returns LoopResult{stop_reason:'budget_reached', final_text: summary-of-done-work} instead of TurnLimit error; completion proposal forced to ProposalKind::Reply when budget_reached (a PlanDraft/Implementation proposal mid-relay is a lie). (2) run_manager run-completion path: when result JSON stop_reason==budget_reached AND chain guard passes -> kernel_tasks.enqueue(task_id, InputKind::Continuation, RELAY_INSTRUCTION (fixed const '继续，从上次停止处接着做'), None); drive loop continues naturally; new run resumes via existing handoff checkpoint (run_manager.rs:531-566); relay instruction enters conversation as replay input. (3) Guard: count chain turns from journal (sum of turns across run.completed events since the last user-input run — or simpler: count run.chained events since last User input, cap at maxTotalTurns/max_turns segments); at limit stop injecting, finish with summary + hint. Each injection journals run.chained {relayCount}. (4) task.cancel interrupts at run boundary (existing abort). (5) TUI display.rs: InputKind::Continuation inputs render as system continuation row, not user message.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["plugins/native", "crates/r-code-runtime", "crates/r-code-tui"],
+      "files": [
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "budget_reached outcome + Reply proposal force + summary generation (final assistant text or synthesized from last turns).", "anchors": ["if turns > config.max_turns { return Err(LoopError::TurnLimit } (line 193-195)", "ProposalKind selection (line 262-276)"] },
+        { "path": "crates/r-code-runtime/src/run_manager.rs", "action": "modify", "what": "Relay enqueue after successful run_one completion (post arbitration, where run.completed is journaled) + chain counting + run.chained event.", "anchors": ["run completion/journaling site (search 'run.completed')", "handoff_checkpoint (line 531)", "kernel_tasks.enqueue sites"] },
+        { "path": "crates/r-code-runtime/src/services/settings_store.rs", "action": "modify", "what": "maxTotalTurns setting (default 200, range 25-1000).", "anchors": ["existing global settings pattern"] },
+        { "path": "crates/r-code-runtime/src/services/run_snapshots.rs", "action": "modify", "what": "Pass maxTotalTurns into harness_config alongside A03's additions if needed for host-side guard.", "anchors": ["planning_harness_config"] },
+        { "path": "crates/r-code-tui/src/display.rs", "action": "modify", "what": "Continuation input row labeled system continuation.", "anchors": ["input/message row rendering (search InputKind or input.kind)"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a11_turn_relay.rs"],
+      "subtasks": [
+        { "id": "A11.1", "description": "budget_reached outcome + Reply proposal + summary." },
+        { "id": "A11.2", "description": "Host enqueue + chain guard + run.chained." },
+        { "id": "A11.3", "description": "TUI labeling + cancel mid-chain." }
+      ],
+      "tests": ["a11_thirty_turn_task_relays_without_error", "a11_chain_guard_stops_at_max_total", "a11_cancel_interrupts_chain", "a11_proposal_kind_is_reply_on_relay", "a11_continuation_not_rendered_as_user_message"],
+      "acceptance_criteria": [
+        "TurnLimit never surfaces to users on native; relay transparent to model; chain bounded by config; cancellable at any boundary; TUI shows system continuation."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a11_turn_relay -- --nocapture"],
+      "depends_on": ["A05", "A06", "A10"],
+      "estimated_loc": 200,
+      "suggested_skills": []
+    },
+    {
+      "id": "A12",
+      "title": "Atomic idempotency fence in the router",
+      "serves": ["idempotency-fence"],
+      "description": "Fixes G11 (production-live; prerequisite for A13): (1) Reservation semantics — replace load_receipt -> save_receipt(Indeterminate) -> execute (router.rs:1135-1138) with insert-only reserve: store gains try_insert_receipt returning Ok(Inserted) | Err(Existing(receipt)); conflict answers replay/conflict per existing ReplayDecision mapping. r-code-store/src/v1/journal.rs save_receipt (line ~509) currently INSERT..ON CONFLICT DO UPDATE — add try_insert variant with ON CONFLICT DO NOTHING + SELECT existing. (2) execute() Err -> persist terminal ReceiptOutcome::Rejected{reason} before returning (key stays retryable; currently stranded Indeterminate bricks the key with PROTOCOL_VIOLATION for all methods except host.tools.call). (3) load_receipt store errors surface as errors, never mapped to None. In-process per-key Mutex<HashMap<key, ()>> is an acceptable alternative if the store change proves disproportionate — but Rejected-terminal is required either way.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-runtime", "crates/r-code-store"],
+      "files": [
+        { "path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "Reserve/execute/finalize flow + Rejected on effect failure + load_receipt error surfacing.", "anchors": ["ReplayDecision::Fresh => { save_receipt(Indeterminate) } (line ~1135-1138)", "service_error / RpcError mapping helpers", "replay_decision match (line 1123)"] },
+        { "path": "crates/r-code-store/src/v1/journal.rs", "action": "modify", "what": "try_insert_receipt (ON CONFLICT DO NOTHING then SELECT) alongside existing save_receipt.", "anchors": ["save_receipt INSERT ... ON CONFLICT DO UPDATE (line ~509)"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a12_idempotency_fence.rs"],
+      "subtasks": [
+        { "id": "A12.1", "description": "Store try_insert_receipt." },
+        { "id": "A12.2", "description": "Router reserve + Rejected terminal + error surfacing." }
+      ],
+      "tests": ["a12_same_key_concurrent_single_execution", "a12_effect_failure_key_stays_retryable", "a12_store_error_surfaces_not_fresh"],
+      "acceptance_criteria": [
+        "Same-key concurrency cannot double-execute an effect; no failure permanently bricks an operation key; store errors distinguishable from 'no receipt'."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a12_idempotency_fence -- --nocapture"],
+      "depends_on": [],
+      "estimated_loc": 140,
+      "suggested_skills": []
+    },
+    {
+      "id": "A13",
+      "title": "Parallel tool execution in the loop",
+      "serves": ["tool-parallelism"],
+      "description": "loop_engine.rs:226-250: sequential for -> bounded concurrency (futures::future::join_all with a semaphore or buffered stream; per-turn cap default 4 from config parallelTools: off|1..16, 'off' restores sequential). Tool results reinserted into ConversationState in the model's call order (collect into Vec indexed by position, then push in order — execution order decoupled). A04's synthetic-error path applies per-call inside the concurrent batch. Abort propagation relies on existing execute_with_context_and_abort (gateway.rs:293); approvals await concurrently. Ships only after A04 + A12.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["plugins/native"],
+      "files": [
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "Bounded join_all + ordered reinsertion + cap; off-switch path keeps sequential loop.", "anchors": ["for (id, name, input) in &calls (line 226)", "push_tool_result(state, id, &output) (line 248)"] },
+        { "path": "crates/r-code-runtime/src/services/settings_store.rs", "action": "modify", "what": "parallelTools setting (default on/4).", "anchors": ["existing pattern"] },
+        { "path": "crates/r-code-runtime/src/services/run_snapshots.rs", "action": "modify", "what": "parallelTools into harness_config (LoopConfig).", "anchors": ["planning_harness_config"] },
+        { "path": "plugins/native/src/loop_engine.rs", "action": "modify", "what": "LoopConfig.parallel_tools field + from_harness_config parsing." }
+      ],
+      "test_files": ["plugins/native/tests/a13_parallel_tools.rs"],
+      "subtasks": [
+        { "id": "A13.1", "description": "Concurrent execution + ordered reinsertion + cap." },
+        { "id": "A13.2", "description": "Abort under concurrency + off-switch baseline." }
+      ],
+      "tests": ["a13_three_sleep_tools_under_two_seconds", "a13_results_reinserted_in_call_order", "a13_abort_mid_batch_cancels_all", "a13_off_switch_sequential_baseline"],
+      "acceptance_criteria": [
+        "Wall clock for 3x sleep(1s) < 2s; reinsertion order == call order; abort leaves no leaked processes; off restores today's semantics."
+      ],
+      "verify": ["cargo test -p r-code-native-harness --test a13_parallel_tools -- --nocapture"],
+      "depends_on": ["A04", "A12"],
+      "estimated_loc": 110,
+      "suggested_skills": []
+    },
+    {
+      "id": "A14",
+      "title": "Reasoning preservation: aggregated assistant.reasoning observation",
+      "serves": ["reasoning-observability"],
+      "description": "models.rs ProviderEvent match maps ReasoningDelta to None today. Aggregate reasoning deltas into a String during the stream loop; expose on ModelStreamOutcome (new field reasoning: Option<String> or via sink finalization); router host.model.stream emits observe('assistant.reasoning', {runId, text}) BEFORE the existing observe('assistant.message') when non-empty. Whole-segment capture (no live channel exists — StreamSink is test-only). ToolUseComplete/HostedToolUse stay dropped.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-runtime"],
+      "files": [
+        { "path": "crates/r-code-runtime/src/services/models.rs", "action": "modify", "what": "ReasoningDelta aggregation -> outcome field.", "anchors": ["ProviderEvent::ReasoningDelta { .. } => None arm (line ~355)", "ModelStreamOutcome struct (line ~25)"] },
+        { "path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "assistant.reasoning observation before assistant.message.", "anchors": ["observe(\"assistant.message\") site (line ~482)"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a14_reasoning_capture.rs"],
+      "subtasks": [
+        { "id": "A14.1", "description": "Aggregation + observation + ordering." }
+      ],
+      "tests": ["a14_reasoning_observed_before_message"],
+      "acceptance_criteria": [
+        "Scripted ReasoningDelta stream yields assistant.reasoning with concatenated text, timestamped before assistant.message; non-reasoning streams unchanged."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a14_reasoning_capture -- --nocapture"],
+      "depends_on": ["A02"],
+      "estimated_loc": 70,
+      "suggested_skills": []
+    },
+    {
+      "id": "A15",
+      "title": "Checkpoint size budget (DEC-1: strategy b+a — ACTIVE)",
+      "serves": ["checkpoint-budget"],
+      "description": "DEC-1 adopted b+a, task active. G13: checkpoint state rides base64 inside a 1MB RPC frame (~768KB effective) with no explicit bound on the checkpoint path (artifacts path has FrameTooLarge — guard drift, router.rs:760). Implement in router host.checkpoint.save arm: (1) explicit MAX_CHECKPOINT_STATE_BYTES (const; set to 768KB aligned with the frame cap; document the coupling). (2) On exceed: HOST-side monotonic truncation — decode the state JSON, replace the OLDEST tool-result output_texts with placeholders (keep call id + first 200 chars + '[truncated by checkpoint budget]') until under bound, save the truncated payload once, journal a note event (e.g. checkpoint.truncated {bytesBefore, bytesAfter}); truncation is monotonic (never re-expands). (3) Still over after truncation (e.g. a single giant user message) -> loud RpcError with guidance. Host-side keeps the plugin oblivious and preserves append-only/prefix-cache discipline.",
+      "building_blocks": [],
+      "tools": [],
+      "packages": ["crates/r-code-runtime"],
+      "files": [
+        { "path": "crates/r-code-runtime/src/plugins/router.rs", "action": "modify", "what": "host.checkpoint.save arm: size check -> decode/truncate-oldest-tool-results/re-encode -> save + journal note; loud failure path.", "anchors": ["host.checkpoint.save arm (search 'checkpoint.save')", "base64_decode(&save.state_base64) site (line ~760)", "ArtifactError::FrameTooLarge reference for the bound constant"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/a15_checkpoint_budget.rs"],
+      "subtasks": [
+        { "id": "A15.1", "description": "Bound + monotonic truncation retry + journal note." }
+      ],
+      "tests": ["a15_under_bound_passes", "a15_over_bound_truncates_oldest_and_saves", "a15_pathological_over_limit_fails_loudly", "a15_truncation_monotonic"],
+      "acceptance_criteria": [
+        "No silent checkpoint size failure; truncation monotonic and journaled; bound constant documents the frame-cap coupling."
+      ],
+      "verify": ["cargo test -p r-code-runtime --test a15_checkpoint_budget -- --nocapture"],
+      "depends_on": ["A06"],
+      "estimated_loc": 90,
+      "suggested_skills": []
+    }
+  ],
+  "order": ["A00", "A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08", "A09", "A10", "A11", "A12", "A13", "A14", "A15"]
+}

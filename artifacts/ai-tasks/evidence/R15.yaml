@@ -11,7 +11,7 @@ assertions:
 regressions: 无代码变更（纯设计文档+静态校验）
 
 changed_paths:
-  - docs/prd/remote-control/relay-interface.md (new：字段级线协议冻结)
+  - docs/support/archive/prd/remote-control/relay-interface.md (new：字段级线协议冻结)
   - scripts/remote/r15-relay-interface.test.mjs (new)
   - scripts/verify-remote.mjs (R15.A1 registered)
 

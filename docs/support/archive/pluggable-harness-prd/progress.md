@@ -6,7 +6,7 @@
 ## 基线（T00）
 
 - 源修订：`88f7efe3e69ff617a4d565efc0d9c700cfed4512`，工作区含 122 个未提交变更（文档重组 + 既有工作区改动）。
-- 计划校验：`validate_plan.py --tasks docs/prd/pluggable-harness/tasks.json` → ok=true（52 任务，warnings 仅为 LOC 体量提醒）。
+- 计划校验：`validate_plan.py --tasks docs/support/harness/tasks.json` → ok=true（52 任务，warnings 仅为 LOC 体量提醒）。
 - 常规回归命令（本实施过程中按需定向执行，不全量跑）：
   - `cargo fmt --all -- --check`
   - `cargo clippy --workspace --all-targets -- -D warnings`

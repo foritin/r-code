@@ -55,7 +55,7 @@ The normal desktop application is not three permanently separate processes. The 
 | Renderer | `src-tauri/frontend/` | React scenes, Zustand state, typed Tauri IPC |
 | Shared contracts | `vendor/agent-contracts/` | required `agent-*` contract crates Git submodule |
 
-JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See the [implementation baseline](./docs/support/archive/architecture-before-pluggable-harness.md) for the full model and diagrams. The [pluggable Harness refactor plan](./docs/prd/pluggable-harness/plan.md) describes the next architecture; its product changes have not been implemented yet.
+JSONL is the conversation-content source, while SQLite is the product-state source for tasks, runs, permissions, audit, Plan, memory, and changes. See the [implementation baseline](./docs/support/archive/architecture-before-pluggable-harness.md) for the full model and diagrams. The [pluggable Harness refactor plan](./docs/support/harness/plan.md) describes the next architecture; its product changes have not been implemented yet.
 
 ## Development
 
@@ -217,7 +217,7 @@ r-code/
 - [Contributing](./CONTRIBUTING.md)
 - [Support](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
-- [Pluggable Harness refactor plan](./docs/prd/pluggable-harness/plan.md)
+- [Pluggable Harness refactor plan](./docs/support/harness/plan.md)
 - [Implementation architecture baseline](./docs/support/archive/architecture-before-pluggable-harness.md)
 - [Plan mode and enhanced review](./docs/support/guides/plan-mode.en.md)
 - [Web tools and MCP](./docs/support/guides/mcp.md)

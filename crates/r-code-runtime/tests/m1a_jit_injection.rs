@@ -195,6 +195,7 @@ impl ModelService for ScriptedModel {
             stream_id,
             finish_reason: Some("stop".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

@@ -122,9 +122,9 @@
       "Retain core coding workflow plus current file/search/Git/Shell/MCP/skills/attachments and explicit memory context service. Autonomous memory learning, advanced marketplace, remote sandbox scheduling and arbitrary UI plugins are subsequent projects."
     ],
     "artifacts": {
-      "plan_file": "docs/prd/pluggable-harness/plan.md",
-      "tasks_file": "docs/prd/pluggable-harness/tasks.json",
-      "review_file": "docs/prd/pluggable-harness/review.json",
+      "plan_file": "docs/support/harness/plan.md",
+      "tasks_file": "docs/support/harness/tasks.json",
+      "review_file": "docs/support/harness/review.json",
       "status": "Published planning artifacts; implementation tasks remain to be executed."
     }
   },
@@ -139,29 +139,29 @@
       "description": "Record accepted decisions and mirror this task DAG; capture source revision/dirty-file inventory and current targeted test results without staging user changes.",
       "files": [
         {
-          "path": "docs/prd/pluggable-harness/plan.md",
+          "path": "docs/support/harness/plan.md",
           "action": "create",
           "what": "Freeze PRD and implementation baseline"
         },
         {
-          "path": "docs/prd/pluggable-harness/tasks.json",
+          "path": "docs/support/harness/tasks.json",
           "action": "create",
-          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/README.md; index the new PRD from docs/readme.md."
         },
         {
-          "path": "docs/prd/pluggable-harness/review.json",
+          "path": "docs/support/harness/review.json",
           "action": "create",
-          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/README.md; index the new PRD from docs/readme.md."
         },
         {
-          "path": "docs/prd/index.md",
+          "path": "docs/prd/README.md",
           "action": "create",
-          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/README.md; index the new PRD from docs/readme.md."
         },
         {
           "path": "docs/readme.md",
           "action": "modify",
-          "what": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+          "what": "Create plan.md, tasks.json and review.json plus docs/prd/README.md; index the new PRD from docs/readme.md."
         }
       ],
       "building_blocks": [
@@ -181,14 +181,14 @@
         },
         {
           "id": "T00.2",
-          "description": "Create plan.md, tasks.json and review.json plus docs/prd/index.md; index the new PRD from docs/readme.md."
+          "description": "Create plan.md, tasks.json and review.json plus docs/prd/README.md; index the new PRD from docs/readme.md."
         }
       ],
       "tests": [
         {
           "description": "Document/schema validation and existing coding-flow smoke commands are recorded; no product implementation is performed in this task.",
           "kind": "manual",
-          "command": "python .agents/skills/plan-loop/tools/validate_plan.py --tasks docs/prd/pluggable-harness/tasks.json"
+          "command": "python .agents/skills/plan-loop/tools/validate_plan.py --tasks docs/support/harness/tasks.json"
         }
       ],
       "acceptance_criteria": [
@@ -3184,17 +3184,17 @@
           "what": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
         },
         {
-          "path": "docs/prd/pluggable-harness/architecture.md",
+          "path": "docs/support/harness/architecture.md",
           "action": "create",
           "what": "Document the implemented new architecture alongside its active PRD; the old architecture stays archived."
         },
         {
-          "path": "docs/prd/pluggable-harness/protocol-v1.md",
+          "path": "docs/support/harness/protocol-v1.md",
           "action": "create",
           "what": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
         },
         {
-          "path": "docs/prd/pluggable-harness/plugin-author-guide.md",
+          "path": "docs/support/harness/plugin-author-guide.md",
           "action": "create",
           "what": "Wire CI plus current GUI/TUI/CLI tests migrated away from old host, shared-service race fixtures and process failure acceptance; document SDK/protocol/deployment topology."
         }
@@ -4184,7 +4184,7 @@
       "Keep historical artifacts/evidence report contents unchanged; record path migrations in the archive index.",
       "Redirect new inline_bench output into artifacts/metrics/tui-v1 rather than overwriting the archived report; update live verifier expectations accordingly.",
       "Update current links and executable path consumers; retain historical literal paths with migration mapping.",
-      "After archiving the old architecture, the new plan's later T41 architecture update targets docs/prd/pluggable-harness/architecture.md, not a recreated top-level docs/architecture.md.",
+      "After archiving the old architecture, the new plan's later T41 architecture update targets docs/support/harness/architecture.md, not a recreated top-level docs/architecture.md.",
       "Run plan schema/DAG validation, relative-link/path checks, TUI verifier unit checks and Windows docs consistency; write new migration reports separately from historical reports.",
       "Before any recursive move, resolve and verify absolute source/destination remain in docs and intended support/archive; use native PowerShell Move-Item -LiteralPath with no overwrites."
     ],

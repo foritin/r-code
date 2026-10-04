@@ -55,7 +55,7 @@ R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展�
 | Renderer | `src-tauri/frontend/` | React 场景、Zustand 状态与 typed Tauri IPC |
 | Shared contracts | `vendor/agent-contracts/` | `agent-*` 公共合同 crates；构建必需 Git 子模块 |
 
-JSONL 是会话内容源，SQLite 是任务、Run、权限、审计、Plan、记忆和变更等产品状态源。完整说明见 [重构前架构基线](./docs/support/archive/architecture-before-pluggable-harness.md)。后续架构见 [可插拔 Harness 重构计划](./docs/prd/pluggable-harness/plan.md)，该计划的产品改动尚未开始实施。
+JSONL 是会话内容源，SQLite 是任务、Run、权限、审计、Plan、记忆和变更等产品状态源。完整说明见 [重构前架构基线](./docs/support/archive/architecture-before-pluggable-harness.md)。后续架构见 [可插拔 Harness 重构计划](./docs/support/harness/plan.md)，该计划的产品改动尚未开始实施。
 
 ## 开发
 
@@ -206,7 +206,7 @@ r-code/
 - [贡献指南](./CONTRIBUTING.md)
 - [支持与问题反馈](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
-- [可插拔 Harness 重构计划](./docs/prd/pluggable-harness/plan.md)
+- [可插拔 Harness 重构计划](./docs/support/harness/plan.md)
 - [重构前架构基线](./docs/support/archive/architecture-before-pluggable-harness.md)
 - [Plan 模式与增强审核](./docs/support/guides/plan-mode.md)
 - [联网工具与 MCP](./docs/support/guides/mcp.md)

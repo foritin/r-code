@@ -171,6 +171,9 @@ pub struct ModelStreamOutcome {
     pub stream_id: String,
     pub finish_reason: Option<String>,
     pub usage: r_code_harness_protocol::ModelUsage,
+    /// A14：本轮流式输出的推理文本聚合（推理模型；普通流为 None）。
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 /// Model provider access, host-mediated; credentials never leave the host.

@@ -12,6 +12,7 @@ name = "r-code-harness-native"
 path = "src/main.rs"
 
 [dependencies]
+futures = { workspace = true }
 agent-config = { workspace = true }
 r-code-harness-sdk = { workspace = true }
 r-code-harness-protocol = { workspace = true }

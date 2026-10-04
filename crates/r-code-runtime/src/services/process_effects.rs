@@ -264,7 +264,12 @@ pub fn revalidate(manifest: &ScanManifest, policy: &ScanPolicy) -> Result<(), Sc
         let path = policy.root.join(&file.path);
         let metadata = match std::fs::metadata(&path) {
             Ok(metadata) => metadata,
-            Err(_) => return Err(ScanError::ConcurrentEdit(file.path.clone())),
+            // L08：文件消失确实是漂移；但 EACCES/EBUSY 一类是瞬时扫描不可用
+            // （如 checkout 中途）——归 Io 让上层 defer 而非永久 FAILED。
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ScanError::ConcurrentEdit(file.path.clone()))
+            }
+            Err(error) => return Err(ScanError::Io(error.to_string())),
         };
         if metadata.is_symlink()
             || metadata.len() != file.bytes

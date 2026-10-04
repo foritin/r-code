@@ -1,0 +1,117 @@
+{
+  "objective": "Close the execution-wave lease-lifecycle defect family in parallel.rs (agent-loop PRD observation item 9, DEC-2): no write lease may be free while its harness process is alive, no non-Started dispatch exit may leak a lease or pin, reconciliation must never silently drop its journal work, and transient scan failures must defer instead of permanently failing units.",
+  "end_state": "All L01–L08 landed with machine acceptance where the existing e06/e07/e08/e10 fixtures allow: cancellation proves every tree's death BEFORE freeing any write lease; the ~15 non-Started exits after lease acquisition release lease+pin through one cleanup helper; supervisor-registration failure kills and proves the orphan before failing; the reconciliation CAS retry preserves events, re-applies repairs and returns Err on exhaustion; the fatal branch journals joined outcomes and records releases; a poisoned proposals lock no longer takes down the manager; held_tools removal happens only after the observation save succeeds; scan-unavailable (EACCES/EBUSY-class) defers instead of ReBlock-permanent-FAILED.",
+  "non_goals": [
+    "Anything in the chat loop (owned by agent-loop-resilience, complete)",
+    "Redesigning the wave dispatcher or lease-family model — lifecycle fixes only",
+    "The kernel-contract races recorded as agent-loop observation item 11 (production-unwired)"
+  ],
+  "environment": {
+    "inherits": "docs/support/archive/prd/agent-loop-resilience/worklist.json environment (same crates/commands)",
+    "target_file": "crates/r-code-runtime/src/parallel.rs (1799 lines @2026-10-03)",
+    "fixtures": "existing e06_parallel_dispatch / e07_lease_family / e08_child_supervisor / e10_chain_recovery integration tests"
+  },
+  "decisions": [
+    { "id": "DEC-5", "question": "fix shape for the ~15 leaking exits", "adopted": "cleanup helper (`defer_with_cleanup` / `fatal_with_cleanup` returning DispatchOutcome with release+unpin) instead of restructuring the 250-line dispatch body — mechanical, reviewable, no signature churn", "flip_point": "the helper call sites; a guard-style restructure remains possible later without behavior change" }
+  ],
+  "tasks": [
+    {
+      "id": "L01",
+      "title": "Safety: cancellation proves kills before freeing any write lease",
+      "serves": ["kill-before-free"],
+      "description": "settle_wave_cancelled (parallel.rs:1727) releases held_tools and awaiting lease families BEFORE the child-supervisor sweep proves the trees dead, and returning detaches the runs JoinSet whose closures own kill/reap — a still-live harness (shell authority, direct writes) can overlap a write scope another manager may acquire. Reorder: (1) drain `runs` (needs it passed in from the caller at :788) with the same per-outcome bookkeeping as the fatal branch, (2) run cancel_and_prove_all(), (3) only then release leases. Journal order must reflect kill-proof-before-release.",
+      "files": [{ "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "settle_wave_cancelled signature gains runs; reorder sweep/drains before releases; caller at :788 passes runs.", "anchors": ["async fn settle_wave_cancelled (:1727)", "SettleFlow::Cancelled call site (:788)"] }],
+      "test_files": ["crates/r-code-runtime/tests/l01_cancel_kill_before_free.rs"],
+      "tests": ["l01_cancel_mid_wave_proves_kills_before_releasing_leases"],
+      "acceptance_criteria": ["During cancel of a wave with a live slow harness: every supervised tree is proven dead (or journaled unproven) before any lease row for those attempts becomes releasable; post-cancel, no lease family row for the wave's attempts remains active."],
+      "depends_on": [],
+      "estimated_loc": 60
+    },
+    {
+      "id": "L02",
+      "title": "Lease+pin cleanup on every non-Started dispatch exit",
+      "serves": ["no-leak-exits"],
+      "description": "execution_tools_for acquires the durable lease family eagerly; ExecutionToolService::Drop deliberately does not release; ~15 Deferred/Fatal returns after acquisition (freeze workspace / snapshot save / pin / handoff / CAS backoffs / already-settled / manifest / spawn-adjacent) leak the lease until process restart, blocking overlapping scopes for other managers and retries. Add `defer_with_cleanup`/`fatal_with_cleanup` helpers (release + catalog unpin) and route every post-acquisition non-Started return through them (DEC-5).",
+      "files": [{ "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "Two async helpers + convert ~15 early returns in dispatch_unit; FailedUnit path also unpins.", "anchors": ["let execution_tools = match self.execution_tools_for (:997)", "each `return DispatchOutcome::Deferred|Fatal` after :997 (enumerate via sed 1010-1270 map)", "FailedUnit release site (:1266 area)"] }],
+      "test_files": ["crates/r-code-runtime/tests/l02_no_leak_exits.rs"],
+      "tests": ["l02_deferred_after_acquisition_releases_lease_and_pin"],
+      "acceptance_criteria": ["A dispatch that defers after acquisition (forced via write-baseline freeze failure) leaves no active lease-family row and no pinned attempt; Started path unaffected (e06 regression green)."],
+      "depends_on": [],
+      "estimated_loc": 90
+    },
+    {
+      "id": "L03",
+      "title": "Supervisor registration failure: kill and prove the orphan",
+      "serves": ["no-orphan-process"],
+      "description": "At :1284 register() failure returns Fatal while PluginSession::start already spawned the process: the run closure owning kill/reap is never spawned, the supervisor never saw the tree, and the earlier catalog pin stays. Kill and prove via session.process().kill_confirmed().await, deregister defensively, release the lease family and unpin, then return Fatal carrying the proof outcome.",
+      "files": [{ "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "register-failure branch: kill_confirmed + releases + unpin + Fatal message includes proof outcome.", "anchors": ["if let Err(error) = self.child_supervisor.register (:1284)"] }],
+      "test_files": [],
+      "tests": ["covered by e08_child_supervisor regression (register path stays green); forced-failure e2e deferred — no injection point without a supervisor double-register seam"],
+      "acceptance_criteria": ["Code path releases lease+pin and proves termination before Fatal; message names the proof outcome."],
+      "depends_on": ["L02"],
+      "estimated_loc": 25
+    },
+    {
+      "id": "L04",
+      "title": "Reconciliation CAS: preserve events, re-apply repairs, fail on exhaustion",
+      "serves": ["cas-integrity"],
+      "description": "The retry loop (:215-231) mem::takes events into the first (failed) save — retries persist the reloaded state (never had require_repair applied) with an EMPTY journal; exhausted retries fall through returning Ok while lease families were already released — kernel units stay Pending and the next wave wedges Fatal on 'already settled'. Collect repair actions during the analysis pass; the CAS loop re-applies require_repair to each reloaded state (tolerating already-applied), passes events by clone, and returns Err when TASK_CAS_RETRIES are exhausted.",
+      "files": [{ "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "Action collection in the crashed-attempt loop; CAS loop rewrite per above.", "anchors": ["state.require_repair (:197)", "for _ in 0..TASK_CAS_RETRIES (:216)", "std::mem::take(&mut events) (:219)"] }],
+      "test_files": ["crates/r-code-runtime/tests/l04_cas_reconciliation.rs"],
+      "tests": ["l04_stale_revision_retry_preserves_events_and_repairs"],
+      "acceptance_criteria": ["Under an injected stale-revision on the first save, the retry persists the repaired state AND the chain.resume-once/quarantined events; exhaustion returns Err (never Ok)."],
+      "depends_on": [],
+      "estimated_loc": 80
+    },
+    {
+      "id": "L05",
+      "title": "Fatal branch: drain with bookkeeping",
+      "serves": ["fatal-drain"],
+      "description": "The fatal branch (:718-726) discards joined UnitRunOutcomes — their tool.result observations (the only record of what the harness did) never journal, release() results are ignored, and an outcome popped but dropped between steps strands its lease. Drain runs with the same per-outcome handling as cancel: release family + tools (log failures), drain observations, best-effort save_run_state.",
+      "files": [{ "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "Fatal drain loop gains per-outcome release+observe+journal.", "anchors": ["if let Some(fatal) = fatal { while runs.join_next() (:718)"] }],
+      "test_files": [],
+      "tests": ["covered via L01's shared drain helper; dedicated e2e deferred (fatal injection needs a store-failure seam)"],
+      "acceptance_criteria": ["Code inspection: no joined outcome is dropped without release attempt and observation drain; e06/e10 regressions green."],
+      "depends_on": ["L01"],
+      "estimated_loc": 40
+    },
+    {
+      "id": "L06",
+      "title": "Poison-tolerant proposals lock",
+      "serves": ["poison-tolerance"],
+      "description": "`.lock().expect(\"proposals\")` (:1396) lets any router-side panic while holding the lock cascade through settle_unit and kill the manager task with lease families active. Use into_inner() recovery (the Vec is plain data; poisoning carries no invariant here).",
+      "files": [{ "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "Replace expect with poison-recovering match; sweep the file for sibling .expect-on-Mutex sites.", "anchors": ["recorded_proposals .lock().expect (:1396)"] }],
+      "test_files": [],
+      "tests": ["grep acceptance: no .expect on std Mutex in parallel.rs"],
+      "depends_on": [],
+      "estimated_loc": 10
+    },
+    {
+      "id": "L07",
+      "title": "held_tools removal only after the observation save succeeds",
+      "serves": ["no-stranded-lease-on-save-failure"],
+      "description": "held_tools.remove(&done.unit.id) (:826) runs before save_run_state; a save failure jumps to fatal releasing only what REMAINS — this unit's lease strands. Move the removal after the successful save (the fatal branch then still finds and releases it).",
+      "files": [{ "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "Reorder remove after save; keep done reachable for fatal.", "anchors": ["held_tools.remove(&done.unit.id) (:826)", "save_run_state match (:832)"] }],
+      "test_files": [],
+      "tests": ["code-inspection + e06 regression (ordering change only)"],
+      "depends_on": ["L05"],
+      "estimated_loc": 10
+    },
+    {
+      "id": "L08",
+      "title": "Revalidate classifies scan-unavailable vs drift",
+      "serves": ["transient-vs-drift"],
+      "description": "process_effects::revalidate maps metadata errors to ConcurrentEdit (:265-267), and revalidate_read_set flattens every error into 'read-set drift' (:399) — the dispatch site ReBlocks permanently on an EACCES/EBUSY mid-checkout. (1) revalidate: NotFound/Removed metadata errors remain ConcurrentEdit (a gone file IS drift); other io kinds map to ScanError::Io. (2) revalidate_read_set returns a Drift|ScanUnavailable distinction; the dispatch site defers on ScanUnavailable instead of ReBlock.",
+      "files": [
+        { "path": "crates/r-code-runtime/src/services/process_effects.rs", "action": "modify", "what": "metadata error kind split at :265; read error already io_error.", "anchors": ["Err(_) => return Err(ScanError::ConcurrentEdit (:266))"] },
+        { "path": "crates/r-code-runtime/src/parallel.rs", "action": "modify", "what": "revalidate_read_set returns typed failure; dispatch site (:391 caller at :989) maps ScanUnavailable → Deferred.", "anchors": ["fn revalidate_read_set (:388)", "if let Err(reason) = drift.revalidate_read_set (:989)"] }
+      ],
+      "test_files": ["crates/r-code-runtime/tests/l08_scan_unavailable_defers.rs"],
+      "tests": ["l08_permission_denied_scope_defers_instead_of_reblock"],
+      "acceptance_criteria": ["A scope that becomes unreadable (EACCES via read-only ACL/directory perms) defers the unit instead of permanently settling it failed."],
+      "depends_on": [],
+      "estimated_loc": 45
+    }
+  ],
+  "order": ["L06", "L07", "L02", "L03", "L01", "L05", "L08", "L04"]
+}

@@ -119,6 +119,7 @@ impl ModelService for DelegationModel {
             stream_id,
             finish_reason: Some("stop".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }
@@ -379,6 +380,7 @@ impl ModelService for QueueModel {
             stream_id,
             finish_reason: Some("stop".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

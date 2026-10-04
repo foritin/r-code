@@ -379,12 +379,45 @@ impl TaskService {
         Some(next)
     }
 
+    /// A10：重启重播种——宿主在 daemon 启动/派发空闲时把 store 侧重建的
+    /// 未投递输入灌回内存队列。按 input_seq 有序合并；已在内存中的消息
+    /// id 跳过（幂等）。返回实际并入条数。
+    pub async fn reseed(&self, task_id: &str, undelivered: Vec<InputMessage>) -> usize {
+        if undelivered.is_empty() {
+            return 0;
+        }
+        let mut index = self.index.lock().expect("index");
+        let queue = index.entry(task_id.to_string()).or_default();
+        let known: std::collections::HashSet<String> = queue
+            .pending
+            .iter()
+            .map(|message| message.message_id.clone())
+            .collect();
+        let mut added = Vec::new();
+        for message in undelivered {
+            if !known.contains(&message.message_id) {
+                queue.last_seq = queue.last_seq.max(message.input_seq);
+                added.push(message);
+            }
+        }
+        let count = added.len();
+        queue.pending.extend(added);
+        queue
+            .pending
+            .make_contiguous()
+            .sort_by_key(|message| message.input_seq);
+        count
+    }
+
     /// Acknowledge delivery of an in-flight message (durable).
     pub async fn acknowledge(
         &self,
         task_id: &str,
         message_id: &str,
     ) -> Result<(), TaskServiceError> {
+        // A10：持久化成功后再改内存——save 失败时恢复 in_flight 保持可重试
+        // （此前先清内存，失败后重试报 NotInFlight、重启后重复执行）。
+        let held;
         {
             let mut index = self.index.lock().expect("index");
             let queue = index.entry(task_id.to_string()).or_default();
@@ -396,19 +429,31 @@ impl TaskService {
             if !matches {
                 return Err(TaskServiceError::NotInFlight(message_id.to_string()));
             }
-            queue.in_flight = None;
-            queue.delivered.insert(message_id.to_string());
+            held = queue.in_flight.take().expect("checked above");
         }
-        let state = self.load(task_id).await?;
-        self.save(
-            &state,
-            vec![Self::event(
-                task_id,
-                "input.delivered",
-                serde_json::json!({"message_id": message_id}),
-            )],
-        )
-        .await?;
+        let save: Result<(), TaskServiceError> = async {
+            let state = self.load(task_id).await?;
+            self.save(
+                &state,
+                vec![Self::event(
+                    task_id,
+                    "input.delivered",
+                    serde_json::json!({"message_id": message_id}),
+                )],
+            )
+            .await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = save {
+            let mut index = self.index.lock().expect("index");
+            let queue = index.entry(task_id.to_string()).or_default();
+            queue.in_flight = Some(held);
+            return Err(error);
+        }
+        let mut index = self.index.lock().expect("index");
+        let queue = index.entry(task_id.to_string()).or_default();
+        queue.delivered.insert(message_id.to_string());
         Ok(())
     }
 

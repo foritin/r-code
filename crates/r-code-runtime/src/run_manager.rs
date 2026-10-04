@@ -25,8 +25,8 @@ use crate::services::verification::{verification_dir_for, CheckStatus, Verificat
 use crate::services::verification_inputs::FrozenControlStore;
 use crate::services::workspaces::{CandidateManifest, TaskWorkspaceBinding};
 use r_code_harness_protocol::{
-    EventEnvelope, EventKind, InputMessage, NegotiatedCapabilities, PackageRef, Provenance,
-    RunIdentity,
+    EventEnvelope, EventKind, InputKind, InputMessage, NegotiatedCapabilities, PackageRef,
+    Provenance, RunIdentity,
 };
 use r_code_kernel::ports::{HarnessSession as _, JournalStore as _, ModelService, RunGuard};
 use r_code_kernel::task::{
@@ -105,6 +105,8 @@ pub struct RunManager {
     context_registry: ContextRegistry,
     transcripts: Mutex<HashMap<String, Arc<TranscriptWriter>>>,
     pub(crate) slots: Mutex<HashMap<String, Arc<Mutex<RunSlot>>>>,
+    /// A10：重启重播种的每任务一次性护栏（防每轮 poll 空转时反复扫 journal）。
+    pub(crate) reseeded: std::sync::Mutex<std::collections::HashSet<String>>,
     /// E08: the one registry owning every in-flight supervised tree; task
     /// cancel sweeps it with per-tree proofs.
     pub(crate) child_supervisor: Arc<crate::child_supervisor::ChildSupervisor>,
@@ -205,6 +207,7 @@ impl RunManager {
             context_registry: ContextRegistry::new(),
             transcripts: Mutex::new(HashMap::new()),
             slots: Mutex::new(HashMap::new()),
+            reseeded: std::sync::Mutex::new(std::collections::HashSet::new()),
             child_supervisor: crate::child_supervisor::ChildSupervisor::new(),
         })
     }
@@ -419,6 +422,105 @@ impl RunManager {
     /// "unknown model selection" → /setup guidance) read `payload.error` off
     /// the run.failed event, so an empty reason degrades a real error into
     /// "unknown error" on screen.
+    /// A11：接力指令固定模板（DEC-4：普通用户侧输入形态，非用户可控）。
+    const RELAY_INSTRUCTION: &str = "继续，从上次停止处接着做。";
+
+    /// A11：判定本 run 是否 budget_reached——找本 run 的 harness.progress
+    /// {budgetReached: true} 信号，返回其 turns。事件本身不带 runId，
+    /// 以最近的 run.completed 为界即圈定本 run 的 journal 段。
+    fn budget_reached_this_run(store: &V1Store, task_id: &str) -> Option<u64> {
+        store
+            .task_events(task_id)
+            .into_iter()
+            .rev()
+            .take_while(|event| {
+                // 只看最近一段：遇到本任务的 run.completed 即止。
+                event.kind != "run.completed"
+            })
+            .find_map(|event| {
+                if event.kind != "harness.progress" {
+                    return None;
+                }
+                let payload = event.payload.get("payload")?;
+                let hit = payload.get("budgetReached")?.as_bool()?;
+                hit.then(|| {
+                    payload
+                        .get("turns")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0)
+                })
+            })
+    }
+
+    /// A11：统计当前接力链已累计轮数——从 journal 末尾向前，累加 run.chained
+    /// 的 chainedTurns 语义简化为各段 turns 之和，遇最近的用户输入排队为止
+    /// （用户输入开启新链）。
+    fn relay_chain_turns(store: &V1Store, task_id: &str) -> u64 {
+        let mut total = 0u64;
+        for event in store.task_events(task_id).into_iter().rev() {
+            match event.kind.as_str() {
+                "run.chained" => {
+                    total += event
+                        .payload
+                        .get("chainedTurns")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0);
+                }
+                "input.queued" => {
+                    let is_user = event
+                        .payload
+                        .get("kind")
+                        .and_then(|value| value.as_str())
+                        .map(|kind| kind == "user")
+                        .unwrap_or(false);
+                    if is_user {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        total
+    }
+
+    /// A05：run 失败的三态分级（随 run.failed journal 落盘，供队列恢复与
+    /// TUI 失败卡片消费）。启发式关键词匹配，默认 deterministic（宁可保守
+    /// 不重试）。
+    fn classify_failure(error: &str) -> &'static str {
+        let lower = error.to_ascii_lowercase();
+        if lower.contains("cancelled") || lower.contains("canceled") {
+            return "cancelled";
+        }
+        // 错误链外层固定带 transport failure 一类包装噪声，确定性关键词必须
+        // 优先于瞬时关键词判定。
+        const DETERMINISTIC: [&str; 7] = [
+            "maximum context",
+            "context length",
+            "context window",
+            "invalid api key",
+            "unauthorized",
+            "forbidden",
+            "content policy",
+        ];
+        if DETERMINISTIC.iter().any(|needle| lower.contains(needle)) {
+            return "deterministic";
+        }
+        const TRANSIENT: [&str; 8] = [
+            "429",
+            "rate limited",
+            "503",
+            "500",
+            "timeout",
+            "timed out",
+            "connection",
+            "transport",
+        ];
+        if TRANSIENT.iter().any(|needle| lower.contains(needle)) {
+            return "transient";
+        }
+        "deterministic"
+    }
+
     pub(crate) async fn record_failure(
         &self,
         task_id: &str,
@@ -444,7 +546,7 @@ impl RunManager {
                     vec![journal_event(
                         task_id,
                         "run.failed",
-                        serde_json::json!({"ownedAttempt": false, "error": error}),
+                        serde_json::json!({"ownedAttempt": false, "error": error, "errorClass": Self::classify_failure(error)}),
                     )],
                     revision,
                 )
@@ -499,7 +601,7 @@ impl RunManager {
                         vec![journal_event(
                             task_id,
                             "run.failed",
-                            serde_json::json!({"attemptId": local_attempt, "error": error}),
+                            serde_json::json!({"attemptId": local_attempt, "error": error, "errorClass": Self::classify_failure(error)}),
                         )],
                         revision,
                     )
@@ -514,7 +616,7 @@ impl RunManager {
                 vec![journal_event(
                     task_id,
                     "run.failed",
-                    serde_json::json!({"attemptId": local_attempt, "error": error}),
+                    serde_json::json!({"attemptId": local_attempt, "error": error, "errorClass": Self::classify_failure(error)}),
                 )],
                 revision,
             )
@@ -1167,6 +1269,46 @@ impl RunManager {
                     "verdict": verdict_label(&verdict),
                 }),
             ));
+        }
+        // A11：轮数预算接力——插件在 budget_reached 时发 harness.progress
+        // {budgetReached, turns}（端口 start 返回 ()，结果 JSON 不上浮，以
+        // journal 信号为准）；宿主注入 Continuation 续跑，drive loop 因队列
+        // 非空自然继续，新 run 经 handoff checkpoint 恢复。
+        let budget = Self::budget_reached_this_run(&self.store, task_id);
+        if let Some(run_turns) = budget {
+            let chained_turns = Self::relay_chain_turns(&self.store, task_id);
+            // DEC-4：链总轮数护栏（翻转点：此常量→设置项）。
+            const MAX_TOTAL_TURNS: u64 = 200;
+            if chained_turns + run_turns >= MAX_TOTAL_TURNS {
+                events.push(journal_event(
+                    task_id,
+                    "run.chain_stopped",
+                    serde_json::json!({
+                        "runId": identity.run_id,
+                        "chainedTurns": chained_turns + run_turns,
+                        "limit": MAX_TOTAL_TURNS,
+                    }),
+                ));
+            } else {
+                self.kernel_tasks
+                    .enqueue(
+                        task_id,
+                        InputKind::Continuation,
+                        Self::RELAY_INSTRUCTION,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                events.push(journal_event(
+                    task_id,
+                    "run.chained",
+                    serde_json::json!({
+                        "runId": identity.run_id,
+                        "chainedTurns": chained_turns + run_turns,
+                        "instruction": Self::RELAY_INSTRUCTION,
+                    }),
+                ));
+            }
         }
         save_run_state(&self.store, &state, events)?;
         self.kernel_tasks

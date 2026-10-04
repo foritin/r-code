@@ -1,7 +1,7 @@
 # R-Code「完全打通 Harness」端到端验收 PRD（增量）
 
 > 作者：许清楚（PM） ｜ 日期：2026-09-13 ｜ 状态：草案，待用户拍板开放问题后转实施
-> 取证基线：`docs/harness-provider-audit.md`（2026-09-13 只读审计）、`docs/prd/pluggable-harness/plan.md`、`progress.md`
+> 取证基线：`docs/harness-provider-audit.md`（2026-09-13 只读审计）、`docs/support/harness/plan.md`、`progress.md`
 > 性质：**增量 PRD**。不推翻 plan.md §1 的既有决策（首期不做插件市场 / 在线自动更新 / Rust 动态库 ABI / WASM / 自定义插件界面 / 恶意插件 OS 沙箱 / 自动学习记忆 / 远程沙箱调度）。
 > 本文件只回答一个问题：**「完全打通」到底是什么意思，怎么判定它已经发生。**
 

@@ -134,6 +134,8 @@ impl RunManager {
         let mut resume_once = 0;
         let mut quarantined = 0;
         let mut events = Vec::new();
+        // L04：修复动作清单（CAS 重试重放用）。
+        let mut repair_actions: Vec<RepairAction> = Vec::new();
         let mut state_dirty = false;
         for row in in_flight {
             let attempt_id = row.attempt_id.clone();
@@ -191,6 +193,13 @@ impl RunManager {
             } else {
                 None
             };
+            // L04：记录修复动作——CAS 重试换新快照后按动作重放（此前重试
+            // 保存的是从未应用修复的新状态 + 空事件表，修复凭空蒸发）。
+            repair_actions.push(RepairAction {
+                repair_attempt: repair_attempt.clone(),
+                unit_id: unit_id.clone(),
+                reason: reason.clone(),
+            });
             state
                 .require_repair(
                     Actor::Host,
@@ -218,7 +227,7 @@ impl RunManager {
             for _ in 0..TASK_CAS_RETRIES {
                 match store.save_task_and_events_if_revision(
                     &state,
-                    std::mem::take(&mut events),
+                    events.clone(),
                     current_revision,
                 ) {
                     Ok(_) => break,
@@ -229,6 +238,33 @@ impl RunManager {
                             .ok_or_else(|| format!("task {task_id_owned} not found"))?;
                         state = next_state;
                         current_revision = next_revision;
+                        // L04：新快照从未应用过本次调和的修复——按记录重放，
+                        // 否则重试落盘的是无修复状态 + 空事件表，修复凭空
+                        // 蒸发。快照已终态结清的单元以快照为准，不覆盖。
+                        for action in &repair_actions {
+                            let settled_completed = state
+                                .unit_records
+                                .get(&action.unit_id)
+                                .is_some_and(|record| {
+                                    matches!(
+                                        record.settlement,
+                                        r_code_kernel::task::UnitSettlement::Completed
+                                            | r_code_kernel::task::UnitSettlement::CompletedWithoutEffect
+                                    )
+                                });
+                            if settled_completed {
+                                continue;
+                            }
+                            state
+                                .require_repair(
+                                    Actor::Host,
+                                    action.repair_attempt.clone(),
+                                    Some(action.unit_id.clone()),
+                                    action.reason.clone(),
+                                    false,
+                                )
+                                .map_err(|error| error.to_string())?;
+                        }
                     }
                     Err(error) => return Err(error.to_string()),
                 }
@@ -278,6 +314,20 @@ fn refresh_unit_statuses(units: &mut [WorkUnit], state: &TaskState) {
 /// legitimate only when the unit's own attempt journaled exactly that
 /// after-state. Everything else is an external edit, and external edits
 /// re-block dependents — never overwrite them (INV-10).
+/// L04：一次崩溃调和中的一个修复动作（重试换快照后可重放）。
+#[derive(Clone)]
+struct RepairAction {
+    repair_attempt: Option<String>,
+    unit_id: String,
+    reason: String,
+}
+
+/// L08：读集复验失败二分——真实漂移（永久）与扫描不可用（瞬时，defer）。
+enum ReadSetRevalidation {
+    Drift(String),
+    ScanUnavailable(String),
+}
+
 struct WaveDrift {
     binding: TaskWorkspaceBinding,
     /// Read-set baselines, frozen the first time a unit becomes
@@ -385,18 +435,33 @@ impl WaveDrift {
     /// Freeze the unit's read-set baseline at its first dependency-ready
     /// moment, then revalidate it. `Err` means external drift: the unit is
     /// re-blocked, never started over the drift.
-    fn revalidate_read_set(&mut self, units: &[WorkUnit], unit: &WorkUnit) -> Result<(), String> {
+    fn revalidate_read_set(
+        &mut self,
+        units: &[WorkUnit],
+        unit: &WorkUnit,
+    ) -> Result<(), ReadSetRevalidation> {
         if !self.read_baselines.contains_key(&unit.id) {
             let mut baselines = Vec::new();
             for scope in Self::read_scopes(units, unit) {
-                baselines.push((scope.clone(), self.capture_scope(&scope)?));
+                let manifest = self.capture_scope(&scope).map_err(|message| {
+                    ReadSetRevalidation::ScanUnavailable(format!(
+                        "scan unavailable in {scope}: {message}"
+                    ))
+                })?;
+                baselines.push((scope.clone(), manifest));
             }
             self.read_baselines.insert(unit.id.clone(), baselines);
         }
         for (scope, manifest) in &self.read_baselines[&unit.id] {
             let policy = ScanPolicy::for_workspace_root(self.scope_root(scope));
-            revalidate(manifest, &policy)
-                .map_err(|error| format!("read-set drift in {scope}: {error}"))?;
+            revalidate(manifest, &policy).map_err(|error| match error {
+                crate::services::process_effects::ScanError::Io(message) => {
+                    ReadSetRevalidation::ScanUnavailable(format!(
+                        "scan unavailable in {scope}: {message}"
+                    ))
+                }
+                other => ReadSetRevalidation::Drift(format!("read-set drift in {scope}: {other}")),
+            })?;
         }
         Ok(())
     }
@@ -717,13 +782,33 @@ impl RunManager {
             //    process at its end), release every held lease, then fail
             //    the wave. Attempt rows stay in flight for restart recovery.
             if let Some(fatal) = fatal {
-                while runs.join_next().await.is_some() {}
+                // L05：drain 不再丢弃 join 结果——每个 outcome 的观察落账
+                // （这是 harness 行为的唯一记录）并尝试释放；释放失败留痕。
+                let mut drained = Vec::new();
+                while let Some(joined) = runs.join_next().await {
+                    if let Ok(done) = joined {
+                        let observations = drain_observations(&done.router);
+                        if !observations.is_empty() {
+                            let _ = save_run_state(&self.store, &mut live, observations);
+                        }
+                        let _ = self.store.release_lease_family(
+                            &done.attempt_id,
+                            &done.attempt_id,
+                            false,
+                        );
+                        if let Err(error) = done.execution_tools.release() {
+                            drained
+                                .push(format!("release failed for {}: {error}", done.attempt_id));
+                        }
+                    }
+                }
                 for tools in held_tools.values() {
                     let _ = tools.release();
                 }
                 for pending in &awaiting {
                     let _ = pending.execution_tools.release();
                 }
+                let _ = drained;
                 return Err(fatal);
             }
 
@@ -792,6 +877,7 @@ impl RunManager {
                                 &ctx,
                                 &mut held_tools,
                                 &mut awaiting,
+                                runs,
                             )
                             .await;
                     }
@@ -826,7 +912,8 @@ impl RunManager {
             // A completion frees both a bound slot and (after its settle) a
             // write lease: deferred units get another chance.
             deferred.clear();
-            held_tools.remove(&done.unit.id);
+            // L07：先落观察、成功后才移出 held_tools——落盘失败走 fatal 分支
+            // 时该租约仍可被释放（移除过早会把它搁浅到进程重启）。
             let observations = drain_observations(&done.router);
             done.tool_failed = observations.iter().any(|event| {
                 event.kind == "tool.result"
@@ -841,6 +928,7 @@ impl RunManager {
                     }
                 }
             }
+            held_tools.remove(&done.unit.id);
             awaiting.push_back(done);
         }
 
@@ -971,6 +1059,37 @@ impl RunManager {
         }
     }
 
+    /// L02（DEC-5）：租约获取之后的非 Started 退出统一出口——释放租约族
+    /// （注：catalog pin 按 attempt 键控且无 unpin API——attempt 消亡后 pin
+    /// 不阻塞任何人，真正会阻塞的是租约族。ocr 原意见的 unpin 不适用。）
+    /// 此前 ~15 个 Deferred/Fatal 返回点泄漏租约到进程重启，
+    /// 阻塞同作用域的其他 manager 与重试。
+    async fn defer_with_cleanup(
+        &self,
+        tools: &Arc<ExecutionToolService>,
+        attempt_id: &str,
+        reason: String,
+    ) -> DispatchOutcome {
+        let _ = self
+            .store
+            .release_lease_family(attempt_id, attempt_id, false);
+        let _ = tools.release();
+        DispatchOutcome::Deferred(reason)
+    }
+
+    async fn fatal_with_cleanup(
+        &self,
+        tools: &Arc<ExecutionToolService>,
+        attempt_id: &str,
+        reason: String,
+    ) -> DispatchOutcome {
+        let _ = self
+            .store
+            .release_lease_family(attempt_id, attempt_id, false);
+        let _ = tools.release();
+        DispatchOutcome::Fatal(reason)
+    }
+
     /// Dispatch one dependency-ready unit (E06.1/E06.3): read-set
     /// revalidation, write lease, frozen per-unit RunSnapshot, DURABLE
     /// attempt row, kernel start — and only then the harness spawn.
@@ -988,8 +1107,15 @@ impl RunManager {
         run_id: String,
     ) -> DispatchOutcome {
         // E06.2: read-set revalidation gates the start.
-        if let Err(reason) = drift.revalidate_read_set(units, unit) {
-            return DispatchOutcome::ReBlocked(reason);
+        if let Err(failure) = drift.revalidate_read_set(units, unit) {
+            // L08：扫描不可用（EACCES/EBUSY 类瞬时）defer 重试；只有真实
+            // 漂移才 ReBlock 永久失败。
+            match failure {
+                ReadSetRevalidation::ScanUnavailable(reason) => {
+                    return DispatchOutcome::Deferred(reason)
+                }
+                ReadSetRevalidation::Drift(reason) => return DispatchOutcome::ReBlocked(reason),
+            }
         }
         let task_id = ctx.task_id;
         let attempt_id = work_unit_attempt_id(task_id, ctx.plan.reference().as_str(), &unit.id);
@@ -999,7 +1125,9 @@ impl RunManager {
                 Err(error) => return DispatchOutcome::Deferred(error.to_string()),
             };
         if let Err(reason) = drift.freeze_write_baseline(unit) {
-            return DispatchOutcome::Deferred(reason);
+            return self
+                .defer_with_cleanup(&execution_tools, &attempt_id, reason)
+                .await;
         }
         // E05 kernel: execution snapshots freeze against the exact Ready
         // approval; the wave's later units freeze the SAME approval through
@@ -1011,7 +1139,15 @@ impl RunManager {
         let run_tools: Arc<dyn r_code_kernel::ports::ToolService> = execution_tools.clone();
         let workspace = match ctx.binding.snapshot_ref() {
             Ok(workspace) => workspace,
-            Err(error) => return DispatchOutcome::Deferred(format!("无法冻结执行工作区：{error}")),
+            Err(error) => {
+                return self
+                    .defer_with_cleanup(
+                        &execution_tools,
+                        &attempt_id,
+                        format!("无法冻结执行工作区：{error}"),
+                    )
+                    .await
+            }
         };
         let effect_approvals = crate::application::StoreEffectApprovals::new(self.store.clone());
         let frozen = match RunSnapshotBuilder::new(
@@ -1043,7 +1179,13 @@ impl RunManager {
             Err(error) => return DispatchOutcome::Deferred(error),
         };
         if let Err(error) = ctx.store.save_run_snapshot(&frozen.snapshot) {
-            return DispatchOutcome::Deferred(format!("保存执行快照失败：{error}"));
+            return self
+                .defer_with_cleanup(
+                    &execution_tools,
+                    &attempt_id,
+                    format!("保存执行快照失败：{error}"),
+                )
+                .await;
         }
         crate::services::run_snapshots::record_run_injections(
             ctx.store,
@@ -1062,7 +1204,11 @@ impl RunManager {
         };
         let attempt_row = match ctx.store.prepare_work_unit_attempt(&seed) {
             Ok(row) => row,
-            Err(error) => return DispatchOutcome::Fatal(error.to_string()),
+            Err(error) => {
+                return self
+                    .fatal_with_cleanup(&execution_tools, &attempt_id, error.to_string())
+                    .await
+            }
         };
         if attempt_row.phase.is_terminal() {
             return DispatchOutcome::Fatal(format!(
@@ -1092,11 +1238,21 @@ impl RunManager {
             frozen.snapshot.id(),
         );
         if let Err(error) = self.catalog.pin(&attempt_id, task_id, ctx.package) {
-            return DispatchOutcome::Deferred(format!("固定 Harness 包失败：{error}"));
+            return self
+                .defer_with_cleanup(
+                    &execution_tools,
+                    &attempt_id,
+                    format!("固定 Harness 包失败：{error}"),
+                )
+                .await;
         }
         let checkpoint = match self.handoff_checkpoint(task_id, &attempt_id).await {
             Ok(checkpoint) => checkpoint,
-            Err(error) => return DispatchOutcome::Deferred(error),
+            Err(error) => {
+                return self
+                    .defer_with_cleanup(&execution_tools, &attempt_id, error)
+                    .await
+            }
         };
         // Kernel start under the task CAS: the loser of a genuine race
         // backs off loudly instead of double-starting a unit.
@@ -1104,7 +1260,13 @@ impl RunManager {
         for _ in 0..TASK_CAS_RETRIES {
             let Ok(Some((mut candidate, revision))) = ctx.store.load_task_with_revision(task_id)
             else {
-                return DispatchOutcome::Fatal(format!("task {task_id} not found"));
+                return self
+                    .fatal_with_cleanup(
+                        &execution_tools,
+                        &attempt_id,
+                        format!("task {task_id} not found"),
+                    )
+                    .await;
             };
             let mut view_units = units.to_vec();
             refresh_unit_statuses(&mut view_units, &candidate);
@@ -1121,18 +1283,28 @@ impl RunManager {
                 // the shared write lease belongs to that same attempt —
                 // back off WITHOUT touching it.
                 Err(r_code_kernel::task::TransitionError::DependencyNotCompleted(_)) => {
+                    // L02 例外：共享写租约归属同一 attempt 的并发兄弟，
+                    // 此处退让**不**释放（释放会拆掉在跑方的租约）。
                     return DispatchOutcome::Deferred(
                         "dependency is not completed under concurrency".to_string(),
-                    )
+                    );
                 }
                 Err(r_code_kernel::task::TransitionError::InvalidTransition { action, .. })
                     if action.contains("start non-writable or active work unit") =>
                 {
-                    return DispatchOutcome::Deferred(
-                        "another manager already owns this work unit".to_string(),
-                    )
+                    return self
+                        .defer_with_cleanup(
+                            &execution_tools,
+                            &attempt_id,
+                            "another manager already owns this work unit".to_string(),
+                        )
+                        .await
                 }
-                Err(error) => return DispatchOutcome::Fatal(error.to_string()),
+                Err(error) => {
+                    return self
+                        .fatal_with_cleanup(&execution_tools, &attempt_id, error.to_string())
+                        .await
+                }
             }
             match ctx.store.save_task_and_events_if_revision(
                 &candidate,
@@ -1155,21 +1327,31 @@ impl RunManager {
                 }
                 Err(r_code_store::v1::V1StoreError::StaleTaskRevision { .. }) => continue,
                 Err(error) => {
-                    return DispatchOutcome::Fatal(format!(
-                        "execution start lost task CAS: {error}"
-                    ))
+                    return self
+                        .fatal_with_cleanup(
+                            &execution_tools,
+                            &attempt_id,
+                            format!("execution start lost task CAS: {error}"),
+                        )
+                        .await
                 }
             }
         }
         let Some(started_state) = started else {
-            return DispatchOutcome::Fatal(
-                "execution start lost task CAS after retries".to_string(),
-            );
+            return self
+                .fatal_with_cleanup(
+                    &execution_tools,
+                    &attempt_id,
+                    "execution start lost task CAS after retries".to_string(),
+                )
+                .await;
         };
         *live = started_state;
         refresh_unit_statuses(units, live);
         if let Err(error) = ctx.store.mark_work_unit_attempt_dispatched(&attempt_id) {
-            return DispatchOutcome::Fatal(error.to_string());
+            return self
+                .fatal_with_cleanup(&execution_tools, &attempt_id, error.to_string())
+                .await;
         }
         {
             let slot = self.slot_of(task_id).await;
@@ -1207,7 +1389,13 @@ impl RunManager {
             ),
         );
         let Some(platform) = ctx.entry.manifest.supported_platforms.first() else {
-            return DispatchOutcome::Fatal("manifest has no platform entry".to_string());
+            return self
+                .fatal_with_cleanup(
+                    &execution_tools,
+                    &attempt_id,
+                    "manifest has no platform entry".to_string(),
+                )
+                .await;
         };
         let session = match PluginSession::start(
             &ctx.entry.install_dir.join(&platform.executable),
@@ -1243,7 +1431,9 @@ impl RunManager {
                     "execution harness failed".to_string(),
                     false,
                 ) {
-                    return DispatchOutcome::Fatal(error.to_string());
+                    return self
+                        .fatal_with_cleanup(&execution_tools, &attempt_id, error.to_string())
+                        .await;
                 }
                 *live = match save_run_state(
                     &self.store,
@@ -1259,7 +1449,11 @@ impl RunManager {
                     )],
                 ) {
                     Ok(state) => state,
-                    Err(error) => return DispatchOutcome::Fatal(error),
+                    Err(error) => {
+                        return self
+                            .fatal_with_cleanup(&execution_tools, &attempt_id, error)
+                            .await
+                    }
                 };
                 refresh_unit_statuses(units, live);
                 let _ = execution_tools.release();
@@ -1280,7 +1474,27 @@ impl RunManager {
             .child_supervisor
             .register(&attempt_id, session.process().clone())
         {
-            return DispatchOutcome::Fatal(error.to_string());
+            // L03：进程已由 PluginSession::start 孵出，但 run 闭包（持有
+            // kill/reap 职责）尚未 spawn、supervisor 也没登记——它是构造性
+            // 孤儿。先杀并求证，再释放租约，然后才 Fatal。
+            let unproven = !session.process().kill_confirmed().await;
+
+            let _ = self
+                .store
+                .release_lease_family(&attempt_id, &attempt_id, false);
+            // 持有权已在 insert 时交给 held_tools——移出并释放。
+            if let Some(tools) = held_tools.remove(&unit.id) {
+                let _ = tools.release();
+            }
+            let reason = format!(
+                "child supervisor register failed: {error}{}",
+                if unproven {
+                    "; harness termination UNCONFIRMED"
+                } else {
+                    ""
+                }
+            );
+            return DispatchOutcome::Fatal(reason);
         }
 
         // E06.3: each attempt gets its OWN execution run. The spawned task
@@ -1393,12 +1607,12 @@ impl RunManager {
             );
             return self.finish_settle(live, ctx, drift, unit, attempt_id, done, flow);
         }
-        let proposals = done
-            .router
-            .recorded_proposals
-            .lock()
-            .expect("proposals")
-            .clone();
+        // L06：毒锁恢复——Vec 是纯数据，锁中毒不携带不变量；panic 级联会
+        // 带着活跃租约杀掉整个 manager。
+        let proposals = match done.router.recorded_proposals.lock() {
+            Ok(proposals) => proposals.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
         if proposals.len() != 1
             || proposals[0].kind != r_code_harness_protocol::services::ProposalKind::Implementation
             || proposals[0].candidate_digest.is_some()
@@ -1732,9 +1946,34 @@ impl RunManager {
         ctx: &WaveCtx<'_>,
         held_tools: &mut HashMap<String, Arc<ExecutionToolService>>,
         awaiting: &mut VecDeque<UnitRunOutcome>,
+        runs: JoinSet<UnitRunOutcome>,
     ) -> Result<(), String> {
-        // Infallible cleanup first: whatever the kernel transition does,
-        // no write lease survives a cancelled wave.
+        // L01（安全序）：先等 run 闭包完成各自的 kill/reap、再由 supervisor
+        // 全量扫描求证，**之后**才释放任何写租约——活 harness（可持 shell
+        // 直写文件）绝不能与已可被他人获取的写作用域重叠。此前先放租后杀，
+        // 返回时 detach JoinSet 使 kill 时机不可控。
+        let mut runs = runs;
+        let mut drained = Vec::new();
+        while let Some(joined) = runs.join_next().await {
+            if let Ok(done) = joined {
+                let observations = drain_observations(&done.router);
+                if !observations.is_empty() {
+                    let _ = save_run_state(&self.store, live, observations);
+                }
+                drained.push(done);
+            }
+        }
+        for done in &drained {
+            let _ = ctx
+                .store
+                .release_lease_family(&done.attempt_id, &done.attempt_id, false);
+            let _ = done.execution_tools.release();
+        }
+        // E08: the cancelled wave sweeps every registered supervised tree
+        // with its own death proof; unprovable trees are journaled and stay
+        // registered — the set is never assumed swept.
+        let sweep = self.child_supervisor.cancel_and_prove_all().await;
+        // 杀证在手，才轮到未启动派发单元的租约。
         for tools in held_tools.values() {
             let _ = tools.release();
         }
@@ -1744,10 +1983,6 @@ impl RunManager {
                 .release_lease_family(&pending.attempt_id, &pending.attempt_id, false);
             let _ = pending.execution_tools.release();
         }
-        // E08: the cancelled wave sweeps every registered supervised tree
-        // with its own death proof; unprovable trees are journaled and stay
-        // registered — the set is never assumed swept.
-        let sweep = self.child_supervisor.cancel_and_prove_all().await;
         let slot = self.slot_of(task_id).await;
         let (run_id, attempt_id) = {
             let slot_guard = slot.lock().await;

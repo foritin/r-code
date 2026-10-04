@@ -109,6 +109,7 @@ impl ModelService for ScriptedModel {
             stream_id,
             finish_reason: Some("done".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }
@@ -284,7 +285,11 @@ pub async fn wait_for_event(
         if events.iter().any(&predicate) {
             return events;
         }
-        assert!(Instant::now() < deadline, "timed out waiting for event");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for event; journal tail: {:#?}",
+            events.iter().rev().take(20).collect::<Vec<_>>()
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

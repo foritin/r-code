@@ -1137,7 +1137,7 @@ fn rpc_request(method: &str, params: serde_json::Value) -> RpcRequest {
 }
 
 #[tokio::test]
-async fn router_persists_indeterminate_then_reconciles_only_tool_calls() {
+async fn router_persists_rejected_then_retries_the_same_tool_key() {
     let tools = Arc::new(FailOnceTools::default());
     let processes = Arc::new(FakeProcessService::default());
     let store = Arc::new(MemoryJournal::new());
@@ -1164,14 +1164,13 @@ async fn router_persists_indeterminate_then_reconciles_only_tool_calls() {
         .expect_err("first tool call interrupted");
     assert!(!format!("{first_error:?}").contains(secret));
     let key = OperationKey::new("tool-reconcile");
+    // A12：效果失败把 in-flight 的 Indeterminate 覆写为 Rejected 终态——
+    // 键保持可重试，重试走同一执行臂而非 Reconcile 拒绝。
     let pending = store
         .load_receipt("router-attempt", &key)
         .await
-        .expect("indeterminate receipt");
-    assert!(matches!(
-        pending.outcome,
-        ReceiptOutcome::Indeterminate { .. }
-    ));
+        .expect("rejected receipt");
+    assert!(matches!(pending.outcome, ReceiptOutcome::Rejected { .. }));
     assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
 
     let reconciled = router

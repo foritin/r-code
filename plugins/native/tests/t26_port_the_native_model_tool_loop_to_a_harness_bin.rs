@@ -117,6 +117,7 @@ impl ModelService for EditingModel {
             stream_id,
             finish_reason: Some("done".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

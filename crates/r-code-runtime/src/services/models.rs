@@ -4,8 +4,10 @@
 //! port with a stable request projection. Credentials stay host-owned: the
 //! plugin sends an opaque selection string; the resolver holds provider
 //! configs and API keys internally and never puts them on the wire. Usage
-//! is recorded host-side per call; retries happen only for requests proven
-//! safe (idempotent, no observable side effects beyond billing).
+//! is recorded host-side on **every** exit path (A02). This layer performs
+//! no retries: the completeness contract rejects unfinished streams, and
+//! retry policy (frozen-request replay, idempotent requests only) lives in
+//! the consuming loop (A03).
 
 use agent_contract::provider::{CompletionRequest, LlmProvider, StreamEvent as ProviderEvent};
 use agent_contract::{ContentBlock, InferenceOptions, Message, Role, ToolSpec, Usage};
@@ -281,119 +283,220 @@ impl ModelService for ModelBroker {
         })?;
 
         let projected = Arc::new(Self::project(&request, &model)?);
-        let mut events = provider
-            .stream(projected)
-            .await
-            .map_err(|e| ServiceError::Failure(e.to_string()))?;
 
-        let stream_id = format!("model-{}-{}", token.run_id, token.generation);
-        let deadline = request
+        // A02：deadline 必须覆盖**首个** provider await（连接/TLS 挂死此前
+        // 无界）；deadline_ms ≤ 0 钳到 1s 下限（0 值会即刻误失败）。
+        const MIN_STREAM_DEADLINE_MS: u64 = 1_000;
+        let deadline_duration = request
             .deadline_ms
-            .map(Duration::from_millis)
+            .map(|ms| Duration::from_millis(ms.max(MIN_STREAM_DEADLINE_MS)))
             .unwrap_or(Duration::from_secs(300));
-        let deadline = tokio::time::Instant::now() + deadline;
-
-        let mut sequence: u64 = 0;
-        let mut final_usage = Usage::default();
-        let mut finish_reason: Option<String> = None;
-        use futures::StreamExt;
-        loop {
-            let next = tokio::time::timeout_at(deadline, events.next()).await;
-            match next {
-                Err(_) => {
-                    sink.send(StreamEvent {
-                        stream_id: stream_id.clone(),
-                        sequence,
-                        payload: StreamPayload::Failed {
-                            message: "stream deadline exceeded".into(),
-                        },
-                        done: Some(true),
-                    })
-                    .await?;
-                    return Err(ServiceError::Failure(
-                        "model stream deadline exceeded".into(),
-                    ));
-                }
-                Ok(None) => break,
-                Ok(Some(event)) => {
-                    let payload = match event {
-                        ProviderEvent::TextDelta { text } => {
-                            Some(StreamPayload::TextDelta { text })
-                        }
-                        ProviderEvent::ToolUseStart { id, name } => {
-                            Some(StreamPayload::ToolCallDelta {
-                                id,
-                                name,
-                                partial_input: String::new(),
-                            })
-                        }
-                        ProviderEvent::ToolUseDelta { id, input_json } => {
-                            Some(StreamPayload::ToolCallDelta {
-                                id,
-                                name: String::new(),
-                                partial_input: input_json,
-                            })
-                        }
-                        ProviderEvent::Usage(usage) => {
-                            let wire_usage = usage_to_wire(&usage);
-                            final_usage = usage;
-                            Some(StreamPayload::Usage { usage: wire_usage })
-                        }
-                        ProviderEvent::Stop { reason } => {
-                            let reason_text = match reason {
-                                agent_contract::provider::StopReason::EndTurn => {
-                                    "end_turn".to_string()
-                                }
-                                agent_contract::provider::StopReason::ToolUse => {
-                                    "tool_use".to_string()
-                                }
-                                agent_contract::provider::StopReason::MaxTokens => {
-                                    "max_tokens".to_string()
-                                }
-                                agent_contract::provider::StopReason::StopSequence => {
-                                    "stop_sequence".to_string()
-                                }
-                                agent_contract::provider::StopReason::Other(other) => other,
-                            };
-                            finish_reason = Some(reason_text.clone());
-                            Some(StreamPayload::Finish {
-                                reason: reason_text,
-                                usage: usage_to_wire(&final_usage),
-                            })
-                        }
-                        ProviderEvent::ReasoningDelta { .. }
-                        | ProviderEvent::ToolUseComplete { .. }
-                        | ProviderEvent::HostedToolUse { .. }
-                        | ProviderEvent::HostedToolResult { .. } => None,
-                    };
-                    if let Some(payload) = payload {
-                        sequence += 1;
-                        let done = matches!(payload, StreamPayload::Finish { .. });
-                        sink.send(StreamEvent {
-                            stream_id: stream_id.clone(),
-                            sequence,
-                            payload,
-                            done: done.then_some(true),
-                        })
-                        .await?;
-                    }
-                }
+        let deadline = tokio::time::Instant::now() + deadline_duration;
+        let mut events = match tokio::time::timeout_at(deadline, provider.stream(projected))
+            .await
+            .map_err(|_| ServiceError::Failure("model stream connect deadline exceeded".into()))
+            .and_then(|stream| stream.map_err(|e| ServiceError::Failure(e.to_string())))
+        {
+            Ok(events) => events,
+            Err(error) => {
+                // A02：请求级失败（连接超时/5xx/429 等）同样入账零值 usage，
+                // 保证"每次调用一条记录"的可审计性。
+                self.usage_log.lock().await.push(UsageRecord {
+                    run_id: token.run_id,
+                    selection,
+                    model,
+                    usage: usage_to_wire(&Usage::default()),
+                });
+                return Err(error);
             }
-        }
+        };
 
+        // A02：同一 (run, generation) 内每轮各起一个流，id 必须带每流判别
+        // 子，否则按 stream_id 关联的消费方会把不同轮的 sequence 错并。
+        static STREAM_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let stream_id = format!(
+            "model-{}-{}-{}",
+            token.run_id,
+            token.generation,
+            STREAM_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+
+        let mut final_usage = Usage::default();
+        let mut partial_text = String::new();
+        let mut reasoning = String::new();
+        let pump = pump_stream(
+            &mut events,
+            stream_id.clone(),
+            deadline,
+            sink,
+            &mut final_usage,
+            &mut partial_text,
+            &mut reasoning,
+        )
+        .await;
+
+        // A02：usage 在**所有**退出路径入账——deadline/sink 失败/provider
+        // 错误路径的已耗 token 此前全部漏记。
         let usage = usage_to_wire(&final_usage);
         self.usage_log.lock().await.push(UsageRecord {
             run_id: token.run_id,
             selection,
             model,
-            usage,
+            usage: usage.clone(),
         });
+        let finish_reason = pump?;
+
+        // A02：完成性契约——已知异常形态（空闲超时 / 传输错误标记 / 从未收
+        // 到 Stop）不得伪装成成功；未知 Other 值 fail-open 放行（DEC-3）。
+        let incomplete = match finish_reason.as_deref() {
+            None => Some("stream ended without a stop event".to_string()),
+            Some(reason) if agent_llm::is_abnormal_stop(reason) => Some(reason.to_string()),
+            Some(reason)
+                if !matches!(
+                    reason,
+                    "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
+                ) =>
+            {
+                eprintln!("unknown finish reason {reason}; failing open (DEC-3)");
+                None
+            }
+            Some(_) => None,
+        };
+        if let Some(reason) = incomplete {
+            const PARTIAL_CAP: usize = 4 * 1024;
+            let partial = if partial_text.len() > PARTIAL_CAP {
+                format!(
+                    "{}…[truncated {} bytes]",
+                    &partial_text[..PARTIAL_CAP],
+                    partial_text.len()
+                )
+            } else {
+                partial_text.clone()
+            };
+            return Err(ServiceError::Failure(format!(
+                "model stream incomplete ({reason}); partial output: {partial}"
+            )));
+        }
         Ok(ModelStreamOutcome {
             stream_id,
             finish_reason,
             usage,
+            reasoning: (!reasoning.is_empty()).then(|| reasoning),
         })
     }
+}
+
+/// The provider event pump shared by [`ModelBroker::stream`]: forwards
+/// provider events to the sink with per-stream sequencing, collects partial
+/// text and usage, and returns the finish reason (`None` when no Stop was
+/// ever seen). Sequencing invariants (A02): the timeout-path `Failed` event
+/// increments `sequence` like every other event; emitting `done: true`
+/// terminates the stream (double-Stop providers cannot emit two Finishes).
+async fn pump_stream<S>(
+    events: &mut S,
+    stream_id: String,
+    deadline: tokio::time::Instant,
+    sink: &mut dyn StreamSink,
+    final_usage: &mut Usage,
+    partial_text: &mut String,
+    reasoning: &mut String,
+) -> Result<Option<String>, ServiceError>
+where
+    S: futures::Stream<Item = ProviderEvent> + Unpin,
+{
+    use futures::StreamExt;
+    let mut sequence: u64 = 0;
+    let mut finish_reason: Option<String> = None;
+    loop {
+        let next = tokio::time::timeout_at(deadline, events.next()).await;
+        match next {
+            Err(_) => {
+                sequence += 1;
+                sink.send(StreamEvent {
+                    stream_id: stream_id.clone(),
+                    sequence,
+                    payload: StreamPayload::Failed {
+                        message: "stream deadline exceeded".into(),
+                    },
+                    done: Some(true),
+                })
+                .await?;
+                return Err(ServiceError::Failure(
+                    "model stream deadline exceeded".into(),
+                ));
+            }
+            Ok(None) => break,
+            Ok(Some(event)) => {
+                let payload = match event {
+                    ProviderEvent::TextDelta { text } => {
+                        partial_text.push_str(&text);
+                        Some(StreamPayload::TextDelta { text })
+                    }
+                    ProviderEvent::ToolUseStart { id, name } => {
+                        Some(StreamPayload::ToolCallDelta {
+                            id,
+                            name,
+                            partial_input: String::new(),
+                        })
+                    }
+                    ProviderEvent::ToolUseDelta { id, input_json } => {
+                        Some(StreamPayload::ToolCallDelta {
+                            id,
+                            name: String::new(),
+                            partial_input: input_json,
+                        })
+                    }
+                    ProviderEvent::Usage(usage) => {
+                        let wire_usage = usage_to_wire(&usage);
+                        *final_usage = usage;
+                        Some(StreamPayload::Usage { usage: wire_usage })
+                    }
+                    ProviderEvent::Stop { reason } => {
+                        let reason_text = match reason {
+                            agent_contract::provider::StopReason::EndTurn => "end_turn".to_string(),
+                            agent_contract::provider::StopReason::ToolUse => "tool_use".to_string(),
+                            agent_contract::provider::StopReason::MaxTokens => {
+                                "max_tokens".to_string()
+                            }
+                            agent_contract::provider::StopReason::StopSequence => {
+                                "stop_sequence".to_string()
+                            }
+                            agent_contract::provider::StopReason::Other(other) => other,
+                        };
+                        finish_reason = Some(reason_text.clone());
+                        Some(StreamPayload::Finish {
+                            reason: reason_text,
+                            usage: usage_to_wire(final_usage),
+                        })
+                    }
+                    ProviderEvent::ReasoningDelta { text } => {
+                        reasoning.push_str(&text);
+                        None
+                    }
+                    ProviderEvent::ToolUseComplete { .. }
+                    | ProviderEvent::HostedToolUse { .. }
+                    | ProviderEvent::HostedToolResult { .. } => None,
+                };
+                if let Some(payload) = payload {
+                    sequence += 1;
+                    let done = matches!(payload, StreamPayload::Finish { .. });
+                    sink.send(StreamEvent {
+                        stream_id: stream_id.clone(),
+                        sequence,
+                        payload,
+                        done: done.then_some(true),
+                    })
+                    .await?;
+                    if done {
+                        // A02：done 即终帧——不再轮询，双 Stop 的 provider 不允许
+                        // 产出第二个 Finish。
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(finish_reason)
 }
 
 /// Credential-free settings view for clients: selections only.

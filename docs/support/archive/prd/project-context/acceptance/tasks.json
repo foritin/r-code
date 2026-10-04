@@ -1,0 +1,289 @@
+{
+  "version": 1,
+  "scoring": {
+    "scale": "0 未完成 / 1 部分完成 / 2 完成（附录 A.2）",
+    "basis": [
+      "run-baseline.mjs 落盘的事件转储（sandbox/project-context-acceptance/events/）",
+      "修改类任务另看 artifacts/patches/ 下的 workspace diff 取证"
+    ],
+    "notes": "两组臂使用同一评分人与同一套 rubric；非稳定结算（超时/中断）记 0 分。"
+  },
+  "groups": {
+    "a": {
+      "fixtureDir": "a-r-code",
+      "repo": "r-code 本仓库快照（Rust/Tauri 多 crate 工作区，含 AGENTS.md 与两级 TOML prompt 体系）",
+      "tasks": [
+        {
+          "id": "A-1",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "找到 daemon 侧 run 启动时冻结 PromptSnapshot 的代码路径，说明 system prompt 的来源链（内置默认 / 全局与项目两级 agent-prompts.toml / 任务偏好）以及 run 快照如何内容寻址。给出关键文件与函数名。",
+          "rubric": {
+            "2": "准确给出 run_snapshots.rs 中 prompt_snapshot/freeze_material 的位置，正确描述来源链与 RunSnapshot 内容寻址（canonical JSON 的 sha256）。",
+            "1": "定位到正确模块但链路描述有错漏（如漏 workspace 冻结或工具目录 digest 排序）。",
+            "0": "未定位或描述与代码明显不符。"
+          }
+        },
+        {
+          "id": "A-2",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "解释 path_leases 持久路径租约的生命周期（获取 → fencing → 释放 / 崩溃恢复），以及它如何防止多个 agent 并发写坏同一文件。指出关键存储表与代码位置。",
+          "rubric": {
+            "2": "准确指出 V1Store path_leases 表结构与获取/释放代码，正确解释 fencing epoch 单调性与跨进程重启语义。",
+            "1": "概念正确但表名、代码位置或恢复语义有错漏。",
+            "0": "未触及租约机制。"
+          }
+        },
+        {
+          "id": "A-3",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "说明前端斜杠命令体系如何分类与展开，/init 与 /doctor 今天分别是什么行为；再对照 docs/support/archive/prd/project-context/prd.md 的引擎化目标，列出当前实现与目标的差距清单。",
+          "rubric": {
+            "2": "准确说明 local/workflow 两类与 /init 的纯提示词展开位置（slash-commands.ts），对照 PRD 列出引擎化差距（daemon 流程、审批写入、幂等增量）。",
+            "1": "命令体系正确但 PRD 对照不完整。",
+            "0": "未读代码或明显错误。"
+          }
+        },
+        {
+          "id": "A-4",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "记忆系统当前存在\"文档声明与实现落差\"：docs/support/guides/memory.md 声称同一快照会传给主 Agent 与其子代理。请逐环节找出代码证据，说明冻结、注入、记账、子代理 seed 哪些环节实际断线（给出文件与符号名）。",
+          "rubric": {
+            "2": "给出 memory.rs / memory_store.rs 中零调用的 record_injection、rendered_prompt、FrozenChildMemorySeed，以及 commands.rs 两处 memory_context 恒 None 的准确证据。",
+            "1": "找到部分断点但遗漏主要环节。",
+            "0": "未找到证据。"
+          }
+        },
+        {
+          "id": "A-5",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "在 crates/r-code-gateway 中任选一个现有宿主工具，为它增加一个向后兼容的可选行为开关（开关默认关闭时行为与现状完全一致），并补对应单元测试覆盖开关两态。",
+          "rubric": {
+            "2": "改动最小且默认行为不变，测试覆盖开关两态，相关 crate 测试全绿。",
+            "1": "功能可用但默认行为有偏差或测试不全。",
+            "0": "未实现或破坏现有行为。"
+          }
+        },
+        {
+          "id": "A-6",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "为 crates/r-code-core/src/sync_util.rs（或同 crate 任一纯工具模块）补齐缺失的单元测试；若测试暴露真实缺陷则一并修复。",
+          "rubric": {
+            "2": "新测试覆盖边界并全绿（或修复了暴露的缺陷），无行为回退。",
+            "1": "测试存在但覆盖薄弱。",
+            "0": "未补测试。"
+          }
+        },
+        {
+          "id": "A-7",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "给 TUI（crates/r-code-tui）增加只读命令 /usage：显示当前会话任务的 token 用量汇总（数据来自 task.detail 的 usage 聚合），遵循仓库\"只为已实现的命令注册菜单项\"的政策。",
+          "rubric": {
+            "2": "命令注册、实现与显示正确，遵循 PENDING 政策。",
+            "1": "实现部分可用（如注册了但数据不对）。",
+            "0": "未实现。"
+          }
+        },
+        {
+          "id": "A-8",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "为 r-code-store 的 V1Store 增加一个只读辅助查询：列出指定 workspace_key 当前活跃（active=1）的路径租约（含 owner 与 fencing epoch），并补用真实 V1Store 的集成测试。",
+          "rubric": {
+            "2": "查询语义正确（只读、只活跃租约、字段齐全），测试用真实存储固定行为。",
+            "1": "查询可用但过滤或断言不严。",
+            "0": "未实现。"
+          }
+        },
+        {
+          "id": "A-9",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划\"任务审计日志导出 JSONL\"特性：把 daemon 事件面导出为可回放 JSONL。覆盖范围、脱敏边界、命令入口、存储位置、增量导出与验收标准。",
+          "rubric": {
+            "2": "方案含数据源（events 表）、脱敏边界、入口、幂等增量与验收标准，且与现有架构一致（不发明新存储）。",
+            "1": "有方案但缺脱敏或验收标准。",
+            "0": "无有效方案。"
+          }
+        },
+        {
+          "id": "A-10",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划 TUI /plugins 管理面板：列出已安装 harness 插件、能力协商状态、启停意图。注意启停属配置面，须走既有设置/提案边界。",
+          "rubric": {
+            "2": "覆盖数据来源（插件目录与 manifest）、TUI 渲染方案、与 capability 协商的关系、只读边界。",
+            "1": "面板设计有但数据链路不清。",
+            "0": "无有效方案。"
+          }
+        },
+        {
+          "id": "A-11",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划远程 PWA 的离线审批队列：断网时暂存审批决策、恢复后幂等回放。覆盖本地存储、幂等键、决策过期冲突与能力降级边界。",
+          "rubric": {
+            "2": "覆盖本地队列存储、幂等键（operationId）、过期冲突处理、离线能力降级的安全边界。",
+            "1": "有队列设计但幂等或冲突处理缺失。",
+            "0": "无有效方案。"
+          }
+        },
+        {
+          "id": "A-12",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划\"冷存储\"特性：超限工具输出落盘可回读、单工作区配额与 TTL 清理（对齐 docs/support/archive/prd/project-context/prd.md FR-6 L0）。覆盖写入切点、路径布局、配额/TTL、回读方式与\"忘记项目\"联动、验收标准。",
+          "rubric": {
+            "2": "覆盖写入切点、路径与配额/TTL、回读 API、清理联动与验收标准。",
+            "1": "存储设计有但清理或联动缺失。",
+            "0": "无有效方案。"
+          }
+        }
+      ]
+    },
+    "b": {
+      "fixtureDir": "b-jq",
+      "repo": "jqlang/jq @ jq-1.7.1（C 单仓，无任何 AGENTS.md/CLAUDE.md 等指令文件）",
+      "tasks": [
+        {
+          "id": "B-1",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "找到 jq 解析器与 AST 执行分发的核心文件，解释一条 `.a | .b` 程序从词法分析到求值执行的完整路径。",
+          "rubric": {
+            "2": "准确给出词法/语法（parser.y 生成的 jq_parser）与 src/execute.c 的指令分发循环，路径描述正确。",
+            "1": "文件定位对但执行路径描述含错。",
+            "0": "未定位。"
+          }
+        },
+        {
+          "id": "B-2",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "说明给 jq 新增一个内置函数（builtin）需要改动哪些注册表与文件，以一个现有内置函数为例对照说明。",
+          "rubric": {
+            "2": "准确指出 src/builtin.c 的函数定义/注册方式与必要挂钩点，并正确举出现有函数作对照。",
+            "1": "注册机制大方向对但细节有错。",
+            "0": "未说明。"
+          }
+        },
+        {
+          "id": "B-3",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "解释 jq 的错误体系：jv 错误值如何在管道中传播，程序错误、输入 JSON 解析错误与系统错误分别如何映射到退出码。",
+          "rubric": {
+            "2": "准确区分错误值传播语义与 main.c 的退出码映射（含 2/3/5 等主要码）。",
+            "1": "概念对但映射不全。",
+            "0": "未解释。"
+          }
+        },
+        {
+          "id": "B-4",
+          "category": "locate",
+          "mode": "ask",
+          "prompt": "说明 jq 的构建体系：configure 的角色、Makefile 主要目标、`make check` 会跑哪些测试、builtin 的 jq 级测试挂载在哪个文件。",
+          "rubric": {
+            "2": "构建链描述准确并指出 jq 级测试的挂载文件（如 tests/ 对应入口）。",
+            "1": "大方向对但测试挂载点指错。",
+            "0": "未说明。"
+          }
+        },
+        {
+          "id": "B-5",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "在 src/builtin.c 新增一个最小内置过滤器 `tobool`：null 与 false 产出 false，其余输入产出 true；按现有代码风格注册，并按现有惯例补 jq 级测试用例。",
+          "rubric": {
+            "2": "实现符合语义、注册位置与风格一致、jq 测试用例进入既有测试挂载点且可运行。",
+            "1": "实现可用但测试缺失或风格不一致。",
+            "0": "未实现。"
+          }
+        },
+        {
+          "id": "B-6",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "为 src/jv.c 中任选一个公开 jv_* API 补 C 级测试（接入现有构建的测试目标，或新增测试文件并接入构建），覆盖其边界值（空值 / 深嵌套 / 引用计数语义按所选 API 取相关边界）。",
+          "rubric": {
+            "2": "测试真实接入构建且边界覆盖充分。",
+            "1": "测试写成但未接入构建。",
+            "0": "未做。"
+          }
+        },
+        {
+          "id": "B-7",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "在 jq 现有测试体系中，为任一覆盖不足的内置函数补至少 3 条 jq 测试用例，覆盖 null / 空输入 / 类型错误三类边界（函数自选）。",
+          "rubric": {
+            "2": "用例落在正确挂载点、三类边界齐备、断言与实际语义一致。",
+            "1": "用例有效但边界不全。",
+            "0": "未做。"
+          }
+        },
+        {
+          "id": "B-8",
+          "category": "modify",
+          "mode": "edit",
+          "prompt": "为 src/execute.c 指令分发中任意 3 个指令补充说明性注释与 debug 断言（断言仅在 debug 构建生效），不改变任何运行行为。",
+          "rubric": {
+            "2": "注释准确描述指令语义，断言只影响 debug 构建，现有测试保持通过。",
+            "1": "注释有但断言缺失或对行为有干扰。",
+            "0": "未做。"
+          }
+        },
+        {
+          "id": "B-9",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划 jq 的多行字符串字面量语法扩展：词法/语法改动点、错误恢复、兼容性开关（--flags）、测试计划与发布风险。",
+          "rubric": {
+            "2": "覆盖 lexer/parser 改动点、兼容策略、测试计划与发布风险。",
+            "1": "语法设计有但解析改动点不清。",
+            "0": "无方案。"
+          }
+        },
+        {
+          "id": "B-10",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划 --stream 模式的性能优化路径：先给出可复现的基准方案（脚本与指标），再列分阶段优化候选与各自假设。",
+          "rubric": {
+            "2": "给出可验证的基准方案与分阶段优化假设。",
+            "1": "有方向无基准。",
+            "0": "无方案。"
+          }
+        },
+        {
+          "id": "B-11",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划 jq 插件机制：动态加载 C 模块注册 builtin。覆盖 ABI 稳定策略、命名空间、加载安全边界（dlopen 限制）、三大平台构建与渐进迁移。",
+          "rubric": {
+            "2": "覆盖 ABI、命名空间、加载安全、跨平台构建与迁移路径。",
+            "1": "设计有但安全或构建维度缺失。",
+            "0": "无方案。"
+          }
+        },
+        {
+          "id": "B-12",
+          "category": "plan",
+          "mode": "plan",
+          "prompt": "规划 jq 的 Windows 一等公民构建改进：先盘点 configure/Makefile 中的 POSIX 假设点与已知编码/路径问题，再给分步改造与 CI 矩阵方案。",
+          "rubric": {
+            "2": "现状盘点具体（指出真实假设点）、改造分步、CI 方案完整。",
+            "1": "方向对但盘点空泛。",
+            "0": "无方案。"
+          }
+        }
+      ]
+    }
+  }
+}

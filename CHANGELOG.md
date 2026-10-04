@@ -8,6 +8,17 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ### Added
 
+- **Agent Loop 韧性（A00–A15，16 任务全落地）**：主循环"生存策略"层补齐，弱网与长任务两个此前不可用的场景打通——
+  - **流完成性契约**：模型流中断不再伪装成成功——OpenAI 兼容与 Responses 解析器对传输错误补发显式 `api_error` Stop（对齐 Anthropic 既有行为，静默截断消灭）；broker 侧强制校验 finish_reason（空闲超时/传输错误标记/无 Stop 一律判未完成并携带 4KB 截断的部分文本返回错误，未知值 fail-open 放行+告警），并顺带修复七项流协议卫生（首连纳入 deadline、0 值钳制、超时事件序号递增、`done` 后停发、stream_id 每流判别、usage 全退出路径入账、删除文档假 retry 声明）。
+  - **冻结请求重放与降级**：可重放采样失败按 1s/2s/4s 退避重放同一请求（默认 3 次，服务端 Retry-After 优先封顶 60s），溢出/鉴权/内容策略零重放直达失败；`max_tokens` 截断自动续写一次、双截拼接并打 `[回答因长度上限被截断]` 标记；失败 run 的部分文本以 `assistant.partial` 落 journal，`run.failed` 带三态 errorClass（transient/deterministic/cancelled）。
+  - **取消不再产生假完成**：取消的 run 以 `cancelled` 结局返回，绝不落入计划发布/完成提案（此前 plan 模式会用空文本发布合成工作单元）；宿主已取消/缺 objective（空白即 Fault）/plan 模式缺 revision 三个 fail-fast 前置；checkpoint 与结果编码失败全部传播（空载荷降级清零）；成功 run 之后的遥测失败不再把任务变失败。
+  - **轮数预算接力**：turn 预算从硬墙改接力——25 轮达限不报错，插件以 `budget_reached` 收尾（提案强制 Reply），宿主注入 `Continuation` 输入自动续跑（checkpoint 恢复，模型无感），链总轮数 200 护栏，超限 `run.chain_stopped` 优雅停链；TurnLimit 错误不再浮出给用户。
+  - **队列生存性**：run 失败不再卡死任务队列（失败后按既有 settled 判定继续派发，退出前锁内清 drive token 消除窄竞态）；**daemon 重启重播种**——崩溃时已入队未派发的输入在重启后自动捞起派发（此前永久滞留 journal）；acknowledge 改持久化成功后再动内存（失败可重试而非 NotInFlight 死路）；投递按 input_seq 排序。
+  - **幂等栅栏原子化**：操作键收据改 per-key 互斥+锁内重读（同键并发单次执行，含 Reconcile 重执行臂），效果失败写 Rejected 终态（键保持可重试，不再一次瞬时错误永久砖死）。
+  - **工具失败续跑与并发**：工具宿主 RPC 失败渲染为合成错误结果回填继续（不再整轮作废）；同轮多工具 join_all 有界并发（默认 4，`parallelTools=0` 一键回退串行），结果按调用序回填。
+  - **推理与 checkpoint 体量**：推理模型思考过程整段保全（`assistant.reasoning` 观察，时序先于回答）；checkpoint 超 768KB 宿主侧单调截断最老工具结果（占位保留前 200 字符 + `checkpoint.truncated` 留痕），病态载荷显式失败。
+  - **SDK 服务循环加固**：steer 通知派发到独立任务（serve loop 不再被任何 handler 阻塞）；取消唤醒丢锁竞态修复（先注册再查标志）；stdin EOF 立即排空全部在飞 host_call（不再等满 300s 超时）；host_call 等待期可被取消打断；shutdown 响应帧有界排水后可靠送达；坏参数显式报错（不再合成空身份）；移除从未接线的 stream 订阅注册表并修正文档。
+  - 配套 chaos 故障注入测试设施（11 种故障变体，可装进宿主 broker 走全链路）与 60+ 机器验收用例（e2e 走真插件进程）。PRD/任务清单见 `docs/support/archive/prd/agent-loop-resilience/`。
 - 只读子代理真实执行体（M1a，FR-8 第一步）：主 Agent 可通过宿主目录工具 `children_spawn` / `children_wait` / `children_close` 委派自包含子任务——子任务以真实任务落在守护进程（独立会话、转录、日志与取消通路），完成回调把报告（结局 + 摘要）回填父级；`children_wait` 为分钟级阻塞原语（条件变量唤醒，无忙轮询）；并发默认 6（占用直到显式 `close` 回收，超限自动排队、额度释放后执行）、嵌套默认 1 层（子代理的工具目录不含 children 工具，结构性禁止再委派）；子代理继承父任务冻结记忆快照（同一 hash），工具审计带 `caller=subagent:<id>` 走既有网关只读白名单。工具描述内嵌委派纪律（四要素契约）。
 - 演进记忆真实接入运行链路（M1a）：开启记忆的项目，桌面在创建任务时冻结一次全局 + 项目记忆快照，随任务契约交给守护进程——主 Agent 的每个 run/attempt 继承同一份（不重算），守护进程把它并入 PromptSnapshot 并在 daemon 侧注入账本记账（可审计快照 hash、entry 引用与字符数）。Codex 子代理委派 prompt 同步携带记忆段。记忆关闭或项目模式为 off 时完全不注入；TUI 直连创建的任务首期无记忆注入。
 - 项目指令读取引擎（M1a，FR-1）：运行启动时自动注入分层项目指令——个人全局 `~/.r-code/context.md`、仓库外来 `AGENTS.md`（缺省回退 `CLAUDE.md`，可配）、仓库自有 `.r-code/context.md`（冲突以自有为准），子目录 `AGENTS.md` 在工具命中该目录后按 8 KiB 独立额度即时注入（模型请求可见、会话正本不落，超额度整批放弃并留痕）。注入合计默认 32 KiB、超限按"全局→外来→自有"逆序裁剪，冻结层运行中不驱逐；跳过（>4 MiB）与被裁剪条目在 `/context` 中带标注。GUI 与 TUI 的 `/context` 显示本次 run 注入的文件、来源、字节数与记忆注入摘要，并可一键对本项目关闭注入（关闭后新 run 不再注入）。原生模型请求的 system 提示携带注入块；每次注入进 daemon 注入账本（kind=memory/instruction/jit）与低噪声时间线事件。
@@ -26,6 +37,11 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ### Fixed
 
+- 同轮第 5 个及以后的工具调用永久挂起（A13 并发路径死锁）：`parallelTools` 信号量的许可此前在提交循环外层 `acquire`，而已提交的任务要等 `join_all` 才首次 poll、结束才释放许可——超出并发额度（默认 4）的调用在 join_all 之前自锁，表现为该轮再无任何响应。许可改为在任务体内获取，超出部分排队等前序完成释放；验收用例扩到 6 个调用钉住回归。
+- 插件进程重启后恢复执行时 checkpoint 落库撞唯一约束：resume 复用同一 attempt 时，新 HostRouter 的 revision 计数器从 0 重新分配，与崩溃前已存的 `(attempt_id, revision)` 冲突（此前该失败被静默吞掉，A 系列传播 checkpoint 失败后显性化为 resume 直接失败）。计数器现在在首次保存前按 store 内该 attempt 的最大 revision 播种。
+- 执行波次崩溃调和的 CAS 重试丢修复（L04 补全）：重启调和落盘遇到任务 revision 竞争换入新快照时，此前保存的是从未应用修复的新状态 + 空事件表（修复凭空蒸发）；现在按记录在新快照上重放修复动作（快照已终态结清的单元以快照为准不覆盖），事件表也随重试保留。
+- SDK serve 循环 shutdown 等待派发任务返回的 JoinResult 未处理（编译告警），以及 A07 后遗留的未用 `empty_identity` 死代码；全仓 `cargo check --workspace --all-targets` 现在零告警（含 9 处测试 fixture 因新增 `ModelStreamOutcome.reasoning` 字段失编译的修复）。
+- m02 收据断言对齐 A12 契约：工具效果失败写 `Rejected` 终态（键保持可重试），不再是滞留的 `Indeterminate`。
 - 协作 Prompt 贯通 Harness v1：主 Agent 采用新的 R-Code 内置协作基线；设置页保存的全局 Prompt 与项目“追加 / 覆盖”规则会在创建任务及每次发送前重新解析，并作为真实 system prompt 进入 Native 模型请求。Prompt 仍可编辑，也可一键恢复随应用发布的默认值。
 - 模型流式输出跨 TCP 分片切开多字节字符（顿号/emoji 等）被逐片 lossy 解码成 `�` 并随工具入参永久写入计划/会话存储的问题：OpenAI 兼容与 Responses 两套 SSE 解析器改为字节缓冲、按完整行边界解码（Anthropic 解析器此前已是正确实现）。
 - 「当前任务步骤」浮层漂移：长步骤列表的浮层曾被按 `scrollHeight`（忽略列表 46vh 限高的内容全高）定位，空间判定误判后贴到视口顶部、与锚点按钮之间悬空数百像素；现在按解除内联约束后的实际布局尺寸定位，并在入场动画结束后补一次重定位，浮层紧贴锚点正上方。

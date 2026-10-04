@@ -1,7 +1,7 @@
 # R-Code「完全打通 Harness」增量架构设计与任务分解
 
 > 作者：高见远（架构师） ｜ 日期：2026-09-13 ｜ 状态：待用户拍板 §5 的开放问题后转实施
-> 输入契约：`docs/prd/pluggable-harness/e2e-acceptance.md`（PM 许清楚，L0–L4 + R-01~R-13 + Q1~Q8）
+> 输入契约：`docs/support/harness/e2e-acceptance.md`（PM 许清楚，L0–L4 + R-01~R-13 + Q1~Q8）
 > 事实基线：`docs/harness-provider-audit.md`（2026-09-13 只读审计）
 > 性质：**增量设计**。不推翻 `plan.md` §1 的首期范围，也不改动 T00–T42 的既有分期。
 > 本次工作方式为**只读核查**（Read / Grep），未修改任何生产代码，未运行 `cargo` 命令。
@@ -389,7 +389,7 @@ guard("plugin host calls stay inside the protocol",
 | `crates/r-code-runtime/src/services/settings_store.rs` | 修改 | ① `apply_provider`（`:155-174`）前置 `provider_catalog::find` 校验；② 改为「先 save 文档，成功后存凭据，失败补偿 delete」 |
 | `scripts/verify-harness-v1.mjs` | 修改 | 在 `:43-90` 守卫段新增 L1-6 静态守卫（扫描 `cmd_settings_save_*` 命令体必须触达 v1 桥） |
 | `src-tauri/tests/harness_v1_settings.rs` | **新增** | 集成测试：apply → `models.available` 回读 `has_credential`；目录外 selection 必须报错；凭据不出现在 settings.json |
-| `docs/prd/pluggable-harness/progress.md` | 修改 | 记录本批达成项与"旧 config.toml 只读保留"的处置 |
+| `docs/support/harness/progress.md` | 修改 | 记录本批达成项与"旧 config.toml 只读保留"的处置 |
 
 **可选子项（取决于 Q2 是否要做一次性导入）**
 
@@ -430,7 +430,7 @@ cargo test --workspace --all-features -- --test-threads=1
 | `src-tauri/src/harness_v1_chat.rs` | 修改 | `:102-113` 的 `_provider_name` / `_agent_engine` 注释更新为明确说明「模型选择走 v1 默认 selection；按任务切换模型不在本期范围」，避免后人误以为是 bug |
 | `src-tauri/frontend/src/lib/ipc.ts` | 修改 | 新增 `harnessModelsAvailable()`，返回 `Vec<ProviderAvailability>` 的无凭据投影 |
 | `src-tauri/frontend/src/` 设置页 / 首屏组件 | 修改 | provider 下拉来自 `models.available`；无 provider 时的引导横幅（L1-5） |
-| `docs/prd/pluggable-harness/e2e-acceptance.md` | 修改 | L1-3 状态从「待验证」改为「已验证」并附测试名 |
+| `docs/support/harness/e2e-acceptance.md` | 修改 | L1-3 状态从「待验证」改为「已验证」并附测试名 |
 
 **验收命令**
 
@@ -495,7 +495,7 @@ node scripts/verify-harness-v1.mjs --profile quick
 | `plugins/codex/harness.json` | 修改 | `requestedHostServices` 增 `host.process.read`；**保持不含 `host.model.stream`** |
 | `plugins/codex/tests/t44_codex_app_server_event_loop.rs` | **新增** | 用 fixture 进程（非真实 codex CLI）驱动：open → initialize → sendUserTurn → 读到 `TurnCompleted` → close |
 | `scripts/verify-harness-v1.mjs` | 修改 | 新增「插件 host_call 字面量 ⊆ `PLUGIN_TO_HOST_METHODS`」静态守卫 |
-| `docs/prd/pluggable-harness/protocol-v1.md` | 修改 | 记录 `host.process.read`；并把 `stream.event` 标注为「设计预留，宿主侧未接线」 |
+| `docs/support/harness/protocol-v1.md` | 修改 | 记录 `host.process.read`；并把 `stream.event` 标注为「设计预留，宿主侧未接线」 |
 
 **验收命令**
 
@@ -522,7 +522,7 @@ rg -n '"host\.|codex\.event' plugins/*/src/**/*.rs | rg -v 'host\.(model|tools|p
 | `.github/workflows/ci.yml` | 修改 | 新增 `harness-nightly` job：`schedule: cron`（每日）+ `workflow_dispatch`，跑 `node scripts/verify-harness-v1.mjs --profile full`。现有 `:229` / `:232` 两步**不动** |
 | `scripts/verify-harness-v1.mjs` | 修改（可选） | 把 full 档的 12 条加上耗时上报（`:113-115` 已有 ms 统计，只需在 nightly 里保留日志） |
 | `src-tauri/src/commands.rs` | 修改 | 删除带 `#[allow(dead_code)] // post-T42 cleanup pending` 的死函数（审计/PRD 记为约千行） |
-| `docs/prd/pluggable-harness/e2e-acceptance.md` 或新建 `deferred-capabilities.md` | 修改/新增 | R-09：GUI Plan 入口、`/compact`、图片多模态三项各写「不做 / 目标版本 / 验收判据」，替换 `progress.md:82` 的"后续版本提供" |
+| `docs/support/harness/e2e-acceptance.md` 或新建 `deferred-capabilities.md` | 修改/新增 | R-09：GUI Plan 入口、`/compact`、图片多模态三项各写「不做 / 目标版本 / 验收判据」，替换 `progress.md:82` 的"后续版本提供" |
 
 **验收命令**
 

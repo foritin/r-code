@@ -64,6 +64,7 @@ impl ModelService for DelayedModel {
             stream_id: "delayed".into(),
             finish_reason: Some("done".into()),
             usage: Default::default(),
+            reasoning: None,
         })
     }
 }

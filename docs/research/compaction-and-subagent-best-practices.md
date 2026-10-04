@@ -1,6 +1,6 @@
 # 增补调研：上下文压缩与子代理协作最优实践（2026-09-30）
 
-> 动机：二次代码探查确认 daemon 链路零压缩、记忆注入断线、children 无执行体（见 [project-context plan §2](../prd/project-context/plan.md)）。本调研为混合需求 R1（压缩引擎）/ R2（记忆接线）/ R3（子代理执行体）提供业界最优实践依据。来源以官方文档与源码为主，社区逆向均标注。
+> 动机：二次代码探查确认 daemon 链路零压缩、记忆注入断线、children 无执行体（见 [project-context plan §2](../support/archive/prd/project-context/prd.md)）。本调研为混合需求 R1（压缩引擎）/ R2（记忆接线）/ R3（子代理执行体）提供业界最优实践依据。来源以官方文档与源码为主，社区逆向均标注。
 
 ## 1. 上下文压缩
 
