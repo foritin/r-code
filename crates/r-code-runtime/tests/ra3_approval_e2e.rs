@@ -4,6 +4,10 @@
 //! to completion, denied ends without a proposal, and an undecided request
 //! denies by timeout (short-timeout configuration) without hanging the run.
 
+//! macOS：daemon→harness 链路依赖 P13 安全激活报告，本 wave 固定
+//! Unsupported——按设计拒绝启动；用例由 linux/windows 腿运行，P13 落地后移除。
+#![cfg(not(target_os = "macos"))]
+
 use r_code_kernel::ports::ToolService;
 use r_code_kernel::testing::FakeToolService;
 use r_code_runtime::application::ApplicationService;

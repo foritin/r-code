@@ -4,6 +4,10 @@
 //! pinned TLS, then observes real task events. Unauthenticated or
 //! wrong-code connections get nothing.
 
+//! macOS：daemon→harness 链路依赖 P13 安全激活报告，本 wave 固定
+//! Unsupported——按设计拒绝启动；用例由 linux/windows 腿运行，P13 落地后移除。
+#![cfg(not(target_os = "macos"))]
+
 use futures_util::{SinkExt, StreamExt};
 use r_code_client::ws::{RemoteClient, RemoteEndpoint};
 use r_code_client::DaemonClient;

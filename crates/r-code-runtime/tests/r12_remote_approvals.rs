@@ -5,6 +5,10 @@
 //! `needs_desktop_confirm` to a remote decision and settle only through
 //! the local console.
 
+//! macOS：daemon→harness 链路依赖 P13 安全激活报告，本 wave 固定
+//! Unsupported——按设计拒绝启动；用例由 linux/windows 腿运行，P13 落地后移除。
+#![cfg(not(target_os = "macos"))]
+
 use r_code_client::ws::{RemoteClient, RemoteEndpoint};
 use r_code_harness_protocol::application::ApplicationCommand;
 use r_code_kernel::ports::{JournalStore as _, ToolService};
