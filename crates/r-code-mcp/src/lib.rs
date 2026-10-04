@@ -4,6 +4,10 @@
 //! policy: persisted server metadata, secret references, lifecycle supervision, marketplace
 //! installation plans, native web tools, and the bundled research server.
 
+// clippy 1.99 对 async_trait 展开的 boxing 方法报 double_must_use（方法与其返回
+// 的 BoxFuture 同时标 must_use）——宏输出不可控，crate 级豁免。
+#![allow(clippy::double_must_use)]
+
 pub mod client;
 pub mod host;
 pub mod installer;

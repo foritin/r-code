@@ -9,6 +9,10 @@
 //! [`harness_conformance`]）。Judge（M2-02）与配对统计（M2-03）见
 //! [`judge`] / [`table`]。
 
+// clippy 1.99 对 async_trait 展开的 boxing 方法报 double_must_use（方法与其返回
+// 的 BoxFuture 同时标 must_use）——宏输出不可控，crate 级豁免。
+#![allow(clippy::double_must_use)]
+
 pub mod corpus;
 pub mod harness_conformance;
 pub mod harness_tasks;

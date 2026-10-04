@@ -11,6 +11,10 @@
 //! The SDK depends only on the public protocol; it never links host
 //! runtime, storage, gateway or Tauri code.
 
+// clippy 1.99 对 async_trait 展开的 boxing 方法报 double_must_use（方法与其返回
+// 的 BoxFuture 同时标 must_use）——宏输出不可控，crate 级豁免。
+#![allow(clippy::double_must_use)]
+
 use r_code_harness_protocol::rpc::{
     decode_frame, encode_frame, RpcError, RpcId, RpcMessage, RpcNotification, RpcRequest,
     RpcResponse, MAX_FRAME_BYTES,

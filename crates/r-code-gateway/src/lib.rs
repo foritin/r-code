@@ -8,6 +8,9 @@
 //! - [`tools_search`]：内嵌 ripgrep 引擎的 `search` / `glob`
 //! - [`tools_command`]：平台自适应的 `bash`
 
+// clippy 1.99 对 async_trait 展开的 boxing 方法报 double_must_use（方法与其返回
+// 的 BoxFuture 同时标 must_use）——宏输出不可控，crate 级豁免。
+#![allow(clippy::double_must_use)]
 #![allow(clippy::doc_nested_refdefs)]
 
 pub mod classifier;

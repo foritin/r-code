@@ -5,6 +5,10 @@
 //! ApplicationService. Frontends (GUI/TUI/MCP) reach it through
 //! `r-code-client`; nothing here links Tauri.
 
+// clippy 1.99 对 async_trait 展开的 boxing 方法报 double_must_use（方法与其返回
+// 的 BoxFuture 同时标 must_use）——宏输出不可控，crate 级豁免。
+#![allow(clippy::double_must_use)]
+
 pub mod application;
 pub mod application_receipts;
 pub mod child_supervisor;

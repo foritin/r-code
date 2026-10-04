@@ -575,6 +575,7 @@ mod tests {
         let fd = write_filter_to_memfd(&program).expect("memfd transport");
         let mut bytes = Vec::new();
         use std::io::Read;
+        use std::os::fd::FromRawFd;
         let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.read_to_end(&mut bytes).expect("read back");
         assert_eq!(bytes.len(), program.len() * 8);
