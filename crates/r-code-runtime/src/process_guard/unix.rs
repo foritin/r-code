@@ -1285,7 +1285,7 @@ fn guardian_session<R: std::io::Read, W: std::io::Write>(commands: &mut R, repli
                 // tree it did not acknowledge.
                 kill_group(identity.group_pid as i32, libc::SIGKILL);
                 let _ = workload.wait();
-                GUARDIAN_EXIT_PROTOCOL
+                return GUARDIAN_EXIT_PROTOCOL;
             }
             // Reaping the released workload is intended to block: the
             // guardian's lifetime doubles as zombie hygiene.
