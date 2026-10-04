@@ -127,6 +127,13 @@ async fn third_party_fixture_installs_and_runs_through_public_paths() {
             HostService::CompletionPropose,
         ],
     };
+    // macOS 安全门：测试自控的 fixture 二进制按 SingleProcess 声明入场
+    // （fixture 不 fork；第三方未声明 harness 默认 SafeDisabled 是策略）。
+    #[cfg(target_os = "macos")]
+    r_code_runtime::plugins::transport::register_child_process_requirement(
+        &installed.executable,
+        true,
+    );
     let session = PluginSession::start(
         &installed.executable,
         &installed.argv,
