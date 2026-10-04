@@ -26,11 +26,13 @@ async fn native_prd_planning_reads_only_the_bound_checkout_and_awaits_approval()
     write_workspace(&workspace);
     let outside = temp.path().join("outside-secret.txt");
     std::fs::write(&outside, "OUTSIDE_SECRET_SENTINEL\n").expect("outside file");
-    // 逃逸链接仅在 Windows 尝试：unix 冻结策略对含符号链接的 checkout
-    // 整体拒绝（candidate capture refuses linked entries——更强的 posture，
-    // 行为正确），链接一建 run 即 deterministic 失败，逐调用拒绝断言无从
-    // 展开；绝对路径越界读取的拒绝覆盖两侧平台共有。
-    let linked = cfg!(windows) && escape_link(&workspace.join("escape.txt"), &outside);
+    // 逃逸链接不再创建：冻结策略（candidate capture refuses linked/reparse
+    // entries）对含链接的 checkout 整体拒绝——更强 posture、行为正确；
+    // 链接一建（unix symlink / Windows runner 的 junction 均可建成）run 即
+    // deterministic 失败，逐调用断言无从展开。越界读取的拒绝由绝对路径
+    // 探针（outside / profile decoy）覆盖。
+    let linked = false;
+    let _ = &outside;
     let profile = profile("read-only-e2e", temp.path());
     std::fs::create_dir_all(profile.workspaces_root()).expect("legacy workspace root");
     let profile_decoy = profile.workspaces_root().join("profile-secret.txt");
