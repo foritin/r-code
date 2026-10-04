@@ -57,11 +57,10 @@ fn default_service_binary() -> Option<PathBuf> {
         }
         let dev = exe.parent().and_then(|dir| dir.parent()).map(|dir| {
             #[cfg(windows)]
-            {
-                return dir.join("r-code-service.exe");
-            }
+            let path = dir.join("r-code-service.exe");
             #[cfg(not(windows))]
-            dir.join("r-code-service")
+            let path = dir.join("r-code-service");
+            path
         });
         if let Some(dev) = dev {
             if dev.is_file() {
