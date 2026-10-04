@@ -195,10 +195,12 @@ async fn wait_for_event(
         }
         if Instant::now() >= deadline {
             panic!(
-                "timed out waiting for {kind}; journal kinds: {:?}",
+                "timed out waiting for {kind}; journal tail: {:#?}",
                 events
                     .iter()
-                    .map(|e| e.payload.get("journalKind"))
+                    .rev()
+                    .take(6)
+                    .map(|e| (e.kind.clone(), e.payload.clone()))
                     .collect::<Vec<_>>()
             );
         }
