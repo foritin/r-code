@@ -53,16 +53,16 @@ fn tempdir_profile(
     network: SandboxNetworkClass,
 ) -> SandboxProfileMaterial {
     for root in ["read", "write", "scratch", "cache"] {
-        make_dir(&base.join(root));
+        make_dir(&base.path().join(root));
     }
-    write_file(&base.join("read/source.txt"), "p16-read-root");
-    write_file(&base.join("cache/registry.bin"), "p16-cache-root");
+    write_file(&base.path().join("read/source.txt"), "p16-read-root");
+    write_file(&base.path().join("cache/registry.bin"), "p16-cache-root");
     SandboxProfileMaterial {
-        read_roots: vec![base.join("read").to_string_lossy().into_owned()],
-        write_roots: vec![base.join("write").to_string_lossy().into_owned()],
-        scratch_root: base.join("scratch").to_string_lossy().into_owned(),
+        read_roots: vec![base.path().join("read").to_string_lossy().into_owned()],
+        write_roots: vec![base.path().join("write").to_string_lossy().into_owned()],
+        scratch_root: base.path().join("scratch").to_string_lossy().into_owned(),
         toolchain_roots,
-        cache_roots: vec![base.join("cache").to_string_lossy().into_owned()],
+        cache_roots: vec![base.path().join("cache").to_string_lossy().into_owned()],
         git_hidden: true,
         inherited_fds: vec![0, 1, 2],
         environment_allowlist: vec!["PATH".into(), "RC16_E2E_TOKEN".into()],
@@ -441,7 +441,7 @@ fn real_launch_proves_pid_namespace_polarity_git_absence_and_env_allowlist() {
     let base = tempfile::tempdir().expect("tempdir");
     // A workspace .git that exists on the host OUTSIDE every mounted root:
     // whitelist mounting means it is simply never mounted inside.
-    let dot_git = base.join("repo/.git");
+    let dot_git = base.path().join("repo/.git");
     write_file(&dot_git.join("HEAD"), "ref: refs/heads/main");
     let mut toolchain_roots = vec!["/usr".to_string()];
     for candidate in ["/lib", "/lib64"] {
@@ -450,9 +450,9 @@ fn real_launch_proves_pid_namespace_polarity_git_absence_and_env_allowlist() {
         }
     }
     let profile = tempdir_profile(base.path(), toolchain_roots, SandboxNetworkClass::Offline);
-    let scratch = base.join("scratch");
-    let read_root = base.join("read");
-    let write_root = base.join("write");
+    let scratch = base.path().join("scratch");
+    let read_root = base.path().join("read");
+    let write_root = base.path().join("write");
     let plan = build_bwrap_launch_plan(&profile, &pinned_bwrap(), "boot-p16-e2e")
         .expect("e2e plan builds over the verified pinned binary");
 
@@ -695,14 +695,14 @@ fn profile_refusals_precede_any_binary_trust() {
     ));
 
     let mut git_read = profile.clone();
-    git_read.read_roots = vec![base.join("repo/.git").to_string_lossy().into_owned()];
+    git_read.read_roots = vec![base.path().join("repo/.git").to_string_lossy().into_owned()];
     assert!(matches!(
         build_bwrap_launch_plan(&git_read, &missing, "boot-p16"),
         Err(BwrapPlanError::InvalidProfile(reason)) if reason.contains(".git")
     ));
 
     let mut git_scratch = profile.clone();
-    git_scratch.scratch_root = base.join("scratch/.git").to_string_lossy().into_owned();
+    git_scratch.scratch_root = base.path().join("scratch/.git").to_string_lossy().into_owned();
     assert!(matches!(
         build_bwrap_launch_plan(&git_scratch, &missing, "boot-p16"),
         Err(BwrapPlanError::InvalidProfile(reason)) if reason.contains(".git")

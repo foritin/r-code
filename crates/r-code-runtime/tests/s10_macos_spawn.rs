@@ -95,8 +95,8 @@ struct ManualSession {
 /// protocol-level refusals, the release handshake and the P08 exit codes are
 /// directly observable (the daemon seam consumes its guardian's exit code).
 fn open_manual_session() -> ManualSession {
-    let (commands_write, commands_read) = UnixStream::pair().expect("command stream pair");
-    let (replies_write, replies_read) = UnixStream::pair().expect("reply stream pair");
+    let (commands_write, mut commands_read) = UnixStream::pair().expect("command stream pair");
+    let (mut replies_write, replies_read) = UnixStream::pair().expect("reply stream pair");
     let guardian = std::thread::Builder::new()
         .name("s10-manual-macos-guardian".into())
         .spawn(move || serve_macos_guardian(&mut commands_read, &mut replies_write))
