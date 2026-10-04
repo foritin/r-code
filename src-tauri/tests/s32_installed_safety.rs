@@ -129,6 +129,7 @@ fn missing_or_tampered_helpers_fail_policy() {
         std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
             .args([
                 "build",
+                "--all-features",
                 "-p",
                 "r-code-runtime",
                 "--bin",
@@ -175,6 +176,7 @@ fn missing_or_tampered_helpers_fail_policy() {
         std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
             .args([
                 "build",
+                "--all-features",
                 "-p",
                 "r-code-runtime",
                 "--bin",
@@ -191,8 +193,23 @@ fn missing_or_tampered_helpers_fail_policy() {
         .join("../target/debug")
         .join(guardian_name);
     std::fs::copy(&guardian_source, &guardian_path).expect("stage real guardian");
-    let verified = r_code_host::packaging::verify_installed_helpers(&installed)
-        .expect("the real pair verifies");
+    let verified =
+        r_code_host::packaging::verify_installed_helpers(&installed).unwrap_or_else(|error| {
+            // CI 诊断：转储 guardian 的头字节/大小，非 ELF 的来源一眼可辨。
+            let head = std::fs::read(&guardian_path)
+                .map(|bytes| {
+                    (
+                        bytes.len(),
+                        bytes
+                            .iter()
+                            .take(8)
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>(),
+                    )
+                })
+                .unwrap_or((0, "(unreadable)".into()));
+            panic!("the real pair verifies: {error}; guardian(len,head8) = {head:?}");
+        });
     assert_eq!(verified.len(), 2);
     for helper in &verified {
         assert_eq!(helper.sha256.len(), 64);
