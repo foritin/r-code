@@ -789,7 +789,7 @@ impl RunManager {
                     if let Ok(done) = joined {
                         let observations = drain_observations(&done.router);
                         if !observations.is_empty() {
-                            let _ = save_run_state(&self.store, &mut live, observations);
+                            let _ = save_run_state(&self.store, &live, observations);
                         }
                         let _ = self.store.release_lease_family(
                             &done.attempt_id,
@@ -1938,6 +1938,7 @@ impl RunManager {
 
     /// Settle the whole wave as cancelled: terminal verdict, one
     /// run.cancelled journal event, every held write lease released.
+    #[allow(clippy::too_many_arguments)]
     async fn settle_wave_cancelled(
         &self,
         task_id: &str,

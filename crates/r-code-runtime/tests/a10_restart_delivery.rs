@@ -44,6 +44,7 @@ impl ModelService for EchoModel {
             .lock()
             .unwrap()
             .push(serde_json::to_string(&request).unwrap_or_default());
+        // 双端迭代器上 last() 会全量遍历——rev().next() 直接取末个用户文本。
         let last_user = request
             .messages
             .iter()
@@ -60,7 +61,7 @@ impl ModelService for EchoModel {
                 }
                 _ => None,
             })
-            .last()
+            .next_back()
             .unwrap_or_default();
         let reply = format!("seen={}:last={last_user}", request.messages.len());
         sink.send(StreamEvent {

@@ -827,7 +827,11 @@ impl HostRouter {
                 // 新 router 的计数器从 0 重来，会与存量 checkpoint 撞
                 // (attempt_id, revision) 唯一约束——此前该失败被 `let _ =`
                 // 吞掉，A 系列传播 checkpoint 失败后显性化（t27 重启用例）。
-                if self.checkpoint_revision.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                if self
+                    .checkpoint_revision
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    == 0
+                {
                     if let Some(latest) = self
                         .store
                         .load_latest_checkpoint(&self.identity.attempt_id)
@@ -1312,11 +1316,10 @@ impl HostRouter {
                     .load_receipt(&self.identity.attempt_id, &key)
                     .await
                     .map(receipt_to_record);
-                match r_code_harness_protocol::replay_decision(reread.as_ref(), method, &hash) {
-                    r_code_harness_protocol::ReplayDecision::ReplayReceipt { result } => {
-                        return Ok(result)
-                    }
-                    _ => {}
+                if let r_code_harness_protocol::ReplayDecision::ReplayReceipt { result } =
+                    r_code_harness_protocol::replay_decision(reread.as_ref(), method, &hash)
+                {
+                    return Ok(result);
                 }
                 let result = execute().await?;
                 self.store

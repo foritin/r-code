@@ -342,7 +342,7 @@ impl ModelService for ModelBroker {
             run_id: token.run_id,
             selection,
             model,
-            usage: usage.clone(),
+            usage,
         });
         let finish_reason = pump?;
 
@@ -381,7 +381,7 @@ impl ModelService for ModelBroker {
             stream_id,
             finish_reason,
             usage,
-            reasoning: (!reasoning.is_empty()).then(|| reasoning),
+            reasoning: (!reasoning.is_empty()).then_some(reasoning),
         })
     }
 }
