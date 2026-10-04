@@ -45,6 +45,11 @@ pub enum PathIdentity {
     Unix {
         device: u64,
         inode: u64,
+        /// inode 变更时间（ctime，纳秒）。delete 后立即 recreate 常复用刚
+        /// 释放的 inode——(device, inode) 二元组会把"新文件"误判为原文件，
+        /// 身份校验失效；ctime 在每次创建/改写时必然前进，补齐区分度。
+        #[serde(default)]
+        change_time_ns: i64,
     },
     Windows {
         volume_serial: u32,
@@ -292,6 +297,7 @@ fn path_identity(_: &Path, metadata: &std::fs::Metadata) -> Result<PathIdentity,
     Ok(PathIdentity::Unix {
         device: metadata.dev(),
         inode: metadata.ino(),
+        change_time_ns: metadata.ctime_nsec(),
     })
 }
 

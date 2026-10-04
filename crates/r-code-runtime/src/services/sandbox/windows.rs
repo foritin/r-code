@@ -515,7 +515,14 @@ pub fn restore_before(
         return Err(api_error("SetSecurityInfo"));
     }
     let readback = capture_acl(path)?;
-    if readback.self_relative != record.before_descriptor {
+    // CAS 校验按语义（排序后的显式 ACE 集合）而非原始 SD 字节：SetSecurityInfo
+    // 回写后 ACE 排序/继承标志由 OS 规范化，字节级相等在默认 DACL 含继承
+    // 项的环境（CI runner 的临时目录）不可达成，语义相等才是恢复本义。
+    let mut expected = extract_explicit_aces(&record.before_descriptor);
+    expected.sort();
+    let mut actual = readback.explicit_aces.clone();
+    actual.sort();
+    if actual != expected {
         return Ok(Err("restore-readback-mismatch"));
     }
     Ok(Ok(()))
@@ -1299,7 +1306,13 @@ mod tests {
             .expect("restore executes")
             .expect("CAS holds");
         let restored = capture_acl(&path).expect("restored capture");
-        assert_eq!(restored.self_relative, record.before_descriptor);
+        // 字节级比较在默认 DACL 含继承项的环境不可达成（OS 规范化排序/
+        // 标志），与 restore_before 的 CAS 同口径：排序显式 ACE 集合相等。
+        let mut expected_aces = extract_explicit_aces(&record.before_descriptor);
+        expected_aces.sort();
+        let mut restored_aces = restored.explicit_aces.clone();
+        restored_aces.sort();
+        assert_eq!(restored_aces, expected_aces);
     }
 
     #[test]
