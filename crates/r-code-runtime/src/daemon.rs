@@ -47,8 +47,9 @@ pub struct ProfileLock {
 }
 
 enum Fileish {
+    // RAII 保持 flock：字段只为持有文件，永不读取。
     #[cfg(unix)]
-    Flocked(std::fs::File),
+    Flocked(#[allow(dead_code)] std::fs::File),
     #[cfg(windows)]
     NoShare(#[allow(dead_code)] std::fs::File),
 }

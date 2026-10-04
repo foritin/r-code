@@ -17,8 +17,9 @@ pub struct WorkspaceLock {
 }
 
 enum LockHandle {
+    // RAII 保持 flock：字段只为持有文件，永不读取。
     #[cfg(unix)]
-    Flocked(std::fs::File),
+    Flocked(#[allow(dead_code)] std::fs::File),
     #[cfg(windows)]
     NoShare(#[allow(dead_code)] std::fs::File),
 }
@@ -41,6 +42,8 @@ impl WorkspaceLock {
             let file = std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
+                // 锁文件不得清空已有内容——truncate 显式声明意图。
+                .truncate(false)
                 .open(path)?;
             let fd = file.as_raw_fd();
             let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };

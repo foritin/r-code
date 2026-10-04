@@ -170,7 +170,8 @@ fn launch_over_plan(base: &Path, workload_argv: &[&str]) -> Option<(BwrapTreeIde
         .iter()
         .map(|(key, value)| ((*key).to_string(), value.clone()))
         .collect();
-    match launch_bwrap_tree(&prefix, workload_argv, &environment, None) {
+    let workload_owned: Vec<String> = workload_argv.iter().map(|s| (*s).to_string()).collect();
+    match launch_bwrap_tree(&prefix, &workload_owned, &environment, None) {
         Ok(tree) => Some((tree, base.join("scratch"))),
         Err(error) => {
             eprintln!(

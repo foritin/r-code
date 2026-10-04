@@ -890,7 +890,15 @@ function sendMessage(args: MockArgs): void {
     return;
   }
 
-  if (task.mode === "plan") requestMockPlanQuestions(taskId);
+  if (task.mode === "plan") {
+    // 守护进程保真：真实链路里规划 run 会发布计划（host.plan.publish），
+    // 桌面不为新建计划任务显式 plan_create——mock 在发送时自动建计划。
+    const existing = currentMockPlan(taskId);
+    if (!existing || ["completed", "cancelled"].includes(existing.plan.state)) {
+      createMockPlan(taskId);
+    }
+    requestMockPlanQuestions(taskId);
+  }
   const planNeedsInput = currentMockPlan(taskId)?.plan.state === "awaiting_input";
 
   for (const run of detail.runs) {

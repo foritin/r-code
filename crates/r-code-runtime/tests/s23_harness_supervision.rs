@@ -418,6 +418,7 @@ async fn macos_refuses_every_launch_it_cannot_contain() {
         TransportLimits::default(),
     )
     .await
+    .map(|_| ())
     .expect_err("undeclared macOS harness is refused");
     assert_eq!(
         refused_code(&error),
@@ -432,6 +433,7 @@ async fn macos_refuses_every_launch_it_cannot_contain() {
         TransportLimits::default(),
     )
     .await
+    .map(|_| ())
     .expect_err("declared macOS harness without an activated report is refused");
     assert_eq!(
         refused_code(&error),

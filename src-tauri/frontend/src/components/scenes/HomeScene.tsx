@@ -355,7 +355,9 @@ export function HomeScene() {
       attachments.clear();
       setGoalMode(false);
       setDraftMode(null);
-      openRoom(task.id);
+      // 计划模式创建即入计划面板：工作台默认隐藏，不带 tab 进房间会让
+      // HITL 边界问题无处浮现（enhanced-review/plan-mode 契约用例）。
+      openRoom(task.id, taskMode === "plan" ? "plan" : undefined);
     } catch (cause) {
       setError(`${stage}失败：${errText(cause)}`);
       setGoal((current) => current.length > 0 ? current : draft);

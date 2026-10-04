@@ -397,7 +397,7 @@ pub fn compile_namespace_policy_filter() -> Result<BpfProgram, SeccompPolicyErro
         libc::SYS_delete_module,
         libc::SYS_reboot,
     ] {
-        rules.insert(syscall as i64, vec![]);
+        rules.insert(syscall, vec![]);
     }
     let filter = SeccompFilter::new(
         rules,
@@ -477,7 +477,7 @@ pub fn attach_seccomp_to_plan(
         .iter()
         .rposition(|argument| argument == "--")
         .ok_or_else(|| SeccompPolicyError::Transport("plan argv lacks the -- terminator".into()))?;
-    attached.argv.insert(insertion, format!("--seccomp"));
+    attached.argv.insert(insertion, "--seccomp".to_string());
     attached.argv.insert(insertion + 1, fd.to_string());
     Ok(attached)
 }

@@ -433,7 +433,7 @@ pub fn available_bytes(root: &Path) -> Result<u64, EffectQuotaError> {
             return Err(EffectQuotaError::Io(format!("statvfs failed for {path}")));
         }
         let stats = unsafe { buffer.assume_init() };
-        Ok(stats.f_bavail as u64 * stats.f_frsize as u64)
+        Ok(stats.f_bavail * stats.f_frsize)
     }
 }
 

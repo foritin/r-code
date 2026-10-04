@@ -173,9 +173,8 @@ impl GuardedChild {
         }
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(Some(_)) => return,
-                _ => {}
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -705,6 +704,9 @@ impl GatedWorkload {
     /// failure path kills the group and reaps the guardian first. An
     /// unconfirmed release is treated as failed even if the gate may have
     /// opened: fail-closed means dead, never running-unowned.
+    // guardian 子进程由 ReleasedWorkload 持有并在其 Drop 中 wait 收割——
+    // clippy::zombie_processes 的路径分析看不到跨结构体的收割，就地豁免。
+    #[allow(clippy::zombie_processes)]
     pub fn release_once(mut self) -> Result<ReleasedWorkload, GuardianError> {
         let mut control_write = self
             .control_write
@@ -858,7 +860,7 @@ pub fn spawn_via_guardian(request: GuardianSpawnRequest) -> Result<GatedWorkload
         });
     }
     // The guardian is created BEFORE any workload exists (P08 ordering).
-    let mut guardian = command
+    let guardian = command
         .spawn()
         .map_err(|error| GuardianError::Io(format!("guardian spawn failed: {error}")))?;
     // The dup2'd copies live in the guardian now; drop the originals so its
@@ -1122,7 +1124,7 @@ fn read_frame_bounded(
     });
     receiver
         .recv_timeout(timeout)
-        .unwrap_or_else(|_| Err(GuardianError::Timeout(stage)))
+        .unwrap_or(Err(GuardianError::Timeout(stage)))
 }
 
 /// Reap the guardian within a bounded window; escalate to SIGKILL if it
@@ -1271,50 +1273,49 @@ fn guardian_session<R: std::io::Read, W: std::io::Write>(commands: &mut R, repli
         return GUARDIAN_EXIT_PROTOCOL;
     }
 
-    // Release-or-EOF loop: the group stays stopped until `Release`.
-    loop {
-        match read_frame(commands) {
-            Ok(Some(GuardianFrame::Release)) => {
-                // Open the gate exactly once.
-                kill_group(identity.group_pid as i32, libc::SIGCONT);
-                if write_frame(replies, &GuardianFrame::ReleaseAck).is_err() {
-                    // An undeliverable ack means the release was never
-                    // confirmed: the daemon must not be left owning a live
-                    // tree it did not acknowledge.
-                    kill_group(identity.group_pid as i32, libc::SIGKILL);
-                    let _ = workload.wait();
-                    return GUARDIAN_EXIT_PROTOCOL;
-                }
-                // Reaping the released workload is intended to block: the
-                // guardian's lifetime doubles as zombie hygiene.
-                let _ = workload.wait();
-                return GUARDIAN_EXIT_RELEASED;
-            }
-            // A repeat Release/SpawnRequest or any other frame before the
-            // ack is a protocol violation: fail closed.
-            Ok(Some(_)) => {
-                let _ = write_frame(
-                    replies,
-                    &GuardianFrame::Error {
-                        code: FrameErrorCode::ProtocolViolation,
-                    },
-                );
+    // Release-or-EOF: the group stays stopped until `Release`（每条臂都返回，
+    // 无需循环包装）。
+    match read_frame(commands) {
+        Ok(Some(GuardianFrame::Release)) => {
+            // Open the gate exactly once.
+            kill_group(identity.group_pid as i32, libc::SIGCONT);
+            if write_frame(replies, &GuardianFrame::ReleaseAck).is_err() {
+                // An undeliverable ack means the release was never
+                // confirmed: the daemon must not be left owning a live
+                // tree it did not acknowledge.
                 kill_group(identity.group_pid as i32, libc::SIGKILL);
                 let _ = workload.wait();
                 return GUARDIAN_EXIT_PROTOCOL;
             }
-            // EOF BEFORE release (daemon death or dropped gate): the gate
-            // must never open — kill the still-stopped group.
-            Ok(None) => {
-                kill_group(identity.group_pid as i32, libc::SIGKILL);
-                let _ = workload.wait();
-                return GUARDIAN_EXIT_DAEMON_EOF;
-            }
-            Err(_) => {
-                kill_group(identity.group_pid as i32, libc::SIGKILL);
-                let _ = workload.wait();
-                return GUARDIAN_EXIT_PROTOCOL;
-            }
+            // Reaping the released workload is intended to block: the
+            // guardian's lifetime doubles as zombie hygiene.
+            let _ = workload.wait();
+            return GUARDIAN_EXIT_RELEASED;
+        }
+        // A repeat Release/SpawnRequest or any other frame before the
+        // ack is a protocol violation: fail closed.
+        Ok(Some(_)) => {
+            let _ = write_frame(
+                replies,
+                &GuardianFrame::Error {
+                    code: FrameErrorCode::ProtocolViolation,
+                },
+            );
+            kill_group(identity.group_pid as i32, libc::SIGKILL);
+            let _ = workload.wait();
+            return GUARDIAN_EXIT_PROTOCOL;
+        }
+        // EOF BEFORE release (daemon death or dropped gate): the gate
+        // must never open — kill the still-stopped group.
+        Ok(None) => {
+            kill_group(identity.group_pid as i32, libc::SIGKILL);
+            let _ = workload.wait();
+            return GUARDIAN_EXIT_DAEMON_EOF;
+        }
+        Err(_) => {
+            kill_group(identity.group_pid as i32, libc::SIGKILL);
+            let _ = workload.wait();
+            return GUARDIAN_EXIT_PROTOCOL;
         }
     }
 }
@@ -1471,7 +1472,6 @@ pub mod bwrap_proof {
     use super::GuardianError;
     use std::collections::BTreeMap;
     use std::io::Read;
-    use std::os::unix::io::AsRawFd;
     use std::os::unix::io::FromRawFd;
     use std::os::unix::process::CommandExt;
 

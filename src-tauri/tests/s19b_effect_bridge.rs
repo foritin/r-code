@@ -151,7 +151,9 @@ fn bridge_body(signature: &str) -> String {
     let start = BRIDGE_SOURCE
         .find(signature)
         .unwrap_or_else(|| panic!("missing {signature}"));
-    let rest = &BRIDGE_SOURCE[start..];
+    // Windows CI checkout 会把源码转成 CRLF，include_str! 原样读入——
+    // 先归一化行尾，源码形状断言才与平台无关。
+    let rest = BRIDGE_SOURCE[start..].replace("\r\n", "\n");
     let end = rest[1..]
         .find("\n    pub async fn ")
         .map(|offset| offset + 1)

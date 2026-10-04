@@ -1,6 +1,6 @@
 {
   "schema_version": "codex-interaction-performance.v1",
-  "generated_at": "2026-09-30T21:10:51.609Z",
+  "generated_at": "2026-10-04T12:41:38.089Z",
   "platform": {
     "node": "v24.17.0",
     "os": "win32"
@@ -8,13 +8,13 @@
   "metrics": {
     "total_delta_events": 10000,
     "applied_events": 10000,
-    "visible_applies": 19,
+    "visible_applies": 20,
     "propagation_latency_ms": {
-      "p95": 104.7,
-      "max": 104.7,
-      "samples": 19
+      "p95": 107,
+      "max": 107.4,
+      "samples": 20
     },
-    "visible_density_hz_estimate": 1.9,
+    "visible_density_hz_estimate": 2,
     "reducer_agent_node_count": 1,
     "reducer_total_items": 1,
     "final_text_length": 10000,
