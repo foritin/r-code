@@ -55,15 +55,12 @@ fn default_service_binary() -> Option<PathBuf> {
         if beside.is_file() {
             return Some(beside);
         }
-        let dev = exe
-            .parent()
-            .and_then(|dir| dir.parent())
-            .map(|dir| dir.join("r-code-service"))
-            .map(|path| {
-                #[cfg(windows)]
-                let path = path.with_extension("exe");
-                path
-            });
+        let dev = exe.parent().and_then(|dir| dir.parent()).map(|dir| {
+            let mut path = dir.join("r-code-service");
+            #[cfg(windows)]
+            path.set_extension("exe");
+            path
+        });
         if let Some(dev) = dev {
             if dev.is_file() {
                 return Some(dev);

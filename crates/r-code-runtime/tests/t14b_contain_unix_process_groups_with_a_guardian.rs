@@ -14,7 +14,7 @@ async fn daemon_death_kills_the_managed_group_via_guardian_eof() {
     // The guarded wrapper leaves a grandchild (sleep) in its group; killing
     // our daemon-side write handle simulates daemon death, which must bring
     // the whole group down through the guardian's EOF → TERM → KILL path.
-    let mut guarded = spawn_guarded(
+    let guarded = spawn_guarded(
         "/bin/sh".as_ref(),
         &["-c".into(), "sleep 300 & sleep 300".into()],
     )
@@ -34,7 +34,7 @@ async fn daemon_death_kills_the_managed_group_via_guardian_eof() {
 
 #[tokio::test]
 async fn cancellation_terminates_the_group_gracefully() {
-    let mut guarded = spawn_guarded("/bin/sh".as_ref(), &["-c".into(), "sleep 300".into()])
+    let guarded = spawn_guarded("/bin/sh".as_ref(), &["-c".into(), "sleep 300".into()])
         .await
         .expect("guarded spawn");
     guarded.cancel_tree().await;
@@ -45,7 +45,7 @@ async fn cancellation_terminates_the_group_gracefully() {
 async fn unverifiable_termination_blocks_rather_than_guesses() {
     // A group that cannot be proven dead within the deadline reports
     // unverifiable: writers must treat that as blocked, not as success.
-    let mut guarded = spawn_guarded(
+    let guarded = spawn_guarded(
         "/bin/sh".as_ref(),
         &["-c".into(), "trap '' TERM; sleep 300".into()],
     )

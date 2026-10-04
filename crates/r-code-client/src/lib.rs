@@ -365,7 +365,9 @@ pub async fn ensure_daemon_with_helpers(
     retire_pre_v1_daemon(harness_v1_root, endpoint, profile_id).await;
     let ipc_name = endpoint_suffix(endpoint);
     let mut spawn_attempts = 0u8;
-    for attempt in 0..40u32 {
+    // 40×250ms=10s 在冷盘/共享 CI runner 上不够（daemon 首启要做 SQLite 迁移
+    // 与工作区扫描）——80×250ms=20s，spawn 次数仍上限 2 次。
+    for attempt in 0..80u32 {
         if let Some(info) = read_owner_token(harness_v1_root) {
             if let Ok(client) =
                 DaemonClient::connect(endpoint, profile_id, &info.token, "probe").await
