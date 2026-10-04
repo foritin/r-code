@@ -6,6 +6,8 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-04
+
 ### Added
 
 - **Agent Loop 韧性（A00–A15，16 任务全落地）**：主循环"生存策略"层补齐，弱网与长任务两个此前不可用的场景打通——
@@ -429,5 +431,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.9.0]: https://github.com/foritin/r-code/releases/tag/v0.9.0
 [0.9.1]: https://github.com/foritin/r-code/releases/tag/v0.9.1
 [1.0.0]: https://github.com/foritin/r-code/releases/tag/v1.0.0
-[Unreleased]: https://github.com/foritin/r-code/compare/v1.0.1...HEAD
 [1.0.1]: https://github.com/foritin/r-code/releases/tag/v1.0.1
+[Unreleased]: https://github.com/foritin/r-code/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/foritin/r-code/releases/tag/v1.0.2
