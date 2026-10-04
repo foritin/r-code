@@ -3,6 +3,12 @@
 //! Acceptance: install and execute the independently built repair-harness
 //! through the actual registry/transport without modifying host source or
 //! selecting a built-in engine enum.
+//!
+//! macOS 安全门：与 t07 同因——裸 PluginSession 直连按设计不可越
+//! child-process 安全门；安装器/目录链路为纯跨平台逻辑，由
+//! linux/windows 腿覆盖。
+
+#![cfg(not(target_os = "macos"))]
 
 use r_code_harness_protocol::{
     ApiVersion, HostService, NegotiatedCapabilities, PackageRef, RunIdentity,
@@ -127,21 +133,6 @@ async fn third_party_fixture_installs_and_runs_through_public_paths() {
             HostService::CompletionPropose,
         ],
     };
-    // macOS 安全门：测试自控的 fixture 二进制按 SingleProcess 声明入场，
-    // 并为本次 boot 绑定已激活的安全报告（无 workspace 的 no-fork 档位）。
-    // fixture 只走 stdio IPC，deny-default 档位即可承载。
-    #[cfg(target_os = "macos")]
-    {
-        use r_code_runtime::plugins::transport::{
-            bind_harness_launch_config, register_child_process_requirement, HarnessLaunchConfig,
-        };
-        register_child_process_requirement(&installed.executable, true);
-        let mut config = HarnessLaunchConfig::host_default();
-        config.activation = r_code_runtime::services::sandbox::SafetyActivation::Activated {
-            report_id: "t11-third-party-fixture".into(),
-        };
-        bind_harness_launch_config(config);
-    }
     let session = PluginSession::start(
         &installed.executable,
         &installed.argv,

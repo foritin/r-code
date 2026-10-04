@@ -1,4 +1,11 @@
 //! T07 — negotiated Native host services and their task-scoped state.
+//!
+//! macOS 安全门：裸 PluginSession 直连被 child-process 安全门依次拒绝
+//! （未声明→未激活→无创建期 containment）——最后一道门只有生产启动链的
+//! seatbelt 创建期包裹能过，测试直连按设计不可越；等价协议覆盖在
+//! linux/windows 腿运行。
+
+#![cfg(not(target_os = "macos"))]
 
 use base64::Engine as _;
 use r_code_harness_protocol::rpc::{error_code, RpcRequest};
@@ -359,23 +366,6 @@ async fn snapshot_router_and_initialize_share_one_exact_grant_set() {
         host_api: ApiVersion::new(1, 0),
         granted_services: grants.clone(),
     };
-    // macOS 安全门：测试 fixture 按 SingleProcess 声明 + 绑定已激活安全报告
-    // （无 workspace no-fork 档位；helper 只走 stdio IPC）。
-    #[cfg(target_os = "macos")]
-    {
-        use r_code_runtime::plugins::transport::{
-            bind_harness_launch_config, register_child_process_requirement, HarnessLaunchConfig,
-        };
-        register_child_process_requirement(
-            Path::new(env!("CARGO_BIN_EXE_harness-test-helper")),
-            true,
-        );
-        let mut launch_config = HarnessLaunchConfig::host_default();
-        launch_config.activation = r_code_runtime::services::sandbox::SafetyActivation::Activated {
-            report_id: "runtime-fixture-tests".into(),
-        };
-        bind_harness_launch_config(launch_config);
-    }
     let session = PluginSession::start(
         Path::new(env!("CARGO_BIN_EXE_harness-test-helper")),
         &["serve".into()],
