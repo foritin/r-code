@@ -3,6 +3,10 @@
 //! config, records a ledger row, and emits the low-noise context.instructions
 //! journal event; per-workspace settings persist and honor the toggle.
 
+//! macOS：daemon→native harness 链路依赖 P13 安全激活报告，本 wave 固定
+//! Unsupported——按设计拒绝启动；用例由 linux/windows 腿运行，P13 落地后移除。
+#![cfg(not(target_os = "macos"))]
+
 mod p_gate_support;
 
 use p_gate_support::{compose_with_builtin, stage_native};

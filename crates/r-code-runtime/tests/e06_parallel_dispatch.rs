@@ -10,6 +10,10 @@
 //! row before any spawn, and each unit completes strictly from its own
 //! attempt's durable settle.
 
+//! macOS：daemon→native harness 链路依赖 P13 安全激活报告，本 wave 固定
+//! Unsupported——按设计拒绝启动；用例由 linux/windows 腿运行，P13 落地后移除。
+#![cfg(not(target_os = "macos"))]
+
 mod p_gate_support;
 
 use p_gate_support::{compose_with_builtin, profile, stage_native, wait_for_kind, write_workspace};

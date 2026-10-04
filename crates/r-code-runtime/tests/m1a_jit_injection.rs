@@ -5,6 +5,10 @@
 //! abandoned with a timeline trace, and every applied batch lands in the
 //! injection ledger.
 
+//! macOS：daemon→native harness 链路依赖 P13 安全激活报告，本 wave 固定
+//! Unsupported——按设计拒绝启动；用例由 linux/windows 腿运行，P13 落地后移除。
+#![cfg(not(target_os = "macos"))]
+
 mod p_gate_support;
 
 use p_gate_support::{compose_with_builtin, stage_native};
