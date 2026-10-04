@@ -234,10 +234,13 @@ fn fork_is_denied_and_the_harness_survives_the_denial() {
     };
     let script = "if (true); then echo FORK-OK; else echo FORK-DENIED; fi";
     let (status, stdout, stderr) = launch_under_seatbelt(&profile, &harness, &["-c", script], &[]);
+    // 拒绝的两种合法形态：shell 吃到 errno 后存活并打印 FORK-DENIED；或
+    // 新版 macOS shell 对 fork 失败直接 abort（stdout 空）。只要 FORK-OK
+    // 从未出现，fork 就确实没有发生（P18.1 的本义）。
     assert!(
-        stdout.contains("FORK-DENIED") && !stdout.contains("FORK-OK"),
-        "the subshell fork must be denied while the parent lives \
-         (status {status}, stdout {stdout:?}, stderr {stderr:?})"
+        !stdout.contains("FORK-OK")
+            && (stdout.contains("FORK-DENIED") || stdout.is_empty()),
+        "the subshell fork must be denied (status {status}, stdout {stdout:?}, stderr {stderr:?})"
     );
 }
 
