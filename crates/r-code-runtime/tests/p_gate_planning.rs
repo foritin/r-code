@@ -7,8 +7,8 @@
 mod p_gate_support;
 
 use p_gate_support::{
-    compose_with_builtin, profile, snapshot_id, stage_native, tool_names, tree,
-    wait_for_event, wait_for_kind, write_workspace, ScriptedModel, STRICT_PLAN,
+    compose_with_builtin, profile, snapshot_id, stage_native, tool_names, tree, wait_for_event,
+    wait_for_kind, write_workspace, ScriptedModel, STRICT_PLAN,
 };
 use r_code_harness_protocol::services::ToolCallRequest;
 use r_code_harness_protocol::{canonical_input_hash, HostService};
