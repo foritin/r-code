@@ -1105,7 +1105,7 @@ impl Drop for RawFdClose {
 /// closes the command end and reaps (or kills) the guardian, which closes
 /// the reply pipe and wakes it; the clone then closes exactly once.
 fn read_frame_bounded(
-    reader: std::fs::File,
+    mut reader: std::fs::File,
     timeout: Duration,
     stage: &'static str,
 ) -> Result<GuardianFrame, GuardianError> {
@@ -1714,7 +1714,7 @@ pub mod bwrap_proof {
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
-        let mut child = command
+        let child = command
             .spawn()
             .map_err(|error| GuardianError::Io(format!("bwrap spawn failed: {error}")))?;
         // The parent's copy of the write end must close so the read sees

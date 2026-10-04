@@ -266,12 +266,11 @@ impl MutationExecutor {
             .get("path")
             .and_then(|value| value.as_str())
             .ok_or(MutationExecutionError::InvalidInput("path required"))?;
-        let mut logical =
+        let logical =
             normalize_workspace_relative_path(path).map_err(|_| MutationExecutionError::Denied)?;
+        // 大小写折叠用遮蔽而非可变绑定——unix 腿没有重赋值，mut 会告警。
         #[cfg(windows)]
-        {
-            logical = logical.to_lowercase();
-        }
+        let logical = logical.to_lowercase();
         let approved = self.lease.request.repo_exclusive
             || self
                 .write_paths
