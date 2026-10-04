@@ -403,10 +403,20 @@ pub async fn ensure_daemon_with_helpers(
                 if let Some(dir) = default_helper_dir {
                     command.arg("--helper-dir").arg(dir);
                 }
+                // 诊断落盘：daemon 起不来时（CI 重启用例）stderr 是唯一
+                // 线索——null 会把它扔掉。每轮覆盖写，路径稳定可取。
+                let stderr_log = harness_v1_root.join("daemon.last.stderr");
+                let stderr_child = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&stderr_log)
+                    .ok()
+                    .map(std::process::Stdio::from);
                 command
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
+                    .stderr(stderr_child.unwrap_or_else(|| std::process::Stdio::null()));
                 #[cfg(windows)]
                 {
                     use std::os::windows::process::CommandExt;

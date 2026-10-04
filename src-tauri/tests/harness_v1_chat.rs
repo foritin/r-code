@@ -631,12 +631,18 @@ fn desktop_p_gate_projects_approves_and_replays_the_exact_daemon_plan() {
     });
 
     daemon_common::shutdown_daemon(&env);
-    let restarted = ChatV1Bridge::new_from_profile(profile, Some(service_binary));
+    let restarted = ChatV1Bridge::new_from_profile(profile.clone(), Some(service_binary));
     runtime.block_on(async {
         let restored = restarted
             .plan_get(&task_id)
             .await
-            .expect("read plan after daemon restart")
+            .unwrap_or_else(|error| {
+                // CI 重启失败的唯一线索：client 落盘的 daemon stderr。
+                let stderr_tail =
+                    std::fs::read_to_string(profile.harness_v1_root().join("daemon.last.stderr"))
+                        .unwrap_or_else(|_| "(no daemon stderr log)".into());
+                panic!("read plan after daemon restart: {error}; daemon stderr: {stderr_tail}")
+            })
             .expect("persisted plan after daemon restart");
         assert_eq!(restored.plan.id, final_revision_hash);
         assert_eq!(restored.plan.revision, 2);

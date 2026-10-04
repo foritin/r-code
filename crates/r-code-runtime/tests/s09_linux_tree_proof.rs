@@ -137,9 +137,7 @@ fn filled_bwrap_prefix(
         if argv[index] == "--setenv" && argv[index + 2].is_empty() {
             let key = argv[index + 1].clone();
             assert!(
-                plan_environment_allowlist
-                    .iter()
-                    .any(|allowed| *allowed == key),
+                plan_environment_allowlist.contains(&key),
                 "the plan only setenvs allowlisted keys (found {key})"
             );
             argv[index + 2] = values
