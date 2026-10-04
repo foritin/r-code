@@ -1757,6 +1757,8 @@ pub mod bwrap_proof {
 mod tests {
     use super::*;
 
+    // /proc 是 Linux 语义（macOS 无 procfs）；starttime 读取器只在 Linux 运行。
+    #[cfg(target_os = "linux")]
     #[test]
     fn start_identity_is_readable_for_the_current_process() {
         let identity = process_start_identity(std::process::id());
