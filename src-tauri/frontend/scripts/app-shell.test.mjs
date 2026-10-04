@@ -3960,7 +3960,10 @@ test("conversation limit UI branches on the stable code instead of localized tex
         useTasksStore.getState().setCurrentProject(path);
         useAppStore.getState().openDashboard(path);
       }, { path: workspacePath, rejection: payload });
-      await page.locator("#main-content > .scene-dashboard").waitFor({ state: "visible" });
+      // CI runner 冷启动慢（本地数秒、CI 曾超默认 30s），放宽到 60s。
+      await page
+        .locator("#main-content > .scene-dashboard")
+        .waitFor({ state: "visible", timeout: 60_000 });
       await page.getByRole("button", { name: "新建任务", exact: true }).click();
       await page.locator(".toast--warn, .toast--error").first().waitFor({ state: "visible" });
       return {

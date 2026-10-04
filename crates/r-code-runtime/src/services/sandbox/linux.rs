@@ -236,7 +236,13 @@ pub fn build_bwrap_launch_plan(
             target: root.clone(),
         });
     }
-    mounts.sort_by(|left, right| serde_json::to_string(left).cmp(&serde_json::to_string(right)));
+    // 序列化定序只为 dedup 的确定性——BwrapMount 形状固定，序列化不会
+    // 失败；失败时以空串参与排序（不 panic，序仍确定）。
+    mounts.sort_by(|left, right| {
+        let left_key = serde_json::to_string(left).unwrap_or_default();
+        let right_key = serde_json::to_string(right).unwrap_or_default();
+        left_key.cmp(&right_key)
+    });
     mounts.dedup();
 
     let unshare_network = profile.network == super::SandboxNetworkClass::Offline;

@@ -424,8 +424,11 @@ pub fn available_bytes(root: &Path) -> Result<u64, EffectQuotaError> {
     }
     #[cfg(not(windows))]
     {
+        // statvfs 需要 NUL 终止的 C 路径——&str 的指针不带终止符。
+        let c_path = std::ffi::CString::new(path)
+            .map_err(|_| EffectQuotaError::Io("root contains NUL".into()))?;
         let mut buffer = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        let code = unsafe { libc::statvfs(path.as_ptr(), buffer.as_mut_ptr()) };
+        let code = unsafe { libc::statvfs(c_path.as_ptr(), buffer.as_mut_ptr()) };
         if code != 0 {
             return Err(EffectQuotaError::Io(format!("statvfs failed for {path}")));
         }

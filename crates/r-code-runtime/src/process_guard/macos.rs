@@ -567,7 +567,7 @@ fn spawn_stopped_workload_macos(
     // POSIX requires the environment array to end with an empty string.
     envp.push(CString::new("").expect("empty string has no NUL"));
 
-    let spawn_attr = SpawnAttrGuard::new()?;
+    let mut spawn_attr = SpawnAttrGuard::new()?;
     let flags = (libc::POSIX_SPAWN_START_SUSPENDED
         | libc::POSIX_SPAWN_SETPGROUP
         | libc::POSIX_SPAWN_CLOEXEC_DEFAULT) as libc::c_short;
@@ -589,7 +589,7 @@ fn spawn_stopped_workload_macos(
         }
     }
 
-    let file_actions = FileActionsGuard::new()?;
+    let mut file_actions = FileActionsGuard::new()?;
     if let Some(cwd) = cwd {
         let cwd_c = cstring(cwd)?;
         // SAFETY: appends the chdir action to the record allocated above;

@@ -1,0 +1,8 @@
+# cargo audit 配置：CI 的 Security Audit job 直接运行 `cargo audit`。
+[advisories]
+ignore = [
+    # proc-macro-error 已停止维护（非漏洞）。传递依赖链固定：
+    # tauri → tray-icon → libappindicator → gtk 0.18 → glib-macros 0.18.5，
+    # 该分支无移除它的新版本；gtk 3 系列本身同样是维护收尾状态。
+    "RUSTSEC-2024-0370",
+]

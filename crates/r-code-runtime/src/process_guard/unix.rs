@@ -15,6 +15,10 @@
 use std::io;
 use std::time::Duration;
 
+// guardian_protocol 定义帧类型（GuardianFrame），顶层守护流程直接使用其
+// 简名；协议编解码内部引用顶层的 GuardianError。
+use guardian_protocol::GuardianFrame;
+
 /// Environment variable selecting guardian mode in a host binary.
 pub const GUARDIAN_PIPE_ENV: &str = "R_CODE_GUARDIAN_PIPE";
 /// Environment variable carrying the guarded process-group id.
@@ -258,6 +262,7 @@ const GUARDIAN_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 /// version for the explicit refusal path (a foreign version can only be
 /// reported, never silently dropped, before the handshake exists).
 pub mod guardian_protocol {
+    use super::GuardianError;
     use std::io::{self, Read, Write};
 
     /// Wire protocol version. A peer speaking a different version must
@@ -820,7 +825,7 @@ pub fn spawn_via_guardian(request: GuardianSpawnRequest) -> Result<GatedWorkload
     // no control descriptor can reach the workload.
     let (command_read, command_write) = create_cloexec_pipe()?;
     let (reply_read, reply_write) = create_cloexec_pipe()?;
-    let mut command_write = unsafe { fd_file(command_write) };
+    let command_write = unsafe { fd_file(command_write) };
     let reply_read = unsafe { fd_file(reply_read) };
     let command_read = RawFdClose(command_read);
     let reply_write = RawFdClose(reply_write);
@@ -1476,6 +1481,13 @@ pub mod bwrap_proof {
     impl PidFd {
         pub fn raw(&self) -> std::os::unix::io::RawFd {
             self.0
+        }
+    }
+
+    impl std::fmt::Debug for PidFd {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // 只暴露描述符编号——pidfd 本身不可读。
+            formatter.debug_tuple("PidFd").field(&self.0).finish()
         }
     }
 

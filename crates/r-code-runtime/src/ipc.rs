@@ -95,7 +95,7 @@ impl IpcListener {
     }
 
     #[cfg(unix)]
-    pub fn bind(path: &Path) -> io::Result<Self> {
+    pub fn bind(path: &std::path::Path) -> io::Result<Self> {
         // Remove a stale socket only when nothing can accept on it; binding
         // over a live socket fails, which is exactly the protection wanted.
         let listener = tokio::net::UnixListener::bind(path)?;

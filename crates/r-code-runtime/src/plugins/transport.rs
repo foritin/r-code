@@ -1762,7 +1762,9 @@ struct ReaderContext {
 
 /// Decode frames until the plugin goes quiet: resolve pending calls, serve
 /// nested host callbacks, and fault the table on a malformed or oversized frame.
-async fn read_plugin_frames<R: tokio::io::AsyncBufRead + Unpin>(
+// R 是裸流（Windows ChunkStream / Unix ChildStdout 只保证 AsyncRead）；
+// BufReader<R> 在 R: AsyncRead 时自身实现 AsyncBufRead——统一取宽边界。
+async fn read_plugin_frames<R: tokio::io::AsyncRead + Unpin>(
     mut source: BufReader<R>,
     context: ReaderContext,
 ) {
@@ -1851,7 +1853,7 @@ async fn read_plugin_frames<R: tokio::io::AsyncBufRead + Unpin>(
 
 /// Bounded stderr capture: the tail keeps the last STDERR_TAIL_BYTES and nothing
 /// more, so a flood cannot grow host memory.
-async fn capture_stderr<R: tokio::io::AsyncBufRead + Unpin>(
+async fn capture_stderr<R: tokio::io::AsyncRead + Unpin>(
     mut reader: BufReader<R>,
     tail: Arc<Mutex<Vec<u8>>>,
 ) {
@@ -1892,7 +1894,7 @@ async fn sweep_policy_tree(policy: &HarnessChildPolicy, pid: u32) -> bool {
 fn pid_is_gone(pid: u32) -> bool {
     // /proc carries the truth on Linux; elsewhere a launch never reached this
     // point, so nothing is claimed.
-    std::path::Path::new(&format!("/proc/{pid}")).exists().not()
+    !std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
 fn id_key(id: &RpcId) -> String {
