@@ -305,9 +305,14 @@ impl RuntimeProfile {
             let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| std::env::temp_dir());
-            IpcEndpoint::UnixSocket {
-                path: runtime_dir.join(format!("r-code-harness-v1-{suffix}.sock")),
-            }
+            let path = runtime_dir.join(format!("r-code-harness-v1-{suffix}.sock"));
+            // macOS 的 sun_path 上限 104 字节：长 ipc 名组合会超限，bind
+            // 直接报 "path must be shorter than SUN_LEN"（daemon 起不来，
+            // CI 深临时目录稳定触发）。超限时回落到按全名散列的短路径
+            // （同一 profile 稳定映射，防碰撞）。
+            #[cfg(target_os = "macos")]
+            let path = shorten_for_sun_len(path, &suffix);
+            IpcEndpoint::UnixSocket { path }
         }
     }
 
@@ -341,4 +346,23 @@ impl RuntimeProfile {
         }
         Ok(())
     }
+}
+
+/// macOS 的 sockaddr_un.sun_path 上限是 104 字节：超出时 bind 会以
+/// "path must be longer than SUN_LEN" 形式失败。超长路径回落为按
+/// 全名（ipc 名）散列的短文件名，同一 profile 稳定映射。
+#[cfg(target_os = "macos")]
+fn shorten_for_sun_len(path: PathBuf, suffix: &str) -> PathBuf {
+    const SUN_LEN_LIMIT: usize = 100;
+    if path.as_os_str().len() <= SUN_LEN_LIMIT {
+        return path;
+    }
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(format!("r-code-ipc:{suffix}").as_bytes());
+    let hex: String = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    std::env::temp_dir().join(format!("r-code-{hex}.sock"))
 }
