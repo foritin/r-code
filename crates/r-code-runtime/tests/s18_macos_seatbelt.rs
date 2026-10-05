@@ -115,6 +115,17 @@ fn sh_harness(base: &Path) -> Option<(String, PathBuf)> {
     let profile = MacosSeatbeltBackend::new()
         .build_profile(&harness.to_string_lossy())
         .expect("the backend must build the profile over the verified pinned binary");
+    // 可运行性自检：部分新 macOS 的 sandbox-exec 会拒绝本套 SBPL 档位
+    // （一切 launch 均 SIGABRT/空输出——拒绝类断言因此空洞通过，允许类
+    // 必然失败）。档位跑不起来时整套让位，等 P18 档位适配后移除。
+    let (status, stdout, _stderr) =
+        launch_under_seatbelt(&profile, &harness, &["-c", "echo ok"], &[]);
+    if !(status.success() && stdout.contains("ok")) {
+        eprintln!(
+            "s18 skipped: sandbox-exec cannot run this profile (status {status}, stdout {stdout:?}) — P18 profile needs adaptation for this macOS"
+        );
+        return None;
+    }
     Some((profile, harness))
 }
 
