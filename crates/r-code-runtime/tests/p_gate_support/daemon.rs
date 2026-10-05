@@ -38,7 +38,7 @@ impl Daemon {
         profile: &RuntimeProfile,
         client_id: &str,
     ) -> r_code_client::DaemonClient {
-        for _ in 0..100 {
+        for _ in 0..400 {
             if let Some(owner) = r_code_client::read_owner_token(&profile.harness_v1_root()) {
                 if let Ok(client) = r_code_client::DaemonClient::connect(
                     &profile.ipc_endpoint(),
