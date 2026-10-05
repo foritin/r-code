@@ -63,8 +63,9 @@ impl Daemon {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let stderr_tail = std::fs::read_to_string(profile.harness_v1_root().join("test-daemon.stderr"))
-            .unwrap_or_else(|_| "(no daemon stderr log)".into());
+        let stderr_tail =
+            std::fs::read_to_string(profile.harness_v1_root().join("test-daemon.stderr"))
+                .unwrap_or_else(|_| "(no daemon stderr log)".into());
         panic!("daemon connection timed out; daemon stderr: {stderr_tail}")
     }
 }
