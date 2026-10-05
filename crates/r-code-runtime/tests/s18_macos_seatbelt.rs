@@ -109,6 +109,9 @@ fn sh_harness(base: &Path) -> Option<(String, PathBuf)> {
         return None;
     }
     let harness = harness_copy("/bin/sh", "p18-harness-sh", base);
+    // 规范化：runner 的临时目录在 /var/folders（/var 是 /private/var 的
+    // 符号链接），SBPL 字面量白名单与 exec 目标必须同用规范路径。
+    let harness = harness.canonicalize().unwrap_or(harness);
     let profile = MacosSeatbeltBackend::new()
         .build_profile(&harness.to_string_lossy())
         .expect("the backend must build the profile over the verified pinned binary");
