@@ -17,7 +17,16 @@ impl Daemon {
             .arg("--ipc-name")
             .arg(profile.ipc_name().expect("ipc name"))
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // 诊断落盘：连接超时的唯一线索是 daemon 启动 stderr。
+            .stderr(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(profile.harness_v1_root().join("test-daemon.stderr"))
+                    .map(Stdio::from)
+                    .unwrap_or_else(|_| Stdio::null()),
+            );
         if let Some((name, value)) = env {
             command.env(name, value);
         }
